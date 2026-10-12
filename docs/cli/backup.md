@@ -55,7 +55,7 @@ result on stdout.
 
 ## Notes
 
-- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the canonical SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no canonical databases were captured (for example, a config-only export), not a full database recovery point.
+- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.
 - Without `--to`, default output is a timestamped `.tar.gz` archive in the current working directory. Local timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location. With `--to`, the default archive is temporary; pass `--output` as well to retain a local copy.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and unsafe symbolic links, confirms every manifest-declared payload exists, and validates the root SQLite snapshot and agent snapshots listed in the manifest or captured durable registry. It rejects sidecars for those snapshots and checks their integrity and database roles, including each agent's identity. Other files, including plugin snapshots already validated during creation, remain opaque during verification and restore. `openclaw backup create --verify` runs that validation immediately after writing the archive.
@@ -284,7 +284,7 @@ The repository contains one directory per committed snapshot. Each snapshot dire
 - `manifest.json`
 - `database.sqlite`
 
-Snapshot creation verifies the live database before reading it, uses SQLite's online backup API to capture committed WAL state without holding one long read transaction, closes the live database, compacts the private copy with `VACUUM`, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove every delivery queue row before compaction, including pending work, failed ownership fences, and completion or idempotency receipts, so neither payload detail nor ownership tombstones are published or retained in free pages. Restoring this sanitized, portable snapshot is therefore not an exactly-once delivery continuation boundary. This is an intentional privacy and no-replay portability tradeoff.
+Snapshot creation verifies the live database before reading it, uses SQLite's online backup API to capture committed WAL state without holding one long read transaction, closes the live database, compacts the private copy with `VACUUM`, verifies the generated database again, and publishes the completed directory without overwriting existing paths. Global snapshots remove every delivery queue row before compaction, including pending work, failed ownership fences, and completion receipts or records used to prevent duplicate sends, so neither payload detail nor ownership tombstones are published or retained in free pages. Restoring this sanitized, portable snapshot is therefore not an exactly-once delivery continuation boundary. This is an intentional privacy and no-replay portability tradeoff.
 
 Do not copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a portability artifact. Copy only completed snapshot directories.
 
@@ -317,7 +317,7 @@ Snapshot repositories are local directories. Scheduling, upload, retention, incr
 
 ## Versioned Git backups
 
-`openclaw backup git` stores deterministic, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
+`openclaw backup git` stores consistently ordered, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
 
 ```text
 global/manifest.json
@@ -356,7 +356,7 @@ backed up. The command reports that agent as degraded in CLI warnings, JSON
 has never been backed up. Explicit `--agent <id>` selections still fail if the
 selected database cannot be copied, and a run with no copyable databases fails.
 
-You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries use a fixed order, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
 
 Git staging is restricted to the backup-owned `global` and `agents` paths;
 unrelated files elsewhere in an adopted repository are never staged.
@@ -569,7 +569,7 @@ plugin-resource discovery and archives only the active config file path.
 
 OpenClaw first plans resources from configuration. It captures the root SQLite
 database online, then derives and freezes registered-agent ownership from that
-private snapshot for database discovery and archive traversal. Paths are canonicalized: config, credentials, workspaces, and agents
+private snapshot for database discovery and archive traversal. Paths are resolved before comparison: config, credentials, workspaces, and agents
 already covered by another included root are not duplicated as top-level
 sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
@@ -626,9 +626,8 @@ Managed databases are captured with SQLite's online backup API and compacted
 offline with `VACUUM`. Committed write-ahead log (WAL) changes are included,
 deleted-page remnants are removed, and sidecars are omitted. Shared and agent
 databases also receive their existing transient-state sanitization and must match
-their expected role and agent owner. Unsafe aliasing or an owner mismatch fails
-closed. A declared plugin database that requires unavailable SQLite capabilities
-also fails closed rather than falling back to a direct file copy.
+their expected role and agent owner. Unsafe aliasing or an owner mismatch stops the backup. A declared plugin database that requires unavailable SQLite capabilities
+also stops the backup rather than falling back to a direct file copy.
 
 Other SQLite files under state and configured agent roots, including their
 sidecars, are copied as opaque bytes. Creation reports each filename in
@@ -650,7 +649,7 @@ outside the backup inventory cause an explicit refusal with no archive. Close
 the database writers cleanly and include every hardlink in those resources before retrying.
 Changes to the shared database file during capture also refuse the backup, including
 a concurrent alias checkpoint that truncates its WAL before the journal checks repeat.
-Canonical OpenClaw database aliases retain their existing owner validation and
+Standard OpenClaw database aliases retain their existing owner validation and
 sanitization.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.

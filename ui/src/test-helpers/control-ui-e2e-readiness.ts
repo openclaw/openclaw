@@ -39,10 +39,12 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
 }
 
 /** A sent connect request is not the delivered Gateway handshake. */
-export async function waitForControlUiGatewayReady(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    return window.openclawControlUi?.snapshot().gatewayPhase === "connected";
-  });
+export async function waitForControlUiGatewayReady(page: Page, timeout?: number): Promise<void> {
+  await page.waitForFunction(
+    () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
+    undefined,
+    { timeout },
+  );
 }
 
 /** Wait for both the Gateway lifecycle and its dedicated visible reconnect status. */

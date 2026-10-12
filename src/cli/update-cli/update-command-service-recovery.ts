@@ -590,14 +590,9 @@ export async function compensateOriginalManagedService(
       invocationCwd: params.invocationCwd,
     })) === "healthy";
   assertCurrent();
-  const summary = [
-    healthy
-      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
-      : "Original managed service compensation was not verified; package and current state were retained.",
-    original.packageFingerprintWarning,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const summary = healthy
+    ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+    : "Original managed service compensation was not verified; package and current state were retained.";
   return {
     result: {
       ...result,

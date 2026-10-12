@@ -214,6 +214,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
   "gateway.controlUi.experimental.customPlugins":
     "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
+  "gateway.controlUi.experimental.chatBubbles":
+    "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":

@@ -9,13 +9,13 @@ import {
 import type { CronServiceState } from "./state.js";
 
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
-export function enqueueCronNotification(
+export async function enqueueCronNotification(
   state: CronServiceState,
   job: CronNotificationJob,
   text: string,
   kind: "auto-disabled" | "failure-alert",
   routing: CronNotificationRouting,
-): void {
+): Promise<void> {
   const owner = resolveCronNotificationQueueOwner(job, kind);
   const { sessionKey } = owner;
   const agentId = owner.agentId ?? normalizeOptionalAgentId(routing.defaultAgentId);
@@ -24,7 +24,7 @@ export function enqueueCronNotification(
   }
   const deliveryContext =
     sessionKey || (kind === "auto-disabled" && agentId)
-      ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
+      ? await state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
       : undefined;
   state.deps.enqueueSystemEvent(text, {
     agentId,
@@ -44,7 +44,7 @@ export function enqueueCronNotification(
 }
 
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
-export function wake(
+export async function wake(
   state: CronServiceState,
   opts: {
     mode: "now" | "next-heartbeat";
@@ -65,6 +65,7 @@ export function wake(
      * ("always routes to default agent").
      */
     agentId?: string;
+    commitGuard?: () => void;
   },
 ) {
   const text = opts.text.trim();
@@ -83,7 +84,7 @@ export function wake(
   // resolve the current system-agent owner and session atomically.
   const originDeliveryContext =
     sessionKey || agentId
-      ? state.deps.resolveOriginDeliveryContext?.({ sessionKey, agentId })
+      ? await state.deps.resolveOriginDeliveryContext?.({ sessionKey, agentId })
       : undefined;
   const enqueueOpts =
     sessionKey || agentId
@@ -93,6 +94,7 @@ export function wake(
           ...(originDeliveryContext ? { deliveryContext: originDeliveryContext } : {}),
         }
       : undefined;
+  opts.commitGuard?.();
   state.deps.enqueueSystemEvent(text, enqueueOpts);
   if (opts.mode === "now" || sessionKey) {
     // Scheduled heartbeats only inspect the agent's main session, so a targeted

@@ -10,7 +10,9 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import * as sessionInputActors from "../config/sessions/session-input-actor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { recordSessionParticipantInWorker } from "../config/sessions/session-sharing-store.async.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -18,6 +20,7 @@ import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -54,15 +57,21 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
             (worker) =>
               operation({
                 execute: async (command, commandOptions) => {
-                  const committing = command.type === "session.turn.commit";
+                  const committing =
+                    (command.type === "session.actor.acceptInput" ||
+                      command.type === "session.actor.adoptRun") &&
+                    typeof command.input === "object" &&
+                    command.input !== null &&
+                    "turn" in command.input &&
+                    command.input.turn !== undefined;
                   if (committing) {
                     turnBoundary.committing = true;
                   }
                   try {
-                    const result = await worker.execute(command, commandOptions);
-                    if (command.type === "session.turn.prepare") {
+                    if (committing) {
                       turnBoundary.afterPrepare?.();
                     }
+                    const result = await worker.execute(command, commandOptions);
                     if (committing) {
                       turnBoundary.afterCommit?.();
                     }
@@ -94,6 +103,91 @@ afterEach(() => {
   turnBoundary.afterPrepare = undefined;
   turnBoundary.afterCommit = undefined;
   vi.restoreAllMocks();
+});
+
+test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const inputs = Array.from({ length: 8 }, (_, index) => ({
+    agentId: "main",
+    key: `agent:main:dashboard:concurrent-initial-${index}`,
+    message: `Persist concurrent Gateway initial input ${index}.`,
+  }));
+  const competingWrites: Promise<unknown>[] = [];
+  const acquire = sessionInputActors.acquireSessionInputActor;
+  vi.spyOn(sessionInputActors, "acquireSessionInputActor").mockImplementation(async (...args) => {
+    const input = await acquire(...args);
+    if (input) {
+      const accept = input.actor.acceptInput;
+      vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...command) => {
+        const recordParticipant = (promptedAt: number) =>
+          recordSessionParticipantInWorker(
+            { agentId: "main", storePath, sessionKey: input.actor.target.sessionKey },
+            {
+              identity: {
+                type: "observation",
+                pluginId: null,
+                accountId: null,
+                senderKind: "unknown",
+                id: "gateway-client",
+              },
+              promptedAt,
+              sessionAgentId: "main",
+            },
+          );
+        await recordParticipant(1);
+        const pending = accept(...command);
+        // This independent writer must wait behind the complete admission, including its rebase.
+        competingWrites.push(runOutsideStoreWriterContext(() => recordParticipant(2)));
+        const outcome = await pending;
+        expect(outcome).toMatchObject({
+          kind: "stale-version",
+          postimage: { target: input.actor.target },
+        });
+        return outcome;
+      });
+    }
+    return input;
+  });
+  dispatch.start.mockClear();
+  dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
+  try {
+    const created = await Promise.all(
+      inputs.map((params) =>
+        rpcReq<{ sessionId: string; runStarted: boolean }>(ws, "sessions.create", params),
+      ),
+    );
+    for (const [index, response] of created.entries()) {
+      expect(response.ok, JSON.stringify(response)).toBe(true);
+      expect(response.payload?.runStarted, JSON.stringify(response)).toBe(true);
+      const input = inputs[index]!;
+      const scope = {
+        agentId: input.agentId,
+        sessionKey: input.key,
+        sessionId: expectDefined(response.payload?.sessionId, "created session ID"),
+        storePath,
+      };
+      expect(
+        (await loadTranscriptEvents(scope)).filter((event) =>
+          JSON.stringify(event).includes(input.message),
+        ),
+      ).toHaveLength(1);
+    }
+    expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
+  } finally {
+    await Promise.all(competingWrites);
+    const released = getSessionWorkAdmissionRelease({
+      scope: storePath,
+      identities: inputs.map((input) => input.key),
+    });
+    for (const [turn] of dispatch.start.mock.calls) {
+      turn.replyAdmissionTicket?.release();
+      turn.admission.cleanupAdmittedRun();
+      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+    }
+    await released;
+    ws.close();
+  }
 });
 
 test.for([

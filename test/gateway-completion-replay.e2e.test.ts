@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../src/agents/internal-runtime-context.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { RUNTIME_CONTEXT_FOOTER, RUNTIME_CONTEXT_HEADER } from "../src/llm/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
   writeOpenAiResponsesSse,
@@ -213,6 +213,22 @@ type ModelInput = {
   output?: unknown;
 };
 
+// Provider payloads carry runtime context as one labeled user item; it is not the requester turn.
+function isRuntimeContextCarrier(content: unknown): boolean {
+  const text = Array.isArray(content)
+    ? content
+        .map((part: unknown) =>
+          typeof part === "object" && part !== null && "text" in part ? part.text : undefined,
+        )
+        .join("")
+    : content;
+  return (
+    typeof text === "string" &&
+    text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) &&
+    text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`)
+  );
+}
+
 async function startModel() {
   const child = createDeferred();
   const failures: string[] = [];
@@ -239,11 +255,7 @@ async function startModel() {
     const input = body.input ?? [];
     const latestUser = input
       .toReversed()
-      .find(
-        (item) =>
-          item.role === "user" &&
-          !JSON.stringify(item.content).includes(INTERNAL_RUNTIME_CONTEXT_BEGIN),
-      );
+      .find((item) => item.role === "user" && !isRuntimeContextCarrier(item.content));
     const text = JSON.stringify(latestUser?.content);
     const last = input.at(-1);
     const id = String(++sequence);

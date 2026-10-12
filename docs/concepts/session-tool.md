@@ -90,7 +90,9 @@ Cancelled and interrupted inputs are retained for inspection and never run
 automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or
-resume work without a current request. Queued, cancelled, hidden, and
+resume work without a current request. The preview tells the agent to resume them
+only when the user asks to continue them, and otherwise answer the current request.
+Queued, cancelled, hidden, and
 context-excluded inputs are not included. Use `pendingBefore` with the page's
 `nextBefore` to read older inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
 the overall 80 KB response budget, so use a smaller `limit` for richer previews.
@@ -294,6 +296,9 @@ and are not restart-durable. They produce no separate completion turn. Use
 If an idempotent retry finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
 installing a watch. Inspect that run before retrying.
+
+Delegated turns write to the target session's transcript, including replies and workspace
+conflict reports from device-hosted workers. The requesting session keeps its own transcript.
 
 Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through

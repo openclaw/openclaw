@@ -12,6 +12,8 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import {
@@ -84,33 +86,36 @@ export async function prepareNodeClaudeSkillRuntime(
   const connectionId = node.connId;
   const pairingGeneration = node.pairingGeneration;
   const caller = getGatewayToolCallerIdentity();
-  const binding = captureIncognitoSessionBinding(sessionScope);
+  const memory = getSessionActorStorageBinding(sessionScope);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(sessionScope);
   const sessionClaim = binding?.actor.sessions.captureCurrent(sessionKey);
   let releaseSource = async () => {};
-  const session = binding
-    ? await (() => {
-        const ready = createDeferredCore<ReturnType<typeof loadSessionEntryReadOnly>>();
-        const done = createDeferredCore();
-        const lifetime = binding.actor.sessions.withSharedState(async () => {
-          const read = await binding.actor.sessions.read(
-            { assertCurrent: assertRun },
-            {
-              sessionKey,
-            },
-            binding.admissionSignal,
-          );
-          read.snapshot.assertCurrent();
-          ready.resolve(read.entry);
-          await done.promise;
-        });
-        releaseSource = () => {
-          done.resolve();
-          return lifetime;
-        };
-        void lifetime.catch(ready.reject);
-        return ready.promise;
-      })()
-    : loadSessionEntryReadOnly(sessionScope);
+  const session = memory
+    ? memory.actor.snapshot(memory.authority)?.entry
+    : binding
+      ? await (() => {
+          const ready = createDeferredCore<ReturnType<typeof loadSessionEntryReadOnly>>();
+          const done = createDeferredCore();
+          const lifetime = binding.actor.sessions.withSharedState(async () => {
+            const read = await binding.actor.sessions.read(
+              { assertCurrent: assertRun },
+              {
+                sessionKey,
+              },
+              binding.admissionSignal,
+            );
+            read.snapshot.assertCurrent();
+            ready.resolve(read.entry);
+            await done.promise;
+          });
+          releaseSource = () => {
+            done.resolve();
+            return lifetime;
+          };
+          void lifetime.catch(ready.reject);
+          return ready.promise;
+        })()
+      : await readSessionEntryReadOnlyInWorker(sessionScope);
   const placements = gateway.workerSessionPlacementService;
   const readPlacement = () => placements?.getMany([run.sessionId]).get(run.sessionId);
   const placement = await readSessionWorkerPlacementAsync({
@@ -165,8 +170,12 @@ export async function prepareNodeClaudeSkillRuntime(
     combinedSignal.throwIfAborted();
     binding?.admissionSignal?.throwIfAborted();
     sessionClaim?.assertCurrent();
-    const nativeCurrent = binding ? undefined : loadSessionEntryReadOnly(sessionScope);
-    const current = binding ? binding.actor.sessions.readPolicy(sessionKey) : nativeCurrent;
+    const nativeCurrent = memory || binding ? undefined : loadSessionEntryReadOnly(sessionScope);
+    const current = memory
+      ? memory.actor.snapshot(memory.authority)?.entry
+      : binding
+        ? binding.actor.sessions.readPolicy(sessionKey)
+        : nativeCurrent;
     const currentPlacement = readPlacement();
     if (
       closed ||
@@ -189,7 +198,8 @@ export async function prepareNodeClaudeSkillRuntime(
         session.lifecycleRevision !==
           (run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision)) ||
       current?.sessionId !== session.sessionId ||
-      (!binding && nativeCurrent?.lifecycleRevision !== session.lifecycleRevision) ||
+      (memory && current?.lifecycleRevision !== session.lifecycleRevision) ||
+      (!memory && !binding && nativeCurrent?.lifecycleRevision !== session.lifecycleRevision) ||
       current.execHost !== "node" ||
       current.execNode?.trim() !== node.nodeId ||
       (current.execCwd?.trim() || undefined) !==

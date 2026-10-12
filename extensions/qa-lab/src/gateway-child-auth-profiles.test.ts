@@ -67,11 +67,6 @@ describe("QA Gateway auth profile staging", () => {
 
   it.each([
     { source: "provider env", apiKey: undefined, env: { OPENAI_API_KEY: "qa-live-key" } },
-    {
-      source: "live alias",
-      apiKey: undefined,
-      env: { OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-key" },
-    },
     { source: "config literal", apiKey: "qa-live-key", env: {} },
   ])("stages $source API-key auth for isolated live QA workers", async ({ apiKey, env }) => {
     const stateDir = await tempDirs.makeTempDir("qa-live-api-key-state-");

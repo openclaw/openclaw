@@ -61,8 +61,8 @@ export const BOUNDARY_CHECKS = (
     "lint:tmp:no-raw-channel-fetch",
     "lint:tmp:no-raw-http2-imports",
     "lint:agent:ingress-owner",
-    // This full-root pass runs all four focused rules, including the narrower
-    // HTTP/window.open guards and both public assertion aliases.
+    // One pass owns all focused AST guards, including forced process exits in
+    // runtime sources and shipped launchers, not unrelated developer tooling.
     "lint:no-chained-type-assertions",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
     "lint:plugins:no-extension-src-imports",

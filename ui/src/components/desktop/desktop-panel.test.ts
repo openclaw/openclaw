@@ -3,8 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import {
   clickPanelButton,
@@ -13,8 +13,10 @@ import {
   createPanel,
   desktopEnvironment,
   selectSizing,
-  settleTasks,
   sizingMenu,
+  mountPanel,
+  unmountPanel,
+  updatePanel,
 } from "./desktop-panel.test-support.ts";
 
 describe("embedded desktop panel presentation", () => {
@@ -45,22 +47,24 @@ describe("embedded desktop panel presentation", () => {
       return createConnectionHandle();
     });
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.documentMode = true;
-    panel.documentControl = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      documentMode: true,
+      documentControl: true,
+      embedded: true,
+      presented: true,
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
 
-    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-    await settleTasks();
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    await panel.updateComplete;
     connect.mock.calls[0]?.[0].onDisconnect?.({ clean: true, code: 4000, reason });
 
-    await waitForFast(() => expect(panel.renderRoot.textContent).toContain(notice));
-    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(panel.renderRoot.textContent).toContain(notice));
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenLastCalledWith("desktop.observe", {
       source: { kind: "environment", environmentId: desktopEnvironment.id },
       control: false,
@@ -89,16 +93,18 @@ describe("embedded desktop panel presentation", () => {
       return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.sessionKey = "agent:main:cloud";
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      sessionKey: "agent:main:cloud",
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
 
-    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("environments.status", {
       environmentId: desktopEnvironment.id,
     });
@@ -109,27 +115,28 @@ describe("embedded desktop panel presentation", () => {
 
     const nextInventory = createDeferred();
     refresh = nextInventory.promise;
-    panel.requestedSource = replacement.id;
+    updatePanel(panel, { requestedSource: replacement.id });
     await panel.updateComplete;
     expect(disconnect).toHaveBeenCalledOnce();
     expect(connect).toHaveBeenCalledOnce();
     nextInventory.resolve();
     refresh = undefined;
-    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenLastCalledWith("desktop.observe", {
       source: { kind: "environment", environmentId: replacement.id },
       control: false,
     });
 
-    panel.requestedSource = null;
+    updatePanel(panel, { requestedSource: null });
     await panel.updateComplete;
-    await settleTasks();
-    expect(disconnect).toHaveBeenCalledTimes(2);
-    expect(connect).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
-    expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
-    expect(panel.renderRoot.textContent).toContain("The requested desktop is unavailable");
+    await waitForSolid(() => {
+      expect(disconnect).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
+      expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
+      expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+      expect(panel.renderRoot.textContent).toContain("The requested desktop is unavailable");
+    });
   });
 
   it.each([
@@ -189,15 +196,17 @@ describe("embedded desktop panel presentation", () => {
         return createConnectionHandle({ disconnect });
       });
       const panel = createPanel();
-      panel.client = gateway.client;
-      panel.available = true;
-      panel.documentMode = presentation !== "embedded" && presentation !== "floating";
-      panel.embedded = presentation === "embedded";
-      panel.presented = true;
-      panel.sessionKey = presentation === "session" ? sessionKey : null;
-      panel.requestedSource = presentation === "source" || panel.embedded ? node.id : null;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
+      updatePanel(panel, {
+        client: gateway.client,
+        available: true,
+        documentMode: presentation !== "embedded" && presentation !== "floating",
+        embedded: presentation === "embedded",
+        presented: true,
+        sessionKey: presentation === "session" ? sessionKey : null,
+        requestedSource: presentation === "source" || panel.embedded ? node.id : null,
+        desktopClientFactory: () => ({ connect }),
+      });
+      mountPanel(panel);
       await panel.updateComplete;
       if (presentation === "floating") {
         window.dispatchEvent(
@@ -205,7 +214,7 @@ describe("embedded desktop panel presentation", () => {
         );
       }
       if (picker) {
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(panel.renderRoot.querySelector(".desktop-environment")).not.toBeNull(),
         );
         clickPanelButton(panel);
@@ -219,23 +228,22 @@ describe("embedded desktop panel presentation", () => {
         }
         return { form, username, password };
       };
-      const initial = await waitForFast(() => credentialForm("initial"));
+      const initial = await waitForSolid(() => credentialForm("initial"));
       initial.username.value = "operator";
       initial.password.value = "synthetic";
       initial.form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
 
-      panel.available = false;
-      panel.client = null;
+      updatePanel(panel, { available: false, client: null });
       await panel.updateComplete;
       expect(disconnect).toHaveBeenCalledOnce();
       online = false;
-      panel.client = gateway.client;
-      panel.available = true;
+      updatePanel(panel, { client: gateway.client, available: true });
       await panel.updateComplete;
-      await settleTasks();
-      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
-      expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+      await waitForSolid(() => {
+        expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
+        expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+      });
       const observations = () =>
         request.mock.calls.filter(([method]) => method === "desktop.observe");
       expect(observations()).toHaveLength(2);
@@ -244,13 +252,13 @@ describe("embedded desktop panel presentation", () => {
       gateway.emit("presence", {
         presence: [{ deviceId: "workstation", roles: ["node"], reason: "connect" }],
       });
-      await settleTasks();
+      await panel.updateComplete;
       expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
       expect(observations()).toHaveLength(2);
       online = true;
       gateway.emit(event, payload);
       if (picker) {
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(
             panel.renderRoot.querySelector(".desktop-environment")?.textContent ?? "",
           ).toContain(node.id),
@@ -258,7 +266,7 @@ describe("embedded desktop panel presentation", () => {
         expect(observations()).toHaveLength(2);
         clickPanelButton(panel);
       }
-      const reconnected = await waitForFast(() => credentialForm("reconnected"));
+      const reconnected = await waitForSolid(() => credentialForm("reconnected"));
       expect(observations().at(-1)?.[1]).toEqual({
         source: { kind: "node", nodeId: "workstation" },
         control: false,
@@ -266,7 +274,7 @@ describe("embedded desktop panel presentation", () => {
       expect(reconnected.username.value).toBe("");
       expect(reconnected.password.value).toBe("");
       gateway.emit(event, payload);
-      await settleTasks();
+      await panel.updateComplete;
       expect(observations()).toHaveLength(3);
       expect(connect).toHaveBeenCalledOnce();
     },
@@ -292,29 +300,33 @@ describe("embedded desktop panel presentation", () => {
       return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
-    panel.client = gateway.client;
-    panel.available = true;
-    panel.documentMode = true;
-    panel.requestedSource = node.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: gateway.client,
+      available: true,
+      documentMode: true,
+      requestedSource: node.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
     try {
       await panel.updateComplete;
       expect(request).toHaveBeenCalledWith("environments.status", { environmentId: node.id });
+      const initialInventoryRequest = request.mock.results[0]!.value;
       inventory = Promise.resolve({ environments: [node] });
       gateway.emit("presence", {
         presence: [{ deviceId: "workstation", roles: ["node"], reason: "connect" }],
       });
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       empty.resolve({ environments: [] });
-      await settleTasks();
+      await initialInventoryRequest;
+      await panel.updateComplete;
       expect(connect.mock.calls[0]?.[0].isCurrent()).toBe(true);
       expect(disconnect).not.toHaveBeenCalled();
       expect(panel.renderRoot.querySelector(".desktop-surface")).not.toBeNull();
     } finally {
       empty.resolve({ environments: [] });
-      panel.remove();
-      await settleTasks();
+      unmountPanel(panel);
+      await panel.updateComplete;
     }
   });
 
@@ -346,47 +358,53 @@ describe("embedded desktop panel presentation", () => {
       return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
-    panel.client = gateway.client;
-    panel.available = true;
-    panel.documentMode = true;
-    panel.sessionKey = session.key;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: gateway.client,
+      available: true,
+      documentMode: true,
+      sessionKey: session.key,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
+    let oldSessionRequest: Promise<unknown> | undefined;
     const startOldSessionRead = async () => {
       const reads = request.mock.calls.filter(([method]) => method === "sessions.describe").length;
       sessionRead = oldSession.promise;
       gateway.emit("sessions.changed", { sessionKey: session.key });
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(
           request.mock.calls.filter(([method]) => method === "sessions.describe"),
         ).toHaveLength(reads + 1),
       );
+      oldSessionRequest = request.mock.results.at(-1)!.value;
       sessionRead = Promise.resolve({ session });
     };
     const retired = { session: { key: session.key, placement: { state: "reclaimed" } } };
     try {
-      await panel.updateComplete;
-      await settleTasks();
-      expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
+      await waitForSolid(() =>
+        expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
+      );
       await startOldSessionRead();
       inventory = nextInventory.promise;
       gateway.emit("presence", {
         presence: [{ deviceId: "workstation", roles: ["node"], reason: "connect" }],
       });
       oldSession.resolve(retired);
-      await settleTasks();
+      await oldSessionRequest;
+      await panel.updateComplete;
       nextInventory.resolve({ environments: [node] });
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       oldSession.resolve(retired);
-      await settleTasks();
+      await oldSessionRequest;
+      await panel.updateComplete;
       expect(connect.mock.calls[0]?.[0].isCurrent()).toBe(true);
       expect(disconnect).not.toHaveBeenCalled();
       expect(panel.renderRoot.querySelector(".desktop-surface")).not.toBeNull();
     } finally {
       oldSession.resolve(retired);
       nextInventory.resolve({ environments: [] });
-      panel.remove();
-      await settleTasks();
+      unmountPanel(panel);
+      await panel.updateComplete;
     }
   });
 
@@ -398,32 +416,32 @@ describe("embedded desktop panel presentation", () => {
       const gateway = createGatewayClient(request);
       const replacement = createGatewayClient(replacementRequest);
       const panel = createPanel();
-      panel.client = gateway.client;
-      panel.available = true;
-      panel.embedded = true;
-      panel.presented = true;
-      document.body.append(panel);
+      updatePanel(panel, {
+        client: gateway.client,
+        available: true,
+        embedded: true,
+        presented: true,
+      });
+      mountPanel(panel);
       await panel.updateComplete;
-      await settleTasks();
       const reads = request.mock.calls.length;
       if (action === "hide") {
-        panel.presented = false;
+        updatePanel(panel, { presented: false });
       } else if (action === "replace") {
-        panel.client = replacement.client;
+        updatePanel(panel, { client: replacement.client });
       } else {
-        panel.remove();
+        unmountPanel(panel);
       }
       gateway.emit("presence", { presence: [] });
       expect(request).toHaveBeenCalledTimes(reads);
       expect(replacementRequest).not.toHaveBeenCalled();
       await panel.updateComplete;
-      await settleTasks();
       gateway.emit("presence", { presence: [] });
       expect(request).toHaveBeenCalledTimes(reads);
-      panel.remove();
+      unmountPanel(panel);
       const replacementReads = replacementRequest.mock.calls.length;
       replacement.emit("presence", { presence: [] });
-      await settleTasks();
+      await panel.updateComplete;
       expect(replacementRequest).toHaveBeenCalledTimes(replacementReads);
     },
   );
@@ -457,21 +475,22 @@ describe("embedded desktop panel presentation", () => {
         return createConnectionHandle({ disconnect });
       });
       const panel = createPanel();
-      panel.client = gateway.client;
-      panel.available = true;
-      panel.embedded = true;
-      panel.presented = true;
-      panel.requestedSource = desktopEnvironment.id;
+      updatePanel(panel, {
+        client: gateway.client,
+        available: true,
+        embedded: true,
+        presented: true,
+        requestedSource: desktopEnvironment.id,
+      });
       const onFocusTargetChange = vi.fn();
-      panel.onFocusTargetChange = onFocusTargetChange;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      updatePanel(panel, { onFocusTargetChange, desktopClientFactory: () => ({ connect }) });
+      mountPanel(panel);
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       clickPanelButton(panel, 'button[aria-label="Disconnect"]');
       await panel.updateComplete;
       environments = [];
       inventoryChanged();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0),
       );
       expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
@@ -481,29 +500,29 @@ describe("embedded desktop panel presentation", () => {
 
       environments = [selected, desktopEnvironment];
       inventoryChanged();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(2),
       );
       clickPanelButton(panel);
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
       expect(panel.renderRoot.querySelectorAll('button[aria-label="Take control"]')).toHaveLength(
         1,
       );
       clickPanelButton(panel, 'button[aria-label="Take control"]');
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
       const selectedConnection = connect.mock.calls.at(-1)?.[0];
       expect(selectedConnection?.viewOnly).toBe(false);
       expect(request).toHaveBeenLastCalledWith("desktop.observe", {
         source: { kind: "environment", environmentId: selected.id },
         control: true,
       });
-      await settleTasks();
+      await panel.updateComplete;
       const selectedFocus = { kind: "desktop", source: selected.id, control: true };
       expect(onFocusTargetChange).toHaveBeenLastCalledWith(selectedFocus);
 
       environments = [desktopEnvironment];
       inventoryChanged();
-      await settleTasks();
+      await panel.updateComplete;
       expect({
         connected: selectedConnection?.isCurrent(),
         connections: connect.mock.calls.length,
@@ -512,7 +531,7 @@ describe("embedded desktop panel presentation", () => {
       }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
       expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
       clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(4));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(4));
       expect(connect.mock.calls.at(-1)?.[0].viewOnly).toBe(true);
       expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
     },
@@ -556,75 +575,81 @@ describe("embedded desktop panel presentation", () => {
       });
       const gateway = createGatewayClient(request);
       const panel = createPanel();
-      panel.client = gateway.client;
-      panel.available = true;
-      panel.documentMode = true;
-      panel.sessionKey = sessionKey;
+      updatePanel(panel, {
+        client: gateway.client,
+        available: true,
+        documentMode: true,
+        sessionKey,
+      });
       const onFocusTargetChange = vi.fn();
-      panel.onFocusTargetChange = onFocusTargetChange;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      updatePanel(panel, { onFocusTargetChange, desktopClientFactory: () => ({ connect }) });
+      mountPanel(panel);
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       const descriptions = () =>
         request.mock.calls.filter(([method]) => method === "sessions.describe");
       const changed = (key = sessionKey) => gateway.emit("sessions.changed", { sessionKey: key });
 
       changed("agent:main:unrelated");
-      await settleTasks();
+      await panel.updateComplete;
       expect(descriptions()).toHaveLength(1);
       changed();
-      await waitForFast(() => expect(descriptions()).toHaveLength(2));
-      await settleTasks();
+      await waitForSolid(() => expect(descriptions()).toHaveLength(2));
+      await panel.updateComplete;
       expect(disconnect).not.toHaveBeenCalled();
 
       const pending = createDeferred<unknown>();
       sessionRead = pending.promise;
       changed();
-      await waitForFast(() => expect(descriptions()).toHaveLength(3));
+      await waitForSolid(() => expect(descriptions()).toHaveLength(3));
       clickPanelButton(panel, 'button[aria-label="Take control"]');
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
       pending.resolve({ session: reclaimed });
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
       );
       expect(disconnect).toHaveBeenCalledTimes(2);
 
       sessionRead = undefined;
       changed();
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
       const stale = createDeferred<unknown>();
       sessionRead = stale.promise;
       changed();
-      await waitForFast(() => expect(descriptions()).toHaveLength(5));
+      await waitForSolid(() => expect(descriptions()).toHaveLength(5));
+      const staleRequest = request.mock.results.at(-1)!.value;
       sessionRead = Promise.resolve({ session: reclaimed });
       changed();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull(),
       );
       stale.resolve({ session: active });
-      await settleTasks();
+      await staleRequest;
+      await panel.updateComplete;
       expect(connect).toHaveBeenCalledTimes(3);
       const lookup = createDeferred<unknown>();
       sessionRead = lookup.promise;
+      let lookupRequest: Promise<unknown> | undefined;
       const startLookup = async () => {
         const count = descriptions().length;
         changed();
-        await waitForFast(() => expect(descriptions()).toHaveLength(count + 1));
+        await waitForSolid(() => expect(descriptions()).toHaveLength(count + 1));
+        lookupRequest = request.mock.results.at(-1)!.value;
       };
       if (lookupTiming === "before") {
         await startLookup();
       }
       clickPanelButton(panel);
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(4));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(4));
       clickPanelButton(panel, 'button[aria-label="Take control"]');
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(5));
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(5));
       const chosenConnection = connect.mock.calls.at(-1)?.[0];
       expect(chosenConnection?.viewOnly).toBe(false);
       if (lookupTiming === "after") {
         await startLookup();
       }
       lookup.resolve({ session: active });
-      await settleTasks();
+      await lookupRequest;
+      await panel.updateComplete;
       expect
         .soft({
           current: chosenConnection?.isCurrent(),
@@ -637,11 +662,10 @@ describe("embedded desktop panel presentation", () => {
 
       // A document URL selects its own source even after the user chose another viewer.
       const connections = connect.mock.calls.length;
-      panel.sessionKey = null;
-      panel.requestedSource = desktopEnvironment.id;
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(connections + 1));
-      panel.requestedSource = selected.id;
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(connections + 2));
+      updatePanel(panel, { sessionKey: null, requestedSource: desktopEnvironment.id });
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(connections + 1));
+      updatePanel(panel, { requestedSource: selected.id });
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(connections + 2));
       expect(request).toHaveBeenLastCalledWith("desktop.observe", {
         source: { kind: "environment", environmentId: selected.id },
         control: false,
@@ -651,7 +675,7 @@ describe("embedded desktop panel presentation", () => {
         source: selected.id,
         control: false,
       });
-      panel.remove();
+      unmountPanel(panel);
       expect(gateway.unsubscribe).toHaveBeenCalledOnce();
     },
   );
@@ -668,6 +692,7 @@ describe("embedded desktop panel presentation", () => {
       const replacement = createDeferred<DesktopConnectionHandle>();
       const previous = createConnectionHandle();
       const next = createConnectionHandle();
+      const replacementCanvas = document.createElement("canvas");
       let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
       const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
         if (method === "environments.list") {
@@ -683,6 +708,7 @@ describe("embedded desktop panel presentation", () => {
       });
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         if (options.viewOnly !== !initialControl) {
+          options.target.append(replacementCanvas);
           pending = options;
           return replacement.promise;
         }
@@ -691,18 +717,21 @@ describe("embedded desktop panel presentation", () => {
       });
       const gateway = createGatewayClient(request);
       const panel = createPanel();
-      panel.client = gateway.client;
-      panel.available = true;
-      panel.documentMode = true;
-      panel.documentControl = initialControl;
-      panel.embedded = true;
-      panel.presented = true;
-      panel.requestedSource = desktopEnvironment.id;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
+      updatePanel(panel, {
+        client: gateway.client,
+        available: true,
+        documentMode: true,
+        documentControl: initialControl,
+        embedded: true,
+        presented: true,
+        requestedSource: desktopEnvironment.id,
+        desktopClientFactory: () => ({ connect }),
+      });
+      mountPanel(panel);
       try {
-        await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-        await settleTasks();
+        await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+        await panel.updateComplete;
+        const surface = connect.mock.calls[0]![0].target;
         if (initialControl) {
           selectSizing(panel, "match");
           await panel.updateComplete;
@@ -717,7 +746,7 @@ describe("embedded desktop panel presentation", () => {
           throw new Error("expected the desktop control toggle");
         }
         toggle.click();
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(
             request.mock.calls.filter(([method]) => method === "desktop.observe"),
           ).toHaveLength(2),
@@ -734,7 +763,7 @@ describe("embedded desktop panel presentation", () => {
           expect(pendingMatch).toBeNull();
         }
         gateway.emit("presence", { presence: [] });
-        await settleTasks();
+        await panel.updateComplete;
         expect(
           request.mock.calls.filter(([method]) => method === "environments.list"),
         ).toHaveLength(inventoryReads);
@@ -744,10 +773,12 @@ describe("embedded desktop panel presentation", () => {
           control: !initialControl,
           canResize: true,
         });
-        await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+        await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+        expect(connect.mock.calls[1]![0].target).toBe(surface);
         if (handleTiming === "before") {
           replacement.resolve(next);
-          await settleTasks();
+          await connect.mock.results[1]!.value;
+          await panel.updateComplete;
         }
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(sizingMenu(panel).querySelector('option[value="match"]')).toBeNull();
@@ -769,10 +800,13 @@ describe("embedded desktop panel presentation", () => {
         pending.onConnect();
         expect(previous.disconnect).toHaveBeenCalledOnce();
         replacement.resolve(next);
-        await settleTasks();
+        await connect.mock.results[1]!.value;
+        await panel.updateComplete;
         gateway.emit("presence", { presence: [] });
-        await settleTasks();
+        await panel.updateComplete;
         expect(pending.isCurrent()).toBe(true);
+        expect(panel.renderRoot.querySelector(".desktop-surface")).toBe(surface);
+        expect(replacementCanvas.isConnected).toBe(true);
         expect(sizingMenu(panel).value).toBe("fit");
         expect(Boolean(sizingMenu(panel).querySelector('option[value="match"]'))).toBe(
           !initialControl,
@@ -781,13 +815,13 @@ describe("embedded desktop panel presentation", () => {
         sendKey();
         expect(next.sendKeyboardEvent).toHaveBeenCalledTimes(initialControl ? 0 : 1);
         expect(previous.sendKeyboardEvent).not.toHaveBeenCalled();
-        panel.remove();
+        unmountPanel(panel);
         expect(next.disconnect).toHaveBeenCalledOnce();
       } finally {
         observe.resolve({ transport: "rfb", wsPath: "/control", control: !initialControl });
         replacement.resolve(next);
-        panel.remove();
-        await settleTasks();
+        unmountPanel(panel);
+        await panel.updateComplete;
       }
     },
   );
@@ -828,18 +862,20 @@ describe("embedded desktop panel presentation", () => {
       return previous;
     });
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
     try {
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-      await settleTasks();
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      await panel.updateComplete;
       panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-stage__take-control")?.click();
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(
           2,
         ),
@@ -853,8 +889,8 @@ describe("embedded desktop panel presentation", () => {
         );
       } else {
         observe.resolve({ transport: "rfb", wsPath: "/control", control: true });
-        await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
-        await settleTasks();
+        await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+        await panel.updateComplete;
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(pending?.isCurrent()).toBe(true);
         if (outcome === "security failure") {
@@ -867,14 +903,14 @@ describe("embedded desktop panel presentation", () => {
         } else if (outcome === "unclean disconnect" || outcome === "clean disconnect") {
           pending?.onDisconnect?.({ clean: outcome === "clean disconnect" });
         } else if (outcome === "hide") {
-          panel.presented = false;
+          updatePanel(panel, { presented: false });
         } else if (outcome === "source change") {
-          panel.requestedSource = null;
+          updatePanel(panel, { requestedSource: null });
         } else {
-          panel.remove();
+          unmountPanel(panel);
         }
       }
-      await settleTasks();
+      await panel.updateComplete;
       const disconnectReasons: Record<string, string> = {
         "transport failure": "desktop stream closed",
         "transport close code": "connection closed with code 1006",
@@ -893,12 +929,12 @@ describe("embedded desktop panel presentation", () => {
           "Reconnect",
         );
       }
-      expect(previous.disconnect).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(previous.disconnect).toHaveBeenCalledOnce());
       if (pending) {
         expect(pending.isCurrent()).toBe(false);
         expect(next.disconnect).toHaveBeenCalledOnce();
         pending.onConnect?.();
-        await settleTasks();
+        await panel.updateComplete;
         expect(previous.disconnect).toHaveBeenCalledOnce();
         expect(next.disconnect).toHaveBeenCalledOnce();
       } else {
@@ -906,8 +942,8 @@ describe("embedded desktop panel presentation", () => {
       }
     } finally {
       observe.resolve({ transport: "rfb", wsPath: "/control", control: true });
-      panel.remove();
-      await settleTasks();
+      unmountPanel(panel);
+      await panel.updateComplete;
     }
   });
 
@@ -918,20 +954,21 @@ describe("embedded desktop panel presentation", () => {
     );
     const request = vi.fn(async () => ({ environments: [desktopEnvironment] }));
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = false;
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: false,
+    });
+    mountPanel(panel);
     await panel.updateComplete;
-    await settleTasks();
 
     panel.handleToggleRequest(
       new CustomEvent("openclaw:desktop-toggle", {
         detail: { environmentId: desktopEnvironment.id },
       }),
     );
-    await settleTasks();
+    await panel.updateComplete;
 
     expect(request).not.toHaveBeenCalled();
     expect(panel.isConnected).toBe(true);

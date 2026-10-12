@@ -219,7 +219,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     const pending = lookups.filter(
       (lookup) => !this.lookupFacts.has(`${lookup.kind}\0${lookup.path}`),
     );
-    // Match byte/topology snapshot lifetime; a new before/after owner probes again.
+    // Match byte/topology snapshot lifetime; a new snapshot probes again.
     if (pending.length) {
       const observed = replayDeclarationLookups(
         this.rootDir,
@@ -277,20 +277,16 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     args: string[],
     inputReceipt: string,
     outputs: string[],
-    before: BoundaryInputSnapshot,
-    startedAt: number,
     outputRoot?: string,
   ): ArtifactRecord {
     const { inputs, lookups } = this.readReceipt(inputReceipt);
     if (!outputs.includes(portableRelativePath(this.rootDir, this.boundary.assert(inputReceipt)))) {
       throw new Error("Bounded compiler receipt is absent from its output inventory");
     }
-    // Fresh compilation still seals the entire namespace before narrowing reuse.
-    const sealed = this.seal(config, args, inputs, before, startedAt, outputRoot);
     const fingerprint = this.resolutionFingerprint(lookups);
     return {
       version: ARTIFACT_CACHE_VERSION,
-      ...sealed,
+      inputs,
       signature: this.signature(config, args, inputs, outputRoot, fingerprint),
       outputs: Object.fromEntries(outputs.map((file) => [file, this.hash(file)])),
     };

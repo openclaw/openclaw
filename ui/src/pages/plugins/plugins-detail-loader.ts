@@ -13,7 +13,7 @@ import {
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { PluginsPageCatalogDetail, PluginsPageDetail } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import type { PluginToolPreview } from "./tool-preview.ts";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 /** Local inspection owns availability; optional metadata never delays the installed controls. */
 export async function loadInstalledPluginDetail(params: {
@@ -47,12 +47,15 @@ export async function loadInstalledPluginDetail(params: {
     return;
   }
   const { client } = scope;
+  // A new detail snapshot retires this read, including when uninstall pauses inspection.
+  let ownedDetail: PluginsPageDetail = initial;
+  const isCurrent = () => gateway.isCurrent(scope) && params.getDetail() === ownedDetail;
   const publish = (patch: Partial<PluginsPageDetail>) => {
-    const detail = params.getDetail();
-    if (!gateway.isCurrent(scope) || !detail || detail.pluginId !== pluginId) {
+    if (!isCurrent()) {
       return;
     }
-    params.onChange({ ...detail, ...patch });
+    ownedDetail = { ...ownedDetail, ...patch };
+    params.onChange(ownedDetail);
   };
   const tools =
     isGatewayMethodAdvertised({ hello: gateway.snapshot?.hello }, "tools.catalog") === true
@@ -62,6 +65,9 @@ export async function loadInstalledPluginDetail(params: {
       : Promise.resolve(undefined);
   try {
     const inspection = await inspectPlugin(client, plugin.id);
+    if (!isCurrent()) {
+      return;
+    }
     publish({
       inspection,
       tools: undefined,

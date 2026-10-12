@@ -13,7 +13,6 @@ import {
   it,
   vi,
 } from "vitest";
-import { getApfsCloneId } from "../../../test/helpers/apfs.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -75,9 +74,11 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
       [path.join(source, "payload"), path.join(destination, "payload")],
       options,
     );
-    expect(original?.cloneId).toBe(getApfsCloneId(path.join(source, "payload")));
-    expect(cloned?.cloneId).toBe(original?.cloneId);
-    expect(cloned?.ino).not.toBe(original?.ino);
+    assert(original);
+    assert(cloned);
+    expect(original.cloneId).toBeGreaterThan(0n);
+    expect(cloned.cloneId).toBe(original.cloneId);
+    expect(cloned.ino).not.toBe(original.ino);
     expect(await fs.readFile(path.join(destination, "payload"))).toEqual(
       await fs.readFile(path.join(source, "payload")),
     );

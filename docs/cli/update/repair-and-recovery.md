@@ -20,6 +20,11 @@ Unexpected exceptions retain the known update mode, resolved target, failed step
 and any recorded recovery outcome. Reports include a bounded, redacted error code
 or name and first message line through the same diagnostics as failed commands;
 unrecognized private text and stack traces are excluded from the public preview.
+Git preflight cleanup continues if its progress history cannot be recorded. The
+direct result retains a reporting warning; if the update was already failing,
+its exception retains both the original failure and the reporting failure. A
+reporting warning alone does not mean runtime verification failed. Uncertain
+command cleanup still preserves the temporary artifacts and blocks recovery.
 
 Choosing **Diagnose update failure** opens [Triage](/cli/triage), which starts the
 first directly launchable coding agent on `PATH`, in this order: Claude Code,
@@ -58,15 +63,13 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
-When another process saves configuration during database admission, OpenClaw
-warns and reads the current configuration again. It validates and uses that
-configuration before continuing, retaining concurrent changes when applying
-the requested update. If the root config or an included file changes after
-candidate checks, it repeats those checks against the current configuration
-before activation. A candidate that cannot accept the current configuration
-still fails validation; a concurrent save alone is not a refusal.
-If the save changes an implicitly selected update channel, OpenClaw resolves
-the target again before execution. An explicit `--channel` keeps its selection.
+OpenClaw retains the selected update target and candidate admission result.
+Concurrent edits to configuration, included files, or the stored update channel
+do not reselect the target or restart candidate validation. Activation-time
+configuration and schema checks, and config-write conflict checks, still apply.
+Avoid editing configuration during an update; if a later edit causes startup to
+fail, correct it or run `openclaw doctor` before restarting. A candidate that
+rejects the selected configuration still fails validation.
 
 Validation failures leave the serving Gateway untouched. If stopping the managed
 service unloads it and then fails before activation, OpenClaw attempts to restore
@@ -94,7 +97,14 @@ operator-stopped services and explicit data-risk refusals remain stopped.
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
-complete; follow its recovery guidance after the owning updater exits.
+complete; follow its recovery guidance after the owning updater exits. If update
+history already records success, a later result-publication error is a warning
+and the command exits successfully without offering recovery.
+
+Repair warns when configured channel accounts remain stopped or suppressed,
+including accounts other than the default. Run `openclaw health --json` to inspect
+them. These warnings do not make a verified Gateway recovery fail, start stopped
+channels, or disable the crash-loop breaker.
 
 Activation Doctor rechecks the chat requester's authority inside its own live
 maintenance scope. This lets it read authorization policy while the state database
@@ -295,6 +305,21 @@ including a verified backup and stopping the managed Gateway, then run
 from the new installation before restarting through the service manager.
 
 ## `update repair`
+
+Repair exits nonzero with the original recovery command when an older package
+journal remains pending and the current CLI cannot settle it. It does not report
+successful repair or continue post-update maintenance while that record remains.
+
+For a record written by the published 2026.9.8 package recovery helper, repair
+can settle an aborted operation after rollback or finish publication into a
+missing installation when ctime or link-count drift invalidates the previous
+package's historical seal. It requires the recorded directory identity and package version,
+verifies launchers, and records: `legacy package record settled by identity and
+version; content could not be re-verified`. The original journal, helper, and
+remaining package evidence are preserved. This accepts unverified contents of
+reinstallable legacy package code; records written by current versions retain
+their existing verification rules. Use a CLI containing this fix: the original sealed helper
+cannot acquire newer recovery behavior.
 
 An older updater can leave package activation at `prepared` after refusing an
 update before publication. Run `openclaw update repair` from an installation
@@ -640,9 +665,10 @@ service restoration, including when the Gateway is still starting or restoration
 also fails. A startup warning after otherwise successful Doctor repair does not
 clear a repair phase timeout.
 
-Recorded pending-migration warnings stop appearing after the migration owner
-records completion. Unrelated warnings and later or reintroduced obligations
-remain visible; the original update history is preserved.
+Recorded pending-migration warnings stop appearing when the plugin is no longer
+pending in the migration owner's current state, including warnings delivered
+after completion by a Doctor child. Unrelated warnings and reintroduced pending
+obligations remain visible; the original update history is preserved.
 
 After post-update or finalization work fails and its child processes settle,
 OpenClaw checks the installed Gateway using the normal startup and readiness

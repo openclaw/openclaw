@@ -8,7 +8,7 @@ read_when:
 
 ## Prove behavior at the owning boundary
 
-Prefer focused integration tests through real production owners, with deterministic
+Prefer focused integration tests through real production owners, with fixed
 external I/O fixtures, not mocked internal decisions or whole-product boots.
 Keep independent unit contracts and the [cost budget](#cost-budget).
 
@@ -28,7 +28,7 @@ Keep independent unit contracts and the [cost budget](#cost-budget).
 - **Paid work:** a paid provider result is kept or never requested.
   - Preflight predictable failures, such as redaction or budget checks, before the call.
   - Distinguish not sent, uncertain outcome, provider completed, and locally persisted.
-    Reconcile uncertain outcomes; exactly-once claims need external idempotency proof.
+    Reconcile uncertain outcomes; exactly-once claims need proof that external retries cannot duplicate effects.
   - Inject relevant failures and assert physical requests and observed usage,
     including rejected results. A local processing error never silently buys another call.
   - Preserve valid results without bypassing redaction, cancellation, or authority.
@@ -106,7 +106,7 @@ What's still missing for skills (see [Skills](/tools/skills)):
 - **Compliance:** does the agent read `SKILL.md` before use and follow required steps/args?
 - **Workflow contracts:** multi-turn scenarios that assert tool order, session history carryover, and sandbox boundaries.
 
-Future evals should stay deterministic first:
+Start future evals with fixed inputs and mock providers:
 
 - A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
 - A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
@@ -130,7 +130,7 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 - The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
   maintainer leaves in mixed fast configs: product-only PRs and main omit it,
   tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
-  retain it. Keep tests in their canonical configs, with their process and timer
+  retain it. Keep tests in their assigned configs, with their process and timer
   policies, so new files inherit the same owner routing. Dedicated product E2E
   and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 - Use an injected clock at the owner instead of real timers, sleeps, or polling;
@@ -156,7 +156,7 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
 `config/test-timeout-race-baseline.txt` shrink-only. Wait for the owned completion
 signal with `awaitGateBeforeSettlement(gate, operation, message)` or
 `withinTest(work, signal)` from `test/helpers/promise.ts`, or use `vi.useFakeTimers()`
-through the owner's injected clock seam. After removing sites, run
+through the owner's injected clock. After removing sites, run
 `pnpm check:test-timeout-race-ratchet --prune` to shrink the baseline.
 
 ## Module mocks and export completeness
@@ -227,8 +227,15 @@ to get green.
    (assertion before the owned completion signal), or product (a real race).
 3. Fix at the owner. Product races get a regression that fails on the original
    defect; fixture leaks are fixed in the fixture owner, not in the failing test.
+   When the red traces to a removal or simplification commit, read that PR's
+   body for accepted tradeoffs before restoring the removed behavior; squash
+   messages can omit them.
 4. Proof bar: 20 clean standalone runs of the file, 3 clean runs of the original
-   shard, and the owner's sibling tests. Record the root cause in the PR.
+   shard, and the owner's sibling tests. Record the root cause in the PR. Clean
+   runs only count once the failure has been reproduced or forced. If it never
+   reproduces, list every producer of the asserted state in the lifecycle
+   (startup, restoration, and timers too, not only the one the assertion names)
+   and add pressure until the failure rate shows.
 5. If the owner is another lane or PR, cite that fix; it is the only reason to
    proceed on a red job.
 

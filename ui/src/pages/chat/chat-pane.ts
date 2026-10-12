@@ -10,3 +10,17 @@ declare global {
     "openclaw-chat-pane": ChatPane;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-pane": HTMLAttributes<ChatPane> &
+        Properties<ChatPane> & {
+          "prop:agentId"?: ChatPane["agentId"];
+          "prop:workContext"?: ChatPane["workContext"];
+          "prop:onBackToSubagents"?: ChatPane["onBackToSubagents"];
+          "prop:onPaneSessionChange"?: ChatPane["onPaneSessionChange"];
+        };
+    }
+  }
+}

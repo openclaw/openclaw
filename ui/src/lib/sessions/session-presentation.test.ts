@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -61,13 +61,9 @@ function harness() {
     },
     subscribeEvents: () => () => undefined,
   } satisfies SessionGateway;
-  const write = vi.fn();
-  const sessions = createSessionCapability(gateway, selection, {
-    rosterCache: { read: async () => null, write },
-  });
+  const sessions = createSessionCapability(gateway, selection);
   return {
     sessions,
-    write,
     gateway,
     client,
     setResult(next: SessionsListResult) {
@@ -115,11 +111,10 @@ describe("session roster presentation", () => {
     try {
       await h.sessions.refresh({ agentId: "main" });
       h.hold(refresh.promise);
-      h.write.mockClear();
       const observed: Array<SessionsListResult | null> = [];
       h.sessions.subscribe(() => observed.push(h.sessions.presentation.result));
       h.publish({ phase: "connected", selfUser: { id: "two" } });
-      expect(h.write).not.toHaveBeenCalled();
+      expect(h.sessions.captureBootRoster()).toBeNull();
       expect(observed.length).toBeGreaterThan(0);
       expect(observed.every((result) => result === null)).toBe(true);
     } finally {

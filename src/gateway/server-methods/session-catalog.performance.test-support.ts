@@ -373,6 +373,7 @@ export async function createComposedCatalogFixture(
       }
     };
     const setupMaintenance = { completed: 0 };
+    let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
       api,
       projection,
@@ -383,9 +384,11 @@ export async function createComposedCatalogFixture(
       setupList,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
-        const completed = observeSessionMaintenanceCompletion(databasePath, {
+        // Fresh adoptions reuse the first acknowledged maintenance deadline; subsequent
+        // no-op writes need not schedule another pass for the fixture to observe.
+        const completed = (maintenanceReady ??= observeSessionMaintenanceCompletion(databasePath, {
           automatic: true,
-        }).then(() => {
+        })).then(() => {
           setupMaintenance.completed++;
         });
         const [result] = await Promise.all([

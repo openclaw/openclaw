@@ -101,6 +101,17 @@ describe("Apple Foundation Models helper lifecycle", () => {
     ).toBe(true);
   });
 
+  it("skips compiler optimization only for the disposable discovery helper", async () => {
+    await native.probe();
+    await native.prepare();
+    expect(
+      vi
+        .mocked(runCommandBuffered)
+        .mock.calls.filter(([argv]) => argv[0] === "/usr/bin/xcrun")
+        .map(([argv]) => argv.filter((arg) => arg.startsWith("-O"))),
+    ).toEqual([["-Onone"], ["-O"]]);
+  });
+
   it("does not publish a compiled helper when setup is canceled", async () => {
     await expect(native.prepare({ signal: cancelAfterCompile() })).rejects.toThrow();
     await expect(native.run({ messages: [] })).rejects.toThrow("setup again");

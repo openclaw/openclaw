@@ -71,6 +71,7 @@ vi.mock("ws", () => ({ default: providerMocks.FakeWebSocket }));
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   isProviderAuthProfileConfigured: providerMocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: providerMocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: providerMocks.resolveProviderAuthProfileApiKeyMock,
 }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({

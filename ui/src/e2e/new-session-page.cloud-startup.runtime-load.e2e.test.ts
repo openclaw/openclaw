@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
@@ -203,7 +204,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (incognito) {
           const timeOrigin = await page.evaluate(() => performance.timeOrigin);
-          await page.locator(".sidebar-brand__new-thread").click();
+          await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
           await page.locator("#new-session-where-trigger").click();
           await page
             .locator("wa-popover.new-session-page__where-popover")
@@ -302,7 +303,7 @@ suite.define(() => {
           );
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
           if (escape === "toast") {
-            await page.locator(".sidebar-brand__new-thread").click();
+            await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
             const privacy = page.getByRole("switch", { name: "Incognito" });
             await privacy.waitFor();
             if (!(await privacy.isChecked())) {
@@ -382,6 +383,8 @@ suite.define(() => {
           params: { key: sessionKey, message, idempotencyKey: messageId },
         });
         if (escape === "toast") {
+          // Retained requests do not establish readiness in the reloaded document.
+          await waitForControlUiGatewayReady(page);
           await navigateToControlUiSession(page, sessionKey);
         }
         await expect

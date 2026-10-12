@@ -1,17 +1,31 @@
 import path from "node:path";
 import { serialize } from "node:v8";
+import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import type { Model } from "../../llm/types.js";
+import type { Context, Model } from "../../llm/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { appendAttemptCacheTtlIfNeeded } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
+import { prepareEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.js";
+import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
 import { createToolResultPromptProjectionState } from "../embedded-agent-runner/session-prompt-state.js";
 import type { AgentEvent } from "../runtime/index.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import {
   createAssistant,
@@ -24,6 +38,7 @@ import {
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
+import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -326,5 +341,196 @@ it("preserves a newer native view and tool-result state when a worker receipt ar
     const beforeOmittedFlush = loadTranscriptEventsSync(target);
     guard.flushPendingToolResults();
     expect(loadTranscriptEventsSync(target)).toEqual(beforeOmittedFlush);
+  });
+});
+
+it("keeps the active turn and all steers after an earlier steer receipt rewrites its transcript", async () => {
+  await withOpenClawTestState({ label: "steer-transcript-conflict" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "steer-conflict",
+      sessionKey: "agent:main:steer-conflict",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    await upsertSessionEntryCore(target, entry);
+    const manager = guardSessionManager(
+      await SessionManager.openAsync(target, state.workspaceDir),
+      {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+      },
+    );
+    const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+      attempt: {
+        runId: "active-run",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionFile: target.sessionKey,
+        sessionTarget: target,
+        sessionManager: manager,
+      },
+      externalAbortController: {
+        arm() {},
+        async throwIfFiredAfterPrepCleanup() {},
+      },
+    });
+    const toolStarted = createDeferredCore();
+    const releaseTool = createDeferredCore();
+    const requests: Context["messages"][] = [];
+    const words = ["W0XYZ", "W1XYZ", "W2XYZ", "W3XYZ", "W4XYZ"];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      const text = context.messages
+        .filter((message) => message.role === "user")
+        .flatMap((message) =>
+          typeof message.content === "string"
+            ? [message.content]
+            : message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
+        )
+        .join("\n");
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          requests.length === 1
+            ? [{ type: "toolCall", id: "held-tool", name: "hold", arguments: {} }]
+            : [{ type: "text", text: words.filter((word) => text.includes(word)).join(" ") }],
+          requests.length === 1 ? "toolUse" : "stop",
+        ),
+      );
+    });
+    const { session } = await createTestSession({
+      sessionManager: manager,
+      withSessionWriteSettlement: transcript.withOwnedTranscriptWrite,
+      customTools: [
+        {
+          name: "hold",
+          label: "Hold",
+          description: "Hold the current tool until steering is queued",
+          parameters: Type.Object({}),
+          execute: async () => {
+            toolStarted.resolve();
+            await releaseTool.promise;
+            return { content: [{ type: "text", text: "Tool complete" }], details: {} };
+          },
+        },
+      ],
+    });
+    session.agent.steeringMode = "all";
+    const operation = createTestReplyOperation(target);
+    const injection: ReplyBackendMessageInjectionV2 = {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: (text, options, assertCurrent) =>
+        steerActiveSessionWithOptionalDeliveryWait(
+          session,
+          text,
+          options,
+          target.sessionKey,
+          () => {
+            assertCurrent();
+            return true;
+          },
+        ),
+    };
+    operation.attachBackend({
+      ...createEmbeddedRunHandle({
+        runId: "active-run",
+        supportsTranscriptCommitWait: true,
+        toolAuthorityFingerprint: "steer-fixture-authority",
+      }),
+      kind: "embedded",
+      cancel() {},
+      messageInjectionV2: injection,
+    });
+    operation.setPhase("running");
+    const active = session.prompt("Run the held tool, then list every word I ask you to include.");
+    void active.catch(() => {});
+    const attempts: Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>>[] = [];
+    const unsubscribe = session.agent.subscribe(async (event) => {
+      if (
+        event.type === "message_start" &&
+        getSteeringMessageIdentity(event.message) === "steer-1"
+      ) {
+        // Let the real receipt rewrite finish before the next user append reads its watermark.
+        await attempts[0]?.outcome;
+      }
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        toolStarted.promise,
+        active,
+        "Active turn never ran its tool",
+      );
+      const recorders = words.map((word, index) =>
+        createUserTurnTranscriptRecorder({
+          input: { text: `Also include the word ${word}.`, idempotencyKey: `steer-${index}` },
+          target: { ...target, sessionEntry: entry },
+        }),
+      );
+      const staged = await Promise.all(
+        recorders.map((recorder, index) =>
+          recorder.stageApproved!({ runId: `steer-${index}`, assertCurrent() {} }),
+        ),
+      );
+      expect(staged).toEqual(words.map(() => true));
+      const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
+        target.sessionKey,
+      )!;
+      attempts.push(
+        ...(await Promise.all(
+          recorders.map((recorder, index) =>
+            beginReplyMessageInjectionTarget(
+              injectionTarget,
+              `Also include the word ${words[index]}.`,
+              {
+                steeringMode: "all",
+                isInboundUserMessage: true,
+                toolAuthorityFingerprint: "steer-fixture-authority",
+                waitForTranscriptCommit: true,
+                queueIdentity: `steer-${index}`,
+                userTurnTranscriptRecorder: recorder,
+              },
+            ),
+          ),
+        )),
+      );
+      expect(await Promise.all(attempts.map((attempt) => attempt.acceptance))).toEqual(
+        words.map(() => true),
+      );
+      releaseTool.resolve();
+      await expect(active).resolves.toBeUndefined();
+      expect(await Promise.all(attempts.map((attempt) => attempt.outcome))).toEqual(
+        words.map(() => ({ status: "accepted" })),
+      );
+      expect(requests).toHaveLength(2);
+      const final = session.messages.at(-1);
+      expect(final).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "W0XYZ W1XYZ W2XYZ W3XYZ W4XYZ" }],
+      });
+      const reopened = await SessionManager.openAsync(target);
+      const users = reopened
+        .getBranch()
+        .flatMap((event) =>
+          event.type === "message" && event.message.role === "user" ? [event.message] : [],
+        );
+      expect(users.slice(1)).toMatchObject(
+        words.map((word, index) => ({
+          role: "user",
+          content: `Also include the word ${word}.`,
+          idempotencyKey: `steer-${index}`,
+          __openclaw: { steerTargetRunId: "active-run" },
+        })),
+      );
+      expect(recorders.every((recorder) => recorder.isPendingInputConsumed?.())).toBe(true);
+    } finally {
+      releaseTool.resolve();
+      await Promise.allSettled([active, ...attempts.map((attempt) => attempt.outcome)]);
+      unsubscribe();
+      operation.complete();
+      session.dispose();
+      await transcript.transcriptLifecycle.dispose();
+    }
   });
 });

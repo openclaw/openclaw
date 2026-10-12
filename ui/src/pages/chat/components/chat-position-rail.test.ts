@@ -588,7 +588,7 @@ describe("conversation position rail", () => {
     }
   });
 
-  it("keeps focused previews after pointer exit and resets interaction when the session changes", () => {
+  it("keeps focused previews after pointer exit and resets interaction when the session changes", async () => {
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
@@ -666,6 +666,7 @@ describe("conversation position rail", () => {
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
       render(nothing, container);
+      await Promise.resolve();
       const escapeAfterRemoval = new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
@@ -905,7 +906,8 @@ describe("conversation position rail", () => {
       wrapper.remove();
       await settleFrames();
       provisional.click();
-      await Promise.resolve();
+      // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
+      await settleFrames();
       expect(streamBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
       props.messages = [
         user,
@@ -922,7 +924,7 @@ describe("conversation position rail", () => {
         '[data-entry-id="persisted-answer"]',
       )!;
       marker().click();
-      await Promise.resolve();
+      await settleFrames();
       expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
     } finally {

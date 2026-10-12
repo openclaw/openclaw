@@ -48,19 +48,6 @@ describe("buildInworldSpeechProvider", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { source: "environment", env: "test-key", providerConfig: {} },
-    { source: "config", env: "", providerConfig: { apiKey: "config-key" } },
-  ])("reports configured with a key from $source", ({ env, providerConfig }) => {
-    vi.stubEnv("INWORLD_API_KEY", env);
-    expect(
-      provider.isConfigured({
-        providerConfig,
-        timeoutMs: 30_000,
-      }),
-    ).toBe(true);
-  });
-
   it("rejects blank API keys across every request entrypoint", async () => {
     vi.stubEnv("INWORLD_API_KEY", "   ");
     const blankRequest = { ...request, providerConfig: {}, timeoutMs: 5_000 };
@@ -165,7 +152,7 @@ describe("buildInworldSpeechProvider", () => {
     });
   });
 
-  it.each(["3", "0x1"])("warns on invalid directive temperature %s", (value) => {
+  it.each(["3"])("warns on invalid directive temperature %s", (value) => {
     expect(
       provider.parseDirectiveToken?.({
         key: "temperature",

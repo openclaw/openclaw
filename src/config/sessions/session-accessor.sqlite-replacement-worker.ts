@@ -7,7 +7,6 @@ import {
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -15,7 +14,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseGenerationClaim,
@@ -90,6 +89,9 @@ export async function withSessionEntryWorker<T>(
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
   try {
+    if (operationMode === "write") {
+      assertAgentSessionWriteAdmission(options);
+    }
     env = Object.freeze({ ...(options.env ?? process.env) });
     execution =
       retainedExecution ??
@@ -120,42 +122,20 @@ export async function withSessionEntryWorker<T>(
     }
     throw error;
   }
-  const assertRetainedIdentity = () => {
-    if (!retainedExecution) {
-      return;
-    }
-    if (!options.env || execution.agentId !== normalizeAgentId(options.agentId)) {
-      throw new Error("Session writer differs from its captured database scope");
-    }
-    const accepted = execution.fileIdentity;
-    if (!accepted) {
-      if (databaseIdentity !== undefined || execution.path !== options.path) {
-        throw new Error("Session writer has no accepted identity for this target");
-      }
-      return;
-    }
-    if (databaseIdentity !== undefined && accepted.physicalIdentity !== databaseIdentity) {
-      throw new Error("Session writer differs from its original read snapshot");
-    }
-    assertExistingDatabaseIdentity(
-      options.path,
-      `file:${accepted.physicalIdentity}`,
-      accepted.birthtime,
-    );
-  };
   let assertNativeCurrent: (() => void) | undefined;
   const context: SessionEntryCommitContext = {
     env,
     assertCurrent() {
       execution.assertCurrent();
-      assertRetainedIdentity();
       assertNativeCurrent?.();
     },
   };
   const assertHeld = () => {
+    if (operationMode === "write") {
+      assertAgentSessionWriteAdmission(options);
+    }
     execution.assertCurrent();
     assertCurrent();
-    assertRetainedIdentity();
     preparedReadClaim?.assertCurrent();
   };
   let preparedReadClaim: AgentDatabaseGenerationClaim | undefined;
@@ -565,31 +545,19 @@ export async function runSessionEntryWorkerMutation<T>(
       if (
         !isRecord(facts) ||
         !isRecord(facts.publication) ||
-        facts.publication.kind !== "session-entry-replacements" ||
-        !Array.isArray(facts.publication.changedKeys) ||
-        !facts.publication.changedKeys.every((key): key is string => typeof key === "string") ||
-        !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
-        !facts.publication.membershipInvalidatedKeys.every(
-          (key): key is string => typeof key === "string",
-        ) ||
-        !Array.isArray(facts.publication.sharingUnchangedKeys) ||
-        !facts.publication.sharingUnchangedKeys.every(
-          (key): key is string => typeof key === "string",
-        ) ||
-        !Array.isArray(facts.publication.generationUnchangedKeys) ||
-        !facts.publication.generationUnchangedKeys.every(
-          (key): key is string => typeof key === "string",
-        )
+        facts.publication.kind !== "session-entry-replacements"
       ) {
         throw new Error("Session entry mutation commit omitted its publication keys");
       }
       admitted = { admission, retained };
+      // SAFETY: This command's native kernel supplies the typed publication, not external input.
+      const committed = facts.publication as SessionEntryReplacementPublication;
       publication.begin(
-        facts.publication.changedKeys,
-        facts.publication.membershipInvalidatedKeys,
-        facts.publication.sharingUnchangedKeys,
-        facts.publication.generationUnchangedKeys,
-        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
+        committed.changedKeys,
+        committed.membershipInvalidatedKeys,
+        committed.sharingUnchangedKeys,
+        committed.generationUnchangedKeys,
+        committed.transcriptPublication,
       );
     },
     executionOptions.retainedExecution,

@@ -77,12 +77,10 @@ export async function findDeliveryIntentOwners(
     return [];
   }
   const captured = context ?? captureDeliveryQueueStateContext(stateDir);
-  const owners = await executeDeliveryQueueOperation(captured, stateDir, {
+  return executeDeliveryQueueOperation(captured, stateDir, {
     type: "deliveryQueue.findIntentOwners",
     input: { ids: [...ids] },
   });
-  captured.workerContext.admission.assertCurrent();
-  return owners;
 }
 
 function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): PreparedOutboundBatch {
@@ -110,6 +108,7 @@ function createQueuedDelivery(
     ...projectQueuedDeliveryOptions(params),
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...(params.initialProducerClaim ??
       (params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {})),
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
@@ -276,10 +275,11 @@ function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after
     stateDir?: string,
     expectedPlatformSendAttemptId?: string | null,
     context?: DeliveryQueueStateContext,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
     await executeDeliveryQueueOperation(context, stateDir, {
       type: "deliveryQueue.mutateOutbound",
-      input: { kind, id, error, expectedPlatformSendAttemptId },
+      input: { kind, id, error, expectedPlatformSendAttemptId, ambiguousTransportError },
     });
   };
 }
@@ -384,7 +384,6 @@ async function readOutboundDeliveries(
     { type: "deliveryQueue.outbound", ...input },
     { context: captured.workerContext, current: true },
   );
-  captured.workerContext.admission.assertCurrent();
   if (!reply) {
     return [];
   }

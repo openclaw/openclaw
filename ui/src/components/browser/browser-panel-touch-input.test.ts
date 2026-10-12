@@ -1,5 +1,7 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
 import {
   createBrowserClient,
@@ -10,7 +12,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
-import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
+import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
@@ -29,18 +31,20 @@ function click(x: number, y: number) {
 
 function renderInput(controller: BrowserPanelController): HTMLTextAreaElement {
   const root = controller.host.renderRoot;
-  render(
-    renderBrowserPanelChrome(
+  const rendered = mountSolid(() =>
+    createComponent(BrowserPanelChrome, {
       controller,
-      "right",
-      400,
-      400,
-      () => {},
-      () => {},
-      nothing,
-    ),
-    root,
+      dock: "right",
+      height: 400,
+      width: 400,
+      onDockChange() {},
+      onClose() {},
+      embedded: false,
+      tabsInHeader: false,
+    }),
   );
+  root.replaceChildren(rendered.container);
+  flush();
   vi.spyOn(root.querySelector<HTMLElement>(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, 100, 100),
   );

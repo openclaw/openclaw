@@ -4,9 +4,8 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-cont
 import { createContext } from "../custodian/custodian-page.test-harness.ts";
 import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import type { PluginsPageViewModel } from "./plugins-page-view.ts";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 function createController() {
   return new PluginHelpController({
@@ -35,7 +34,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
         result: { plugins: [{ id, name: id, installed: true }] },
         detail: { pluginId: id },
         installedDetailTab: "configuration",
-      }) as unknown as PluginsPageViewModel;
+      }) as unknown as Parameters<PluginHelpController["update"]>[0];
     controller.update(model("first"));
     const ask = controller.ask.bind(controller);
     if (change === "plugin") {
@@ -176,7 +175,7 @@ it.each([
       result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
       detail: { pluginId: "workboard" },
       installedDetailTab: "configuration",
-    } as unknown as PluginsPageViewModel);
+    } as unknown as Parameters<PluginHelpController["update"]>[0]);
     try {
       await controller.ask({
         path,

@@ -118,7 +118,9 @@ describe("Gateway-owned Claw removal journal", () => {
             operationId: deletion.entry.operationId,
             workspaceDir: plan.agent.workspace,
             cleanupCompleted: false,
+            phase: "retiring",
           });
+          expect(deletion.entry.phase).toBe("retiring");
           await deletion.assertCurrentAsync();
           deletion.assertCurrentFinal();
           await deletion.rollback();

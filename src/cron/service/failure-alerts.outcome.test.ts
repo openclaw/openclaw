@@ -25,9 +25,9 @@ import { applyJobResultAndDrainNotifications } from "./notification.test-helpers
 import { stop as stopCronService } from "./ops-lifecycle.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { applyTriggerNoFireResult } from "./timer-outcomes.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-outcome-" });
 
@@ -455,9 +455,9 @@ describe("cron failure incident startup recovery", () => {
 
   it.each(["trigger", "payload"] as const)(
     "reconciles a quiet startup check after a %s failure without historical notifications",
-    (source) => {
+    async (source) => {
       const { state, job, clock, sendCronFailureAlert } = createFixture();
-      applyJobResultAndDrainNotifications(state, job, {
+      await applyJobResultAndDrainNotifications(state, job, {
         status: "error",
         error: "plugin refresh failed",
         ...cronScriptFailureMetadata(source, "plugin_reload_failed"),
@@ -485,9 +485,9 @@ describe("cron failure incident startup recovery", () => {
     },
   );
 
-  it("keeps a replayed failure without script detail unresolved through a quiet trigger check", () => {
+  it("keeps a replayed failure without script detail unresolved through a quiet trigger check", async () => {
     const { state, job, clock, sendCronFailureAlert } = createFixture();
-    applyJobResultAndDrainNotifications(state, job, {
+    await applyJobResultAndDrainNotifications(state, job, {
       status: "error",
       error: "plugin refresh failed",
       ...cronScriptFailureMetadata("trigger", "plugin_reload_failed"),

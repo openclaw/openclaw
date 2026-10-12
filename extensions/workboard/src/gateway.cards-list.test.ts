@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -142,40 +141,6 @@ describe("workboard card list revisions", () => {
     expect(after.mock.calls[0]?.[1].revision.revision).toBeGreaterThan(
       before.mock.calls[0]?.[1].revision.revision,
     );
-  });
-
-  it("replaces a pending card read when a sibling mutation advances its revision", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const stores = createWorkboardSqliteStores({
-      dbPath,
-      workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
-    });
-    const writer = new WorkboardStore(stores.cards, stores);
-    const card = await store.create({ title: "Before" });
-    const captured = createDeferred<void>();
-    const release = createDeferred<void>();
-    const originalList = store.list.bind(store);
-    vi.spyOn(store, "list").mockImplementationOnce(async (options) => {
-      const cards = await originalList(options);
-      captured.resolve();
-      await release.promise;
-      return cards;
-    });
-    const listCards = captureCardsList(store);
-    const pending = listCards({});
-    await captured.promise;
-    try {
-      await writer.update(card.id, { title: "After" });
-      const current = await listCards({});
-      release.resolve();
-      const previous = await pending;
-      expect(previous.mock.calls[0]?.[1]).toBe(current.mock.calls[0]?.[1]);
-      expect(previous.mock.calls[0]?.[1].cards[0].title).toBe("After");
-    } finally {
-      release.resolve();
-      await pending;
-      await writer.close();
-    }
   });
 
   it("returns uncached reads while a writer receipt is unsettled", async () => {

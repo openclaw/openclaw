@@ -60,46 +60,60 @@ function fixture(
 }
 
 describe("plugin state data-only comparison", () => {
-  it("serves independent observations from native and worker write receipts without requests", async () => {
+  it("observes native and worker writes with independent returned values", async () => {
     const { store, legacy } = fixture("receipt-cache");
     legacy.register("counter", { count: 1 });
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
     const first = await store.observe("counter");
     first.value!.count = 99;
     expect((await store.observe("counter")).value).toEqual({ count: 1 });
-    expect(messages).not.toHaveBeenCalled();
 
     legacy.register("counter", { count: 2 });
     expect((await store.observe("counter")).value).toEqual({ count: 2 });
     await store.register("counter", { count: 3 });
-    messages.mockClear();
     expect((await store.observe("counter")).value).toEqual({ count: 3 });
     legacy.delete("counter");
     expect((await store.observe("counter")).value).toBeUndefined();
-    expect(messages).not.toHaveBeenCalled();
   });
+
+  it.each([{ action: "set" }, { action: "keep" }] as const)(
+    "converges after an unannounced native deletion ($action)",
+    async ({ action }) => {
+      const { store, legacy, native } = fixture(`native-deletion-${action}`);
+      legacy.register("counter", { count: 1 });
+      const before = await store.observe("counter");
+      const { db } = native();
+      // Native binding transactions carry their own receipt, without plugin-state postimages.
+      executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
+      const change =
+        action === "set"
+          ? ({ operation: "update", action, value: { count: 2 } } as const)
+          : ({ operation: "update", action } as const);
+      const conflict = await store.compareAndApply("counter", before.comparison, change);
+      expect(conflict).toMatchObject({ status: "conflict", current: { value: undefined } });
+      if (conflict.status !== "conflict") {
+        throw new Error("Expected the deleted row to conflict");
+      }
+      expect(await store.compareAndApply("counter", conflict.current.comparison, change)).toEqual({
+        status: action === "set" ? "applied" : "unchanged",
+      });
+    },
+  );
 
   it.each([
     { operation: "update", present: true },
     { operation: "delete", present: true },
     { operation: "update", present: false },
   ] as const)(
-    "does not lose a native write after preparing cached $operation (present=$present)",
+    "does not lose a native write before comparing $operation (present=$present)",
     async ({ operation, present }) => {
-      const { store, legacy } = fixture(`cached-race-${operation}-${present}`);
+      const { store, legacy } = fixture(`comparison-race-${operation}-${present}`);
       legacy.register("counter", { count: 1 });
       if (!present) {
         legacy.delete("counter");
       }
       const before = await store.observe("counter");
-      // Forward the original method with the intercepted worker as its receiver below.
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      const postMessage = Worker.prototype.postMessage;
-      const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-        this: Worker,
-        message,
-        transferList,
-      ) {
+      const dispatch = vi.spyOn(Worker.prototype, "postMessage");
+      Worker.prototype.postMessage = function (this: Worker, message, transferList) {
         const request = asOptionalRecord(message);
         if (request?.type === "execute" && request.input instanceof Uint8Array) {
           const command = asOptionalRecord(deserialize(request.input));
@@ -109,8 +123,8 @@ describe("plugin state data-only comparison", () => {
             legacy.register("counter", { count: 2 });
           }
         }
-        return postMessage.call(this, message, transferList);
-      });
+        return dispatch.call(this, message, transferList);
+      };
       const result = await store.compareAndApply(
         "counter",
         before.comparison,

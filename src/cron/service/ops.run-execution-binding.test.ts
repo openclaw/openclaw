@@ -20,12 +20,10 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { saveCronStore } from "../store.js";
 import {
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import { run } from "./ops-run.js";
 import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";

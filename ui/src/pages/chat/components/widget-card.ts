@@ -26,7 +26,7 @@ import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { canvasWidgetMount } from "./canvas-widget-mount.ts";
 import { exportWidget } from "./widget-export.ts";
-import "./browser-tab-card.ts";
+import "./browser-tab-card.tsx";
 
 registerMcpAppEnglish();
 
@@ -342,12 +342,11 @@ function renderPreviewFrame(params: PreviewFrameParams) {
 }
 
 const loadMcpAppView = async () => {
-  const registration = await import("../../../components/mcp-app-view-registration.ts");
-  registration.registerMcpAppView();
+  await import("../../../components/mcp-app-view-registration.ts");
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
-const loadYouTubeVideo = () => import("./youtube-video-card.ts");
+const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function renderWidgetContent(
   preview: CanvasToolPreview,
@@ -489,9 +488,14 @@ function renderWidgetAction(value: "copy" | "download" | "raw-details") {
     "raw-details": { icon: icons.fileText, labelKey: "chat.toolCards.showRawDetails" },
   }[value];
   const label = t(labelKey);
+  // Menu actions replace this text, so it must not contain Lit child markers.
   return html`<wa-dropdown-item class="session-menu__item" value=${value}>
     <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
-    <span class="session-menu__text" ?data-raw-label=${value === "raw-details"}>${label}</span>
+    <span
+      class="session-menu__text"
+      ?data-raw-label=${value === "raw-details"}
+      .textContent=${label}
+    ></span>
   </wa-dropdown-item>`;
 }
 

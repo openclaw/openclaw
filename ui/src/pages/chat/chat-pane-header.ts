@@ -138,6 +138,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
     subagentStop: TemplateResult | typeof nothing = nothing,
+    detailsControl: TemplateResult | typeof nothing = nothing,
   ) {
     this.headerMenuRow = row;
     this.headerWorkspace = sessionWorkspace;
@@ -578,6 +579,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelActions: browserPanelAction,
+      detailsControl,
       runAction: subagentStop,
       panelLayoutActions: html`${renderChatPanePanelLayoutActions(
         currentLayout,
@@ -628,6 +630,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
               .splitAllowed=${canSplitSessionView()}
               .settings=${this.state.settings}
+              .bubbleModeEnabled=${this.context.config.current.chatBubblesEnabled === true}
+              .mainKey=${resolveUiConfiguredMainKey({ agentsList: this.context.agents.state.agentsList, hello: this.context.gateway.snapshot.hello })}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .boardWidgetMenu=${boardWidgetMenu}
