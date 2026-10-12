@@ -419,6 +419,7 @@ describe("chat pane sharing authorization", () => {
       sessions: createSessionCapabilityFixture(),
     });
     const invalidate = vi.spyOn(pane.chatState, "requestBackgroundUpdate");
+    const hydration = vi.spyOn(pane, "loadSessionSharing");
     setSharingAuthorization(pane, { scopes: ["operator.sessions.write"] });
 
     pane.syncSelectedSessionSharing(row);
@@ -430,7 +431,7 @@ describe("chat pane sharing authorization", () => {
     setSharingAuthorization(pane, { scopes: ["operator.read"] });
     pane.syncSelectedSessionSharing(row);
     pane.syncSelectedSessionSharing(row);
-    await Promise.resolve();
+    await hydration.mock.results.at(-1)?.value;
 
     expect(request).toHaveBeenCalledExactlyOnceWith("session.members.listEvidence", {
       sessionKey: row.key,
