@@ -1,6 +1,7 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isGatewayClosingUnavailableError,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
@@ -26,7 +27,9 @@ export function resolveGatewayReadRetryDelayMs(error: unknown, attempt = 0): num
 function isGatewayUnavailableError(error: unknown): boolean {
   return (
     (error instanceof GatewayProtocolRequestError &&
-      (isGatewaySuspendUnavailableError(error) || isGatewayRestartUnavailableError(error))) ||
+      (isGatewaySuspendUnavailableError(error) ||
+        isGatewayRestartUnavailableError(error) ||
+        isGatewayClosingUnavailableError(error))) ||
     isRetryableGatewayStartupUnavailableError(error) ||
     isAgentDatabaseInspectionPendingError(error)
   );

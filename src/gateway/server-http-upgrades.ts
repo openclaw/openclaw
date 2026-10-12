@@ -98,9 +98,16 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   preauthBudgetKey: string | undefined;
   ingressName: "Gateway" | "Worker";
   isStartupPending?: () => boolean;
+  isTransportAdmissionClosed?: () => boolean;
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  // A closing generation refuses its own listeners before process-global admission,
+  // which same-process successors still need open.
+  if (params.isTransportAdmissionClosed?.() === true) {
+    rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
+    return;
+  }
   const allowsRestartStartupPreauth =
     ingressName === "Gateway" &&
     isGatewayRestartDraining() &&
@@ -173,6 +180,8 @@ export function attachGatewayUpgradeHandler(opts: {
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   isStartupPending?: () => boolean;
+  /** Refuses new upgrades once this Gateway generation begins closing. */
+  isTransportAdmissionClosed?: () => boolean;
   ingressTransport?: GatewayIngressTransport;
   reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
@@ -247,6 +256,7 @@ export function attachGatewayUpgradeHandler(opts: {
             preauthConnectionBudget,
             preauthBudgetKey: requestClientIp,
             ingressName: "Worker",
+            isTransportAdmissionClosed: opts.isTransportAdmissionClosed,
             prepareSocket: (workerSocket) => {
               workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
               markPublicWorkerIngress(workerSocket, {
@@ -370,7 +380,7 @@ export function attachGatewayUpgradeHandler(opts: {
         // Desktop observers are long-lived Gateway sockets, so they obey the same
         // suspension/restart admission boundary as core upgrades. Without this a
         // drained Gateway would keep accepting new desktop streams.
-        if (isGatewayWorkAdmissionClosed()) {
+        if (isGatewayWorkAdmissionClosed() || opts.isTransportAdmissionClosed?.() === true) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
           return;
         }
@@ -392,7 +402,7 @@ export function attachGatewayUpgradeHandler(opts: {
           rejectGatewayUpgradeServiceUnavailable(socket, `node ${feature} attach unavailable`);
           return;
         }
-        if (isGatewayWorkAdmissionClosed()) {
+        if (isGatewayWorkAdmissionClosed() || opts.isTransportAdmissionClosed?.() === true) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
           return;
         }
@@ -411,6 +421,7 @@ export function attachGatewayUpgradeHandler(opts: {
           preauthBudgetKey: requestClientIp,
           ingressName: "Gateway",
           isStartupPending: opts.isStartupPending,
+          isTransportAdmissionClosed: opts.isTransportAdmissionClosed,
         });
       } catch {
         throw new Error("gateway websocket upgrade failed");

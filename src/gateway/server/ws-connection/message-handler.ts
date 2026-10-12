@@ -16,6 +16,7 @@ import {
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
+  GATEWAY_CLOSING_UNAVAILABLE_REASON,
   GATEWAY_RESTART_UNAVAILABLE_REASON,
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
@@ -47,6 +48,7 @@ import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
 } from "../../server-constants.js";
+import { gatewayClosingUnavailableError } from "../../server-request-lifecycle.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayConnectionFrame } from "../connection-transport.js";
@@ -423,12 +425,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return { id: parsed.id, params: parsed.params };
   };
 
-  const rejectConnectForClosedAdmission = async (id: string): Promise<void> => {
-    const restartDraining = isGatewayRestartDraining();
-    const reason = restartDraining
-      ? GATEWAY_RESTART_UNAVAILABLE_REASON
-      : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
-    const operation = restartDraining ? "restart" : "suspension";
+  const rejectConnectForClosedAdmission = async (
+    id: string,
+    admission: "closed" | "closing" = "closed",
+  ): Promise<void> => {
+    const restartDraining = admission === "closed" && isGatewayRestartDraining();
+    const reason =
+      admission === "closing"
+        ? GATEWAY_CLOSING_UNAVAILABLE_REASON
+        : restartDraining
+          ? GATEWAY_RESTART_UNAVAILABLE_REASON
+          : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
+    const operation =
+      admission === "closing" ? "shutdown" : restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
     setLastFrameMeta({ type: "req", method: "connect", id });
     setHandshakeState("failed");
@@ -463,9 +472,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       await handleMessage(data, requestAdmission);
       return;
     }
-    const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
+    // A closing generation refuses new connect work before process-global
+    // admission, which same-process successors still need open.
+    const admission = params.connectionWork.isClosing
+      ? null
+      : tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
       const connect = parsePreauthConnectFrame(data);
+      if (params.connectionWork.isClosing) {
+        if (connect) {
+          await rejectConnectForClosedAdmission(connect.id, "closing");
+          return;
+        }
+        await handleMessage(data);
+        return;
+      }
       if (
         connect &&
         isGatewayRestartDraining() &&
@@ -511,11 +532,35 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
+  const rejectRequestForClosingGeneration = (data: GatewayConnectionFrame): void => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawDataToString(data));
+    } catch {
+      return;
+    }
+    if (!validateRequestFrame(parsed)) {
+      return;
+    }
+    setLastFrameMeta({ type: "req", method: parsed.method, id: parsed.id });
+    void sendFrame({
+      type: "res",
+      id: parsed.id,
+      ok: false,
+      error: gatewayClosingUnavailableError(parsed.method),
+    }).catch(() => {});
+  };
+
   const dispatchIncomingMessage = (data: GatewayConnectionFrame, onSettled?: () => void) => {
     // Capture receipt before any await: older requests keep their admitted lifetime,
     // while shutdown frames may only settle an exact pending node owner.
     const admission = params.connectionWork.isClosing ? "continuation" : undefined;
-    if (admission && getClient()?.connect.role !== "node") {
+    const client = getClient();
+    if (admission && client && client.connect.role !== "node") {
+      // Refuse new operator work with the retryable contract instead of leaving the
+      // caller without an outcome until transport teardown. Pre-auth frames still
+      // reach the shared connect refusal below.
+      rejectRequestForClosingGeneration(data);
       onSettled?.();
       return;
     }
