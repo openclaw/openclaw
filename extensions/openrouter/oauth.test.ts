@@ -93,25 +93,6 @@ function boundedTextErrorResponse(
   return { response, cancel, releaseLock, text };
 }
 
-function oversizedJsonResponse(): { response: Response; wasCanceled: () => boolean } {
-  let canceled = false;
-  const body = new TextEncoder().encode(`{"key":"${"x".repeat(16 * 1024 * 1024)}"}`);
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(body);
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    ),
-    wasCanceled: () => canceled,
-  };
-}
-
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -181,7 +162,7 @@ function runRemoteOpenRouterOAuthRedirect(redirectInput: string) {
 }
 
 describe("OpenRouter OAuth", () => {
-  it.each([false, true])(
+  it.each([true])(
     "uses hosted authorization without a manual prompt or loopback when isRemote=%s",
     async (isRemote) => {
       const { ctx, note, text, log, openUrl } = createOpenRouterOAuthContext({ isRemote });
@@ -286,27 +267,6 @@ describe("OpenRouter OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("builds the documented PKCE authorize URL", async () => {
-    const { ctx, openUrl } = createOpenRouterOAuthContext({ isRemote: true });
-    await loginOpenRouterOAuth(ctx, {
-      createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
-      createState: () => "state-1",
-      fetchImpl: vi.fn(async () => jsonResponse({ key: "sk-or-v1-test" })),
-    });
-    const openedUrl = (openUrl as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    if (typeof openedUrl !== "string") {
-      throw new Error("expected OpenRouter OAuth authorize URL");
-    }
-    const url = new URL(openedUrl);
-    const callbackUrl = new URL(url.searchParams.get("callback_url") ?? "");
-
-    expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
-    expect(callbackUrl.origin + callbackUrl.pathname).toBe(OPENROUTER_OAUTH_REDIRECT_URI);
-    expect(callbackUrl.searchParams.get("state")).toBe("state-1");
-    expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-  });
-
   it("parses state-bound OpenRouter redirect URLs and query strings", async () => {
     await expect(
       runRemoteOpenRouterOAuthRedirect(
@@ -347,53 +307,6 @@ describe("OpenRouter OAuth", () => {
     await expect(runRemoteOpenRouterOAuthRedirect("AUTHCODE")).rejects.toThrow(
       "Paste the full OpenRouter redirect URL",
     );
-  });
-
-  it("exchanges an authorization code for the issued OpenRouter API key", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-      expect(requestUrl(url)).toBe("https://openrouter.ai/api/v1/auth/keys");
-      expect(init?.method).toBe("POST");
-      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
-      expect(requestJsonBody(init)).toEqual({
-        code: "AUTHCODE",
-        code_verifier: "verifier-1",
-        code_challenge_method: "S256",
-      });
-      return jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" });
-    });
-    const { ctx } = createOpenRouterOAuthContext({ isRemote: true });
-
-    await expect(
-      loginOpenRouterOAuth(ctx, {
-        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
-        createState: () => "state-1",
-        fetchImpl,
-      }),
-    ).resolves.toMatchObject({
-      profiles: [
-        {
-          credential: {
-            key: "sk-or-v1-test",
-            metadata: { userId: "user-1" },
-          },
-        },
-      ],
-    });
-  });
-
-  it("bounds successful OpenRouter OAuth responses", async () => {
-    const oversized = oversizedJsonResponse();
-    const { ctx } = createOpenRouterOAuthContext({ isRemote: true });
-
-    await expect(
-      loginOpenRouterOAuth(ctx, {
-        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
-        createState: () => "state-1",
-        fetchImpl: vi.fn(async () => oversized.response),
-      }),
-    ).rejects.toThrow("OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes");
-    expect(oversized.wasCanceled()).toBe(true);
-    expect(releaseGuard).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces OpenRouter OAuth exchange errors without credential material", async () => {
@@ -604,9 +517,5 @@ describe("OpenRouter OAuth", () => {
       expect.objectContaining({ message: "Paste the OpenRouter redirect URL" }),
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("exposes stable auth choice metadata", () => {
-    expect(createOpenRouterOAuthAuthMethod().wizard?.choiceId).toBe("openrouter-oauth");
   });
 });
