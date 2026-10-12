@@ -21,12 +21,13 @@ import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
 
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
   return {
     ...actual,
-    openSqliteWorkerStore: async (...args: Parameters<typeof actual.openSqliteWorkerStore>) => {
-      const worker = await actual.openSqliteWorkerStore(...args);
+    openEngineWorkerStore: async (...args: Parameters<typeof actual.openEngineWorkerStore>) => {
+      const worker = await actual.openEngineWorkerStore(...args);
       if (worker) {
         const execute = worker.execute.bind(worker);
         vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {

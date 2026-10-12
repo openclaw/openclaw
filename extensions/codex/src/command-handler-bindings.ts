@@ -410,7 +410,7 @@ export async function resumeThread(
           let sameOwner = false;
           let knownOwnership: CodexAppServerLiveThreadOwnership | undefined;
           try {
-            const bindingBeforeCommit = deps.bindingStore.read(identity);
+            const bindingBeforeCommit = await deps.bindingStore.readAsync(identity);
             assertCodexBindingMayBeReplaced(
               bindingBeforeCommit,
               "committing a different resumed thread",

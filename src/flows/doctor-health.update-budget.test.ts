@@ -1,10 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunPhase } from "../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  createDoctorHealthContribution,
+  recordDoctorHealthWarnings,
+} from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -152,31 +156,87 @@ it.each([true, false])(
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
     };
     const ctx = createDoctorHealthFlowContext({
-      env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "1" },
+      env: {
+        ...updateEnv,
+        OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "reported-checks",
+      },
       updateBudget: hasBudget ? updateBudget() : undefined,
     });
-    await runDoctorHealthContributionList(ctx, contributions);
+    await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
+      await runDoctorHealthContributionList(ctx, contributions);
+      expect(capture.deferredInspectionCheckIds).toEqual([
+        "core/doctor/hooks-model",
+        "core/doctor/provider-catalog-projection",
+        "core/doctor/runtime-tool-schemas",
+      ]);
+    });
 
     expect(new Set(executed)).toEqual(retainedIds);
     expect(ctx.updateWarnings ?? []).toEqual([]);
     expect(ctx.runtime.log).toHaveBeenCalledWith(
       expect.stringContaining(
-        "Deferred advisory inspections until the restarted Gateway is ready: doctor:hooks-model, doctor:provider-catalog-projection, doctor:runtime-tool-schemas.",
+        "Deferred advisory inspections until the restarted Gateway is ready: core/doctor/hooks-model, core/doctor/provider-catalog-projection, core/doctor/runtime-tool-schemas.",
       ),
     );
 
-    // A shipped updater never runs them after restart, so its Doctor keeps them.
-    executed.length = 0;
-    await runDoctorHealthContributionList(
-      createDoctorHealthFlowContext({
-        env: updateEnv,
+    for (const marker of [undefined, "1", "reported-checks"]) {
+      executed.length = 0;
+      const inline = createDoctorHealthFlowContext({
+        env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: marker },
         updateBudget: hasBudget ? updateBudget() : undefined,
-      }),
-      contributions,
-    );
-    expect(new Set(executed)).toEqual(new Set([...retainedIds, ...deferredIds]));
+      });
+      if (marker === "reported-checks") {
+        await runDoctorHealthContributionList(inline, contributions);
+      } else {
+        await captureUpdateDoctorConfigWrites(inline.configPath, async (capture) => {
+          await runDoctorHealthContributionList(inline, contributions);
+          expect(capture.deferredInspectionCheckIds).toBeUndefined();
+        });
+      }
+      // Older parents, and markers without a result owner, keep every inspection inline.
+      expect(new Set(executed), marker).toEqual(new Set([...retainedIds, ...deferredIds]));
+    }
   },
 );
+
+it("records only inspections actually skipped before a required Doctor failure", async () => {
+  const executed: string[] = [];
+  const inspection = (id: string) =>
+    createDoctorHealthContribution(id, id, {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthChecks: { description: id, detect: async () => [] },
+      run: async () => {
+        executed.push(id);
+      },
+    });
+  const contributions = [
+    inspection("doctor:newTarget_inspection"),
+    createDoctorHealthContribution("doctor:required-inspection", "Required inspection", {
+      required: true,
+      updateWork: { kind: "inspection", scope: "run" },
+      run: async () => {
+        throw new Error("Required inspection failed");
+      },
+    }),
+    inspection("doctor:unvisited-inspection"),
+  ];
+  const ctx = createDoctorHealthFlowContext({
+    env: {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "reported-checks",
+    },
+  });
+  await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
+    await expect(runDoctorHealthContributionList(ctx, contributions)).rejects.toThrow(
+      "Required inspection failed",
+    );
+    expect(capture.deferredInspectionCheckIds).toEqual(["core/doctor/newTarget_inspection"]);
+  });
+  expect(executed).toEqual([]);
+  expect(ctx.runtime.log).toHaveBeenCalledWith(
+    expect.stringContaining("ready: core/doctor/newTarget_inspection."),
+  );
+});
 
 it.each([
   { agentCount: 480, phase: "validation" },

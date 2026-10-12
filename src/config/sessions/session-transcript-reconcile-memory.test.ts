@@ -12,6 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   createSessionEntryWithTranscript,
   loadSessionEntry,
@@ -62,6 +63,7 @@ describe("incognito transcript reconciliation", () => {
       prefix: "memory-reconcile-explicit-",
       applyEnv: false,
     });
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {

@@ -1,6 +1,7 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
 import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
+import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import {
   classifySqliteWorkerExecute,
@@ -8,7 +9,37 @@ import {
 } from "./sqlite-worker-request-class.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
-export type WorkerRequestObservation = { started(): void; completed(): void };
+export type WorkerRequestObservation = {
+  timing?: DiagnosticWorkerRequestFields["timing"];
+  started(): void;
+  completed(): void;
+};
+
+const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
+
+// Exact owner commands only: SDK callers may supply private suffixes.
+const sessionCommands = new Set([
+  "session.actor.read",
+  "session.actor.acceptInput",
+  "session.actor.adoptRun",
+  "session.actor.appendToolResult",
+  "session.actor.appendTranscriptEvent",
+  "session.actor.completeTurn",
+  "session.actor.deliveryPending",
+  "session.actor.deliverySettled",
+  "session.actor.patch",
+  "session.entry.read",
+  "session.entry.patch.prepare",
+  "session.entry.patch.commit",
+  "session.entry.replacements.prepare",
+  "session.entry.replacements.commit",
+  "session.lifecycle.project",
+  "session.maintenance.read",
+  "session.pendingInputs.read",
+  "session.pendingInputs.mutate",
+  "session.turn.prepare",
+  "session.turn.commit",
+]);
 
 const requestPrefixes = [
   ["pluginState.", "plugin_state"],
@@ -23,6 +54,9 @@ const requestPrefixes = [
 export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (typeof commandType !== "string") {
     return "execute";
+  }
+  if (sessionCommands.has(commandType)) {
+    return commandType;
   }
   if (commandType === "auth-profile-rows") {
     return "auth_profiles";
@@ -44,6 +78,7 @@ const queued = resolveGlobalSingleton(
 );
 
 const requestClasses = new Set([
+  ...sessionCommands,
   ...sqliteWorkerRequestClasses,
   ...requestPrefixes.map(([, requestClass]) => requestClass),
   "task",
@@ -62,11 +97,13 @@ export function trackWorkerRequest(
 ): WorkerRequestObservation {
   const label = requestClasses.has(requestClass) ? requestClass : "other";
   const enqueuedAt = performance.now();
+  const timing: DiagnosticWorkerRequestFields["timing"] =
+    detailedTiming && kind === "sqlite_writer" ? { enqueued: enqueuedAt } : undefined;
   let startedAt: number | undefined;
   let completed = false;
   const emit = (
     phase: DiagnosticWorkerRequestFields["phase"],
-    timing: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
+    durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
   ) => {
     if (!hasInternalDiagnosticEventInterest("worker.request")) {
       return;
@@ -77,18 +114,23 @@ export function trackWorkerRequest(
       requestClass: label,
       phase,
       queueDepth: queued.get(kind) ?? 0,
-      ...timing,
+      ...durations,
+      ...(phase === "completed" && timing ? { timing } : {}),
     });
   };
   const dequeue = () => queued.set(kind, (queued.get(kind) ?? 0) - 1);
   queued.set(kind, (queued.get(kind) ?? 0) + 1);
   emit("queued");
   const observation = {
+    timing,
     started: () => {
       if (completed || startedAt !== undefined) {
         return;
       }
       startedAt = performance.now();
+      if (timing) {
+        timing.dispatched = startedAt;
+      }
       queuedSignal?.removeEventListener("abort", observation.completed);
       dequeue();
       emit("started", { queueWaitMs: startedAt - enqueuedAt });

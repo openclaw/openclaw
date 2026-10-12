@@ -33,7 +33,7 @@ root_uid="${OPENCLAW_TEAM_ROOT_UID:-0}"
 root_gid="${OPENCLAW_TEAM_ROOT_GID:-0}"
 ancestor_boundary="${OPENCLAW_TEAM_ANCESTOR_BOUNDARY:-/}"
 fetch_budget="${OPENCLAW_TEAM_FETCH_BUDGET:-180}"
-# Cloning the multi-GB mirror is single-threaded CPU work and starves under host load.
+# Candidate checkout has its own budget, independent of the upstream fetch.
 clone_budget="${OPENCLAW_TEAM_CLONE_BUDGET:-600}"
 # Mirror operations must never run a foreground auto-gc inside a bounded step.
 mirror_git_config=(-c gc.auto=0 -c maintenance.auto=false)
@@ -2869,9 +2869,6 @@ cleanup_candidate_failure() {
 	if [[ -n "${candidate_build_identity:-}" && -e "$candidate_build_path" ]]; then
 		clean_candidate "$candidate_build_path" "$work_root" "$deploy_file_uid" "$deploy_gid" "$candidate_build_identity" || exit_code=1
 	fi
-	if [[ -n "${candidate_cache_identity:-}" && -e "$candidate_cache_path" ]]; then
-		clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity" || exit_code=1
-	fi
 	exit "$exit_code"
 }
 
@@ -2892,30 +2889,27 @@ publish_release() (
 	local published="$releases_root/$target_sha" origin_after published_info
 	candidate_build_path="$build_directory"
 	candidate_staging_path="$staging"
-	candidate_cache_path="$build_home/cache/$target_sha.$$"
 	candidate_build_identity=""
 	candidate_staging_identity=""
-	candidate_cache_identity=""
 	if [[ -e "$published" ]]; then
 		published_info="$(proof validate-release "$published" "$target_sha" "$root_uid" sealed)"
 		proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
-		bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$published"
 		prewarm_release "$published"
 		printf '%s\n' "$published_info"
 		return 0
 	fi
-	[[ ! -e "$build_directory" && ! -e "$staging" && ! -e "$candidate_cache_path" && ! -L "$candidate_cache_path" ]] || fail 'candidate path already exists'
+	[[ ! -e "$build_directory" && ! -e "$staging" ]] || fail 'candidate path already exists'
 	proof release-capacity build "$reference_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	trap 'cleanup_candidate_failure "$?"' EXIT
 	run_build mkdir -m 0700 -- "$build_directory"
 	candidate_build_identity="$(proof stat-identity "$build_directory")"
-	run_build mkdir -m 0700 -- "$candidate_cache_path"
-	candidate_cache_identity="$(proof stat-identity "$candidate_cache_path")"
-	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$candidate_cache_path/store" "PNPM_HOME=$candidate_cache_path/pnpm" "XDG_CACHE_HOME=$candidate_cache_path/metadata")
-	bounded_build "$clone_budget" git "${mirror_git_config[@]}" clone --no-local --no-hardlinks --no-checkout \
-		"file://$mirror" "$build_directory" >&2
+	# pnpm owns content integrity and pruning; imports must never share writable store inodes.
+	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$build_home/cache/store" PNPM_CONFIG_PACKAGE_IMPORT_METHOD=clone-or-copy PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true)
+	run_build git init "$build_directory" >&2
+	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" fetch --depth=1 --no-tags \
+		"file://$mirror" "$target_sha" >&2
 	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" checkout --detach "$target_sha" >&2
-	run_build git -C "$build_directory" remote set-url origin "$official_origin" >&2
+	run_build git -C "$build_directory" remote add origin "$official_origin" >&2
 	origin_after="$(run_build git -C "$build_directory" remote get-url origin)"
 	[[ "$origin_after" == "$official_origin" &&
 		"$(run_build git -C "$build_directory" rev-parse HEAD)" == "$target_sha" &&
@@ -2926,13 +2920,10 @@ publish_release() (
 	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
 		pnpm -C "$build_directory" build >&2
 	proof validate-release "$build_directory" "$target_sha" "$root_uid" candidate >/dev/null
-	# Every runtime symlink is release-local; installed hardlinks/reflinks survive cache unlink.
-	clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity"
-	candidate_cache_identity=""
 	proof release-capacity stage "$build_directory" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	install -d -m 0700 "$staging"
 	candidate_staging_identity="$(proof stat-identity "$staging")"
-	cp -a "$build_directory/." "$staging"
+	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
 	bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$staging"

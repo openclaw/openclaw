@@ -17,7 +17,7 @@ import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingIdentity } from "../session-sharing-policy.js";
-import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
+import { resolveSessionSharingRole, resolveSessionSharingTargetAsync } from "../session-sharing.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -227,14 +227,17 @@ export async function resolveSessionCatalogThreadVisibility(params: {
       ) {
         return { visibility, source: { sessionKey: session.sessionKey, entry: visibleEntry } };
       }
-      const target = resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey });
+      const target = await resolveSessionSharingTargetAsync({
+        cfg: config,
+        sessionKey: session.sessionKey,
+      });
       const identity = sharingIdentity(
         params.client,
         resolveGatewayOperatorRoleActor(params.client),
       );
       return target !== null &&
         resolveSessionSharingRole({
-          cfg: config,
+          cfg: params.context.getRuntimeConfig(),
           client: params.client,
           target,
           isMember: Boolean(

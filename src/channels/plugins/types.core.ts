@@ -469,13 +469,6 @@ export type ChannelMessagingAdapter = {
     | { kind: "unavailable" }
     | null
     | undefined;
-  /** @deprecated Use prepareConversationRouteOwnersAsync for worker-backed route ownership. */
-  prepareConversationRouteOwners?: (
-    params: readonly Parameters<
-      NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
-    >[0][],
-    inspectBindings: (refs: readonly ConversationRef[]) => readonly SessionBindingInspection[],
-  ) => readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[];
   /** Prepare binding facts in workers; returned resolvers run under the current effect grant. */
   prepareConversationRouteOwnersAsync?: (
     params: readonly Parameters<

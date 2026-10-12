@@ -12,6 +12,7 @@ import {
   resumableClaudeCatalog,
 } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectVirtualRowPaintProbeLifecycle } from "./virtual-row-anchor.lifecycle.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
   expectPaintedVirtualRowAnchor,
@@ -625,7 +626,7 @@ suite.define(() => {
         )
         .toBe(41);
       await page.clock.runFor(100);
-      await waitForPaintedVirtualRowAnchor(thread, anchor);
+      await waitForPaintedVirtualRowAnchor(thread);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
@@ -981,28 +982,33 @@ suite.define(() => {
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     const readerAnchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, readerAnchor);
-    await gateway.resolveDeferred("chat.history", {
-      messages: older,
-      hasMore: true,
-      nextOffset: 1100,
-      totalMessages: 1140,
-      sessionId: "native-scrollback",
-      thinkingLevel: null,
-    });
-    await expect
-      .poll(() =>
-        page
-          .locator("openclaw-chat-pane")
-          .evaluate(
-            (element) =>
-              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                .length,
-          ),
-      )
-      .toBe(1100);
-    await expectHistoryBoundaryState(page, false);
-    await waitForPaintedVirtualRowAnchor(thread, readerAnchor);
-    expectPaintedVirtualRowAnchor(readerAnchor, await stopVirtualRowPaintProbe(thread));
+    let paintResult: VirtualRowPaintResult;
+    try {
+      await gateway.resolveDeferred("chat.history", {
+        messages: older,
+        hasMore: true,
+        nextOffset: 1100,
+        totalMessages: 1140,
+        sessionId: "native-scrollback",
+        thinkingLevel: null,
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (element) =>
+                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                  .length,
+            ),
+        )
+        .toBe(1100);
+      await expectHistoryBoundaryState(page, false);
+      await waitForPaintedVirtualRowAnchor(thread);
+    } finally {
+      paintResult = await stopVirtualRowPaintProbe(thread);
+    }
+    expectPaintedVirtualRowAnchor(readerAnchor, paintResult);
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "03-native-history-prepended-visible.png"),
@@ -1035,5 +1041,11 @@ suite.define(() => {
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
     await page.close();
+  });
+
+  it("seals completed paint evidence and retains queued anchor jumps", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      await expectVirtualRowPaintProbeLifecycle(page);
+    });
   });
 });

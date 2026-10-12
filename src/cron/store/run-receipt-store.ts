@@ -6,8 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import type { CronJob } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
@@ -39,7 +38,7 @@ const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 export function ensureCronRunReceiptSchema(database: DatabaseSync): void {
   // sqlite-allow-raw -- Canonical feature-local additive DDL only.
   database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "cron_run_receipts", {
+    getOpenClawStateFeatureSchemaSql("cron_run_receipts", {
       endMarker: "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);",
       errorMessage: "OpenClaw cron run receipt schema marker is missing.",
     }),
@@ -129,7 +128,8 @@ function pruneTerminalReceipts(
       .orderBy("finished_at_ms", "desc")
       .orderBy("started_at_ms", "desc")
       .orderBy("receipt_id", "desc")
-      .limit(-1)
+      // SQLite requires a LIMIT for OFFSET; this bound exceeds any realizable receipt set.
+      .limit(Number.MAX_SAFE_INTEGER)
       .offset(CRON_RUN_RECEIPT_TERMINAL_RETENTION),
   ).rows;
   for (let index = 0; index < terminalIds.length; index += CRON_RUN_RECEIPT_DELETE_BATCH_SIZE) {

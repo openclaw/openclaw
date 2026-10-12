@@ -20,7 +20,9 @@ import type { ResolvedZaloAccount } from "./accounts.js";
 
 const getWebhookInfoMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
-const getUpdatesMock = vi.fn(() => new Promise(() => {}));
+const getUpdatesMock = vi.fn<(typeof import("./api.js"))["getUpdates"]>(
+  () => new Promise(() => {}),
+);
 const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 const getZaloRuntimeMock = vi.hoisted(() => vi.fn());
 
@@ -136,6 +138,40 @@ describe("monitorZaloProvider lifecycle", () => {
 
     expect(settled).toBe(true);
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
+  });
+
+  it("cancels the pending polling request when the monitor stops", async () => {
+    const actualApi = await vi.importActual<typeof import("./api.js")>("./api.js");
+    const started = Promise.withResolvers<AbortSignal>();
+    let finishRequest: (() => void) | undefined;
+    getUpdatesMock.mockImplementationOnce((...args: Parameters<typeof actualApi.getUpdates>) =>
+      actualApi.getUpdates(args[0], args[1], async (_url, init) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Polling request has no cancellation signal");
+        }
+        started.resolve(signal);
+        return new Promise<Response>((resolve, reject) => {
+          finishRequest = () => resolve(new Response(JSON.stringify({ ok: true })));
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Polling request aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }),
+    );
+    const { abort, run } = await startLifecycleMonitor();
+    try {
+      const requestSignal = await started.promise;
+      abort.abort();
+      await run;
+      expect(requestSignal.aborted).toBe(true);
+    } finally {
+      abort.abort();
+      finishRequest?.();
+      await run;
+    }
   });
 
   it("publishes ready after the first successful polling response", async () => {

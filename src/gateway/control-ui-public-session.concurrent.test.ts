@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -21,6 +22,7 @@ it("serves public text and images through real publication, isolation, and revoc
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const locator = {
       agentId: "main",
       sessionKey: "agent:main:dashboard:bbbbbbbb-aaaa-4000-8000-000000000001",

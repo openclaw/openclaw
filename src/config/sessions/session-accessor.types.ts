@@ -5,6 +5,7 @@ import type {
   InternalSessionTranscriptUpdate,
   SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   SessionTranscriptTurnMutation,
@@ -824,6 +825,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */
   bindCreation?: (operation: SessionEntryCreationOperation) => void;
+  /** Follow the selected creator execution's own database registration receipts. */
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */

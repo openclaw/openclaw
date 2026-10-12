@@ -38,6 +38,31 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it("converges pending same-version agent schema during an update", async () => {
+    const stateDir = makeTempDir(tempDirs, "update-pending-agent-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    const pathname = createLegacyDatabaseFixture({
+      env,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      eventsBySession: {},
+    });
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+    try {
+      database.exec("DROP TABLE session_reactions;");
+    } finally {
+      database.close();
+    }
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+    const repaired = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+    try {
+      expect(
+        repaired.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_reactions'").get(),
+      ).toEqual({ "1": 1 });
+    } finally {
+      repaired.close();
+    }
+  });
+
   it("reports skipped embedding cache rows as recoverable Doctor warnings after a schema-21 upgrade", async () => {
     const stateDir = makeTempDir(tempDirs, "memory-cache-migration-warning-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -388,7 +413,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION])(
-    "canonicalizes retired media carriers on every transcript message role at schema v%s",
+    "defers unchanged schema-v%s media maintenance during updates and repairs it in explicit Doctor",
     async (schemaVersion) => {
       const stateDir = makeTempDir(tempDirs, "media-persistence-message-roles-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -412,6 +437,20 @@ describe("legacy media persistence doctor migration", () => {
           ],
         },
       });
+
+      const beforeUpdate = readDatabaseSnapshot(databasePath);
+      const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+      try {
+        expect(
+          await migrateLegacyMediaPersistence({
+            env: { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+          }),
+        ).toEqual({ changes: [], warnings: [] });
+        expect(readDatabaseSnapshot(databasePath)).toEqual(beforeUpdate);
+        expect(checks.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(0);
+      } finally {
+        checks.mockRestore();
+      }
 
       const scope = createOpenClawDatabaseMaintenanceScope();
       if (schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {

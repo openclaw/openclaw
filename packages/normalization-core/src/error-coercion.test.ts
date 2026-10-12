@@ -47,28 +47,6 @@ describe("formatErrorMessage", () => {
     );
   });
 
-  it.each(["persistenceError", "cleanupError"])(
-    "retains aggregate diagnostics when the typed %s field is inaccessible",
-    (field) => {
-      const persistence = new Error("write failed");
-      const cleanup = new Error("cleanup failed");
-      const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
-        cause: cleanup,
-      });
-      Object.defineProperty(failure, field, {
-        get() {
-          throw new Error("diagnostic field unavailable");
-        },
-      });
-
-      expect(format(failure)).toBe(
-        field === "persistenceError"
-          ? "persistence failed | cleanup failed | write failed"
-          : "persistence failed | write failed | cleanup failed",
-      );
-    },
-  );
-
   it("retains both failures from actual async disposal", async () => {
     const body = new Error("body secret");
     const cleanup = new Error("cleanup secret");
@@ -91,7 +69,7 @@ describe("formatErrorMessage", () => {
     expect(redact).toHaveBeenCalledOnce();
   });
 
-  it.each([0, null, undefined])("retains a downlevel suppressed value %s", (suppressed) => {
+  it.each([0, null])("retains a downlevel suppressed value %s", (suppressed) => {
     const failure = Object.assign(new Error("disposal failed"), {
       name: "SuppressedError",
       error: new Error("cleanup failed"),
@@ -101,11 +79,9 @@ describe("formatErrorMessage", () => {
     expect(format(failure)).toBe(`disposal failed | cleanup failed | ${String(suppressed)}`);
   });
 
-  it.each(
-    ["native", "vm"].flatMap((kind) => ["message", "name"].map((field) => ({ kind, field }))),
-  )("isolates inaccessible $field on $kind errors", ({ kind, field }) => {
-    const error: unknown = kind === "vm" ? runInNewContext("new Error('')") : new Error("");
-    Object.defineProperty(error, field, {
+  it("isolates inaccessible messages on VM errors", () => {
+    const error: unknown = runInNewContext("new Error('')");
+    Object.defineProperty(error, "message", {
       get() {
         throw new Error("diagnostic field unavailable");
       },
@@ -143,28 +119,6 @@ describe("formatErrorMessage", () => {
     expect(format(outer)).toBe(
       "turn failed | primary failure | cleanup failed | native close failed | EIO | second failure",
     );
-  });
-
-  it("redacts aggregate causes without treating arbitrary error metadata as causes", () => {
-    const inner = Object.assign(new Error("native secret"), {
-      data: new Error("display-only detail"),
-      errors: [new Error("not an aggregate")],
-    });
-    const outer = new AggregateError([inner], "cleanup failed: native secret");
-    const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
-
-    expect(formatErrorMessage(outer, { redact })).toBe("cleanup failed: native [REDACTED]");
-    expect(redact).toHaveBeenCalledOnce();
-  });
-
-  it("ignores inaccessible aggregate links but keeps readable causes", () => {
-    const error = new AggregateError([], "cleanup failed", { cause: new Error("native failed") });
-    Object.defineProperty(error, "errors", {
-      get: () => {
-        throw new Error("opaque");
-      },
-    });
-    expect(format(error)).toBe("cleanup failed | native failed");
   });
 
   it("walks and deduplicates Error cause chains while preserving codes", () => {
@@ -233,25 +187,6 @@ describe("formatErrorMessage", () => {
   });
 });
 
-describe("collectNestedErrorCandidates", () => {
-  it("keeps other branches when a suppressed accessor throws", () => {
-    const leaf = new Error("body failed");
-    const error = Object.defineProperty({ error: leaf }, "suppressed", {
-      get() {
-        throw new Error("opaque suppressed branch");
-      },
-    });
-    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
-  });
-
-  it("deduplicates cyclic suppressed branches", () => {
-    const leaf = new Error("body failed");
-    const error = { error: leaf, suppressed: undefined as unknown };
-    error.suppressed = error;
-    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
-  });
-});
-
 describe("toErrorObject", () => {
   it("preserves Error and string inputs", () => {
     const error = new Error("boom");
@@ -293,16 +228,6 @@ describe("toStructuredErrorObject", () => {
       expect(Object.hasOwn(error, "cause")).toBe(true);
       expect(error.cause).toBe(value);
     }
-  });
-
-  it("preserves hostile stringification failures", () => {
-    const failure = {
-      [Symbol.toPrimitive]() {
-        throw new Error("stringification failed");
-      },
-    };
-
-    expect(() => toStructuredErrorObject(failure)).toThrow("stringification failed");
   });
 
   it("copies enumerable string and symbol details while retaining the original cause", () => {

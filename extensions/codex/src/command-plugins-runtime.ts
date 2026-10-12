@@ -55,152 +55,156 @@ export async function withCodexPluginCommandContext<T>(
     { ...scope, config: ctx.config },
     appServer.start,
   );
-  const { assertCurrentAsync } = {
-    assertCurrentAsync: scope.assertCurrentAsync,
-    ...auth.clientOptions,
-  };
-  const preparedAuth =
-    "preparedAuth" in auth.clientOptions ? auth.clientOptions.preparedAuth : undefined;
-  const usesNativeAuth = scope.authProfileId === null || appServer.start.homeScope === "user";
-  const profileId = usesNativeAuth ? undefined : auth.authProfileId;
-  const readAuthBinding = async () =>
-    profileId
-      ? fingerprintCodexAppServerAuthBinding({
-          authProfileId: profileId,
-          authProfileStore: await resolveCodexAppServerAuthProfileStore({
-            authProfileId: profileId,
-            agentDir: scope.agentDir,
-            config: ctx.config,
-          }),
-          agentDir: scope.agentDir,
-          config: ctx.config,
-        })
-      : Promise.resolve(undefined);
-  // Compare the prepared principal binding, not cache keys with email/profile fallbacks.
-  // A profile can change accounts while preparation awaits, before a client is leased.
-  const authBinding =
-    "authBindingFingerprint" in auth.clientOptions
-      ? auth.clientOptions.authBindingFingerprint
-      : await readAuthBinding();
-  const accountId = usesNativeAuth
-    ? undefined
-    : preparedAuth?.kind === "api-key"
-      ? resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey)
-      : preparedAuth?.kind === "profile"
-        ? preparedAuth.snapshot.secretFreeCacheKey
-        : await resolveCodexAppServerAuthAccountCacheKey({
-            authProfileId: profileId,
-            agentDir: scope.agentDir,
-            config: ctx.config,
-          });
-  if ((await readAuthBinding()) !== authBinding) {
-    throw new Error(SCOPE_CHANGED_MESSAGE);
-  }
-  return await withCodexAppServerJsonClient(
-    {
-      startOptions: appServer.start,
-      pluginConfig,
-      agentDir: scope.agentDir,
-      config: ctx.config,
-      sessionId: ctx.sessionId,
-      sessionKey: ctx.sessionKey,
-      timeoutMs: appServer.requestTimeoutMs,
-      timeoutMessage: "Codex plugin request timed out. Check the Codex connection and retry.",
-      assertCurrent: scope.assertCurrent,
+  try {
+    const { assertCurrentAsync } = {
+      assertCurrentAsync: scope.assertCurrentAsync,
       ...auth.clientOptions,
-    },
-    async (request, client, requestScope) => {
-      const assertCurrent = () => {
-        requestScope.assertCurrent();
-        if (client.getCloseError()) {
-          throw new Error(SCOPE_CHANGED_MESSAGE);
-        }
-      };
-      const validateCurrent = async () => {
-        assertCurrent();
-        const currentTarget = await resolveControlTarget(ctx);
-        const currentConversation = readCodexConversationBindingData(
-          await ctx.getCurrentConversationBinding(),
-        );
-        const currentPolicy = JSON.stringify(
-          (await deps.codexPluginsManagementIo?.readConfig()) ?? {},
-        );
-        const currentAuthBinding = await readAuthBinding();
-        await assertCurrentAsync?.();
-        // Reads can outlive cancellation; never publish after the request scope ends.
-        assertCurrent();
-        if (
-          !isDeepStrictEqual(currentTarget, target) ||
-          !isDeepStrictEqual(currentConversation, conversation) ||
-          currentPolicy !== initialPolicy ||
-          currentAuthBinding !== authBinding
-        ) {
-          throw new Error(SCOPE_CHANGED_MESSAGE);
-        }
-      };
-      // Codex serializes account/read after login's delayed account/updated.
-      // Drain startup before subscribing so the prepared login is not revoked.
-      try {
-        await request({
-          method: "account/read",
-          requestParams: { refreshToken: false },
-          assertCurrent,
-        });
-      } catch {
-        requestScope.assertCurrent();
-        throw new Error(
-          "Codex account startup could not be confirmed. Check /codex account and retry.",
-        );
-      }
-      const unsubscribe = client.addNotificationHandler((notification) => {
-        if (notification.method === "account/updated") {
-          requestScope.abort(new Error(SCOPE_CHANGED_MESSAGE));
-        }
-      });
-      try {
-        await validateCurrent();
-        const result = await run({
-          request: async <TResponse>(
-            method: string,
-            requestParams?: unknown,
-          ): Promise<TResponse> => {
-            await validateCurrent();
-            const response = await request<TResponse>({
-              method,
-              requestParams,
-              assertCurrent: () => {
-                assertCurrent();
-                assertCodexHostOwnerCurrent(ctx);
-              },
-            });
-            await validateCurrent();
-            return response;
-          },
-          workspaceDir,
-          agentId: scope.agentId,
-          current,
-          ...(profileId ? { profileId } : {}),
-          // Persisted thread ids alone cannot attest a different physical client.
-          ...(binding?.clientId === client.getInstanceId() ? { threadId: binding.threadId } : {}),
-          appCacheKey: buildCodexPluginAppCacheKey({
-            appServer,
-            agentDir: scope.agentDir,
+    };
+    const preparedAuth =
+      "preparedAuth" in auth.clientOptions ? auth.clientOptions.preparedAuth : undefined;
+    const usesNativeAuth = scope.authProfileId === null || appServer.start.homeScope === "user";
+    const profileId = usesNativeAuth ? undefined : auth.authProfileId;
+    const readAuthBinding = async () =>
+      profileId
+        ? fingerprintCodexAppServerAuthBinding({
             authProfileId: profileId,
-            accountId,
-            envApiKeyFingerprint:
-              usesNativeAuth || preparedAuth || profileId
-                ? undefined
-                : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
-            appServerVersion: client.getServerVersion(),
-            runtimeIdentity: client.getRuntimeIdentity(),
-          }),
-          validateCurrent,
+            authProfileStore: await resolveCodexAppServerAuthProfileStore({
+              authProfileId: profileId,
+              agentDir: scope.agentDir,
+              config: ctx.config,
+            }),
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          })
+        : Promise.resolve(undefined);
+    // Compare the prepared principal binding, not cache keys with email/profile fallbacks.
+    // A profile can change accounts while preparation awaits, before a client is leased.
+    const authBinding =
+      "authBindingFingerprint" in auth.clientOptions
+        ? auth.clientOptions.authBindingFingerprint
+        : await readAuthBinding();
+    const accountId = usesNativeAuth
+      ? undefined
+      : preparedAuth?.kind === "api-key"
+        ? resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey)
+        : preparedAuth?.kind === "profile"
+          ? preparedAuth.snapshot.secretFreeCacheKey
+          : await resolveCodexAppServerAuthAccountCacheKey({
+              authProfileId: profileId,
+              agentDir: scope.agentDir,
+              config: ctx.config,
+            });
+    if ((await readAuthBinding()) !== authBinding) {
+      throw new Error(SCOPE_CHANGED_MESSAGE);
+    }
+    return await withCodexAppServerJsonClient(
+      {
+        startOptions: appServer.start,
+        pluginConfig,
+        agentDir: scope.agentDir,
+        config: ctx.config,
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        timeoutMs: appServer.requestTimeoutMs,
+        timeoutMessage: "Codex plugin request timed out. Check the Codex connection and retry.",
+        assertCurrent: scope.assertCurrent,
+        ...auth.clientOptions,
+      },
+      async (request, client, requestScope) => {
+        const assertCurrent = () => {
+          requestScope.assertCurrent();
+          if (client.getCloseError()) {
+            throw new Error(SCOPE_CHANGED_MESSAGE);
+          }
+        };
+        const validateCurrent = async () => {
+          assertCurrent();
+          const currentTarget = await resolveControlTarget(ctx);
+          const currentConversation = readCodexConversationBindingData(
+            await ctx.getCurrentConversationBinding(),
+          );
+          const currentPolicy = JSON.stringify(
+            (await deps.codexPluginsManagementIo?.readConfig()) ?? {},
+          );
+          const currentAuthBinding = await readAuthBinding();
+          await assertCurrentAsync?.();
+          // Reads can outlive cancellation; never publish after the request scope ends.
+          assertCurrent();
+          if (
+            !isDeepStrictEqual(currentTarget, target) ||
+            !isDeepStrictEqual(currentConversation, conversation) ||
+            currentPolicy !== initialPolicy ||
+            currentAuthBinding !== authBinding
+          ) {
+            throw new Error(SCOPE_CHANGED_MESSAGE);
+          }
+        };
+        // Codex serializes account/read after login's delayed account/updated.
+        // Drain startup before subscribing so the prepared login is not revoked.
+        try {
+          await request({
+            method: "account/read",
+            requestParams: { refreshToken: false },
+            assertCurrent,
+          });
+        } catch {
+          requestScope.assertCurrent();
+          throw new Error(
+            "Codex account startup could not be confirmed. Check /codex account and retry.",
+          );
+        }
+        const unsubscribe = client.addNotificationHandler((notification) => {
+          if (notification.method === "account/updated") {
+            requestScope.abort(new Error(SCOPE_CHANGED_MESSAGE));
+          }
         });
-        await validateCurrent();
-        return result;
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
+        try {
+          await validateCurrent();
+          const result = await run({
+            request: async <TResponse>(
+              method: string,
+              requestParams?: unknown,
+            ): Promise<TResponse> => {
+              await validateCurrent();
+              const response = await request<TResponse>({
+                method,
+                requestParams,
+                assertCurrent: () => {
+                  assertCurrent();
+                  assertCodexHostOwnerCurrent(ctx);
+                },
+              });
+              await validateCurrent();
+              return response;
+            },
+            workspaceDir,
+            agentId: scope.agentId,
+            current,
+            ...(profileId ? { profileId } : {}),
+            // Persisted thread ids alone cannot attest a different physical client.
+            ...(binding?.clientId === client.getInstanceId() ? { threadId: binding.threadId } : {}),
+            appCacheKey: buildCodexPluginAppCacheKey({
+              appServer,
+              agentDir: scope.agentDir,
+              authProfileId: profileId,
+              accountId,
+              envApiKeyFingerprint:
+                usesNativeAuth || preparedAuth || profileId
+                  ? undefined
+                  : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
+              appServerVersion: client.getServerVersion(),
+              runtimeIdentity: client.getRuntimeIdentity(),
+            }),
+            validateCurrent,
+          });
+          await validateCurrent();
+          return result;
+        } finally {
+          unsubscribe();
+        }
+      },
+    );
+  } finally {
+    auth.release();
+  }
 }

@@ -128,8 +128,6 @@ export type ToolSearchCatalogRef = {
   directOnlyToolNames?: ReadonlySet<string>;
   baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;
-  onChange?: () => void;
-  disposeObserver?: () => void;
   onDispose?: Set<() => void>;
 };
 

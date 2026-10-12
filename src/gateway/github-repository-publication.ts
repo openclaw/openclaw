@@ -187,6 +187,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       agentId: input.agentId,
     };
     const currentOwner = await prepareRepositoryOwner(session);
+    using _ = { [Symbol.dispose]: () => currentOwner.release() };
+
     const initial = currentOwner();
     const assertCurrent = () => {
       requester.assertCurrent();
@@ -357,6 +359,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
         const prepared = await preparePersonalStatus(existing.request_id);
+        using _ = { [Symbol.dispose]: () => prepared?.release() };
         action.assertCurrent();
         return (await personalStatus(existing, action, action, prepared)).result;
       }
@@ -368,6 +371,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         action,
         async (assertReservation) => {
           const currentOwner = await prepareRepositoryOwner(action);
+          using _ = { [Symbol.dispose]: () => currentOwner.release() };
+
           const initial = currentOwner();
           const assertCurrent = () => {
             action.assertCurrent();
@@ -475,8 +480,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         return null;
       }
       const prepared = await preparePersonalStatus(row.request_id);
+      using _ = { [Symbol.dispose]: () => prepared?.release() };
       action.assertCurrent();
-      return personalStatus(row, action, session, prepared);
+      return await personalStatus(row, action, session, prepared);
     },
     async confirmPersonalV2(
       input: SessionGitHubConfirmParams,

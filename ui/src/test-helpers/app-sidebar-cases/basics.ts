@@ -556,13 +556,16 @@ describe("AppSidebar agent chip", () => {
         "[data-agent-group=main] .sidebar-agent-roster__header .session-glyph__ring",
       ),
     ).toBeNull();
-    expect(
-      sidebar.querySelector(
-        '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
-      ),
-    ).not.toBeNull();
-    expect(
-      sidebar.querySelector("[data-agent-group=main] .sidebar-agent-roster__header")?.textContent,
-    ).toContain("Child session Spawned thread failed: Review failed");
+    const attention = sidebar.querySelector(
+      '[data-agent-group=main] .sidebar-agent-roster__header [data-session-attention="error"]',
+    )!;
+    expect(attention).not.toBeNull();
+    await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+      .updateComplete;
+    const description = (attention.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("Child session Spawned thread failed: Review failed");
   });
 });

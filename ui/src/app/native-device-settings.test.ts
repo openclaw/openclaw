@@ -12,6 +12,7 @@ import {
   type NativeDeviceSettingsCapability,
   type NativeDeviceSettingsSnapshot,
 } from "./native-device-settings.ts";
+import { nativeSetupCapability } from "./native-setup.ts";
 
 let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
@@ -32,6 +33,27 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
+  it.each([undefined, false, true])(
+    "advertises AI setup only with explicit host support (%s)",
+    (available) => {
+      const base = createIosNativeDeviceSettingsSnapshot();
+      const post = installBridge({
+        ...base,
+        capabilities: {
+          ...base.capabilities,
+          ...(available === undefined ? {} : { aiSetupAvailable: available }),
+        },
+      });
+      const setup = nativeSetupCapability({ nativeDeviceSettings: capability, navigate: vi.fn() });
+      expect(typeof setup?.openAiSetup === "function").toBe(available === true);
+      setup?.openAiSetup?.();
+      if (available) {
+        expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      } else {
+        expect(post).not.toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      }
+    },
+  );
   it("uses the shipped installation projection on an older native host without offering new actions", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     delete snapshot.browser.chromeSetupActions;

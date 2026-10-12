@@ -195,7 +195,7 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
-                const nextAction = `Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
+                const nextAction = `Stop the Gateway through its service owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
                   `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
                 ]);
@@ -217,6 +217,10 @@ export async function updateFinalizeCommand(
                   );
                 }
                 lifecycle.complete(0, nextAction);
+                // Keep the pending receipt; an older driver still owns its update's exit status.
+                if (recoveryRunIds !== undefined && lifecycle.ownsUpdateRun) {
+                  exitCode = 2;
+                }
                 return;
               }
               if (!lifecycle.completed) {

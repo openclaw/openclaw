@@ -1,6 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
@@ -83,8 +87,11 @@ vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => {
   };
 });
 
+afterAll(() => clearRuntimeConfigSnapshot());
+
 describe("subagent registry recovery scheduling", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({ session: { store: "/synthetic-kill/sessions.sqlite" } });
     vi.useFakeTimers();
     resetGatewayWorkAdmission();
     recoverRow.mockReset();
@@ -209,6 +216,9 @@ describe("subagent registry recovery scheduling", () => {
       .mocked(loadSubagentSessionEntry)
       .withImplementation(actual.loadSubagentSessionEntry, async () => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          setRuntimeConfigSnapshot({
+            session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+          });
           recoverRow.mockResolvedValue({ status: "ignored" });
           const { entry, runs, completeSubagentRunWithRecovery, sweeper } = createHarness({
             current: createMockGatewayRecoveryRuntime(),
@@ -382,6 +392,9 @@ describe("subagent registry recovery scheduling", () => {
         .mocked(loadSubagentSessionEntry)
         .withImplementation(actual.loadSubagentSessionEntry, async () => {
           await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+            setRuntimeConfigSnapshot({
+              session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+            });
             const { entry, runs, callGateway, sweeper } = createHarness({}, archivedRun());
             const sibling = archivedRun({
               runId: "sibling-run",
@@ -657,6 +670,9 @@ describe("subagent registry recovery scheduling", () => {
       .mocked(prepareSubagentKillSession)
       .withImplementation(actual.prepareSubagentKillSession, async () => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          setRuntimeConfigSnapshot({
+            session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+          });
           const { entry, runs, completeSubagentRunWithRecovery } = createHarness({});
           entry.childSessionKey = "global";
           entry.childAgentId = "research";
@@ -953,6 +969,9 @@ describe("superseded subagent retirement", () => {
     "publishes retirement after durable deletion (refused: $refused, successor retires during cleanup: $retireSuccessor)",
     async ({ refused, retireSuccessor }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({
+          session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+        });
         const entry = run();
         if (retireSuccessor) {
           entry.execution.transcriptTarget = {

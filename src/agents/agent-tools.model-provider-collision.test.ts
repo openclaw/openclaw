@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -21,12 +25,16 @@ beforeEach(() => {
   // Route selection needs a configured managed fallback without forcing a provider.
   vi.stubEnv("BRAVE_API_KEY", "test-managed-search-key");
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllEnvs();
+});
 
 function selectedTools(
   requestedTools: string[],
   options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
 ) {
+  setRuntimeConfigSnapshot(options?.config ?? {});
   const actualTools = createOpenClawCodingTools({
     ...options,
     cwd: "/tmp/openclaw-agent-tools-policy-test",

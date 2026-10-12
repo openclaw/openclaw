@@ -106,13 +106,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     clientRunId,
     entry,
     expectedLeafEntryId,
-    requestedSessionId,
     resolvedSessionModel,
     storePath,
     selectedAgent,
     sessionKey,
   } = session;
-  const { clientInfo, p, reconnectResumeRequested, supportsTaskSuggestions } = request;
+  const { clientInfo, p, supportsTaskSuggestions } = request;
   const {
     accountId,
     ctx,
@@ -408,18 +407,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(supportsTaskSuggestions
                   ? { taskSuggestionDeliveryMode: "gateway" as const }
                   : {}),
-                requestedSessionId,
                 expectedActiveReplyOperation: admission.expectedActiveReplyOperation,
-                ...(restartSafeAdmission
-                  ? {
-                      expectedExistingSessionId: admittedSessionId,
-                      pinExpectedExistingSession: true,
-                      newlyCreatedSessionId: admission.initialSessionEntry?.sessionId,
-                    }
-                  : entry?.sessionId
-                    ? { expectedExistingSessionId: entry.sessionId }
-                    : {}),
-                resumeRequestedSession: reconnectResumeRequested,
+                ...userTurn.getSessionInitializationOptions(),
+                bindSessionCreation: params.bindSessionCreation,
+                onSessionCreated: params.onSessionCreated,
                 onSessionPrepared: (binding) => {
                   phase?.mark("preparation");
                   admission.onSessionPrepared(binding);

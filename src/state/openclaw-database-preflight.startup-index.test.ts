@@ -5,6 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
@@ -37,9 +41,11 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   await flushLogger();
+  clearRuntimeConfigSnapshot();
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -63,6 +69,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     configPath,
     JSON.stringify({ ...config, logging: { level: "warn", file: logPath } }),
   );
+  setRuntimeConfigSnapshot(config);
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
   const agents = [];
   for (const agentId of ids) {

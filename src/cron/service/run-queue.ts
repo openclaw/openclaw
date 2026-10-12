@@ -338,6 +338,8 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
           completion: createDeferredCore<CronRunResult>(),
           activation: createDeferredCore(),
         };
+        // Recovered requests have no caller waiting on their completion.
+        void pending.completion.promise.catch(() => {});
         launchState(state).contexts.set(entry.runReceipt.receiptId, pending);
         registerCronRunQueue(state, () => drainCronRunQueue(state));
       }
@@ -404,7 +406,7 @@ async function launchCronRun(
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
   const force = options.mode === "force" || options.onExit !== undefined;
   const unavailable =
-    state.deps.isAgentAvailable?.(entry.runReceipt.agentId, undefined, {
+    state.deps.isAgentAvailable?.(entry.runReceipt.agentId, {
       deletionBlocked: false,
     }) === false;
   // One final live owner/eligibility check; a disable may still race dispatch.

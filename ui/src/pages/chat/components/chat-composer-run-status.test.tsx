@@ -12,11 +12,7 @@ it.each([
   const onOpenSubagents = vi.fn();
   const waitingSubagents: ChatSubagentWait = { startedAt: null, ...counts };
   const view = mountSolid(() => (
-    <ComposerRunStatus
-      waitingSubagents={waitingSubagents}
-      working={false}
-      onOpenSubagents={onOpenSubagents}
-    />
+    <ComposerRunStatus waitingSubagents={waitingSubagents} onOpenSubagents={onOpenSubagents} />
   ));
   expect(view.container.textContent).toContain(label);
   expect(view.container.querySelector("openclaw-elapsed-time")).toBeNull();

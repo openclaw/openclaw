@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -65,6 +66,7 @@ it.each(callbackCases)(
   "$opener keeps reentrant incognito reads and the live view consistent after callback $outcome",
   async ({ opener, outcome }) => {
     await withOpenClawTestState({ label: "manager-callback-rollback" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = await createTarget(state, "callback", true);
       const manager =
         opener === "openAsync"
@@ -157,6 +159,7 @@ it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] 
   "restores the live view and continuation after %s rolls back",
   async (scenario) => {
     await withOpenClawTestState({ label: "manager-transaction-rollback" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target =
         scenario === "lazy header"
           ? {
@@ -300,6 +303,7 @@ it.each(["keyed replay", "same-target reload", "bounded branch", "lazy header"] 
 
 it("rolls back only the inner savepoint while the enclosing transaction commits", async () => {
   await withOpenClawTestState({ label: "manager-savepoint-rollback" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = await createTarget(state, "savepoint");
     const manager = SessionManager.open(target, state.workspaceDir);
     const seed = manager.appendMessage(message("seed"));
@@ -338,6 +342,7 @@ it("rolls back only the inner savepoint while the enclosing transaction commits"
 
 it("does not restore the old view over a rebound target after rollback", async () => {
   await withOpenClawTestState({ label: "manager-rebound-rollback" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const first = await createTarget(state, "first");
     const second = await createTarget(state, "second");
     const manager = SessionManager.open(first, state.workspaceDir);
@@ -380,6 +385,7 @@ it.each(["top-level", "enclosing transaction"] as const)(
   "rejects a callback target rebind before persisting the message in a %s append",
   async (transaction) => {
     await withOpenClawTestState({ label: "manager-callback-rebind" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const first = await createTarget(state, "first");
       const second = await createTarget(state, "second");
       const manager = SessionManager.open(first, state.workspaceDir);

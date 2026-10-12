@@ -133,7 +133,11 @@ describe("secret target registry fast path", () => {
         "channels.custom.secondaryToken",
       ]),
     );
-    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config, env });
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({
+      config,
+      env,
+      configuredOnly: true,
+    });
 
     const nextConfig = {
       plugins: { load: { paths: ["/plugins/custom-next"] }, entries: {} },
@@ -141,7 +145,11 @@ describe("secret target registry fast path", () => {
     };
     const nextTargets = discoverConfigSecretTargets(nextConfig, { env });
     expect(nextTargets.map((target) => target.entry.id)).toContain("channels.customNext.token");
-    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({ config: nextConfig, env });
+    expect(getSecretTargetRegistryMock).toHaveBeenLastCalledWith({
+      config: nextConfig,
+      env,
+      configuredOnly: true,
+    });
   });
 
   it("resolves channel plan targets without loading plugin metadata", () => {

@@ -6,6 +6,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -39,6 +40,7 @@ describe("session startup catch-up", () => {
       prefix: "openclaw-session-startup-",
       layout: "state-only",
     });
+    await captureRuntimeConfigAsyncReader()();
     stateDir = testState.stateDir;
     resetTranscriptUpdateListener();
   });
@@ -84,6 +86,7 @@ describe("session startup catch-up", () => {
     await testState.writeConfig({ session: { store: storePath } });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
   }
 
   async function writeSqliteSession(
@@ -355,7 +358,9 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await SessionStartupCatchupHarness.create([], true);
+    const harness = await SessionStartupCatchupHarness.create([], true, false, false, {
+      session: { store: storePath },
+    });
     harness.addPendingSessionTarget({
       agentId: "main",
       sessionId: "custom-thread",
@@ -418,7 +423,9 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await SessionStartupCatchupHarness.create([]);
+    const harness = await SessionStartupCatchupHarness.create([], false, false, false, {
+      session: { store: session.storePath },
+    });
     harness.afterNextCorpusListForTest(async () => {
       await configureTestSessionStore(replacement.storePath);
     });

@@ -17,9 +17,9 @@ import { getRuntimeConfig } from "../config/config.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   applySessionEntryLifecycleMutation,
-  loadExactSessionEntry,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -541,11 +541,11 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
     }
     const staleIsolatedEntry = staleIsolatedSessionKey
-      ? loadExactSessionEntry({
+      ? await readSessionEntryReadOnlyInWorker({
           agentId,
           storePath: isolatedStorePath,
           sessionKey: staleIsolatedSessionKey,
-        })?.entry
+        })
       : undefined;
     const removals: SessionEntryLifecycleRemoval[] = staleIsolatedSessionKey
       ? [
@@ -619,11 +619,11 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     previousUpdatedAt,
     policySessionEntry:
       outboundPolicySessionKey && (outboundPolicySessionKey !== sessionKey || !entry)
-        ? loadExactSessionEntry({
+        ? await readSessionEntryReadOnlyInWorker({
             agentId,
             storePath: preflight.session.storePath,
             sessionKey: outboundPolicySessionKey,
-          })?.entry
+          })
         : entry,
     delivery,
     visibility,

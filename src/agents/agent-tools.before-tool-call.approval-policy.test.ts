@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../logging/diagnostic-run-activity.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -24,6 +25,7 @@ vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGateway = vi.mocked(callGatewayTool);
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resetDiagnosticSessionStateForTest();
   resetDiagnosticEventsForTest();
   hookRunner.hasHooks.mockImplementation((hookName) => hookName === "before_tool_call");
@@ -33,6 +35,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticRunActivityForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });

@@ -216,7 +216,7 @@ describe("composer run status", () => {
     },
   );
 
-  it("shows Working only during the current run and leaves idle and approval states empty", async () => {
+  it("keeps the composer free of duplicate working status across run and access states", async () => {
     const { context } = createRefreshChatPane();
     const container = document.body.appendChild(createApplicationContextProvider(context));
     onTestFinished(() => {
@@ -234,22 +234,14 @@ describe("composer run status", () => {
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.runActive = true;
     await draw();
-    expect(
-      container.querySelector(".agent-chat__composer-footer .agent-chat__composer-run-status")
-        ?.textContent,
-    ).toContain("Working…");
-    expect(
-      container.querySelector(".agent-chat__composer-notices .agent-chat__composer-run-status"),
-    ).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.disabledBanner = {
       kind: "composer-replacement",
       text: "This conversation is view-only.",
     };
     await draw();
     expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-run-status")?.textContent).toContain(
-      "Working…",
-    );
+    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
     props.waitingApproval = true;
     await draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();

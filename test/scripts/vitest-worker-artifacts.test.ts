@@ -52,6 +52,40 @@ const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
 
+function heldWorkerBorrowingProbe(directory: string) {
+  const observed = path.join(directory, "generations.jsonl");
+  const test = writeFixture(
+    directory,
+    "held-borrower.test.ts",
+    `
+    ${fixtureReceiptClientSource(receipts.endpoint)}
+    import fs from 'node:fs';
+    import {it,expect} from 'vitest';
+    import {runtimeProcessEntrypoints} from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import {resolveRuntimeWorkerUrl} from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
+    const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+    const preparedAtCollection = fs.existsSync(generation);
+    it('holds the compiled generation until the real borrower is stopped',async()=>{
+      expect(generation.pathname.endsWith('/dist/infra/sqlite-readonly-location.worker.js')).toBe(true);
+      expect(preparedAtCollection).toBe(true);
+      fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify(generation.href)+'\\n');
+      sendReceipt(${JSON.stringify(observed)},'written');
+      await awaitRelease(${JSON.stringify(observed)},'finish');
+    });
+  `,
+  );
+  const config = writeFixture(
+    directory,
+    "vitest.config.mts",
+    `
+    import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
+    const project = {extends:false,plugins:shared.plugins,resolve:shared.resolve,test:{name:'second',environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout}};
+    export default {root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project]}};
+  `,
+  );
+  return { config };
+}
+
 describe.concurrent("fresh compiled subprocess invocation", () => {
   it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
@@ -953,7 +987,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
       workerArtifacts.fixtureLifetime.run(async () => {
         const { startBorrower } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
-        const { config } = workerProbe(directory);
+        const { config } = workerBorrowingProbe(directory);
         const owner = workerArtifacts.createWorkerRun();
         let generation: string | undefined;
         try {
@@ -996,7 +1030,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
       workerArtifacts.fixtureLifetime.run(async () => {
         const { startBorrower } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
-        const { config } = workerProbe(directory, true, "compiled", receipts.endpoint);
+        const { config } = heldWorkerBorrowingProbe(directory);
         const owner = workerArtifacts.createWorkerRun();
         // Node parent-side child.disconnect() can omit ChildProcess.close. Close the
         // fixture endpoint so the owner receives EOF and retains its real join contract.

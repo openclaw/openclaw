@@ -33,7 +33,7 @@ import {
   wrapReadToolWithSkillContent,
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -603,7 +603,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
     }
-    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+    const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
       config,
       agentId: "main",
       sessionKey: requesterSessionKey,
@@ -773,7 +773,7 @@ describe("createOpenClawCodingTools", () => {
 
   registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
 
-  it("materializes additive runtime tools while preserving normal deny policy", () => {
+  it("materializes additive runtime tools while preserving normal deny policy", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const config: OpenClawConfig = {
@@ -785,7 +785,7 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       config,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
         config,
         runtimePluginToolGrant: {
           pluginId: "workboard",

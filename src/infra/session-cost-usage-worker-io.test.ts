@@ -12,12 +12,18 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
 } from "../config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -72,11 +78,13 @@ async function withUsageWorkerPreload(
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
   await withEnvAsync({ OPENCLAW_STATE_DIR: root, ...sqliteWorkerPreloadEnv(preload) }, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await operation();
     } finally {
       await closeOpenClawAgentDatabasesAsync();
       await closeStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 }
@@ -109,6 +117,15 @@ if (!isMainThread) {
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = Reflect.apply(prepare, this, [sql]);
+    if (/^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql)) {
+      for (const method of ["all", "get", "iterate"]) {
+        const original = statement[method];
+        statement[method] = function(...args) {
+          record({ kind: "transcript-stats" });
+          return Reflect.apply(original, this, args);
+        };
+      }
+    }
     if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
@@ -157,6 +174,7 @@ if (!isMainThread) {
         .map(
           (line) =>
             JSON.parse(line) as
+              | { kind: "transcript-stats" }
               | { kind: "cache" }
               | { kind: "cache-row"; key: string; valueBytes: number }
               | { kind: "transcript"; method: string; start: number },
@@ -165,6 +183,33 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
+  it("returns uncached SQLite sessions as pending without reading transcript statistics", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "not-yet-projected",
+        storePath: database.path,
+      });
+      const probe = await observeUsageWorkerReads(state.stateDir, []);
+      await probe.run(async () => {
+        expect(
+          await loadSessionCostSummariesFromCache({
+            agentId: "main",
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          }),
+        ).toMatchObject({
+          summaries: [null],
+          cacheStatus: { status: "stale", cachedFiles: 0, pendingFiles: 1, staleFiles: 1 },
+        });
+        expect((await probe.read()).filter((entry) => entry.kind === "transcript-stats")).toEqual(
+          [],
+        );
+      });
+    });
+  });
+
   it.each(["zstd", "plain"] as const)(
     "inventories %s archives without reading payloads and materializes only for a summary",
     async (encoding) => {
@@ -581,6 +626,7 @@ if (!isMainThread) {
 
 it("keeps model addition order when integer timestamp totals hide fractional model costs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
     const agentId = "usage-model-rounding";
     const sessionFile = state.path("usage-model-rounding.jsonl");
     const records = [
@@ -602,8 +648,9 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
       ),
     );
     await fs.writeFile(sessionFile, records.join("\n") + "\n");
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     const request = {
+      config,
       agentId,
       sessions: [{ sessionFile }],
       requestRefresh: false,
@@ -626,6 +673,7 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
 
 it("replaces every monthly partition after cache damage and filters within and across months", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
     const agentId = "usage-missing-partition";
     const sessionFile = state.path("usage-missing-partition.jsonl");
     const record = (day: number) =>
@@ -640,7 +688,7 @@ it("replaces every monthly partition after cache damage and filters within and a
         },
       }) + "\n";
     await fs.writeFile(sessionFile, record(18) + record(19) + record(31));
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     runOpenClawAgentWriteTransaction(
       ({ db }) =>
         db
@@ -651,7 +699,7 @@ it("replaces every monthly partition after cache damage and filters within and a
       { agentId },
     );
     await fs.appendFile(sessionFile, record(20));
-    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
     const stored = runOpenClawAgentWriteTransaction(
       ({ db }) =>
         db
@@ -678,6 +726,7 @@ it("replaces every monthly partition after cache damage and filters within and a
     ]) {
       expect(
         await loadSessionCostSummariesFromCache({
+          config,
           agentId,
           sessions: [{ sessionFile }],
           projection: "overview",

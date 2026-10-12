@@ -327,6 +327,7 @@ export class MemoryIndexDatabase {
     return {
       vector: { enabled: this.vector.enabled, available: this.vector.available },
       fts: { enabled: this.fts.enabled, available: this.fts.available },
+      hasVectorTable: this.facts.hasVectorTable,
       ...(this.vector.available && this.vector.extensionPath
         ? { extensionPath: this.vector.extensionPath }
         : {}),

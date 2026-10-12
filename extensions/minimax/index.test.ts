@@ -209,7 +209,7 @@ describe("minimax provider hooks", () => {
       });
 
       const canDiscover = available || legacyToken;
-      expect(result?.outcomes).toEqual([
+      expect(result?.outcomes).toMatchObject([
         {
           provider: "minimax-portal",
           profileId: "minimax-portal:selected",

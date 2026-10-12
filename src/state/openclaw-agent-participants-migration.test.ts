@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
 import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sqlite-recover-report.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -97,6 +98,7 @@ describe("participant identity migration", () => {
     "handles %s atomically",
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(
           { agentId: "main", env: state.env, sessionKey },
           { sessionId: "migration-session", updatedAt: 123 },
@@ -207,6 +209,7 @@ describe("participant identity migration", () => {
   );
   it("preserves supported non-profile observations and explicit unknown legacy identities", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         { sessionId: "legacy-kinds", updatedAt: 1 },
@@ -288,6 +291,7 @@ describe("participant identity migration", () => {
     "preserves membership but not unproved profile times from the %s shape",
     async (shape) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(
           { agentId: "main", env: state.env, sessionKey },
           { sessionId: "migration-session", updatedAt: 123 },
