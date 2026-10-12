@@ -548,7 +548,7 @@ public enum ChatSessionSidebarModel {
         guard let projection = self.observerProjection(for: change, activeAgentId: activeAgentId)
         else { return sessions }
 
-        var session = sessions[index]
+        guard var session = self.sessionSnapshot(for: change, previous: sessions[index]) else { return nil }
         if let updatedAt = change.updatedAt {
             session.updatedAt = updatedAt
         }
@@ -603,7 +603,31 @@ public enum ChatSessionSidebarModel {
 
         var updated = sessions
         updated[index] = session
-        return updated
+        return self.clearingForeignGlobalObserverDigest(in: updated, activeAgentId: activeAgentId)
+    }
+
+    private static func sessionSnapshot(
+        for change: OpenClawChatSessionsChangedEvent,
+        previous: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry?
+    {
+        guard let row = change.session else { return previous }
+        guard row.key == previous.key else { return nil }
+        guard row.sessionId != nil, row.kind != nil else { return previous }
+        if row.sessionId == previous.sessionId, let offeredDate = row.updatedAt,
+           let heldDate = previous.updatedAt, offeredDate < heldDate { return nil }
+        var session = row
+        if session.sessionId == previous.sessionId, self.isRunning(session),
+           let digest = previous.observerDigest,
+           self.sessionMatchesActiveAgent(
+               sessionKey: row.key,
+               agentId: digest.agentId ?? previous.agentId,
+               activeAgentId: change.agentId ?? row.agentId),
+           digest.runId.map(self.normalizedActiveRunIds(session.activeRunIds).contains) == true,
+           session.observerDigest.map({ self.isNewer(digest, than: $0) }) ?? true
+        {
+            session.observerDigest = digest
+        }
+        return session
     }
 
     private static func visibleObserverDigest(
