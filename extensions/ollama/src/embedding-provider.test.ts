@@ -555,6 +555,21 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  it("does not attach provider apiKey to a different remote embedding host", async () => {
+    const { fetchMock } = await embedTestQuery({
+      config: createProviderConfig({
+        baseUrl: "http://127.0.0.1:11434",
+        apiKey: "provider-host-key",
+        models: [],
+      }),
+      remote: { baseUrl: "https://memory.example.com" },
+    });
+
+    const init = firstFetchInit(fetchMock);
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBeUndefined();
+  });
+
   it("does not forward selected-host SecretRefs to a different remote embedding host", async () => {
     vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
     vi.stubEnv("OLLAMA_SELECTED_HOST_KEY", "synthetic-selected-host-key");

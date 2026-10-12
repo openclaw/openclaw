@@ -164,6 +164,7 @@ describe("VisitorPolicyClient", () => {
     [name: string, override: Record<string, unknown>, provider?: typeof githubProvider | null]
   >([
     ["deny decision", { decision: "deny" }],
+    ["unsupported includes", { include: [{ everyone: {} }] }],
     ["mixed email rules", { include: [{ email: { email: "first@example.com" }, everyone: {} }] }],
     ["unconfigured GitHub mapping", { include: [githubRule] }, null],
     [
@@ -173,6 +174,7 @@ describe("VisitorPolicyClient", () => {
       },
     ],
     ["another OIDC claim", { include: [{ oidc: { ...githubRule.oidc, claim_name: "login" } }] }],
+    ["mixed OIDC rules", { include: [{ ...githubRule, everyone: {} }] }],
     ["extra OIDC fields", { include: [{ oidc: { ...githubRule.oidc, login: "visitor" } }] }],
     ...["042", "9007199254740992", 42].map((claimValue): [string, Record<string, unknown>] => [
       `noncanonical account ID ${JSON.stringify(claimValue)}`,

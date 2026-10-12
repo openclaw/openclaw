@@ -106,7 +106,7 @@ describe("browser screencast mint route", () => {
     expect(response.body).not.toHaveProperty("token");
   });
 
-  it("binds a minted token to requester invalidation", async () => {
+  it.each(["socket close", "invalidation"])("binds a minted token to requester %s", async (end) => {
     const connection = new AbortController();
     const requester = {
       invalidated: false,
@@ -117,8 +117,12 @@ describe("browser screencast mint route", () => {
     const response = await request({}, requester);
     const token = (response.body as { token: string }).token;
     expect(response.statusCode).toBe(200);
-    requester.invalidated = true;
-    expect(connection.signal.aborted).toBe(false);
+    if (end === "socket close") {
+      connection.abort();
+    } else {
+      requester.invalidated = true;
+    }
+    expect(connection.signal.aborted).toBe(end === "socket close");
     expect(consumeBrowserScreencastToken(token)).toBeUndefined();
   });
 

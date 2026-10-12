@@ -150,6 +150,39 @@ describe("RealtimeAudioPacer playout state", () => {
     return { pacer, sent };
   }
 
+  it("drops playout state when queued audio is cleared or closed", async () => {
+    const { pacer } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
+
+    pacer.clearAudio();
+    expect(pacer.getPlaybackState()).toEqual([]);
+
+    pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
+    pacer.close();
+    expect(pacer.getPlaybackState()).toEqual([]);
+  });
+
+  it("fires the playback reset hook on every clear and close", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const onPlaybackReset = vi.fn();
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      onPlaybackReset,
+      send: () => true,
+    });
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
+    pacer.clearAudio();
+    expect(onPlaybackReset).toHaveBeenCalledTimes(1);
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-b" });
+    pacer.close();
+    expect(onPlaybackReset).toHaveBeenCalledTimes(2);
+  });
+
   it("reports one cumulative offset when an item resumes after another item", async () => {
     const { pacer, sent } = createPlaybackPacer();
 
