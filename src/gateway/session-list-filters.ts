@@ -390,6 +390,31 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
+    if (!matchesSessionArchiveFilter(entry, opts.archived)) {
+      continue;
+    }
+    if (
+      opts.requireLastInteraction === true &&
+      (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
+        normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
+    ) {
+      continue;
+    }
+    if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
+      continue;
+    }
+    if (opts.projectId !== undefined && entry.projectId !== opts.projectId) {
+      continue;
+    }
+    if (
+      opts.workspaceDir !== undefined &&
+      (entry.spawnedCwd ?? entry.spawnedWorkspaceDir) !== opts.workspaceDir
+    ) {
+      continue;
+    }
+    if (opts.group !== undefined && (entry.category ?? "") !== opts.group) {
+      continue;
+    }
     if (!opts.involvingProfileId && params.entryFilter?.(key, entry) === false) {
       continue;
     }
@@ -429,31 +454,6 @@ export function* filterSessionEntries(
       if (!keepSpawned) {
         continue;
       }
-    }
-    if (!matchesSessionArchiveFilter(entry, opts.archived)) {
-      continue;
-    }
-    if (
-      opts.requireLastInteraction === true &&
-      (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||
-        normalizeOptionalString(entry.heartbeatIsolatedBaseSessionKey))
-    ) {
-      continue;
-    }
-    if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
-      continue;
-    }
-    if (opts.projectId !== undefined && entry.projectId !== opts.projectId) {
-      continue;
-    }
-    if (
-      opts.workspaceDir !== undefined &&
-      (entry.spawnedCwd ?? entry.spawnedWorkspaceDir) !== opts.workspaceDir
-    ) {
-      continue;
-    }
-    if (opts.group !== undefined && (entry.category ?? "") !== opts.group) {
-      continue;
     }
     if (
       opts.pinned !== undefined &&
@@ -547,7 +547,7 @@ export function* filterSessionEntries(
     ) {
       const profileId = effectiveOwner.identity.id;
       const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
-      const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
+      const agentId = target.agentId;
       const active = params.projectActiveRun?.(key, entry, agentId);
       counts.open += 1;
       counts.running += Number(
@@ -558,7 +558,7 @@ export function* filterSessionEntries(
       ownerSessionCounts.set(profileId, counts);
     }
     if (activityPulse) {
-      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      const agentId = target.agentId;
       activityPulse.sessions += 1;
       activityPulse.running += Number(
         params.projectActiveRun?.(key, entry, agentId)?.active === true,

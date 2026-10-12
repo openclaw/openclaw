@@ -10,11 +10,7 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "../../infra/sqlite-worker-transfer.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
@@ -268,9 +264,6 @@ export async function runSessionEntryWorkerOperation<
     | ReturnType<typeof retainSessionTranscriptWorkerPublication>
     | undefined;
   let committing = false;
-  let transferId: number | undefined;
-  let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
-  let transferred = false;
   let settlement: {
     candidate?: Candidate;
     admitted?: {
@@ -278,13 +271,22 @@ export async function runSessionEntryWorkerOperation<
       retained: RetainedWorkerTransactionAdmission;
     };
   } = {};
+  const createTransfer = () =>
+    createSqliteWorkerTransferCollector("patch", (value) => {
+      if (settlement.candidate || !isRecord(value) || value.kind !== params.candidateKind) {
+        throw new Error("Session patch returned an invalid publication candidate");
+      }
+      // SAFETY: This command's paired kernel supplies the complete framed candidate.
+      settlement.candidate = value as Candidate;
+    });
+  let transfer = createTransfer();
   const matchesReceipt = (raw: unknown) => {
     const receipt = params.nativeSettlement ? params.nativeSettlement.readCommitReceipt(raw) : raw;
     return (
       isRecord(receipt) &&
       receipt.kind === "session-entry-patch-committed" &&
-      transferred &&
-      receipt.transferId === transferId
+      transfer.completed &&
+      receipt.transferId === transfer.id
     );
   };
   return withSessionEntryWorker(
@@ -313,9 +315,7 @@ export async function runSessionEntryWorkerOperation<
         params.run(worker, async (send) => {
           // One locked callback may settle several independent commits in this FIFO turn.
           settlement = {};
-          transferId = undefined;
-          receiver = undefined;
-          transferred = false;
+          transfer = createTransfer();
           committing = true;
           const outcome = await send().then(ok, err);
           let acknowledged = outcome.ok && matchesReceipt(outcome.value);
@@ -403,6 +403,9 @@ export async function runSessionEntryWorkerOperation<
       if (!committing) {
         return;
       }
+      if (isRecord(facts) && isRecord(facts.publication) && facts.publication.transfer) {
+        transfer.accept(facts.publication.transfer);
+      }
       if (!isRecord(facts) || !matchesReceipt(facts.publication) || !settlement.candidate) {
         throw new Error("Session patch commit omitted its exact candidate");
       }
@@ -444,34 +447,7 @@ export async function runSessionEntryWorkerOperation<
       ) {
         params.assertPrepared?.();
       } else if (isRecord(value) && value.kind === "session-entry-patch-transfer") {
-        if (
-          receiver ||
-          !isRecord(value.handle) ||
-          typeof value.handle.id !== "number" ||
-          !Array.isArray(value.handle.kinds) ||
-          value.handle.kinds.length !== 1 ||
-          value.handle.kinds[0] !== "patch"
-        ) {
-          throw new Error("Session patch returned an invalid publication transfer");
-        }
-        // SAFETY: The paired kernel supplies the validated transfer descriptor.
-        const handle = value.handle as SqliteWorkerTransferHandle;
-        transferId = handle.id;
-        receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-          if (
-            settlement.candidate ||
-            record.kind !== "patch" ||
-            !isRecord(record.value) ||
-            record.value.kind !== params.candidateKind
-          ) {
-            throw new Error("Session patch returned an invalid publication candidate");
-          }
-          // SAFETY: This command's paired kernel supplies the complete candidate through its transfer.
-          settlement.candidate = record.value as Candidate;
-        });
-      } else if (isRecord(value) && value.kind === "session-entry-patch-frame" && receiver) {
-        // SAFETY: The receiver validates framing, byte bounds, ordering and record completeness.
-        transferred = receiver.accept(value.frame as SqliteWorkerTransferFrame) !== undefined;
+        transfer.accept(value.transfer);
       } else {
         throw new Error("Session patch returned unexpected transaction facts");
       }

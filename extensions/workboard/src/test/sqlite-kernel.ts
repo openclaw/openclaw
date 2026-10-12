@@ -1,7 +1,7 @@
 import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { WorkboardKeyedStore } from "../persistence-types.js";
-import { createWorkboardSqliteKernel } from "../sqlite-store-kernel.js";
-import type { createWorkboardSqliteStores } from "../sqlite-store.js";
+import { createWorkboardSqliteKernel } from "./database-config.js";
+import type { createWorkboardSqliteStores } from "./database-config.js";
 
 // Native statement counts and error ordering stay with the synchronous worker kernel.
 function asyncKeyedStore<T>(store: {

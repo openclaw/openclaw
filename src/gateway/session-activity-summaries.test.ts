@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -121,8 +122,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
 
   beforeEach(async ({ signal }) => {
     testSignal = signal;
-    testState = await createActivityRecapSessionFixture();
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
+    testState = await createActivityRecapSessionFixture(cfg);
     complete.mockReset().mockImplementation(async () => result("Completed the requested work."));
     prepare.mockReset().mockImplementation(async () => prepared);
     changed.mockReset();
@@ -135,6 +136,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     residentProjection?.dispose();
     residentProjection = undefined;
     await testState.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   it("does not enqueue recaps for excluded sessions or disabled utility routing", async () => {
@@ -381,11 +383,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
     const before = read()!;
     const completion = createDeferred<ReturnType<typeof result>>();
-    complete.mockImplementationOnce(() => completion.promise);
+    const completionStarted = createDeferred();
+    complete.mockImplementationOnce(() => {
+      completionStarted.resolve();
+      return withinTest(completion.promise, testSignal);
+    });
     residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
     await residentProjection.ensureMaterialized();
     await service.ensure(target);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    await withinTest(completionStarted.promise, testSignal);
+    expect(complete).toHaveBeenCalledTimes(1);
     const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const parse = vi.spyOn(JSON, "parse");
     try {
@@ -583,9 +590,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(view()?.state).toBe("current");
     await messages(2, 2);
     const completion = createDeferred<ReturnType<typeof result>>();
-    complete.mockImplementationOnce(() => completion.promise);
+    const completionStarted = createDeferred();
+    complete.mockImplementationOnce(() => {
+      completionStarted.resolve();
+      return withinTest(completion.promise, testSignal);
+    });
     await service.ensure(target);
-    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    await withinTest(completionStarted.promise, testSignal);
+    expect(complete).toHaveBeenCalledTimes(2);
 
     const materializationStarted = createDeferred();
     const materializationReleased = createDeferred();

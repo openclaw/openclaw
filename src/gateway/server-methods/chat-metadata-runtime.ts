@@ -22,7 +22,7 @@ import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
+import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
 import { prepareChatAccountSelection } from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
@@ -176,7 +176,7 @@ export function createGatewayChatMetadataRuntime(params: {
       useRequesterDefaults &&
       !profiles.preferredProfileId &&
       requesterProfileId &&
-      listUserProfileAuthLinks(requesterProfileId).length > 0
+      (await listUserProfileAuthLinksAsync(requesterProfileId)).length > 0
         ? requesterProfileId
         : undefined;
     // Personal selections and credentials can change without publishing a shared auth

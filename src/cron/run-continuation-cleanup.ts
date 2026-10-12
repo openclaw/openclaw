@@ -110,7 +110,6 @@ export async function removeCronRunContinuationSessionIfIdle(
         return;
       }
       await deleteSessionEntryLifecycle({
-        descendantRunBasis: descendants.basis,
         agentId,
         commitGuard: () => {
           assertCurrent();

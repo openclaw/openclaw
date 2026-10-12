@@ -169,7 +169,7 @@ export async function prepareSessionLifecycleDrain(
         // cancellation completion here: it may need placement and lifecycle recovery.
         params.authorize?.();
         params.beforeCancel?.();
-        const workerStop = prepareSessionWorkerPlacementStop(params);
+        const workerStop = await prepareSessionWorkerPlacementStop(params);
         params.authorize?.();
         releaseAdmissions = closeSessionWorkAdmissions({
           scope: params.storePath,
@@ -251,25 +251,26 @@ export async function prepareSessionLifecycleDrain(
               ...queueTarget,
               assertCurrent: () => params.authorize?.(),
             });
-            let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
-            for (const operation of replyRuns) {
-              params.authorize?.();
-              if (isReplyOperationForSession(params, operation)) {
-                aborted = operation.abortByUser() || aborted;
-              }
-            }
+            return cleared.followupCleared > 0 || cleared.laneCleared > 0;
+          },
+          onAuthorizedAfterQueuedAbort: ({ aborted }) => {
+            embeddedAborted ||= aborted;
+            return false;
+          },
+          onCancellationStarted: () => {
             // Agent deletion captured its exact owner before asynchronous inventory.
             // Ordinary session Stop owns embedded cancellation and its persistence.
             if (params.embeddedRun !== undefined || params.sessionKey === "global") {
               params.authorize?.();
               embeddedAborted = embeddedRun?.abort() === true;
-              aborted = embeddedAborted || aborted;
             }
-            return aborted;
-          },
-          onAuthorizedAfterQueuedAbort: ({ aborted }) => {
-            embeddedAborted ||= aborted;
-            return false;
+            // Let chat controllers publish cancellation before their reply becomes non-abortable.
+            for (const operation of replyRuns) {
+              params.authorize?.();
+              if (isReplyOperationForSession(params, operation)) {
+                operation.abortByUser();
+              }
+            }
           },
         });
         // Observe failures immediately while the short mutation releases its queues.
@@ -401,6 +402,8 @@ export async function prepareSessionLifecycleDrain(
       },
     };
   } catch (error) {
+    // Controller cancellation can revoke authority before the embedded fallback runs.
+    const embeddedCancellationAccepted = embeddedAborted || embeddedRun?.isAborted();
     // Accepted worker writes retain cleanup custody even after a caller timeout.
     // Only agent deletion additionally joins unbounded local runtime settlement.
     const settled = await Promise.allSettled([
@@ -410,7 +413,7 @@ export async function prepareSessionLifecycleDrain(
         ? [
             ...terminalDrains.map((drain) => drain.drained),
             admittedWork,
-            embeddedAborted ? embeddedRun?.waitForEnd(null) : undefined,
+            embeddedCancellationAccepted ? embeddedRun?.waitForEnd(null) : undefined,
             ...replyRuns
               .filter((operation) => operation.abortSignal.aborted)
               .map((operation) => waitForReplyOperationOwnerSettlement(operation, null)),

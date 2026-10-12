@@ -125,6 +125,9 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   "extensions/matrix/src/matrix/monitor/startup-verification.ts": {
     "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
   },
+  "extensions/matrix/src/matrix/sdk/crypto-store-ownership.ts": {
+    "@openclaw/fs-safe/durability": { values: ["syncDirectory"] },
+  },
   "extensions/matrix/src/matrix/thread-bindings.ts": {
     "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
   },

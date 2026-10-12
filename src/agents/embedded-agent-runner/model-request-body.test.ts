@@ -1,5 +1,5 @@
 import { hash } from "node:crypto";
-import { serializeModelRequestBody } from "@openclaw/ai/internal/openai";
+import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";

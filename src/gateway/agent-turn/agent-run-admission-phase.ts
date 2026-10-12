@@ -443,7 +443,16 @@ export async function prepareAgentRunDispatch(
   let subagentAdmission: Awaited<ReturnType<typeof prepareGatewaySubagentRun>>;
   try {
     subagentAdmission = await prepareGatewaySubagentRun({
-      ...params,
+      cfg: params.cfg,
+      client: params.client,
+      resolvedSessionKey: params.resolvedSessionKey,
+      activeSessionAgentId: params.activeSessionAgentId,
+      inputProvenance: params.inputProvenance,
+      request: params.request,
+      isOneShotModelRun: params.isOneShotModelRun,
+      runId: params.runId,
+      getAdmittedSessionId: params.getAdmittedSessionId,
+      context: params.context,
       onParentResumeAdopted: (entry) => {
         adoptedParentResume = entry;
       },

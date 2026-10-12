@@ -18,8 +18,8 @@
     "@lezer/highlight": "1.2.5",
     "@lit/context": "1.1.6",
     "@lit/task": "1.0.3",
-    "@modelcontextprotocol/client": "2.3.0",
-    "@modelcontextprotocol/core": "2.3.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/core": "2.3.1",
     "@modelcontextprotocol/ext-apps": "2.0.3",
     "@noble/ed25519": "3.2.0",
     "@noble/hashes": "2.4.0",
@@ -66,7 +66,7 @@
     "openclaw": "workspace:*",
     "pako": "3.0.2",
     "playwright": "1.63.0",
-    "postcss": "8.5.28",
+    "postcss": "8.5.29",
     "vite": "8.3.2",
     "vitest": "5.0.1"
   }

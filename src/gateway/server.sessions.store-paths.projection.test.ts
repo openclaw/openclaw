@@ -8,6 +8,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.ent
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -40,12 +41,13 @@ test("automatic list and search projection reuse conventional state-directory pr
         testState.agentsConfig = {
           entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
         };
-        const { getRuntimeConfig } = await getGatewayConfigModule();
+        const { setRuntimeConfigSnapshot } = await getGatewayConfigModule();
         const { resolvePluginMetadataSnapshot } =
           await import("../plugins/plugin-metadata-snapshot.js");
         const { withPluginMetadataSnapshotScope } =
           await import("../plugins/current-plugin-metadata-snapshot.js");
-        const config = getRuntimeConfig();
+        const config = loadGatewayTestConfig();
+        setRuntimeConfigSnapshot(config);
         const metadata = resolvePluginMetadataSnapshot({ config, allowCurrent: false });
         // Normal Gateway requests inherit the immutable metadata prepared at startup.
         await withPluginMetadataSnapshotScope(

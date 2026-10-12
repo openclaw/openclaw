@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createGatewayCrashLoopRecovery } from "../../cli/gateway-cli/crash-loop-recovery.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -83,11 +84,13 @@ describe("startup recovery admission", () => {
     resetAgentEventsForTest();
     resetGatewayWorkAdmission();
     tmpDir = tempDirs.make("openclaw-recovery-admission-");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
+    clearRuntimeConfigSnapshot();
   });
 
   async function makeMainSessionFixture(
@@ -143,7 +146,12 @@ describe("startup recovery admission", () => {
       if (action !== "healthy") {
         for (let i = 0; i < 3; i++) {
           const boot = recordGatewayBootStart(env, now - 295_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 295_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 295_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(
           env,
@@ -154,7 +162,12 @@ describe("startup recovery admission", () => {
         // Two previous crashes plus the live boot must not independently trip safe mode.
         for (let i = 0; i < 2; i++) {
           const boot = recordGatewayBootStart(env, now - 1_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 1_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 1_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(env, now);
       }
@@ -269,7 +282,7 @@ describe("startup recovery admission", () => {
         const extendedPause = createDeferred();
         if (action === "crash") {
           const boot = recordGatewayBootStart(env, now);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
+          await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
           info.mockImplementation((message) => {
             if (message.includes("restart recovery paused until")) {
               extendedPause.resolve();

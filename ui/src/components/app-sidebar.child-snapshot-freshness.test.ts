@@ -281,8 +281,7 @@ describe("sidebar child snapshot freshness", () => {
       harness.publishList({
         result: result([{ ...parentRow, hasActiveSubagentRun: false }]),
       });
-      await sidebar.updateComplete;
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(sidebar.sessionData.loadingChildSessionKeys.has(parentKey)).toBe(false);
       expect(
         sidebar

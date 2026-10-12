@@ -1,4 +1,3 @@
-// Runtime model preflight tests cover provider/model checks before cron execution.
 import net from "node:net";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";

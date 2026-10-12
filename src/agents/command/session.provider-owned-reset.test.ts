@@ -23,13 +23,14 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: () => "/stores/main.json",
 }));
 
-vi.mock("../../config/sessions/lifecycle.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions/lifecycle.js")>(
-    "../../config/sessions/lifecycle.js",
+vi.mock("../../config/sessions/lifecycle-read.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/lifecycle-read.js")>(
+    "../../config/sessions/lifecycle-read.js",
   );
   return {
     ...actual,
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync: () => hoisted.terminalTranscriptNewer,
+    hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () =>
+      hoisted.terminalTranscriptNewer,
   };
 });
 

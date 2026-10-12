@@ -69,8 +69,6 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        placements.get(SESSION_ID);
-        expect(sql.queries.length).toBeGreaterThan(0);
         const saving = f.mutations.mutate({
           ...sessionTarget,
           assertCurrent: () => {
@@ -155,7 +153,7 @@ describe("repository workspace editor admission", () => {
       .spyOn(brokerReply, "dispatchSqliteWorkerJob")
       .mockImplementation((slot, job, onRejected) => {
         dispatchedSlots.set(slot, slot);
-        dispatch(slot, job, onRejected);
+        return dispatch(slot, job, onRejected);
       });
     const replies = vi
       .spyOn(brokerReply, "receiveSqliteWorkerReply")

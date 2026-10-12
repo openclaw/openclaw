@@ -65,7 +65,7 @@ export async function readGitHubPublicationSessionLifecycleInWorker(input: Publi
     { type: "githubPublication.lifecycle", publicationKind, requestId },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubPublication.lifecycle") {
+  if (!result) {
     throw new Error("GitHub publication requester metadata is unavailable.");
   }
   return result.lifecycle;

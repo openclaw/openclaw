@@ -1465,11 +1465,20 @@ export function resolveUiE2ePrTestSelection(
   }
   const paths = [...changedPaths];
   const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
-  const ownerWatches = UI_E2E_OWNER_WATCHES.map((watch) => ({
-    testFile: resolveUiTypeScriptPath(watch.testFile, cwd),
-    ownerRoots: watch.ownerRoots.map((root) => resolveUiTypeScriptPath(root, cwd)),
-    watchGlobs: watch.watchGlobs,
-  }));
+  const availableTests = new Set(inventory);
+  const ownerWatches = UI_E2E_OWNER_WATCHES.flatMap((watch) => {
+    const testFile = resolveUiTypeScriptPath(watch.testFile, cwd);
+    // Only inventoried tests can consume a source-owner match below.
+    return availableTests.has(testFile)
+      ? [
+          {
+            testFile,
+            ownerRoots: watch.ownerRoots.map((root) => resolveUiTypeScriptPath(root, cwd)),
+            watchGlobs: watch.watchGlobs,
+          },
+        ]
+      : [];
+  });
   const roots = [...new Set(ownerWatches.flatMap(({ ownerRoots }) => ownerRoots))];
   const policyTargets = new Set(
     resolvePolicyTestTargets(paths).map((file) => resolveUiTypeScriptPath(file, cwd)),

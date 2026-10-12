@@ -106,6 +106,7 @@ class PendingSessionCreate extends OpenClawLightDomElement {
         <div class="sidebar-region__header">
           ${renderChatPaneHeader({
             paneId: this.composerId,
+            presented: false,
             narrow: this.narrow,
             mergedChrome: this.mergedChrome,
             navDrawerOpen: this.navDrawerOpen,

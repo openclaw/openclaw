@@ -6,6 +6,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -131,6 +132,7 @@ const validConfigSnapshot = {
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let restoreTempRoot = () => {};
 const readinessExit = {
   code: 0,
   signal: null,
@@ -141,12 +143,17 @@ const readinessExit = {
 } as const;
 
 afterEach(() => {
+  restoreTempRoot();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
 describe("post-plugin update readiness", () => {
   beforeEach(() => {
+    const coordinator = vi
+      .spyOn(tempRoot, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(tempDirs.make("fresh-doctor-coordinator-"));
+    restoreTempRoot = () => coordinator.mockRestore();
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
@@ -304,7 +311,10 @@ describe("post-plugin update readiness", () => {
         if (outcome === "advisory") {
           await writeUpdatePostInstallDoctorResult({
             resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
-            result: createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+            result: {
+              ...createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+              deferredInspectionCheckIds: ["core/doctor/new-target-inspection"],
+            },
           });
         }
         if (outcome !== "success") {
@@ -341,6 +351,8 @@ describe("post-plugin update readiness", () => {
       expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           name: `${phase} doctor`,
+          deferredInspectionCheckIds:
+            outcome === "advisory" ? ["core/doctor/new-target-inspection"] : null,
           exitCode:
             outcome === "success"
               ? 0

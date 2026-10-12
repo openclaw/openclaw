@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -7,6 +8,7 @@ import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-
 
 it("reads committed verbose policy without main-thread SQL and retains caller revocation", async () => {
   await withOpenClawTestState({ label: "dispatch-verbose-worker" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const sessionKey = "agent:main:verbose-worker";
     const scope = { agentId: "main", sessionKey, env };
     await upsertSessionEntryCore(scope, {

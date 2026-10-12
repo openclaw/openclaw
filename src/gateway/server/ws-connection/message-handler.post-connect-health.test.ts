@@ -1752,7 +1752,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           ...(kind === "remote" ? { token: "gateway-token" } : {}),
           ...(kind === "missing"
             ? {}
-            : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
+            : { approvalRuntimeToken: await getOperatorApprovalRuntimeToken() }),
         },
       });
       await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());

@@ -17,6 +17,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -159,39 +160,42 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
       break;
     }
   }
-  return write("trajectory.runtime.append", (database) => {
-    const publishRetention = captureTrajectoryRuntimeRetentionMutation(database.db);
-    const db = getTrajectoryKysely(database.db);
-    const window = prepareSqliteTrajectoryRuntimeWindow(database, sessionId, {
-      maxRuntimeBytes,
-      retainedBytes,
-      expiredThroughIndex,
-      discardPrevious: input.discardPrevious,
-    });
-    let seq = window.nextSeq;
-    for (const row of rows) {
-      row.seq = seq++;
-    }
-    for (let index = 0; index < rows.length; index += TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("trajectory_runtime_events")
-          .values(rows.slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE)),
-      );
-    }
-    if (window.removeThroughSeq !== undefined) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("trajectory_runtime_events")
-          .where("session_id", "=", sessionId)
-          .where("seq", "<=", window.removeThroughSeq),
-      );
-    }
-    publishRetention?.(sessionId);
-    return database;
-  });
+  return write("trajectory.runtime.append", (database) =>
+    // Runtime event rows do not change session entries or transcript projections.
+    withSqliteDatabaseWriteScope(database.db, [], () => {
+      const publishRetention = captureTrajectoryRuntimeRetentionMutation(database.db);
+      const db = getTrajectoryKysely(database.db);
+      const window = prepareSqliteTrajectoryRuntimeWindow(database, sessionId, {
+        maxRuntimeBytes,
+        retainedBytes,
+        expiredThroughIndex,
+        discardPrevious: input.discardPrevious,
+      });
+      let seq = window.nextSeq;
+      for (const row of rows) {
+        row.seq = seq++;
+      }
+      for (let index = 0; index < rows.length; index += TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("trajectory_runtime_events")
+            .values(rows.slice(index, index + TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE)),
+        );
+      }
+      if (window.removeThroughSeq !== undefined) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .deleteFrom("trajectory_runtime_events")
+            .where("session_id", "=", sessionId)
+            .where("seq", "<=", window.removeThroughSeq),
+        );
+      }
+      publishRetention?.(sessionId);
+      return database;
+    }),
+  );
 }
 
 /** Loads runtime trajectory events from per-agent SQLite rows in storage order. */

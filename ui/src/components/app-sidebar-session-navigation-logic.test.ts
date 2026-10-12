@@ -74,6 +74,17 @@ it.each([
   },
 );
 
+it.each([
+  ["agent:main:dashboard:incognito-session", undefined, true],
+  ["agent:main:subagent:incognito-child", undefined, true],
+  ["agent:main:internal-session-effects:incognito-effect", undefined, true],
+  ["agent:main:dashboard:ordinary", true, true],
+  ["agent:main:dashboard:ordinary", undefined, false],
+  ["agent:main:telegram:incognito-peer", undefined, false],
+] as const)("preserves Incognito sidebar presentation for %s", (key, incognito, expected) => {
+  expect(projectSidebarSession({ key, incognito }).incognito).toBe(expected);
+});
+
 function projectDraftOwnership(
   row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
   selfUserId?: string,

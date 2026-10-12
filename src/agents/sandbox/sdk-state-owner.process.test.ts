@@ -89,6 +89,7 @@ describe("plugin SDK sandbox process ownership", () => {
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
     };
     let parentOwner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     expect(parentOwner).not.toBeNull();

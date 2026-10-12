@@ -305,7 +305,7 @@ openclaw-select-picker {
 }
 
 .picker-select--submenu .picker-select__trigger .picker-select__label {
-  font-weight: var(--wa-font-weight-normal);
+  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .picker-select--submenu .picker-select__chevron {
@@ -346,7 +346,7 @@ openclaw-select-picker {
   align-items: center;
   gap: var(--space-1);
   min-height: var(--menu-item-height);
-  font-weight: var(--wa-font-weight-semibold);
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .picker-select__back {

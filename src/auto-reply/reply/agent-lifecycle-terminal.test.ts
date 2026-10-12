@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
@@ -10,6 +11,44 @@ const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  it("publishes a preparation failure once instead of its cancellation side effect", async () => {
+    emitAgentEvent.mockClear();
+    const preparation: { failure?: Error } = {};
+    const terminal = await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey: "agent:main:preparing",
+        waitUntilReady: async () => {},
+        assertCurrent: () => {},
+        getFailure: () => preparation.failure,
+      },
+      async () =>
+        createAgentLifecycleTerminalBackstop({
+          runId: "preparing",
+          sessionKey: "agent:main:preparing",
+          getLifecycleGeneration: () => "generation",
+          resolveTerminationFields: () => ({ aborted: true, stopReason: "aborted" }),
+        }),
+    );
+    const failure = new Error("Checkout failed; retry this session.");
+    preparation.failure = failure;
+    terminal.note({
+      stream: "lifecycle",
+      data: { phase: "finishing", aborted: true, stopReason: "aborted" },
+    });
+    terminal.capture("end", {}, { aborted: true, stopReason: "aborted" });
+    terminal.emit("end", {});
+    terminal.emit("error", failure);
+    expect(emitAgentEvent).toHaveBeenCalledOnce();
+    const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
+    expect(data).toMatchObject({
+      phase: "error",
+      error: failure.message,
+      executionSettled: true,
+    });
+    expect(data).not.toHaveProperty("aborted");
+    expect(data).not.toHaveProperty("stopReason");
+  });
+
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
     emitAgentEvent.mockClear();
     const terminal = createAgentLifecycleTerminalBackstop({

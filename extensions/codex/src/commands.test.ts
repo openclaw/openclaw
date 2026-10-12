@@ -3142,10 +3142,8 @@ describe("codex command", () => {
           },
         });
         release.resolve();
-        expect((await command).text).toContain(
-          args === "permissions default"
-            ? "Codex session execution policy changed"
-            : "Codex session generation is no longer current",
+        expect((await command).text).toMatch(
+          /Codex session (generation is no longer current|execution policy changed)/,
         );
         expect(writes).toBe(0);
       } finally {

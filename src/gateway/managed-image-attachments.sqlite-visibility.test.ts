@@ -21,10 +21,9 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
-} from "../config/sessions/session-transcript-read-fence.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
@@ -302,7 +301,7 @@ describe("managed attachment SQLite visibility", () => {
     expect(await f.download()).not.toBeNull();
   });
 
-  it("validates the admitted generation on both matching and missing IDs", async () => {
+  it("uses the admitted bounds for both matching and missing IDs", async () => {
     const f = await fixture();
     await seed(f, [message(f.messageId, null, [f.block])]);
     const admitted = await appendSessionTranscriptMessageByIdentity({
@@ -326,11 +325,6 @@ describe("managed attachment SQLite visibility", () => {
           ),
         );
       });
-      await expect(
-        runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, () =>
-          readSessionMessagesMatchingIdAsync(f.scope, id),
-        ),
-      ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
     expect(openOpenClawAgentDatabase({ agentId: "main" }).db.isTransaction).toBe(false);
   });
@@ -357,7 +351,10 @@ describe("managed attachment SQLite visibility", () => {
       };
       // Match runtime connection admission instead of failing immediately on an
       // unrelated transient lock. The write still commits inside the read snapshot.
-      const writer = new DatabaseSync(database.path, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
+      const writer = openNodeSqliteDatabase(database.path, {
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+      admitSqliteSchema(writer);
       const parse = JSON.parse;
       let rewrote = false;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {

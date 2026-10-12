@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolConfig } from "../config/types.tools.js";
 import {
   loadExecApprovals,
+  loadExecApprovalsReadOnlyAsync,
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecHost,
@@ -23,7 +24,10 @@ import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  resolveSandboxRuntimeStatus,
+  withSandboxRuntimeStatusInWorker,
+} from "./sandbox/runtime-status.js";
 import { resolveSessionPermissionExecPolicy } from "./session-permission-exec-mode.js";
 
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
@@ -93,6 +97,13 @@ export function resolveNodeExecEligibility(
     canExec: defaults.canRequestNode && defaults.security !== "deny" && !systemRunDenied,
     ...(defaults.node ? { node: defaults.node } : {}),
   };
+}
+
+/** Resolve node availability without reading the approval store on the caller thread. */
+export async function resolveNodeExecEligibilityAsync(
+  params: Omit<ResolveExecDefaultsParams, "scope" | "elevatedRequested">,
+): Promise<{ canExec: boolean; node?: string }> {
+  return resolveNodeExecEligibility(params, await resolveExecDefaultsAsync(params));
 }
 
 export type ResolveExecDefaultsParams = {
@@ -233,6 +244,22 @@ export function resolveExecDefaults(params: ResolveExecDefaultsParams): Resolved
   return preparation.kind === "resolved"
     ? preparation.defaults
     : preparation.resolve(preparation.suppliedApprovals ?? loadExecApprovals());
+}
+
+/** Prepare session classification and host approval floors through their existing workers. */
+export async function resolveExecDefaultsAsync(
+  params: ResolveExecDefaultsParams,
+): Promise<ResolvedExecDefaults> {
+  const { agentId } = resolveExecConfigState(params);
+  return withSandboxRuntimeStatusInWorker(
+    { cfg: params.cfg, agentId, sessionKey: params.sessionKey },
+    { env: process.env, cwd: process.cwd(), assertCurrent: () => {} },
+    (sandbox) =>
+      resolvePreparedExecDefaultsAsync(
+        prepareExecDefaults(params, sandbox),
+        loadExecApprovalsReadOnlyAsync,
+      ),
+  );
 }
 
 /** Called inside retained session-reader scopes, before synchronous tool construction. */

@@ -1,4 +1,4 @@
-import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
+import { createErrorBoundary } from "@solidjs/signals";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
@@ -11,7 +11,6 @@ import {
   Match,
   untrack,
 } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -28,7 +27,7 @@ import {
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -52,10 +51,10 @@ import {
 import {
   BoardDisabledPlugin,
   BoardCoreWidget,
-  BoardWidgetError,
   BoardWidgetMenu,
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
+import { BoardWidgetError } from "./board-widget-error.tsx";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 import "../web-awesome.ts";
 
@@ -66,15 +65,7 @@ function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
   host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
 ) {
-  let context: ApplicationContext | undefined;
-  try {
-    context = useApplication();
-  } catch (error) {
-    // Standalone capless cells have no application provider.
-    if (!(error instanceof ContextNotFoundError)) {
-      throw error;
-    }
-  }
+  const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
     get: () => cells.get(host)?.presentationReady ?? false,

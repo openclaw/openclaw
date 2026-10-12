@@ -120,6 +120,7 @@ async function listModels(config: OpenClawConfig) {
         makeContextParams({ loadGatewayModelCatalogSnapshot: loader }),
       ),
       getRuntimeConfig: getConfig,
+      getCommittedRuntimeConfig: getConfig,
     },
     respond,
   });

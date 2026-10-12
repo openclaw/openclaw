@@ -9,6 +9,10 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -217,6 +221,7 @@ describe("talk.client.transcript", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     await replaceSessionEntry(
       { agentId: "main", sessionKey },
       { sessionId, updatedAt: Date.now() },
@@ -239,6 +244,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: tempDir });
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);

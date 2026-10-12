@@ -35,7 +35,7 @@ export async function createRuntimeSessionEntry(
   const [
     { createGatewaySession },
     { resolveGatewaySessionStoreTargetInWorker },
-    { readAcpSessionMetaForEntry },
+    { readAcpSessionMetaForEntryAsync },
     { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
@@ -179,6 +179,7 @@ export async function createRuntimeSessionEntry(
                 sessionKey: captured.key,
                 storePath: captured.storePath,
               });
+              // This synchronous guard also runs immediately before external policy injection.
               const current = selected
                 ? "kind" in selected
                   ? undefined
@@ -241,9 +242,10 @@ export async function createRuntimeSessionEntry(
             const expectedExecNode = params.execNode?.trim() || undefined;
             const expectedExecCwd = params.execCwd?.trim() || undefined;
             const matchingAcpMeta = acpInitial
-              ? readAcpSessionMetaForEntry({
+              ? await readAcpSessionMetaForEntryAsync({
                   sessionKey: target.canonicalKey,
                   agentId: target.agentId,
+                  cfg: params.cfg,
                   entry: matchingEntry,
                 })
               : undefined;

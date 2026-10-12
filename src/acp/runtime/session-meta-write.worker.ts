@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
+import {
+  mergeSessionEntry,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
 import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
@@ -72,10 +75,16 @@ function readMutationSource(
     // Memory entries have one in-process owner and no legacy disk provenance.
     return input.source.snapshot;
   }
+  if ("kind" in input.source && input.source.kind === "reset") {
+    const current = readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
+    if (current.entry?.activeWriterRunId !== input.entry?.activeWriterRunId) {
+      throw new Error(`Canonical ACP session changed before ${phase}.`);
+    }
+    return { entry: current.entry, sources: [] };
+  }
   if ("kind" in input.source) {
     // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
-    const current =
-      input.source.kind === "reset" ? { entry: input.entry, sources: [] } : input.source.snapshot;
+    const current = input.source.snapshot;
     assertAcpSessionMutationEntry(
       current.entry,
       input.entry ?? null,

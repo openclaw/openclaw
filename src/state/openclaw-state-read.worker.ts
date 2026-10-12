@@ -30,12 +30,12 @@ import {
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
 import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+} from "../gateway/operator-approval-standing-grants.worker.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
@@ -76,6 +76,7 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { readPluginMetadataStateRowsInDatabase } from "../plugins/installed-plugin-index-row.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -403,6 +404,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readExecApprovalsConfigRow(db),
+              };
+            }
+            if (command.type === "plugins.metadata.read") {
+              return {
+                type: command.type,
+                rows: readPluginMetadataStateRowsInDatabase(db, command.input.stateKeys),
               };
             }
             if (command.type === "skills.library.descriptions") {

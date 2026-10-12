@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -17,6 +17,7 @@ import {
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -53,11 +54,19 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "transcript-test-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "transcript-test-",
+);
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
     const tempDir = sessionDirs.make();
+    setRuntimeConfigSnapshot({});
     const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -74,6 +83,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   const fixture = useTempSessionsFixture("transcript-test-");
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "test-session-id";
   const sessionKey = "agent:main:test-session";
   function createFixtureTranscriptScope() {
@@ -284,11 +294,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each([
     [
       '/debug set gateway.auth.token="synthetic-private-token"',
-      '/debug set gateway.auth.token="__OPEN…ED__"',
+      '/debug set gateway.auth.token="__OPENCLAW_REDACTED__"',
     ],
     [
       '/config set gateway.auth={"mode":"token","token":"synthetic-private-token"}',
-      '/config set gateway.auth={"mode":"token","token":"__OPEN…ED__"}',
+      '/config set gateway.auth={"mode":"token","token":"__OPENCLAW_REDACTED__"}',
     ],
     [
       "/debug set channels.telegram.botToken=synthetic-private-token",
@@ -348,6 +358,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const sessionsDir = path.join(tempDir, "configured", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
+      setRuntimeConfigSnapshot({ session: { store: storePath } });
       const configuredSessionKey = "agent:main:configured-store";
       await replaceSessionEntry(
         { agentId: "main", sessionKey: configuredSessionKey, storePath },
@@ -409,6 +420,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
+      setRuntimeConfigSnapshot({ session: { store: storeTemplate } });
       const configuredSessionKey = "agent:worker:configured-store";
       await replaceSessionEntry(
         { agentId: "worker", sessionKey: configuredSessionKey, storePath },

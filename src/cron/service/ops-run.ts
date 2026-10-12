@@ -1,17 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
-import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
+import {
+  createAbortError,
+  isAbortError,
+  racePromiseWithAbortSignal,
+} from "../../infra/abort-signal.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
-import { waitForRunSettlement } from "./ops-lifecycle.js";
 import { inspectManualRunPreflight } from "./ops-run-preparation.js";
 import type { ManualRunOptions, OnExitRunOptions } from "./run-options.js";
-import { commitCronRunRequests, drainCronRunQueue, type RequestedCronRun } from "./run-queue.js";
+import {
+  commitCronRunRequests,
+  drainCronRunQueue,
+  waitForCronJobRun,
+  type RequestedCronRun,
+} from "./run-queue.js";
 import type { CronRunMode, CronRunResult, CronServiceState, CronWakeMode } from "./state.js";
 import { captureCronServiceMutationSource } from "./store.js";
 import { wake } from "./wake.js";
@@ -70,7 +78,8 @@ export async function runOnExit(state: CronServiceState, id: string, opts: OnExi
       opts.commitGuard();
     };
     try {
-      while (await waitForRunSettlement(state, id, opts.signal)) {
+      while (!opts.signal.aborted && !state.stopped && generation === state.lifecycleGeneration) {
+        const waited = await racePromiseWithAbortSignal(waitForCronJobRun(state, id), opts.signal);
         const result = await requestManualCronRun(state, id, "force", {
           onExit: { ...opts, commitGuard },
           commitGuard,
@@ -78,7 +87,7 @@ export async function runOnExit(state: CronServiceState, id: string, opts: OnExi
         if ("requested" in result) {
           return await result.requested.completion;
         }
-        if (!(result.ok && "reason" in result && result.reason === "already-running")) {
+        if (!waited || !(result.ok && "reason" in result && result.reason === "already-running")) {
           return result;
         }
       }

@@ -162,7 +162,8 @@ struct DeviceSettingsBridgeTests {
         }
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
-            ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
+            ("browser-import", .browserImport), ("ai-setup", .aiSetup),
+            ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
             ("diagnostics", .diagnostics), ("licenses", .licenses), ("about", .about), ("watch", .watch),
         ]
         #expect(Set(DeviceSettingsPanel.allCases.map(\.rawValue)) == Set(panels.map(\.0)))

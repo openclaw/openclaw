@@ -54,9 +54,9 @@
     "navigation"
   ],
   "controlUi": {
-    "entry": "dist/control-ui/5d6c0088df14c767b03515ea1966538f70d7a796d855744b1c089065baafc34c/index.js",
+    "entry": "dist/control-ui/e9d84b43efd37c69e49640aad269b5dc60d898b458f6d18de7a6dd04cc19f7c7/index.js",
     "styles": [
-      "dist/control-ui/5d6c0088df14c767b03515ea1966538f70d7a796d855744b1c089065baafc34c/index.css"
+      "dist/control-ui/e9d84b43efd37c69e49640aad269b5dc60d898b458f6d18de7a6dd04cc19f7c7/index.css"
     ]
   }
 }

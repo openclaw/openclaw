@@ -57,6 +57,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       canvasEnabled: z.boolean().optional(),
       cameraEnabled: z.boolean().optional(),
       keepAwakeEnabled: z.boolean().optional(),
+      aiSetupAvailable: z.boolean().optional(),
       healthSummaryAvailable: z.boolean().optional(),
       healthSummaryEnabled: z.boolean().optional(),
       computerControlEnabled: z.boolean().optional(),
@@ -197,6 +198,7 @@ export type SettingKey =
   | "updates.automatic";
 
 type NativePanel =
+  | "ai-setup"
   | "quick-chat-shortcut"
   | "microphone-test"
   | "browser-import"

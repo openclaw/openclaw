@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
@@ -68,7 +69,11 @@ const mediaConfig = {
 } satisfies OpenClawConfig;
 
 describe("createOpenClawTools context wiring", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    vi.clearAllMocks();
+  });
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {

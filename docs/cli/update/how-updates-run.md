@@ -32,6 +32,13 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Readiness checks share an overall deadline across native service inspection,
+listener checks, authenticated RPC, and HTTP readiness. A network probe's
+per-request limit does not shorten native inspection. Slow inspection still
+consumes the shared deadline, so it cannot extend the update's overall budget.
+These checks belong to the installed updater; a candidate cannot change an
+older updater's already-running readiness wait.
+
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different
 immediate parent no longer causes a valid candidate to fail with `Candidate
@@ -749,6 +756,23 @@ avoiding another full database read. Recovery still verifies the stored bytes
 against that receipt before replacing any live database, so later snapshot changes
 are rejected. This saving requires the installed updater to contain the fix;
 older updaters retain their original backup path.
+
+The native supervisor's `update migrate --backup-root` capture runs with the
+Gateway stopped. Checkpointed database files use filesystem clones when available
+(including APFS and reflink-capable Linux filesystems), with an independent byte
+copy on other filesystems. The capture checks the SQLite header/schema, records
+one SHA-256 digest for the existing restore contract, and verifies that source
+files and journal state stayed unchanged. Clone creation avoids copying payload
+pages, but the required digest still reads each snapshot once. Retained WAL or
+rollback journals use the existing coherent, fully verified snapshot path.
+
+Every discovered agent database remains covered even during a shared-state-only
+schema upgrade: Doctor can write agent bookkeeping without advancing its schema.
+Update-time Doctor defers media content maintenance on databases whose schema is
+already current; explicit `openclaw doctor --fix` still performs that maintenance.
+Databases needing schema repair or carrying recorded corruption retain the repair
+path. This avoids repeated backup integrity audits and unnecessary writable opens
+while the service is stopped; startup validation retains its own policy.
 
 Settled, verified successful activation removes the current update's database
 snapshots, together with the old package backup. Rollback, failed or unverified

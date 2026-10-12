@@ -198,26 +198,55 @@ describe("sessions_send communication boundary", () => {
       "disabled",
     );
   });
-  it("survives ordinary metadata publication but rejects changed permissions", async () => {
+  it.each(["entry", "replacement"] as const)(
+    "survives neutral %s metadata but keeps permission revocation sticky",
+    async (kind) => {
+      const input = operation();
+      const gate = await prepareSessionsSendCommunication(input);
+      const publish = (entry: SessionEntry) =>
+        sessionChanges.emit({
+          agentId: "main",
+          sessionKey: input.target.sessionKey,
+          storePath: "/sessions",
+          facts:
+            kind === "entry"
+              ? {
+                  kind,
+                  previousSessionId: "target",
+                  sessionId: "target",
+                  category: null,
+                  clearMembers: false,
+                  communicationBinding: communicationEntryBinding(entry),
+                }
+              : {
+                  kind,
+                  membership: [input.target.sessionKey, null, [], {}, entry.sessionId],
+                  lifecycleChanged: false,
+                  communicationBinding: communicationEntryBinding(entry),
+                },
+        });
+      publish({ ...input.target.entry!, updatedAt: 9 });
+      expect(gate.assertCurrent).not.toThrow();
+      publish({ ...input.target.entry!, communication: { receive: "never" } });
+      expect(gate.assertCurrent).toThrow("changed");
+      publish(input.target.entry!);
+      expect(gate.assertCurrent).toThrow("changed");
+      gate.close();
+    },
+  );
+  it("refuses a replacement without current communication facts", async () => {
     const input = operation();
     const gate = await prepareSessionsSendCommunication(input);
-    const publish = (entry: SessionEntry) =>
-      sessionChanges.emit({
-        agentId: "main",
-        sessionKey: input.target.sessionKey,
-        storePath: "/sessions",
-        facts: {
-          kind: "entry",
-          previousSessionId: "target",
-          sessionId: "target",
-          category: null,
-          clearMembers: false,
-          communicationBinding: communicationEntryBinding(entry),
-        },
-      });
-    publish({ ...input.target.entry!, updatedAt: 9 });
-    expect(gate.assertCurrent).not.toThrow();
-    publish({ ...input.target.entry!, communication: { receive: "never" } });
+    sessionChanges.emit({
+      agentId: "main",
+      sessionKey: input.target.sessionKey,
+      storePath: "/sessions",
+      facts: {
+        kind: "replacement",
+        membership: [input.target.sessionKey, null, [], {}, "target"],
+        lifecycleChanged: false,
+      },
+    });
     expect(gate.assertCurrent).toThrow("changed");
     gate.close();
   });

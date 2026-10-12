@@ -13,6 +13,18 @@ const mappedTypes: Record<string, string> = {
   TEXT: "text",
   BLOB: "bytea",
 };
+export const sqliteOnlyNulGuards = [
+  "node_worker_launches.launch_id",
+  "node_worker_launches.environment_id",
+  "node_worker_launches.session_id",
+  "node_worker_launches.run_id",
+  "node_worker_launches.result_json",
+  "node_worker_launches.error_text",
+  "node_worker_turns.turn_id",
+  "node_worker_turns.run_id",
+  "node_worker_turns.result_json",
+  "node_worker_turns.error_text",
+];
 
 function tokens(sql: string): string[] {
   const result: string[] = [];
@@ -91,7 +103,7 @@ function globRegex(pattern: string): string {
   return `${result}\\Z`;
 }
 
-function expression(source: string, columns: Map<string, string>): Expression {
+function expression(source: string, columns: Map<string, string>, table?: string): Expression {
   const input = tokens(source);
   let pos = 0;
   const take = (word: string) => (keyword(input[pos], word) ? (pos++, true) : false);
@@ -143,17 +155,86 @@ function expression(source: string, columns: Map<string, string>): Expression {
       return { sql: "NULL", type: "null" };
     }
     if (take("(")) {
-      if (!/^(length|json_valid)$/i.test(token)) {
+      if (!/^(length|json_valid|cast|instr|char|substr|coalesce|trim|typeof)$/i.test(token)) {
         throw new Error(`Unsupported function ${token}`);
       }
       const value = or();
-      requireToken(")");
-      if (value.type !== "text" && !(keyword(token, "LENGTH") && value.type === "bytea")) {
-        throw new Error(`${token} requires text (or bytea for length)`);
+      if (keyword(token, "CAST")) {
+        requireToken("AS");
+        requireToken("BLOB");
+        requireToken(")");
+        if (value.type !== "text") {
+          throw new Error("CAST AS BLOB requires text");
+        }
+        return { sql: `convert_to(${value.sql}, 'UTF8')`, type: "bytea" };
       }
-      return keyword(token, "LENGTH")
-        ? { sql: `length(${value.sql})`, type: "bigint" }
-        : { sql: `(${value.sql} IS JSON)`, type: "boolean" };
+      const args = [value];
+      while (take(",")) {
+        args.push(or());
+      }
+      requireToken(")");
+      const [first, second, third] = args;
+      const name = token.toLowerCase();
+      const textArgs = args.every((arg) => arg.type === "text");
+      if (name === "char" && args.length === 1 && /^\d+$/.test(value.sql)) {
+        const point = Number(value.sql);
+        if (point === 0) {
+          return { sql: "", type: "nul" };
+        }
+        if (point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)) {
+          return { sql: literal(String.fromCodePoint(point)), type: "text" };
+        }
+      } else if (name === "coalesce" && args.length >= 2) {
+        args.forEach((arg) => compatible(value, arg));
+        return { sql: `coalesce(${args.map((arg) => arg.sql).join(", ")})`, type: value.type };
+      } else if (
+        name === "substr" &&
+        (args.length === 2 || args.length === 3) &&
+        first!.type === "text" &&
+        /^\d+$/.test(second!.sql) &&
+        Number(second!.sql) > 0 &&
+        (!third || /^\d+$/.test(third.sql))
+      ) {
+        return { sql: `substr(${args.map((arg) => arg.sql).join(", ")})`, type: "text" };
+      } else if (name === "trim" && args.length <= 2 && textArgs) {
+        return { sql: `btrim(${args.map((arg) => arg.sql).join(", ")})`, type: "text" };
+      } else if (name === "instr" && args.length === 2 && first!.type === "text") {
+        if (
+          second!.type === "nul" &&
+          sqliteOnlyNulGuards.some((guard) => guard === `${table}.${identifier(first!.sql)}`)
+        ) {
+          return { sql: first!.sql, type: "nul-position" };
+        }
+        if (second!.type === "text") {
+          return { sql: `strpos(${first!.sql}, ${second!.sql})`, type: "bigint" };
+        }
+      } else if (args.length === 1) {
+        if (name === "length" && ["text", "bytea"].includes(value.type)) {
+          return {
+            sql: `${value.type === "text" ? "char_length" : "octet_length"}(${value.sql})`,
+            type: "bigint",
+          };
+        }
+        if (name === "json_valid" && value.type === "text") {
+          return { sql: `(${value.sql} IS JSON)`, type: "boolean" };
+        }
+        if (
+          name === "typeof" &&
+          ["text", "bytea", "bigint", "double precision"].includes(value.type)
+        ) {
+          const type = {
+            text: "text",
+            bytea: "blob",
+            bigint: "integer",
+            "double precision": "real",
+          }[value.type];
+          return {
+            sql: `CASE WHEN ${value.sql} IS NULL THEN 'null' ELSE ${literal(type!)} END`,
+            type: "text",
+          };
+        }
+      }
+      throw new Error(`Unsupported arguments for ${token}`);
     }
     const name = identifier(token);
     const type = columns.get(name);
@@ -164,10 +245,23 @@ function expression(source: string, columns: Map<string, string>): Expression {
   }
   function predicate(): Expression {
     const left = atom();
+    if (left.type === "nul-position") {
+      requireToken("=");
+      requireToken("0");
+      // PostgreSQL text is intrinsically NUL-free; retain SQLite's NULL result.
+      return { sql: `(${left.sql} IS NOT NULL OR NULL)`, type: "boolean" };
+    }
     if (take("IS")) {
       const negate = take("NOT");
-      requireToken("NULL");
-      return { sql: `${left.sql} IS ${negate ? "NOT " : ""}NULL`, type: "boolean" };
+      const right = atom();
+      compatible(left, right);
+      return {
+        sql:
+          right.type === "null"
+            ? `${left.sql} IS ${negate ? "NOT " : ""}NULL`
+            : `${left.sql} IS ${negate ? "" : "NOT "}DISTINCT FROM ${right.sql}`,
+        type: "boolean",
+      };
     }
     const negate = take("NOT");
     let sql: string;
@@ -245,7 +339,13 @@ type Item = {
   category?: string;
   design?: string;
 };
-type Column = { name: string; type: string; nullable: boolean; identity: boolean };
+type Column = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  identity: boolean;
+  default: string | null;
+};
 type ForeignKey = {
   columns: string[];
   target: string;
@@ -315,7 +415,8 @@ function createContext(db: DatabaseSync, schema: string) {
   };
 }
 type Context = ReturnType<typeof createContext>;
-const qualified = (ctx: Context, name: string) => `${quote(ctx.result.schema)}.${quote(name)}`;
+const qualified = (ctx: Context, name: string) =>
+  ctx.result.schema ? `${quote(ctx.result.schema)}.${quote(name)}` : quote(name);
 
 type TableMapping = {
   name: string;
@@ -339,7 +440,7 @@ function translateObject(
     return ctx.record(kind, mapping.name, name, source, null, reason);
   }
   try {
-    const value = expression(source, kind === "default" ? new Map() : mapping.cols);
+    const value = expression(source, kind === "default" ? new Map() : mapping.cols, mapping.name);
     if (
       value.type !== expectedType &&
       !(expectedType !== "boolean" && value.type === "null") &&
@@ -384,11 +485,13 @@ function mapColumns(ctx: Context, mapping: TableMapping, columns: Row[], rowidCo
     const type = cols.get(colName)!;
     const identity = col === rowidColumn;
     const nullable = Number(col.notnull) === 0 && !identity;
+    let defaultSql: string | null = null;
     let definition = `${quote(colName)} ${type}${type === "text" ? ' COLLATE "C"' : ""}${identity ? " GENERATED BY DEFAULT AS IDENTITY" : ""}${!nullable ? " NOT NULL" : ""}`;
     if (col.dflt_value !== null) {
       const value = translateObject(ctx, mapping, "default", colName, String(col.dflt_value), type);
       if (value.sql && !identity) {
         definition += ` DEFAULT ${value.sql}`;
+        defaultSql = value.sql;
       }
       if (identity && value.sql) {
         value.sql = null;
@@ -399,7 +502,7 @@ function mapColumns(ctx: Context, mapping: TableMapping, columns: Row[], rowidCo
     ctx.record("column", name, colName, String(col.type), sql, omitted);
     if (!omitted) {
       fields.push(definition);
-      table.columns.push({ name: colName, type, nullable, identity });
+      table.columns.push({ name: colName, type, nullable, identity, default: defaultSql });
     }
     if (identity && !omitted) {
       ctx.result.notes.push(

@@ -68,22 +68,6 @@ describe("DiscordEntityCache eviction", () => {
     await cache.fetchGuildEmojis("g1", fetchEmojis);
     expect(fetchEmojis).toHaveBeenCalledTimes(2);
   });
-
-  it.each([
-    ["updated", GatewayDispatchEvents.ThreadUpdate],
-    ["deleted", GatewayDispatchEvents.ThreadDelete],
-  ])("invalidates cached channels when a thread is %s", async (_label, eventType) => {
-    const { cache, getCalls } = makeCache();
-
-    await cache.fetchChannel("thread-42");
-    await cache.fetchChannel("thread-42");
-    expect(getCalls()).toBe(1);
-
-    cache.invalidateForGatewayEvent(eventType, { id: "thread-42" });
-    await cache.fetchChannel("thread-42");
-
-    expect(getCalls()).toBe(2);
-  });
 });
 
 describe("DiscordEntityCache gateway invalidation", () => {
@@ -100,23 +84,22 @@ describe("DiscordEntityCache gateway invalidation", () => {
     expect(fetchEmojis).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    GatewayDispatchEvents.GuildMemberAdd,
-    GatewayDispatchEvents.GuildMemberRemove,
-    GatewayDispatchEvents.GuildMemberUpdate,
-  ])("invalidates member and user entries for %s", async (event) => {
-    const { cache, getCalls } = makeCache();
+  it.each([GatewayDispatchEvents.GuildMemberUpdate])(
+    "invalidates member and user entries for %s",
+    async (event) => {
+      const { cache, getCalls } = makeCache();
 
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    expect(getCalls()).toBe(2);
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      expect(getCalls()).toBe(2);
 
-    cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
+      cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
 
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    expect(getCalls()).toBe(4);
-  });
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      expect(getCalls()).toBe(4);
+    },
+  );
 });

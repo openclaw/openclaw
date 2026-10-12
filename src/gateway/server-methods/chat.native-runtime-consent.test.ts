@@ -7,6 +7,7 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "../../agents/harness/acp-native-process.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as replyInitialization from "../../config/sessions/session-accessor.reset.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
@@ -16,6 +17,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -71,6 +73,7 @@ it.each([false, true])(
     await withOpenClawTestState({ label: "chat-native-consent" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const target = {
         agentId: "main",
@@ -164,6 +167,7 @@ it.each([
     await withOpenClawTestState({ label: "chat-native-mandatory" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       const profile = ensureProfileForEmail("native-creator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = nativeClient(
         kind === "non-admin" ? ["operator.write"] : undefined,
         profile.id,
@@ -189,6 +193,7 @@ it.each([
         };
       }
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const respond = vi.fn<RespondFn>();
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
@@ -233,6 +238,7 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
     await withOpenClawTestState({ label: "chat-native-creation-race" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const client = nativeClient();
       const respond = vi.fn<RespondFn>();
@@ -313,6 +319,7 @@ it.runIf(process.platform !== "win32")(
     await withOpenClawTestState({ label: "chat-native-database-replacement" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const client = nativeClient();
       const respond = vi.fn<RespondFn>();

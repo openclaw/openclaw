@@ -6,7 +6,12 @@ import {
   type MockFn,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   runTelegramChannelInboundEventWithHarness,
@@ -387,7 +392,13 @@ const telegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig,
+  getRuntimeConfig: () => {
+    const config = getRuntimeConfig();
+    if (getRuntimeConfigSnapshot() !== config) {
+      setRuntimeConfigSnapshot(config);
+    }
+    return config;
+  },
   getSessionEntryAsync: async (params) => getSessionEntryMock(params),
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAtAsync: readSessionUpdatedAtMock,
@@ -437,6 +448,7 @@ const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   resetTelegramMessageCacheForTest();
   setTelegramPluginStateRuntimeForTests();
   getRuntimeConfig.mockReset();
@@ -541,4 +553,8 @@ beforeEach(() => {
     modelCatalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: false }],
   });
   middlewareUseSpy.mockReset();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });

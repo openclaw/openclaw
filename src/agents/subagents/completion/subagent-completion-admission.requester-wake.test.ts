@@ -23,12 +23,14 @@ import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-st
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { registerRequesterWakeOwnershipTests } from "./subagent-completion-admission.requester-wake-ownership.test-support.js";
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
+  readCompletionSystemEvents,
   advanceRequesterWakeTime,
   armRequesterWake,
   reopenCompletionFixtureOwners,
@@ -37,7 +39,6 @@ import {
   requesterWakeDriver,
   observeRequesterOutcomePublication,
   admitCompletionFixtureDatabase,
-  readCompletionSystemEvents,
   seedSubagentCompletionDelivery,
   seedSubagentCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
@@ -68,6 +69,7 @@ describe("persisted subagent requester wakes", () => {
   const persistOwner = (input: ReturnType<typeof records>) =>
     seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
 
+  registerRequesterWakeOwnershipTests({ database: () => database, persistOwner });
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
     input.subagent.expectsCompletionMessage = false;

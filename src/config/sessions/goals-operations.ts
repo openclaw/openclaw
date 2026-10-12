@@ -335,12 +335,9 @@ export async function mutateSessionGoal(
         return result;
       };
       // The outer FIFO captures the physical store before waiting and retains preparation order.
-      // Incognito, maintenance, and opaque Gateway/SDK guards keep their native atomicity.
-      if (
-        !isMainThread ||
-        !supportsOpenClawAgentDatabaseExecution(databaseOptions) ||
-        (options.assertCurrent && !options.assertCurrent.prepareSessionSource)
-      ) {
+      // Worker-local calls and offline maintenance retain their owning transaction.
+      // Plain Gateway authority callbacks run at the worker's existing host grant.
+      if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
         return native();
       }
       const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);

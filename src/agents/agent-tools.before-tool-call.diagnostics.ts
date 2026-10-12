@@ -33,7 +33,6 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
-import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
@@ -131,9 +130,7 @@ export function prepareToolTerminalPresentation({
     project = (result) => {
       try {
         const text = formatter(formatterParams, result)?.text.trim();
-        return text
-          ? truncateUtf16Safe(redactToolDetail(text), MAX_TERMINAL_PRESENTATION_CHARS)
-          : undefined;
+        return text ? truncateUtf16Safe(text, MAX_TERMINAL_PRESENTATION_CHARS) : undefined;
       } catch (err) {
         log.warn(
           `terminal tool presentation failed: tool=${toolName || "tool"} error=${String(err)}`,
