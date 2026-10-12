@@ -16,7 +16,7 @@ const { createLineWebhookSpoolMock, handleLineWebhookEventsMock } = vi.hoisted((
   handleLineWebhookEventsMock: vi.fn(
     async (
       _events: webhook.Event[],
-      _context: { mediaMaxBytes: number; historyLimit: number },
+      _context: { mediaMaxBytes: number; historyLimit: number; botUserId?: string },
     ) => {},
   ),
 }));
@@ -91,6 +91,12 @@ describe("createLineBot media cap", () => {
 
   it("still caps at a configured positive mediaMaxMb", async () => {
     await expect(resolveMediaMaxBytes(2)).resolves.toBe(2 * MB);
+  });
+
+  it("passes the webhook destination on as the receiving bot's user id", async () => {
+    await resolveMediaMaxBytes();
+
+    expect(handleLineWebhookEventsMock.mock.calls.at(-1)?.[1].botUserId).toBe("destination");
   });
 });
 
