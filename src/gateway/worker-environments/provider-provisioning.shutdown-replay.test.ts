@@ -129,6 +129,7 @@ describe("worker node provisioning shutdown replay", () => {
 
     const createDispatch = (environments: typeof first) =>
       createProviderReplayDispatch({
+        initialPlacements: placements.list(),
         placements,
         environments,
         resolveDevicePlacementRequirement: async () => ({
