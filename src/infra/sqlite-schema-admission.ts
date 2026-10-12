@@ -57,7 +57,7 @@ function captureSqliteSchemaFacts(
   validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts {
   const retainedTextEncoding = getSqliteDatabaseAdmission(database, textEncodingAdmission);
-  const facts = runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
+  const captured = runSqliteSchemaReadSnapshotSync(database, (schemaVersion) => {
     const version = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) => s.get());
     const userVersion = Number(version?.user_version ?? 0);
     // Validate the captured header before catalog errors can mask its refusal.
@@ -113,10 +113,10 @@ function captureSqliteSchemaFacts(
     return facts;
   });
   // SQLite may still change an empty database's encoding before its first schema object.
-  if (retainedTextEncoding === undefined && (facts.tables.size > 0 || facts.views.size > 0)) {
-    publishSqliteDatabaseAdmission(database, textEncodingAdmission, facts.textEncoding);
+  if (retainedTextEncoding === undefined && (captured.tables.size > 0 || captured.views.size > 0)) {
+    publishSqliteDatabaseAdmission(database, textEncodingAdmission, captured.textEncoding);
   }
-  return facts;
+  return captured;
 }
 
 export function captureTrackedSqliteSchemaFacts(
