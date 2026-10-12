@@ -89,7 +89,7 @@ describe("dispatch Stop before provider allocation", () => {
         await expect(dispatch()).rejects.toThrow("is busy with active work");
         expect(workspace.preflight).not.toHaveBeenCalled();
         expect(start).not.toHaveBeenCalled();
-        expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+        expect(await placements.getAsync(REQUEST.sessionId)).toBeUndefined();
       }
       expect(interrupted).not.toHaveBeenCalled();
       expect(admission.isActive()).toBe(true);
@@ -263,7 +263,7 @@ describe("dispatch Stop before provider allocation", () => {
             // completion as authority over the replacement session incarnation.
             expect(stopped).toMatchObject({ code: "invalid_state" });
             expect(sourceEntry.sessionId).toBe("replacement-session");
-            expect(placements.get("replacement-session")).toBeUndefined();
+            expect(await placements.getAsync("replacement-session")).toBeUndefined();
           } else {
             expect.soft(stopped).toMatchObject({ state: "local", generation: local?.generation });
           }
@@ -314,7 +314,7 @@ describe("dispatch Stop before provider allocation", () => {
     const runtime = await createRuntime(placements, environments);
     const dispatch = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
     await preflight.entered;
-    expect(placements.get(REQUEST.sessionId)).toBeUndefined();
+    expect(await placements.getAsync(REQUEST.sessionId)).toBeUndefined();
     const stopping = runtime.dispatchService.reclaim(REQUEST);
     let stopped = false;
     void stopping.then(

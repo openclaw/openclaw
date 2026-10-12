@@ -699,7 +699,9 @@ it.each(["missing", "local"] as const)(
     });
     const sweep = coordinated.reconcileActive();
     await entered.promise;
-    expect(placements.get(REQUEST.sessionId)?.state).toBe(state === "local" ? "local" : undefined);
+    expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
+      state === "local" ? "local" : undefined,
+    );
     let dispatchSettled = false;
     const dispatch = coordinated
       .dispatch(REQUEST)
