@@ -540,8 +540,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         }
         if let window {
             if page != .welcome {
-                (window.contentViewController as? NSHostingController<OnboardingView>)?.rootView =
-                    OnboardingView(initialPage: page, initialError: error)
+                let frame = window.frame
+                window.contentViewController = NSHostingController(
+                    rootView: OnboardingView(initialPage: page, initialError: error))
+                window.setFrame(frame, display: false)
             }
             DockIconManager.shared.temporarilyShowDock()
             AppActivation.shared.makeKeyAndOrderFront(window: window)
