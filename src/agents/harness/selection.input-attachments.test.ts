@@ -1,13 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { getMediaDir, readMediaBuffer, saveMediaBuffer } from "../../media/store.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import type { PluginHookName } from "../../plugins/hook-types.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createSqliteTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -21,8 +33,11 @@ import { prepareEmbeddedAttemptPromptExecution } from "../embedded-agent-runner/
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
+import * as builtinOpenClaw from "./builtin-openclaw.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 
@@ -42,9 +57,13 @@ beforeEach(async () => {
     operationalRunInstance: createOperationalRunInstanceRef("attachment-test"),
   });
   const context = await admission.admit("plugin-harness", "attachment-test");
-  createAttemptParams = (config) => createHarnessAttemptParams(context, config);
+  createAttemptParams = (config) => {
+    setRuntimeConfigSnapshot(config ?? {}, config);
+    return createHarnessAttemptParams(context, config);
+  };
 });
 afterEach(async () => {
+  resetGlobalHookRunner();
   admission.close();
   clearAgentHarnesses();
   resetAgentRunRegistryForTest();
@@ -52,9 +71,209 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   trajectoryTempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
+function createAttributionRecorder(registered = true) {
+  const beforeWrite = vi.fn(() => undefined);
+  initializeGlobalHookRunner(
+    createMockPluginRegistry(
+      registered ? [{ hookName: "before_message_write", handler: beforeWrite }] : [],
+    ),
+  );
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: "hello", timestamp: 1 },
+    target: createSqliteTranscriptTarget({ dir: trajectoryTempDirs.make("harness-attribution-") }),
+    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+  });
+  return { beforeWrite, recorder };
+}
+
 describe("registered harness input attachment preparation", () => {
+  it.each<{ name: string; hook?: PluginHookName; bootstrap?: boolean; waits: boolean }>([
+    ...(
+      [
+        "agent_turn_prepare",
+        "before_prompt_build",
+        "before_agent_run",
+        "llm_input",
+        "llm_output",
+        "before_agent_finalize",
+        "agent_end",
+        "tool_result_persist",
+        "before_compaction",
+        "after_compaction",
+        "heartbeat_prompt_contribution",
+      ] as const
+    ).map((hook) => ({ name: hook, hook, waits: true })),
+    { name: "internal bootstrap", bootstrap: true, waits: true },
+    { name: "heartbeat hook on a user turn", hook: "heartbeat_prompt_contribution", waits: false },
+  ])("settles attribution before builtin callback-capable dispatch: $name", async (scenario) => {
+    const entered = createDeferred();
+    const capture = createDeferred();
+    const handler = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry(scenario.hook ? [{ hookName: scenario.hook, handler }] : []),
+    );
+    if (scenario.bootstrap) {
+      registerInternalHook("agent:bootstrap", handler);
+    }
+    const harness = builtinOpenClaw.createOpenClawAgentHarness();
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeEmbeddedRunnerAttempt({ agentHarnessId: "openclaw" }),
+    );
+    harness.runAttempt = runAttempt;
+    const factory = vi
+      .spyOn(builtinOpenClaw, "createOpenClawAgentHarness")
+      .mockReturnValue(harness);
+    const awaitBaseline = vi.fn(() => {
+      entered.resolve();
+      return capture.promise;
+    });
+    const pending = runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      agentHarnessId: "openclaw",
+      trigger:
+        scenario.hook === "heartbeat_prompt_contribution" && scenario.waits ? "heartbeat" : "user",
+      awaitSessionDiffBaseline: awaitBaseline,
+    });
+    try {
+      if (scenario.waits) {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Builtin callbacks bypassed attribution",
+        );
+        expect(runAttempt).not.toHaveBeenCalled();
+        capture.resolve();
+      }
+      await pending;
+      expect(awaitBaseline).toHaveBeenCalledTimes(scenario.waits ? 1 : 0);
+      expect(runAttempt).toHaveBeenCalledOnce();
+    } finally {
+      capture.resolve();
+      await pending.catch(() => undefined);
+      factory.mockRestore();
+      if (scenario.bootstrap) {
+        unregisterInternalHook("agent:bootstrap", handler);
+      }
+    }
+  });
+
+  it.each(["settled", "aborted", "retired", "failed"] as const)(
+    "settles workspace attribution before native dispatch (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const controller = new AbortController();
+      const failure = new Error("Workspace attribution unavailable");
+      const { beforeWrite, recorder } = createAttributionRecorder();
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
+        },
+        { ownerPluginId: "codex" },
+      );
+      const pending = runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        agentHarnessId: "codex",
+        userTurnTranscriptRecorder: recorder,
+        abortSignal: controller.signal,
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Native harness dispatched before workspace attribution",
+        );
+        expect(beforeWrite).not.toHaveBeenCalled();
+        expect(runAttempt).not.toHaveBeenCalled();
+        if (outcome === "aborted") {
+          controller.abort(failure);
+        } else if (outcome === "retired") {
+          admission.close();
+        }
+        if (outcome === "failed") {
+          baseline.reject(failure);
+        } else {
+          baseline.resolve();
+        }
+        if (outcome === "settled") {
+          await expect(pending).resolves.toMatchObject({ terminal: { kind: "ok" } });
+          expect(beforeWrite).toHaveBeenCalledOnce();
+          expect(recorder.getAdmissionReceipt()).toBeDefined();
+          expect(runAttempt).toHaveBeenCalledOnce();
+        } else {
+          await expect(pending).rejects.toThrow();
+          expect(beforeWrite).not.toHaveBeenCalled();
+          expect(runAttempt).not.toHaveBeenCalled();
+        }
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "settles attribution before builtin transcript hooks only when registered (%s)",
+    async (registered) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const { beforeWrite, recorder } = createAttributionRecorder(registered);
+      const harness = builtinOpenClaw.createOpenClawAgentHarness();
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => {
+        await recorder.persistApproved();
+        return makeEmbeddedRunnerAttempt({ agentHarnessId: "openclaw" });
+      });
+      harness.runAttempt = runAttempt;
+      const factory = vi
+        .spyOn(builtinOpenClaw, "createOpenClawAgentHarness")
+        .mockReturnValue(harness);
+      const capture = vi.fn(async () => {
+        entered.resolve();
+        await baseline.promise;
+      });
+      const pending = runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        agentHarnessId: "openclaw",
+        userTurnTranscriptRecorder: recorder,
+        awaitSessionDiffBaseline: capture,
+      });
+      try {
+        if (registered) {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Builtin transcript hook ran before workspace attribution",
+          );
+          expect(beforeWrite).not.toHaveBeenCalled();
+          expect(runAttempt).not.toHaveBeenCalled();
+          baseline.resolve();
+        }
+        await expect(pending).resolves.toMatchObject({ terminal: { kind: "ok" } });
+        expect(capture).toHaveBeenCalledTimes(registered ? 1 : 0);
+        expect(beforeWrite).toHaveBeenCalledTimes(registered ? 1 : 0);
+        expect(recorder.getAdmissionReceipt()).toBeDefined();
+        expect(runAttempt).toHaveBeenCalledOnce();
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+        factory.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { operation: "prepare", when: "before" },
     { operation: "prepare", when: "during" },

@@ -1,6 +1,6 @@
 import "../browser/extension-install-fixture.test-support.js";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -16,6 +16,11 @@ const boundary = vi.hoisted(() => ({
   deps: undefined as InstallFixture | undefined,
   connect: vi.fn(),
   readToken: vi.fn(),
+  config: vi.fn<() => OpenClawConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => boundary.config(),
 }));
 // Keep the actual CLI, controller, installer, adapter and metadata validator.
 // Only inject isolated filesystem/Windows OS facts and the C# process boundary.
@@ -96,7 +101,7 @@ async function setup() {
     browserProfile: "work",
   });
   manage.mockClear();
-  const cfg = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+  const cfg = boundary.config.mockReset().mockReturnValue({
     browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } },
   });
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { deleteSessionEntryRows } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   loadSessionEntry,
@@ -30,6 +31,7 @@ afterEach(() => vi.restoreAllMocks());
 type PatchMethod = "session.visibility.set" | "session.publicShare.set";
 
 async function fixture() {
+  await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionKey: "agent:main:sharing-patch-worker" };
   const sessionId = "sharing-patch-worker";
   await upsertSessionEntryCore(scope, {

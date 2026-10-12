@@ -14,6 +14,7 @@ import { readConfigHealthStateFromStore } from "./io.health-state.js";
 import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import {
   captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
   registerConfigWriteListener,
   writeConfigFile,
 } from "./io.runtime.js";
@@ -82,6 +83,19 @@ async function withoutMainSql<T>(run: () => Promise<T>): Promise<T> {
     }
   }
 }
+
+it("requires preparation and follows published config changes without main SQL", async () => {
+  fixture();
+  await withoutMainSql(async () => {
+    expect(() => getRuntimeConfig()).toThrow("Runtime config is not prepared");
+    const config = await captureRuntimeConfigAsyncReader()();
+    expect(getRuntimeConfig()).toBe(config);
+    const replacement = { ...config, gateway: { ...config.gateway, port: 19002 } };
+    setRuntimeConfigSnapshot(replacement);
+    expect(getRuntimeConfig()).toBe(replacement);
+    expect(getRuntimeConfig().gateway?.port).toBe(19002);
+  });
+});
 
 it("preserves SDK config writes and load authority inside a native worker", async () => {
   const { configPath } = fixture();

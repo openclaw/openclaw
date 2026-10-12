@@ -72,6 +72,21 @@ const { appendSessionTranscriptMessageByIdentity, publishSessionTranscriptUpdate
     path.join(repository, "src/plugin-sdk/session-transcript-runtime.ts"),
   ) as typeof import("../plugin-sdk/session-transcript-runtime.js");
 
+// The SDK reads config through the native host, outside the transformed fixture graph.
+const configRuntime = tryNativeRequireModule(
+  path.join(repository, "src/config/runtime-snapshot.ts"),
+  {
+    aliasMap: preparePluginLoaderAliases({
+      modulePath: memorySource,
+      devSourceRoot: repository,
+      pluginSdkResolution: "src",
+    }).resolveAlias,
+  },
+);
+assert(configRuntime.ok, "Expected the native config runtime fixture");
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  configRuntime.moduleExport as typeof import("../config/runtime-snapshot.js");
+
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
 type SyncReason = "watch" | "interval" | "session-delta" | "session-startup-catchup";
 
@@ -262,6 +277,7 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
       search: { provider: "none", sources: ["sessions"], store: { vector: { enabled: false } } },
     },
   };
+  setRuntimeConfigSnapshot(config, config);
   const memory = loadMemory(registryHost(), config);
   try {
     // A transient manager exposes the shared prototype without scheduling startup work.
@@ -311,7 +327,7 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
   } finally {
     await memory.instance.dispose();
     vi.restoreAllMocks();
-    await state.cleanup();
+    await state.cleanup().finally(clearRuntimeConfigSnapshot);
   }
 });
 
@@ -519,6 +535,7 @@ it.for([false, true])(
         awaitingStage = `${reason}: prepare sources`;
         const agentId = reason;
         const cfg = config(agentId, reason);
+        setRuntimeConfigSnapshot(cfg, cfg);
         const workspace = path.join(state.workspaceDir, agentId);
         await fs.mkdir(workspace, { recursive: true });
         await fs.writeFile(
@@ -603,7 +620,9 @@ it.for([false, true])(
       const disposed = await Promise.allSettled(
         instances.toReversed().map(async (instance) => await instance.dispose()),
       );
-      const cleaned = await Promise.allSettled([state.cleanup()]);
+      const cleaned = await Promise.allSettled([
+        state.cleanup().finally(clearRuntimeConfigSnapshot),
+      ]);
       signal.removeEventListener("abort", reportInterruptedStage);
       errors.push(
         ...[...closed, ...disposed, ...cleaned].flatMap((result) =>

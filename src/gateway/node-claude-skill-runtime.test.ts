@@ -9,6 +9,10 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
@@ -47,6 +51,7 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
     for (const stateDir of temps.dirs) {
       await cleanupSessionStateForTest({ stateDir });
     }
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -65,6 +70,7 @@ async function fixture(
 ) {
   const root = await fs.realpath(temps.make("node-skill-wire-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot({});
   const workspace = path.join(root, "project");
   await fs.mkdir(workspace);
   const executable = path.join(root, "claude.cjs");

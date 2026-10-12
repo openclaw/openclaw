@@ -50,6 +50,21 @@ const count = (history: ChatHistoryResult) =>
 
 describe("subagent panel call counts", () => {
   it.each([
+    {
+      name: "complete ordinary history",
+      history: complete([toolCall()]),
+      expected: { count: 1, exact: true },
+    },
+    {
+      name: "older pages remain",
+      history: complete([toolCall()], { hasMore: true, nextOffset: 1, totalMessages: 20 }),
+      expected: { count: 1, exact: false },
+    },
+    {
+      name: "empty incomplete history",
+      history: { messages: [], hasMore: true },
+      expected: undefined,
+    },
     { name: "unkeyed legacy call", history: complete([toolCall("")]), expected: undefined },
     {
       name: "call without a recorded run owner",
@@ -69,8 +84,8 @@ describe("subagent panel call counts", () => {
       expected: undefined,
     },
     { name: "unknown history", history: {}, expected: undefined },
-  ])("only reports an exact total for $name", ({ history, expected }) => {
-    expect(count(history)).toBe(expected);
+  ])("reports count certainty for $name", ({ history, expected }) => {
+    expect(count(history)).toEqual(expected);
   });
 
   it("counts paired transcript calls, results and replayed live items once", () => {
@@ -88,7 +103,7 @@ describe("subagent panel call counts", () => {
           },
         }),
       ),
-    ).toBe(1);
+    ).toEqual({ count: 1, exact: true });
   });
 
   it("keeps reused call IDs in distinct recorded runs separate while deduplicating each result", () => {
@@ -109,11 +124,11 @@ describe("subagent panel call counts", () => {
           },
         ),
       ),
-    ).toBe(2);
+    ).toEqual({ count: 2, exact: true });
   });
 
   it.each(["omitted"])(
-    "withholds the count when an invocation ID is %s across item frames",
+    "keeps a lower bound when an invocation ID is %s across item frames",
     (change) => {
       const known = activity({
         phase: "update",
@@ -135,7 +150,7 @@ describe("subagent panel call counts", () => {
           },
         }),
       );
-      expect(subagentToolCallCount(snapshot)).toBeUndefined();
+      expect(subagentToolCallCount(snapshot)).toEqual({ count: 1, exact: false });
       expect(snapshot.tool).toMatchObject({ name: "read", text: "Reading source" });
     },
   );
@@ -147,7 +162,7 @@ describe("subagent panel call counts", () => {
         event("tool", { toolCallId: "read-1", name: "read", phase: "result" }, 1),
         event("item", activity({ hideFromChannelProgress: true }), 2),
       ],
-      expected: 0,
+      expected: { count: 0, exact: true },
     },
     {
       name: "a suppressed duplicate follows its visible prepared operation",
@@ -155,9 +170,9 @@ describe("subagent panel call counts", () => {
         event("item", activity(), 1),
         event("item", activity({ itemId: "duplicate-item", suppressChannelProgress: true }), 2),
       ],
-      expected: 1,
+      expected: { count: 1, exact: true },
     },
   ])("preserves prepared visibility when $name", ({ events, expected }) => {
-    expect(count(complete([], { inFlightRun: { runId: "run-1", events } }))).toBe(expected);
+    expect(count(complete([], { inFlightRun: { runId: "run-1", events } }))).toEqual(expected);
   });
 });

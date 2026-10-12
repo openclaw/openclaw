@@ -4,7 +4,6 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -131,7 +130,6 @@ function prepareSessionEntryReplacementChanges(
   owner: PendingSessionEntryPublication,
   replacement: SessionEntryReplacementPublication,
   databaseIdentity: string,
-  transcriptUnchanged: boolean,
 ): PreparedSessionEntryChanges | undefined {
   if (replacement.source?.identity !== databaseIdentity) {
     return undefined;
@@ -168,9 +166,7 @@ function prepareSessionEntryReplacementChanges(
       new Map(
         [...replacement.projection]
           .filter(
-            ([key, facts]) =>
-              readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
-              (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
           )
           .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
       ),
@@ -183,19 +179,12 @@ export function prepareSessionEntryPublicationFacts(params: {
   owner: PendingSessionEntryPublication;
   databaseIdentity: string;
   unknown: boolean;
-  transcriptVersion: number | undefined;
 }) {
-  const { replacement, owner, databaseIdentity, unknown, transcriptVersion } = params;
+  const { replacement, owner, databaseIdentity, unknown } = params;
   const current = (key: string) => !owner.superseded.has(key);
-  const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
   const prepared =
     !unknown && replacement
-      ? prepareSessionEntryReplacementChanges(
-          owner,
-          replacement,
-          databaseIdentity,
-          transcriptUnchanged,
-        )
+      ? prepareSessionEntryReplacementChanges(owner, replacement, databaseIdentity)
       : undefined;
   const currentMetadata = (key: string) => current(key) && replacement !== undefined;
   const readCurrent = (key: string) => {
@@ -223,11 +212,7 @@ export function prepareSessionEntryPublicationFacts(params: {
       entry,
       fullEntry: prepared?.fullEntries?.get(key),
       actorPostimage: prepared?.actorPostimages?.get(key),
-      projection:
-        projection?.activitySummaryWatermark === undefined ||
-        transcriptVersion === readSessionTranscriptUpdateVersion()
-          ? projection
-          : undefined,
+      projection,
     };
   };
   return { prepared, currentMetadata, readCurrent };

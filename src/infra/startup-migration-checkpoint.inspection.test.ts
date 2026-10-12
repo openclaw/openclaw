@@ -105,12 +105,14 @@ describe("startup lease integrity and admission", () => {
               .prepare("SELECT expires_at FROM state_leases WHERE owner = ?")
               .get(lease.owner)?.expires_at,
           ).toBeGreaterThan(nowMs);
+        }
+        expect(committed).toBe(true);
+        expect(checker).toHaveBeenCalledTimes(2);
+        if (!corrupt) {
           await expect(acquireStartupMigrationLeaseWithWait(parameters())).rejects.toThrow(
             "already running",
           );
         }
-        expect(committed).toBe(true);
-        expect(checker).toHaveBeenCalledTimes(2);
       } finally {
         checker.mockRestore();
         if (corrupt) {

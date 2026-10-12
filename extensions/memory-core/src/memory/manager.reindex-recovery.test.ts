@@ -21,7 +21,6 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
@@ -494,72 +493,49 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it.each(["purge", "revoke"] as const)(
-    "revalidates generated cache writes after published writer admission (%s)",
-    async (scenario) => {
-      const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
-      const memoryManager = await openManager(cfg);
-      const harness = memoryManager as unknown as ReindexHarness;
-      const publishedDb = harness.db;
-      const queued = createDeferred<void>();
-      let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
-      observePublishedReservations(publishedDb, () => {
-        if (reservation) {
-          queued.resolve();
-        }
-      });
-      await memoryManager.sync({ reason: "cli", force: true });
-      if (!harness.provider) {
-        throw new Error("fixture provider missing");
+  it("refuses generated cache writes after database admission is revoked", async () => {
+    const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
+    const memoryManager = await openManager(cfg);
+    const harness = memoryManager as unknown as ReindexHarness;
+    const publishedDb = harness.db;
+    const queued = createDeferred<void>();
+    let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
+    observePublishedReservations(publishedDb, () => {
+      if (reservation) {
+        queued.resolve();
       }
-      await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
-      let reopenedDb: DatabaseSync | undefined;
-      vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
-        reservation = await reservePublishedWriter(() => {
-          if (scenario === "purge") {
-            seedMemoryForgetTombstones({
-              agentId: "main",
-              sessionIds: ["forgotten-during-embedding"],
-            });
-          } else if (scenario === "revoke") {
-            closeOpenClawAgentDatabasesForTest();
-          }
-        });
-        return inputs.map(() => [0, 1, 0]);
+    });
+    await memoryManager.sync({ reason: "cli", force: true });
+    if (!harness.provider) {
+      throw new Error("fixture provider missing");
+    }
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "New reusable alpha memory.");
+    vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
+      reservation = await reservePublishedWriter(() => {
+        closeOpenClawAgentDatabasesForTest();
       });
-      const sync = memoryManager.sync({ reason: "cli", force: true });
-      void sync.catch(() => undefined);
-      try {
-        await Promise.race([queued.promise, sync]);
-        expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
-        reservation?.release();
-        if (scenario === "revoke") {
-          // Revocation also fences the transcript lock holding the published writer.
-          await expect(reservation?.done).rejects.toThrow(
-            /^Agent database execution admission is closed$/,
-          );
-        } else {
-          await reservation?.done;
-        }
-        await expect(sync).rejects.toThrow(
-          scenario === "revoke"
-            ? /^Agent database execution admission is closed$/
-            : /Memory index changed/,
-        );
-        if (scenario === "revoke") {
-          // Readmission waits until the revoked write and its native owner settle.
-          await closeOpenClawAgentDatabasesAsync();
-          reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
-        }
-        expect(
-          (reopenedDb ?? publishedDb).prepare("SELECT hash FROM memory_embedding_cache").all(),
-        ).toEqual([]);
-      } finally {
-        reservation?.release();
-        await Promise.allSettled([reservation?.done, sync]);
-      }
-    },
-  );
+      return inputs.map(() => [0, 1, 0]);
+    });
+    const sync = memoryManager.sync({ reason: "cli", force: true });
+    void sync.catch(() => undefined);
+    try {
+      await Promise.race([queued.promise, sync]);
+      expect(publishedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      reservation?.release();
+      // Revocation also fences the transcript lock holding the published writer.
+      await expect(reservation?.done).rejects.toThrow(
+        /^Agent database execution admission is closed$/,
+      );
+      await expect(sync).rejects.toThrow(/^Agent database execution admission is closed$/);
+      // Readmission waits until the revoked write and its native owner settle.
+      await closeOpenClawAgentDatabasesAsync();
+      const reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+      expect(reopenedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+    } finally {
+      reservation?.release();
+      await Promise.allSettled([reservation?.done, sync]);
+    }
+  });
 
   it("drains accepted sync through provider and writer waits before closing", async () => {
     const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));

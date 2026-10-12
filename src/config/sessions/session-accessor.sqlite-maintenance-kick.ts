@@ -389,10 +389,9 @@ function startPendingMaintenance(databasePath: string, owner: SessionEntryMainte
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
-    // Detach turn context, but keep Doctor/temporary-command database custody
-    // so background borrowing cannot move handles outside their cleanup scope.
+    // Keep command cleanup custody while automatic work uses the runtime worker path.
     const run = () => runPendingMaintenance(databasePath, owner);
-    await (owner.maintenanceResource ? owner.maintenanceResource.run(run) : run());
+    await (owner.maintenanceResource ? owner.maintenanceResource.runWorker(run) : run());
   });
 }
 
@@ -514,7 +513,6 @@ async function runPendingMaintenance(
           admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
         },
-        forceInProcess: false,
         plan: operation,
       });
       if (result.kind === "maintenance-plan") {
@@ -552,7 +550,6 @@ async function runPendingMaintenance(
       const age = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-age" },
         assertCommitAllowed: assertInputsCurrent,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-age",
           databaseOptions: operation.databaseOptions,

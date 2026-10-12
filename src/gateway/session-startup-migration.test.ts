@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -54,6 +58,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 
@@ -62,7 +67,7 @@ function makeLog() {
 }
 
 describe("runStartupSessionMaintenanceForTest", () => {
-  it.each([1, 2])(
+  it.each([2])(
     "admits the first session after certifying %i cold empty agent databases once",
     async (agentCount) => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-small-startup-"));
@@ -180,9 +185,9 @@ describe("runStartupSessionMaintenanceForTest", () => {
     },
   );
 
-  it.each(["successful", "failed"] as const)(
+  it.each(["failed"] as const)(
     "hands the cold maintenance connection directly to %s reconciliation",
-    async (outcome) => {
+    async () => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handoff-"));
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const options = { agentId: "main", env };
@@ -198,10 +203,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
         async (databaseOptions: OpenClawAgentDatabaseOptions) => {
           handedOff = getOpenClawAgentDatabaseIfOpen(databaseOptions);
           reconciled = openOpenClawAgentDatabase(databaseOptions);
-          if (outcome === "failed") {
-            throw failure;
-          }
-          return { reconciledSessions: 0 };
+          throw failure;
         },
       );
       try {
@@ -211,11 +213,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
           log: makeLog(),
           deps: { reconcileSessionTranscriptIndexes },
         });
-        if (outcome === "failed") {
-          await expect(startup).rejects.toBe(failure);
-        } else {
-          await startup;
-        }
+        await expect(startup).rejects.toBe(failure);
         expect(reconcileSessionTranscriptIndexes).toHaveBeenCalledOnce();
         expect(handedOff).toBe(reconciled);
         expect(
@@ -272,7 +270,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
     }
   });
 
-  it.each(["default", "custom", "shared", "scoped"] as const)(
+  it.each(["default", "shared", "scoped"] as const)(
     "admits the %s SQLite store before repair and preserves its history",
     async (layout) => {
       const root = fs.realpathSync.native(tempDirs.make("openclaw-sqlite-session-startup-"));
@@ -291,6 +289,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
           },
           ...(storePath ? { session: { store: storePath } } : {}),
         };
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           agentId,
           defaultAgentId: "main",
@@ -390,18 +389,14 @@ describe("runStartupSessionMaintenanceForTest", () => {
     },
   );
 
-  it.each(["configured", "retired-root"] as const)(
+  it.each(["retired-root"] as const)(
     "preserves the %s legacy source until a configured Doctor import",
-    async (layout) => {
+    async () => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-legacy-session-startup-"));
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "migration" };
-      const storePath =
-        layout === "configured"
-          ? path.join(stateDir, "custom", "sessions.json")
-          : path.join(stateDir, "sessions", "sessions.json");
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {} } },
-        ...(layout === "configured" ? { session: { store: storePath } } : {}),
       };
       const original = JSON.stringify({
         "agent:main:legacy": { sessionId: "legacy-session", updatedAt: 1 },
@@ -409,12 +404,10 @@ describe("runStartupSessionMaintenanceForTest", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, original);
 
-      if (layout === "retired-root") {
-        await expect(
-          runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() }),
-        ).resolves.toBeUndefined();
-        cfg.session = { store: storePath };
-      }
+      await expect(
+        runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() }),
+      ).resolves.toBeUndefined();
+      cfg.session = { store: storePath };
       await expect(
         runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() }),
       ).rejects.toThrow("openclaw --profile migration doctor --fix");

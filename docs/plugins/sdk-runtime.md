@@ -184,10 +184,10 @@ Submitting a SessionManager append transfers its ordinary JSON payload to the
 manager by reference. Treat the payload as immutable from submission, including
 while an asynchronous append is pending; nested objects and arrays are frozen.
 Append receipts and transcript views share that immutable payload. Create a new
-value for a later update. Custom JSON
-representations are normalized before transcript redaction and persistence.
-If redaction policy changes after a tool result commits, the runtime creates a
-replacement for the model context while preserving the committed transcript bytes.
+value for a later update. Custom JSON representations are normalized before
+persistence. Tool arguments, tool results, and transcript text are not
+secret-masked; image and provider replay metadata still receive structural
+normalization.
 
 An admitted iterator owns its invocation scope and call lease for its lifetime.
 Advancing or closing it executes plugin code in that scope without creating a
@@ -332,6 +332,15 @@ temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
 
+Engine-aware stores keep host secret resolution and operation settlement in
+`openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
+recipes in the worker/admission-only
+`openclaw/plugin-sdk/database-engine-worker-runtime`. The existing
+`sqlite-worker-runtime` entrypoint retains SQLite helpers; PostgreSQL connections
+are opened through `openEngineStore`, without a public connection constructor.
+See [Database engine adapters](/plugins/sdk-overview/infrastructure#database-engine-adapters-experimental)
+for the contracts and boundary.
+
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
 issuing SQL or a worker request. Retained row caches may reuse results only when
@@ -360,9 +369,12 @@ worker grants; existing writer adapter selection remains unchanged.
 `await api.runtime.agent.session.createSessionEntryListReader({ agentId, storePath, env? })`
 creates a read-only metadata inventory reader for a durable session store.
 Await the returned function to read `{ entries, assertCurrent }`. It reuses
-entries only after a worker verifies the same database connection and revision;
-foreign commits and reopened databases invalidate them. Entries exclude saved
-prompt snapshots and derived participants. Treat them as immutable. The returned
+entries while the worker's database incarnation, in-process writer receipts, and
+session-row generation are unchanged. Writes through sibling handles and reopened
+databases invalidate the snapshot; it does not poll for external writers.
+External writers must use the Gateway or hold exclusive ownership while it is
+stopped. Entries exclude saved prompt snapshots and derived participants. Treat
+them as immutable. The returned
 assertion checks physical source identity, not sharing permissions or row freshness;
 revalidate access before publishing data after an await. Keep the reader within
 its consumer's lifecycle and discard it when configuration changes.

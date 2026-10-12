@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  getRuntimeConfig,
+  readRuntimeConfig as getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";

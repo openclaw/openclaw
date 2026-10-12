@@ -276,11 +276,11 @@ export function linkSessionConversation(params: {
     const stalePrimaryRows = executeSqliteQuerySync(
       database.db,
       db
-        .selectFrom("session_conversations")
-        .select(["conversation_id", "first_seen_at", "last_seen_at", "route_context_json"])
+        .deleteFrom("session_conversations")
         .where("session_id", "=", sessionId)
         .where("role", "=", "primary")
-        .where("conversation_id", "!=", conversation.identity.conversationRef),
+        .where("conversation_id", "!=", conversation.identity.conversationRef)
+        .returningAll(),
     ).rows;
     if (stalePrimaryRows.length > 0) {
       const related = executeSqliteQuerySync(
@@ -310,16 +310,7 @@ export function linkSessionConversation(params: {
           .returningAll(),
       ).rows;
       associations.push(...related);
-      const removed = executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("session_conversations")
-          .where("session_id", "=", sessionId)
-          .where("role", "=", "primary")
-          .where("conversation_id", "!=", conversation.identity.conversationRef)
-          .returningAll(),
-      ).rows;
-      removedAssociations.push(...removed);
+      removedAssociations.push(...stalePrimaryRows);
     }
   }
 

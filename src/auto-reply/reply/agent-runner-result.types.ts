@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
+import type {
+  AgentTurnCompletion,
+  AgentTurnRestartClaimCleanup,
+} from "./agent-runner-completion.types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -34,6 +37,7 @@ export type FinalizeReplyAgentRunInput = Pick<
   activeSessionEntry: SessionEntry | undefined;
   activeSessionStore: Record<string, SessionEntry> | undefined;
   completion?: AgentTurnCompletion;
+  prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
   blockReplyPipeline: BlockReplyPipeline | null;
   cfg: OpenClawConfig;
   isHeartbeat: boolean;

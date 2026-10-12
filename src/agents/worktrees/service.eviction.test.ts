@@ -20,7 +20,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
-import * as checkout from "./checkout.js";
+import * as checkout from "./checkout-materialize.js";
 import * as eviction from "./eviction.js";
 import { requireGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.test-support.js";

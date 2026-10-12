@@ -7,6 +7,7 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -19,7 +20,7 @@ import { stop } from "../service/ops-lifecycle.js";
 import { list } from "../service/ops-read.js";
 import { enqueueRun } from "../service/ops-run.js";
 import type { CronEvent } from "../service/state.js";
-import { onTimer } from "../service/timer-scheduler.js";
+import { onTimer } from "../service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronStoredJob } from "../types.js";
@@ -102,6 +103,7 @@ describe("scheduled account policy outcomes", () => {
     }) => {
       const { storePath } = fixtures.makeStorePath();
       const cfg: OpenClawConfig = { channels: { whatsapp: { accounts: { work: {} } } } };
+      setRuntimeConfigSnapshot(cfg);
       const job: CronStoredJob = {
         ...createDueIsolatedJob({
           id: name.replaceAll(" ", "-"),

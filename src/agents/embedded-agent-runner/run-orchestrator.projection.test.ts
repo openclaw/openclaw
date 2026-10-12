@@ -7,6 +7,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgentLoopContinue } from "../../../packages/agent-core/src/agent-loop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   persistSessionTranscriptTurn,
@@ -85,6 +89,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   tempRoots.cleanup();
@@ -167,6 +172,8 @@ describe("embedded retry transcript ownership", () => {
     const agentDir = path.join(root, "agent");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(agentDir, { recursive: true });
+    const config = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4-mini"]);
+    setRuntimeConfigSnapshot(config);
     const target = {
       agentId: "main",
       sessionId: "foreground-projection",
@@ -204,7 +211,7 @@ describe("embedded retry transcript ownership", () => {
       ...target,
       agentDir,
       workspaceDir,
-      config: createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4-mini"]),
+      config,
       prompt: "Recall the fact.",
       provider: "openai",
       model: "gpt-5.4-mini",
@@ -268,6 +275,8 @@ describe("embedded retry transcript ownership", () => {
         api: "openai-responses" as const,
         input: ["text" as const],
       };
+      const config = createEmbeddedAgentRunnerOpenAiConfig([model.id]);
+      setRuntimeConfigSnapshot(config);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
@@ -463,7 +472,7 @@ describe("embedded retry transcript ownership", () => {
           ...target,
           agentDir,
           workspaceDir,
-          config: createEmbeddedAgentRunnerOpenAiConfig([model.id]),
+          config,
           sessionPersistence,
           sessionManager: callerManager,
           prompt: "Check the results.",

@@ -186,6 +186,7 @@ export async function executeWorkerTurn(
   assertContextCurrent();
   if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
     const persisted = await recorder.persistApproved({
+      storageTarget: transcriptTarget,
       cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
     });
     if (persisted) {
@@ -643,6 +644,7 @@ export async function executeWorkerTurn(
     let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
     try {
       processResult = await tunnel.launchTurn({
+        assertCurrent: assertActive,
         plan: launchPlan.plan,
         turnClaim: params.turnClaim,
         timeoutMs: turn.timeoutMs,

@@ -3,6 +3,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -127,6 +128,7 @@ describe("models.list configured static entries", () => {
             },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         const pluginRegistry = loadOpenClawPlugins({
           config: cfg,
           onlyPluginIds: ["codex"],

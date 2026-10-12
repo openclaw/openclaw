@@ -10,6 +10,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
@@ -317,6 +318,7 @@ describe("doctor auth-profile consumers", () => {
             messages: { responsePrefix: "literal anthropic/test-model@claude-cli:work" },
           };
           await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
           const cronStorePath = resolveCronJobsStorePath();
           await saveCronJobsStore(cronStorePath, {
             version: 1,

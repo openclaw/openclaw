@@ -35,7 +35,7 @@ const hoisted = vi.hoisted(() => {
     },
   }));
   const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
-  const readAcpSessionEntry = vi.fn();
+  const readAcpSessionEntryAsync = vi.fn();
   return {
     sendMessageDiscord,
     sendWebhookMessageDiscord,
@@ -43,7 +43,7 @@ const hoisted = vi.hoisted(() => {
     restPost,
     createDiscordRestClient,
     createThreadDiscord,
-    readAcpSessionEntry,
+    readAcpSessionEntryAsync,
   };
 });
 
@@ -67,7 +67,7 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   );
   return {
     ...actual,
-    readAcpSessionEntry: hoisted.readAcpSessionEntry,
+    readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
   };
 });
 
@@ -123,7 +123,7 @@ export function installThreadBindingLifecycleTestHooks() {
       },
     }));
     hoisted.createThreadDiscord.mockReset().mockResolvedValue({ id: "thread-created" });
-    hoisted.readAcpSessionEntry.mockReset().mockReturnValue(null);
+    hoisted.readAcpSessionEntryAsync.mockReset().mockResolvedValue(null);
     vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
       (...args) =>
         hoisted.createDiscordRestClient(...args) as unknown as ReturnType<

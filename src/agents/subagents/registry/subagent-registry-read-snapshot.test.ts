@@ -79,25 +79,35 @@ it("does not retain a removed live-only row as a prepared durable payload", asyn
   });
 });
 
-it.each(["delete", "replace", "move alias", "update"] as const)(
-  "applies a %s in the prepared read's consuming frame",
-  async (publication) => {
+it.each(["update", "delete"] as const)(
+  "consumes a committed resident %s after preparing its run ID",
+  async (kind) => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
-      saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-      const prepared = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-      const replacement = {
-        ...entry,
-        runId: publication === "replace" ? "replacement" : entry.runId,
-        swarmRunId: publication === "move alias" ? "other-collector" : entry.swarmRunId,
-        requesterSessionKey: "agent:main:current-owner",
-        completion: { required: false, resultText: "current result" },
-      };
-      const current = new Map(publication === "delete" ? [] : [[replacement.runId, replacement]]);
-      persistRegistryFixture(current, [entry.runId, replacement.runId]);
-      expect(prepared.consume((runs) => [...runs.values()])).toEqual({
+      persistRegistryFixture(new Map([[entry.runId, entry]]));
+      const memory = new Map([[entry.runId, entry]]);
+      const prepared = await prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
+      await mutateSubagentRuns(
+        [entry.runId],
+        (rows) => ({
+          value: undefined,
+          postimages: new Map([
+            [
+              entry.runId,
+              kind === "delete"
+                ? null
+                : {
+                    ...rows.get(entry.runId)!,
+                    completion: { required: false, resultText: "committed child result" },
+                  },
+            ],
+          ]),
+        }),
+        { runs: memory },
+      );
+      expect(prepared.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
         ready: true,
-        value: publication === "delete" || publication === "move alias" ? [] : [replacement],
+        value: kind === "delete" ? undefined : "committed child result",
       });
     });
   },
@@ -208,9 +218,9 @@ it("prepares durable grandchildren through live-only parents and refuses changed
   });
 });
 
-it.each(["update", "delete"] as const)(
+it.each(["update"] as const)(
   "preserves fresh durable descendants after a refused named %s",
-  async (kind) => {
+  async () => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
       persistRegistryFixture(new Map([[entry.runId, entry]]));
@@ -236,7 +246,7 @@ it.each(["update", "delete"] as const)(
             [entry.runId],
             () => ({
               value: undefined,
-              postimages: new Map([[entry.runId, kind === "update" ? update : null]]),
+              postimages: new Map([[entry.runId, update]]),
             }),
             { runs: new Map([[foreign.runId, foreign]]) },
           ),

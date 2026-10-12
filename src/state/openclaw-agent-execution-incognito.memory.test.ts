@@ -272,13 +272,13 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
         }),
       );
     }
+    await expect(listSessionTranscriptCorpusEntriesForAgent("foreign", {}, reader)).rejects.toThrow(
+      "another agent",
+    );
   } finally {
     environment.mockRestore();
     config.mockRestore();
   }
-  await expect(listSessionTranscriptCorpusEntriesForAgent("foreign", {}, reader)).rejects.toThrow(
-    "another agent",
-  );
 });
 
 it("keeps selected Memory absence separate from a retained ended actor", async () => {

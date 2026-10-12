@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -100,13 +104,15 @@ describe("restricted CLI tool preparation", () => {
       getCliLiveSessionGeneration: () => undefined,
       loadManifestModelCatalog: () => [],
     });
-    fixture = createCliRunnerPrepareFixture((params) =>
-      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
-    );
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+    });
   });
 
   afterEach(async () => {
     await fixture.settle();
+    clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
   });

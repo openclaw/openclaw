@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +16,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ browser: {} })),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => configMocks.getRuntimeConfig(),
 }));
 
 const sharedMocks = vi.hoisted(() => ({
@@ -67,9 +70,6 @@ function installInspectSpies() {
     vi
       .spyOn(browserCliSharedModule, "callBrowserRequest")
       .mockImplementation(sharedMocks.callBrowserRequest),
-    vi
-      .spyOn(runtimeConfigSnapshot, "getRuntimeConfig")
-      .mockImplementation(configMocks.getRuntimeConfig),
     vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
     vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),

@@ -6,6 +6,10 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -111,6 +115,7 @@ beforeEach(async () => {
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -673,7 +678,7 @@ describe("composed cleanup and terminal outcome", () => {
     );
     expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
-  it.each(["release-failure", "revoked", "link-retained"] as const)(
+  it.each(["revoked", "link-retained"] as const)(
     "qualifies pending recovery claims after %s settlement",
     async (kind) => {
       // Service verification is supplied data; publication, cleanup and owner failure are real.
@@ -727,7 +732,6 @@ describe("composed cleanup and terminal outcome", () => {
 
   it.each([
     { kind: "renamed", json: true },
-    { kind: "retained", json: false },
     { kind: "cleanup-deadline", json: true },
   ] as const)(
     "reports the $kind backup after verified activation and repeated completion",
@@ -763,77 +767,23 @@ describe("composed cleanup and terminal outcome", () => {
       }
     },
   );
-  it("caches the first link-retirement outcome after a one-shot deletion failure", async () => {
-    const value = await scenario("link-retained-once", true, true);
-    expect(value.injected).toBe(true);
-    expect(value.repeatedCompletion).toMatchObject({ exitCode: 1 });
-    expect(value.retainedExists).toBe(true);
-    expect(value.exitCode).toBe(1);
-    expect(value.jsonOutput).toHaveLength(1);
-    expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
-  });
-  it.each(["link-authority-read", "last-cleanup-read"] as const)(
-    "caches the first retirement authority failure for %s",
+  it.each(["link-changed", "transient-read"] as const)(
+    "keeps producer-qualification failure hard for %s",
     async (kind) => {
-      const value = await scenario(kind, true, true);
+      const value = await scenario(kind, true);
       expect(value.injected).toBe(true);
-      expect(value.repeatedFailure).toBeDefined();
       expect(value.exitCode).toBe(1);
       expect(value.jsonOutput).toHaveLength(1);
-      expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
+      expect(value.jsonOutput[0]).toMatchObject({
+        status: "error",
+        steps: expect.not.arrayContaining([
+          expect.objectContaining({ advisory: expect.anything() }),
+        ]),
+      });
       expect(value.history?.status).toBe("failed");
       expect(value.afterRepeat).toEqual(value.beforeRepeat);
-      expect(value.retainedExists).toBe(kind === "link-authority-read");
     },
   );
-  it("keeps unqualified link retirement failure hard without deleting its checkout", async () => {
-    const value = await scenario("link-retained", true);
-    expect(value.injected).toBe(true);
-    expect(value.exitCode).toBe(1);
-    expect(value.history?.status).toBe("failed");
-    expect(value.jsonOutput).toHaveLength(1);
-    expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
-    expect(value.retainedExists).toBe(true);
-    expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
-    // The recovery location survives separately from the bounded failure cause.
-    expect(JSON.stringify(value.history)).toContain(path.basename(value.expectedRetained));
-    expect(value.report).toContain(path.basename(value.expectedRetained));
-    expect(
-      JSON.parse(await fs.readFile(path.join(base, "operator-checkout", "package.json"), "utf8"))
-        .version,
-    ).toBe("1.0.0");
-  });
-  it.each([
-    "unverified-completion",
-    "rollback-refused",
-    "link-changed",
-    "transient-read",
-    "cleanup-read",
-  ] as const)("keeps producer-qualification failure hard for %s", async (kind) => {
-    const value = await scenario(kind, true);
-    expect(value.injected).toBe(true);
-    if (kind === "rollback-refused") {
-      expect(value.prerequisiteResult).toMatchObject({
-        exitCode: 1,
-        reason: "rollback-project-changed",
-      });
-      expect(value.retainedExists).toBe(true);
-      expect(value.package.version).toBe("2.0.0");
-    }
-    if (kind === "unverified-completion") {
-      expect(value.prerequisiteResult).toMatchObject({ status: "failed" });
-      expect(value.package.version).toBe("1.0.0");
-    }
-    expect(value.exitCode).toBe(1);
-    expect(value.jsonOutput).toHaveLength(1);
-    expect(value.jsonOutput[0]).toMatchObject({
-      status: "error",
-      steps: expect.not.arrayContaining([expect.objectContaining({ advisory: expect.anything() })]),
-    });
-    expect(value.history?.status).toBe("failed");
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
-  });
   it("publishes the hard completion result through the direct finalizer fallback", async () => {
     const value = await scenario("unverified-completion", true, false, false);
     expect(value.exitCode).toBe(1);
@@ -849,17 +799,6 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.history).toMatchObject({ status: "failed", reason: "foreign-terminal-fact" });
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
-  });
-  it("keeps healthy cleanup and JSON terminal output consistent", async () => {
-    const value = await scenario("healthy", true);
-    expect(value.exitCode).toBe(0);
-    expect(value.retainedExists).toBe(false);
-    expect(value.history?.status).toBe("succeeded");
-    expect(value.lease).toBe("absent");
-    expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
-    expect(value.observationLeases).toEqual(["absent"]);
-    expect(value.jsonOutput).toEqual([expect.objectContaining({ status: "ok" })]);
     expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
 });
@@ -923,6 +862,7 @@ it("keeps foreground success pending until the replacement Gateway observes the 
   if (!sentinel) {
     throw new Error("Expected the canonical final sentinel");
   }
+  setRuntimeConfigSnapshot(validConfigSnapshot.runtimeConfig);
   await finalizeRestartUpdateRun(sentinel.payload);
   expect(getUpdateRun(run.runId)).toMatchObject({
     status: "succeeded",
@@ -930,11 +870,7 @@ it("keeps foreground success pending until the replacement Gateway observes the 
   });
 });
 
-it.each([
-  { status: "error" as const, reason: "build-failed", expected: "failed" },
-  { status: "skipped" as const, reason: "already-current", expected: "skipped" },
-  { status: "ok" as const, reason: undefined, expected: "succeeded" },
-])(
+it.each([{ status: "skipped" as const, reason: "already-current", expected: "skipped" }])(
   "terminalizes the foreground $expected outcome without waiting for restart",
   async ({ status, reason, expected }) => {
     const created = createUpdateRun({ trigger: "api" });

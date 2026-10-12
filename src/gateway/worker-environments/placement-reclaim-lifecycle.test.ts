@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKSPACE_QUIESCENCE_COMMAND,
@@ -19,8 +23,11 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
+afterAll(() => clearRuntimeConfigSnapshot());
+
 describe("placement reclaim with provider-owned node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it.each([
     { operation: "reclaim", failure: "timeout" },
@@ -37,7 +44,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         reconcileChanged: false,
         reconcileCommitsManifest: false,
       };
-      let harness = createHarness(support.testState.stateDb, placements, harnessOptions);
+      let harness = await createHarness(support.testState.stateDb, placements, harnessOptions);
       const environmentId = harness.ready.environmentId;
       const build = {
         ...support.BOOTSTRAP_RECEIPT,
@@ -96,7 +103,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         await placements.markWorkspaceResultPending(claim);
         await placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-        harness = createHarness(support.testState.stateDb, placements, harnessOptions);
+        harness = await createHarness(support.testState.stateDb, placements, harnessOptions);
       }
       harness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
       const transport = nodeSupport.transport();
@@ -344,6 +351,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
 
 describe("SSH placement cleanup after worker credential expiry", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it.each(["reclaim", "move", "idle suspend"] as const)(
     "%s reconciles the workspace before releasing the exact lease",
@@ -352,7 +360,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         database: support.testState.stateDb,
         now: () => support.testState.nowMs,
       });
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;

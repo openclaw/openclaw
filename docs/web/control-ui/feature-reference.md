@@ -33,7 +33,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. Expand the activity to see each call; read and edit counts can include repeated attempts on the same file.
     - Tool activity automatically displays a short purpose description supplied by the acting agent when available, with commands and results expandable underneath. Calls without descriptions keep deterministic labels. Viewing activity makes no additional model calls. The former `gateway.controlUi.toolTitles` option is retired; `openclaw doctor --fix` removes it from existing configs.
     - Start or dismiss ephemeral model-suggested follow-up tasks. **Start in a new session** opens the proposed task in the suggested folder without requiring Git or creating a worktree. The new session asks the user before using a worktree if the task needs one later.
-    - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
+    - Activity tab with browser-local, bounded summaries of live tool activity from existing `session.tool` / tool event delivery.
 
   </Accordion>
   <Accordion title="Channels, sessions, memory">
@@ -98,7 +98,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
 
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
     - Session rows and selected details show saved conversation names, including generated titles. Explicit renames take precedence; unnamed sessions show their keys.
-    - The Sessions card counts the rows currently shown: up to 50 in **All**, or matching sessions selected on this Usage page in **Recently viewed**. The total is the loaded session count for the agent scope; the separate selected-session comparison does not increase the shown count.
+    - Overview charts and totals cover every session matching the active filters. The Sessions card pages 50 rows on the server; its shown count excludes the separate selected-session comparison. Comparisons remain visible when you change pages and refresh with the overview. Shift-click selects a range within the current page. **Recently viewed** shows matching sessions selected on this Usage page.
     - Filter sessions with the provider, model, channel, or tool menus, or type case-insensitive `key:value` terms. Values within one category match as alternatives. Toggling a menu option preserves the other filters and their quoted text.
     - Selecting days narrows token and cost totals to those days within the active session filters. Daily charts and exports retain that session scope. Provider/model/tool queries select matching sessions, including all usage within each matched session; hour filters select sessions active in those hours.
     - Whole-session totals count each tool call, including repeated uses of the same tool in one assistant message. Drag the handles in a session’s usage timeline to inspect an interval; its counts use assistant invocations in the loaded conversation. Tool results do not add calls. Tool-only assistant messages remain visible in the loaded conversation.

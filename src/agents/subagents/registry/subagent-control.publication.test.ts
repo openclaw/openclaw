@@ -2,9 +2,10 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import {
@@ -29,6 +30,9 @@ import {
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const rootKey = "agent:main:subagent:publication-root";
 const childKey = "agent:main:subagent:publication-drain";
 
@@ -69,11 +73,14 @@ it("revalidates the session after held publication preparation permits retiremen
     agentId: "main",
     sessionKey: rootKey,
     defaultSessionId: "prepared-publication-session",
+    lifecycleRevision: "prepared-publication-revision",
   };
-  await writeSubagentSessionEntry(target);
+  const storePath = await writeSubagentSessionEntry(target);
   await registerSubagentRun({
     runId: "prepared-publication",
     childSessionKey: rootKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -142,6 +149,11 @@ it.each([
     await registerSubagentRun({
       runId: "publication-b0",
       childSessionKey: rootKey,
+      childAgentId: "main",
+      sessionEntry: {
+        sessionId: "publication-root-session",
+        lifecycleRevision: "publication-root-revision",
+      },
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -237,10 +249,13 @@ it.each([
         agentId: "main",
         sessionKey,
         defaultSessionId: `${runId}-session`,
+        lifecycleRevision: `${runId}-revision`,
       });
       await registerSubagentRun({
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey })?.entry,
         requesterSessionKey: rootKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",

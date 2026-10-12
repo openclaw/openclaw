@@ -5,6 +5,7 @@ import {
   createOperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -204,6 +205,7 @@ describe("typed in-process agent authorization", () => {
             },
           },
         });
+        setRuntimeConfigSnapshot(context.getRuntimeConfig());
         const foreignSessionKey = "agent:maintainer:main";
         await upsertSessionEntryCore(
           { agentId: "maintainer", sessionKey: foreignSessionKey },
@@ -604,6 +606,7 @@ describe("typed in-process agent authorization", () => {
           },
         },
       });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
       const foreignSessionKey = "agent:maintainer:main";
       await upsertSessionEntryCore(
         {
@@ -785,6 +788,7 @@ describe("typed in-process agent authorization", () => {
 
   it("rejects a nonparticipant agent turn before preflight", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:private-draft";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

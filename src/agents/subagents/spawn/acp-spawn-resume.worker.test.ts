@@ -14,6 +14,7 @@ import {
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../../../acp/runtime/session-meta.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -30,6 +31,7 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
       agents: { ownership: "explicit", entries: { main: {}, coder: {}, other: {}, reviewer: {} } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const requester = "agent:main:main";
     const seed = async (
       name: string,

@@ -168,29 +168,6 @@ describe("QA auth profile store", () => {
     },
   );
 
-  it("writes new auth profiles to SQLite without creating legacy JSON", async () => {
-    const { agentDir, agentId, stateDir } = await createQaAuthState();
-
-    await writeQaAuthProfiles({
-      agentId,
-      profiles: {
-        "qa-mock-openai": {
-          type: "api_key",
-          provider: "openai",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
-      stateDir,
-    });
-
-    expect((await readQaAuthProfiles(agentDir)).profiles["qa-mock-openai"]).toMatchObject({
-      provider: "openai",
-    });
-    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("refuses to bypass a pending legacy auth source", async () => {
     const { agentDir, agentId, stateDir } = await createQaAuthState();
     const authPath = path.join(agentDir, "auth-profiles.json");
@@ -256,6 +233,9 @@ describe("QA auth profile store", () => {
       tokenProfile: { type: "token", provider: "github" },
       oauthProfile: { type: "oauth", provider: "chatgpt" },
       "qa-mock-anthropic": { type: "api_key", provider: "anthropic" },
+    });
+    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 

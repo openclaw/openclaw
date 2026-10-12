@@ -29,7 +29,7 @@ import {
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -322,14 +322,6 @@ export async function resolveUsageCostTranscriptSources(
   return results;
 }
 
-export async function resolveUsageCostTranscriptFile(
-  sessionFile: string,
-  access: UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile | undefined> {
-  const source = await resolveUsageCostTranscriptSource(sessionFile, access);
-  return materializeUsageCostTranscriptSourceBestEffort(source, access);
-}
-
 async function materializeUsageCostTranscriptSourceBestEffort(
   source: UsageCostTranscriptSource | undefined,
   access: UsageCostCollectionAccess,
@@ -381,7 +373,7 @@ export async function* readTranscriptRecords(
     } else if (incognito) {
       events = await readIncognitoUsageTranscript(incognito, marker);
     } else {
-      events = await loadTranscriptEvents(marker);
+      events = await loadSessionTranscriptEvents(marker);
     }
     for (const event of selectVisibleTranscriptEvents(events)) {
       incognito?.actor.assertCurrent();

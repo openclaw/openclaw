@@ -38,6 +38,10 @@ export function registerLateDescendantControlTests({
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
+        childSessionIdentity: {
+          sessionId: "late-parent-session",
+          lifecycleRevision: "late-parent-session-revision",
+        },
         requesterSessionKey: owner,
         requesterDisplayKey: owner,
         task: "orchestrator",
@@ -49,6 +53,10 @@ export function registerLateDescendantControlTests({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
+        childSessionIdentity: {
+          sessionId: "live-child-session",
+          lifecycleRevision: "live-child-session-revision",
+        },
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
@@ -90,6 +98,11 @@ export function registerLateDescendantControlTests({
         return registerSubagentRun({
           runId: "late-child",
           childSessionKey: childKey,
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "late-child-session",
+            lifecycleRevision: "late-child-session-revision",
+          },
           requesterSessionKey: requester.childSessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: requester.childSessionKey,
@@ -158,6 +171,11 @@ export function registerLateDescendantControlTests({
         await registerSubagentRun({
           runId: "other-turn-root",
           childSessionKey: "agent:main:subagent:other-turn-root",
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "other-turn-root-session",
+            lifecycleRevision: "other-turn-root-session-revision",
+          },
           requesterSessionKey: owner,
           requesterAgentId: "main",
           requesterTurnRunId: "other-turn",

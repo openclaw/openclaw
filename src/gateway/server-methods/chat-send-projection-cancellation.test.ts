@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -34,6 +35,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
   "cancels %s projection waiting without cancelling the shared rebuild or losing the answer",
   async (scenario) => {
     await withOpenClawTestState({ label: "chat-projection-cancel" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runId = "projection-run";
       const scope = {
         agentId: "main",

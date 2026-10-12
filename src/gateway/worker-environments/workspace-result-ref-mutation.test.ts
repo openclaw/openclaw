@@ -94,6 +94,7 @@ it("shares ref serialization and deferred retention between snapshots and result
   let now = 1_700_000_000_000;
   const service = new ManagedWorktreeService({
     env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    getConfig: () => ({}),
     now: () => now,
   });
   phase = "create";

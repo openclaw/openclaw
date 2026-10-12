@@ -574,7 +574,13 @@ describe("composer overflow presentation", () => {
       );
       flush();
       const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
-      expect(getComputedStyle(commands).display).toBe("none");
+      const visibleCommands = () =>
+        [...commands.querySelectorAll<HTMLButtonElement>("button")]
+          .filter((button) => button.checkVisibility())
+          .map((button) => button.getAttribute("aria-label"));
+      const collapsedCommands = status === "active" ? [] : ["Resume goal"];
+      await afterLayout();
+      expect(visibleCommands()).toEqual(collapsedCommands);
       await page.getByRole("button", { name: "Show goal details", exact: true }).click();
       await afterLayout();
       const objective = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
@@ -635,7 +641,7 @@ describe("composer overflow presentation", () => {
       await afterLayout();
       expect(commands.getBoundingClientRect().top).toBe(commandBox.top);
       await page.getByRole("button", { name: "Hide goal details", exact: true }).click();
-      expect(getComputedStyle(commands).display).toBe("none");
+      expect(visibleCommands()).toEqual(collapsedCommands);
     },
   );
 

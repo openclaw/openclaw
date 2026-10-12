@@ -1,9 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -57,12 +55,12 @@ beforeAll(async () => {
     plugins: { enabled: false },
     skills: { load: { watch: false } },
   };
-  setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(config);
   model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
     await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
       "gateway",
@@ -190,36 +188,22 @@ test("starts and notifies when identity enrichment fails, then resolves child id
   }
 });
 
-test("reports manual collection after real destination capture fails, then recovers on the same tool", async ({
+test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
   signal,
 }) => {
   const sessionKey = "agent:main:exec-capture-failure";
   await seedOrigin(sessionKey);
   let faults = 0;
-  const failRead = (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      !isRecord(value.input) ||
-      value.input.kind !== "session-entry-read" ||
-      !isRecord(value.input.scope) ||
-      value.input.scope.sessionKey !== sessionKey ||
-      faults
-    ) {
-      return;
-    }
-    faults++;
-    throw new Error("session worker transport unavailable");
-  };
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the real Worker receiver.
-  const threadPost = Worker.prototype.postMessage;
-  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    value,
-    transferList,
-  ) {
-    failRead(value);
-    threadPost.call(this, value, transferList);
-  });
+  const capture = sessionEvents.captureSessionEventTargetForHost;
+  vi.spyOn(sessionEvents, "captureSessionEventTargetForHost").mockImplementation(
+    async (...args) => {
+      if (args[0] === "main" && args[1] === sessionKey && faults === 0) {
+        faults++;
+        throw new Error("session event destination unavailable");
+      }
+      return capture(...args);
+    },
+  );
   const exec = createExecTool({
     config,
     host: "gateway",

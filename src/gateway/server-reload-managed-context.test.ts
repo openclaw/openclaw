@@ -7,7 +7,10 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { ConfigWriteNotification } from "../config/config.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -130,6 +133,7 @@ function startManagedGatewayConfigReloader(
   startManagedGatewayConfigReloaderImpl: typeof StartManagedGatewayConfigReloader,
   params: ManagedReloaderTestParams,
 ) {
+  setRuntimeConfigSnapshot(params.initialConfig);
   let state: ReturnType<ManagedReloaderParams["getState"]> = {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,

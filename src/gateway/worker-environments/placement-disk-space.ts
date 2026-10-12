@@ -18,6 +18,7 @@ const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 const DISK_SPACE_PROBE_CONCURRENCY = 8;
 const DISK_SPACE_PROBE_TIMEOUT_MS = 30_000;
+const IDLE_DISK_SPACE_REFRESH_MS = 15 * 60_000;
 
 const REMOTE_DISK_SPACE_PROBE_JS = String.raw`
 const fs = require("node:fs");
@@ -34,6 +35,7 @@ type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }
 
 type DiskSpaceObservation = ActivePlacement & {
   snapshot: SessionPlacementDiskSpace;
+  runnerVersion: number;
 };
 
 function hasExactBinding(
@@ -103,9 +105,9 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
+  placements: Pick<WorkerSessionPlacementStore, "prepareMaintenancePlacements">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
-  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read">;
+  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
@@ -130,6 +132,17 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (params.runnerAvailability.read(placement)?.status === "offline") {
       return;
     }
+    const runnerVersion = params.runnerAvailability.version();
+    const previousObservation = observations.get(placement.sessionId);
+    if (
+      previousObservation &&
+      hasExactBinding(previousObservation, placement) &&
+      previousObservation.updatedAtMs === placement.updatedAtMs &&
+      previousObservation.runnerVersion === runnerVersion &&
+      now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
+    ) {
+      return;
+    }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
@@ -146,13 +159,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       result.stdout,
       Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
     );
-    const current = params.placements.get(placement.sessionId);
-    const candidate = { ...placement, snapshot } satisfies DiskSpaceObservation;
-    // Tunnel work can outlive an owner. Accept the sample only for the exact active generation.
-    if (!hasExactBinding(candidate, current)) {
-      return;
-    }
-    const previous = read(current);
+    const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
+    // Late samples remain tagged with their original binding; read() hides them after a move.
+    const previous = read(placement);
     observations.set(placement.sessionId, candidate);
     if (
       !previous ||
@@ -172,22 +181,20 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const identities = await params.placements.readChangeSnapshot();
-    const projection = await params.placements.readProjection(
-      identities.map(({ sessionId }) => sessionId),
-      { current: true },
+    const inventory = await params.placements.prepareMaintenancePlacements();
+    const active = inventory.placements.filter(
+      (placement): placement is ActivePlacement => placement.state === "active",
     );
-    const active = identities
-      .map(({ sessionId }) => projection.placements.get(sessionId))
-      .filter((placement): placement is ActivePlacement => placement?.state === "active");
+    inventory.release();
+    const activeBySession = new Map(active.map((placement) => [placement.sessionId, placement]));
     for (const [sessionId, observation] of observations) {
-      if (!hasExactBinding(observation, params.placements.get(sessionId))) {
+      if (!hasExactBinding(observation, activeBySession.get(sessionId))) {
         observations.delete(sessionId);
         observationVersion += 1;
       }
     }
     for (const [sessionId, binding] of staleBindings) {
-      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+      if (!hasExactBinding(binding, activeBySession.get(sessionId))) {
         staleBindings.delete(sessionId);
       }
     }

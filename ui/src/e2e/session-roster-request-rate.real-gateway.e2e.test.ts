@@ -140,14 +140,14 @@ suite.define(() => {
         await page.evaluate(() => {
           Math.random = () => 0;
         });
+        const eventRenderMs = 20;
         // Browser time is controlled; the real server still owns mutation, projection,
         // event delivery, and list responses. Await the delivered row, not patch's ACK.
         const patch = async (sessionKey: string, label: string) => {
           await emitter.request("sessions.patch", { key: sessionKey, label });
           await expect.poll(() => labels.has(label)).toBe(true);
           if (sessionKey === key) {
-            // The snapshot-eligible sidebar renders the real event before browser
-            // time advances. This also proves the subscription is not inert.
+            await page.clock.runFor(eventRenderMs);
             await expect
               .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
               .toContain(label);
@@ -174,7 +174,7 @@ suite.define(() => {
           await roster.getByText("Trailing rate update " + index, { exact: true }).waitFor();
           await page.clock.runFor(1_000);
         }
-        await page.clock.runFor(56_999);
+        await page.clock.runFor(56_999 - 4 * eventRenderMs);
         expect(lists).toEqual(before);
         // The first row arms the minute fallback, followed by the shared event
         // collection window. Later rows neither refetch nor postpone it.

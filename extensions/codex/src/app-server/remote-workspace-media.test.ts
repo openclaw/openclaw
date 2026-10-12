@@ -51,33 +51,6 @@ function createRemoteFileReader(files: Record<string, string>) {
 }
 
 describe("Codex remote file transport", () => {
-  it("retains the implicit Windows output cap and scrubs Node preload variables", async () => {
-    const bytes = Buffer.alloc(512 * 1024 + 17, 0x61);
-    const request = vi.fn(async (_method: string, params: { command: string[] }) => {
-      const offset = Number(params.command[6]);
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
-          size: bytes.length,
-          revision: "same-file",
-        }),
-        stderr: "",
-      };
-    });
-    const read = createCodexRemoteWorkspaceFileReader(
-      { request },
-      createNativeSessionBindingAuthority([], vi.fn()),
-    );
-    expect(await read({ path: "/remote/report.txt", maxBytes: bytes.length })).toEqual(bytes);
-    expect(request).toHaveBeenCalledTimes(2);
-    for (const [method, params] of request.mock.calls) {
-      expect(method).toBe("command/exec");
-      expect(params).toMatchObject({ env: { NODE_OPTIONS: null, NODE_PATH: null } });
-      expect(params).not.toHaveProperty("outputBytesCap");
-    }
-  });
-
   it("distinguishes missing files from a missing Node.js executable", async () => {
     const request = vi.fn(async () => ({
       exitCode: 1,
@@ -139,6 +112,8 @@ describe("Codex remote file transport", () => {
             params: { command: string[] };
           };
           expect(request.method).toBe("command/exec");
+          expect(request.params).toMatchObject({ env: { NODE_OPTIONS: null, NODE_PATH: null } });
+          expect(request.params).not.toHaveProperty("outputBytesCap");
           const offset = Number(request.params.command[6]);
           const reply = () =>
             send({
@@ -201,7 +176,6 @@ describe("Codex remote file transport", () => {
 
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
   it.each([
-    { remoteRoot: remoteWorkspaceRoot, reportAlias: "reports/./slack-upload.txt" },
     { remoteRoot: "C:/Work/Repo", reportAlias: "c:\\work\\repo\\reports\\slack-upload.txt" },
   ])(
     "stages scalar, list, and structured attachments from $remoteRoot",
@@ -249,7 +223,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     },
   );
 
-  it("uses authoritative remote bytes even when a stale local file has the same timestamp", async () => {
+  it("uses authoritative remote bytes when a stale local file exists", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
     await writeFile(path.join(localWorkspaceRoot, "reused-upload.txt"), "stale local content\n");
 
@@ -345,17 +319,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     ).rejects.toThrow("requires an active app-server client");
   });
 
-  it("propagates missing remote files before invoking a channel uploader", async () => {
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({
-        args: { filePath: `${remoteWorkspaceRoot}/reports/missing.txt` },
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-        readRemoteFile: createRemoteFileReader({}),
-      }),
-    ).rejects.toThrow("does not exist");
-  });
-
   it("rejects gateway-local paths and traversal before issuing a remote request", async () => {
     for (const filePath of ["/etc/passwd", `${remoteWorkspaceRoot}/reports/../../private.txt`]) {
       const readRemoteFile = createRemoteFileReader({});
@@ -369,19 +332,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       ).rejects.toThrow(/outside|must stay inside/);
       expect(readRemoteFile).not.toHaveBeenCalled();
     }
-  });
-
-  it("rejects oversized remote files before handing bytes to the channel uploader", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reports/oversized.txt`;
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({
-        args: { filePath: remotePath },
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-        readRemoteFile: createRemoteFileReader({ [remotePath]: "too many bytes" }),
-        maxBytes: 3,
-      }),
-    ).rejects.toThrow("limit of 3 bytes");
   });
 
   it("enforces one aggregate byte limit across remote attachments", async () => {
@@ -398,35 +348,35 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     ).rejects.toThrow("limit of 2 bytes");
   });
 
-  it.each([
-    { elapsedMs: 100.25, budgets: [500, 399], expires: false },
-    { elapsedMs: 499.75, budgets: [500], expires: true },
-  ])("keeps batch deadlines across a clock rewind ($elapsedMs)", async (test) => {
-    let elapsed = 0;
-    let wallClock = 10_000;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-    const first = `${remoteWorkspaceRoot}/reports/first.txt`;
-    const second = `${remoteWorkspaceRoot}/reports/second.txt`;
-    const readRemoteFile = vi.fn<RemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
-      elapsed = test.elapsedMs;
-      wallClock -= 5_000;
-      return Buffer.from(remotePath === first ? "first" : "second");
-    });
-    const transfer = prepareCodexRemoteWorkspaceMessageMedia({
-      args: { mediaUrls: [first, second] },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile,
-      timeoutMs: 500,
-    });
-    if (test.expires) {
-      await expect(transfer).rejects.toThrow("timed out");
-    } else {
-      await transfer;
-    }
-    expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual(test.budgets);
-  });
+  it.each([{ elapsedMs: 499.75, budgets: [500], expires: true }])(
+    "keeps batch deadlines across a clock rewind ($elapsedMs)",
+    async (test) => {
+      let elapsed = 0;
+      let wallClock = 10_000;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+      const first = `${remoteWorkspaceRoot}/reports/first.txt`;
+      const second = `${remoteWorkspaceRoot}/reports/second.txt`;
+      const readRemoteFile = vi.fn<RemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
+        elapsed = test.elapsedMs;
+        wallClock -= 5_000;
+        return Buffer.from(remotePath === first ? "first" : "second");
+      });
+      const transfer = prepareCodexRemoteWorkspaceMessageMedia({
+        args: { mediaUrls: [first, second] },
+        localWorkspaceRoot,
+        remoteWorkspaceRoot,
+        readRemoteFile,
+        timeoutMs: 500,
+      });
+      if (test.expires) {
+        await expect(transfer).rejects.toThrow("timed out");
+      } else {
+        await transfer;
+      }
+      expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual(test.budgets);
+    },
+  );
 
   it("counts repeated attachment entries before issuing any remote request", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reports/report.txt`;

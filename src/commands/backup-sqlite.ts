@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig, resolveStateDir } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -164,7 +164,7 @@ async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions) {
       identity: { role: "global" as const },
     };
   }
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
   const agentRoot = await resolveBackupAgentRoot(config, agentId);
   assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());

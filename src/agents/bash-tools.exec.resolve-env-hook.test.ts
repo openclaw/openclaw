@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
@@ -166,11 +167,13 @@ describe("exec resolve_exec_env hook wiring", () => {
   });
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     mocks.hookRunner = undefined;
     mocks.gatewayParams.length = 0;
     mocks.nodeHostParams.length = 0;
     mocks.spawnInputs.length = 0;
   });
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {
     installResolveExecEnvHook({

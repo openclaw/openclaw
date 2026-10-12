@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -33,7 +37,7 @@ function createStore() {
   });
 }
 
-function coordinate(harness: ReturnType<typeof createHarness>) {
+function coordinate(harness: Awaited<ReturnType<typeof createHarness>>) {
   return coordinateWorkerPlacementDispatch(harness.service, (_request, run) => run());
 }
 
@@ -42,7 +46,7 @@ function prepareTargetedAdmissionObserver(placements: ReturnType<typeof createSt
   // arm it only when the test reaches its recovery observation boundary.
   const read = placements.readProjection.bind(placements);
   const reads = vi.spyOn(placements, "readProjection");
-  return (harness: ReturnType<typeof createHarness>) => {
+  return (harness: Awaited<ReturnType<typeof createHarness>>) => {
     const unitReached = createDeferredCore();
     const reconcile = harness.service.reconcileActive;
     vi.spyOn(harness.service, "reconcileActive").mockImplementation((environmentId, admit) =>
@@ -72,6 +76,8 @@ async function git(root: string, ...args: string[]) {
 
 describe("placement recovery session admission with persisted placements", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
+  afterAll(() => clearRuntimeConfigSnapshot());
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.
@@ -89,7 +95,7 @@ describe("placement recovery session admission with persisted placements", () =>
       const releaseStop = createDeferredCore();
       const environmentEntered = createDeferredCore();
       const releaseEnvironment = createDeferredCore();
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
         runReclaimPreparation: async ({ run, authorize }) => {
           stopEntered.resolve();
@@ -157,7 +163,7 @@ describe("placement recovery session admission with persisted placements", () =>
       });
       const readCandidates = placements.readRecoveryCandidates.bind(placements);
       const candidateReads = vi.spyOn(placements, "readRecoveryCandidates");
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         environmentGeneration: 3,
       });
       const coordinated = coordinate(harness);
@@ -198,7 +204,7 @@ describe("placement recovery session admission with persisted placements", () =>
   it("targeted recovery preserves a dispatch through activation", async () => {
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
-    const harness = createHarness(support.testState.stateDb, placements);
+    const harness = await createHarness(support.testState.stateDb, placements);
     const tunnelEntered = createDeferredCore();
     const releaseTunnel = createDeferredCore();
     const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
@@ -230,7 +236,7 @@ describe("placement recovery session admission with persisted placements", () =>
     async (mode) => {
       const placements = createStore();
       const observe = prepareTargetedAdmissionObserver(placements);
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const active = await harness.placements.seedActive(2);
@@ -286,7 +292,7 @@ describe("placement recovery session admission with persisted placements", () =>
     const claimWaitEntered = createDeferredCore();
     const releaseClaimWait = createDeferredCore();
     const interruption = new Error("fixture Move interrupted after claim wait");
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       runMoveBarrier: async ({ sessionId, begin }) => {
         await begin();
@@ -358,7 +364,7 @@ describe("placement recovery session admission with persisted placements", () =>
     const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
     const reconciliationEntered = createDeferredCore();
     const releaseReconciliation = createDeferredCore();
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       afterReconcile: async () => {
         reconciliationEntered.resolve();
@@ -386,6 +392,33 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
     expect(abandon).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("does not start orphan discovery for sessions created after startup", async () => {
+    const placements = createStore();
+    const readChangeSnapshot = vi.spyOn(placements, "readChangeSnapshot");
+    const resolveWorkspace = vi.fn(async () => ({
+      kind: "local" as const,
+      path: support.testState.root,
+    }));
+    const harness = await createHarness(support.testState.stateDb, placements, {
+      resolveWorkspace,
+    });
+    const coordinated = coordinate(harness);
+    await coordinated.reconcile("startup");
+
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      owner: { kind: "local" },
+      claimId: "after-startup",
+      runId: "after-startup",
+    });
+    await placements.releaseTurnIfOwned(claim);
+    await coordinated.reconcileActive();
+    await coordinated.reconcileActive();
+
+    expect(readChangeSnapshot).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
   });
 
   it("spreads startup orphan inventories across idle sweeps and eventually reclaims every checkout", async () => {
@@ -416,7 +449,7 @@ describe("placement recovery session admission with persisted placements", () =>
     const orphanRoot = roots.at(-1)!;
     const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
     await git(orphanRoot, "update-ref", cleanupRef, tree);
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       resolveWorkspace: async ({ sessionId }) => {
         const root = rootsBySession.get(sessionId);
         if (!root) {
@@ -503,7 +536,7 @@ describe("placement recovery session admission with persisted placements", () =>
     }
   });
 
-  it("retries orphan cleanup on the next full sweep when a sharing session was busy", async () => {
+  it("retries startup orphan cleanup after a busy placement becomes inactive", async () => {
     const root = support.testState.root;
     await git(root, "init", "--quiet");
     await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
@@ -512,17 +545,16 @@ describe("placement recovery session admission with persisted placements", () =>
     const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
     await git(root, "update-ref", cleanupRef, tree);
     const placements = createStore();
-    const idle = await placements.startDispatch({
-      ...REQUEST,
-      sessionId: "idle",
-      sessionKey: "agent:main:idle",
-    });
+    const requested = await placements.startDispatch(REQUEST);
     await placements.fail({
-      sessionId: idle.sessionId,
-      expectedGeneration: idle.generation,
+      sessionId: requested.sessionId,
+      expectedGeneration: requested.generation,
       recoveryError: "finished fixture",
     });
-    const harness = createHarness(support.testState.stateDb, placements, { workspacePath: root });
+    const harness = await createHarness(support.testState.stateDb, placements, {
+      workspacePath: root,
+      environmentGeneration: 3,
+    });
     const coordinated = coordinate(harness);
     await coordinated.reconcile("startup");
     const providerEntered = createDeferredCore();
@@ -543,13 +575,16 @@ describe("placement recovery session admission with persisted placements", () =>
       releaseProvider.resolve();
       await dispatch;
     }
+    await coordinated.reclaim(REQUEST);
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
     await coordinated.reconcileActive();
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
 
   it("a real dispatch reaches device provisioning while another placement's teardown is stuck", async () => {
     const placements = createStore();
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
     });
     const requested = await placements.startDispatch({

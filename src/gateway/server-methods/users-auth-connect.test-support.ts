@@ -18,7 +18,7 @@ import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
+const resolveProfileId = vi.hoisted(() => vi.fn());
 const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
@@ -34,13 +34,12 @@ const resolvePersonalAccountAuthMethod = vi.hoisted(() => vi.fn());
 const exchange = vi.hoisted(() => vi.fn());
 const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 
-vi.mock("../../state/user-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
-  return {
-    ...actual,
-    getUserProfileRole: () => null,
-  };
-});
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => ({ id: resolveProfileId(profileId), role: null, githubLogin: null }),
+  }),
+}));
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
@@ -278,14 +277,13 @@ export function setupModelAccountConnectTest() {
           return links;
         },
       );
-    resolveUserProfileId.mockImplementation((id: string) => id);
+    resolveProfileId.mockImplementation((id: string) => id);
     prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) => {
-      const profileId = resolveUserProfileId(reference);
+      const profileId = resolveProfileId(reference);
       return {
         profileId,
         isCurrent: () =>
-          resolveUserProfileId(reference) === profileId &&
-          resolveUserProfileId(profileId) === profileId,
+          resolveProfileId(reference) === profileId && resolveProfileId(profileId) === profileId,
       };
     });
     listPersonalAccountAuthChoices.mockReturnValue([
@@ -351,7 +349,7 @@ function restartService() {
 }
 
 export {
-  resolveUserProfileId,
+  resolveProfileId,
   prepareUserProfileSelectionAuthority,
   connectUserModelAccount,
   listUserProfileAuthLinks,

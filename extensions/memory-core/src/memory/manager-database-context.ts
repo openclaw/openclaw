@@ -567,16 +567,14 @@ export class MemoryIndexDatabase {
   async mutateEmbeddingCache(
     mutation: MemoryEmbeddingCacheMutation,
     assertCurrent: () => void,
-    prepareRevision: () => number | undefined,
-    invalidate: () => void,
+    prepare: () => boolean,
   ): Promise<boolean | undefined> {
     const publish = (scope: PublicationScope) =>
       publishMemoryEmbeddingCache({
         scope,
         mutation,
-        prepareRevision,
-        invalidate,
-        retry: (run, prepare) => this.retryPublication(run, prepare),
+        prepare,
+        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
       });
     return mutation.kind === "clear" ||
       memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)

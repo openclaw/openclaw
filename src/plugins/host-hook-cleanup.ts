@@ -1,5 +1,5 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
@@ -224,7 +224,7 @@ export async function runPluginHostCleanup(params: {
     if (!params.skipPersistentSessionState && shouldCleanup()) {
       try {
         cleanupCount = await clearPluginSessionStores({
-          cfg: params.cfg ?? getRuntimeConfig(),
+          cfg: params.cfg ?? (await captureRuntimeConfigAsyncReader()()),
           mode: params.reason === "restart" ? "promoted-slots" : "plugin-owned-state",
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,
@@ -361,6 +361,7 @@ export function createPluginHostRegistryRetirement(params: {
     return async () => ({ cleanupCount: 0, failures: [] });
   }
   const cfg = params.cfg ?? getRuntimeConfigSnapshot() ?? undefined;
+  const readConfig = captureRuntimeConfigAsyncReader();
   const runContextCleanup = preparePluginRunContextCleanup();
   const nextPluginIds = params.nextRegistry
     ? collectLoadedPluginIds(params.nextRegistry)
@@ -375,8 +376,8 @@ export function createPluginHostRegistryRetirement(params: {
   ]);
   let sessionStoreTargets: Promise<readonly SessionStoreTarget[]> | undefined;
   // Discover stores after admitted writes finish, using the retiring configuration.
-  const resolveSessionStoreTargets = () =>
-    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? getRuntimeConfig()));
+  const resolveSessionStoreTargets = async () =>
+    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? (await readConfig())));
   const waits: PluginHostRegistryRetirement[] = [];
   for (const pluginId of previousPluginIds) {
     const record = previousRegistry.plugins.find((entry) => entry.id === pluginId);
@@ -395,7 +396,7 @@ export function createPluginHostRegistryRetirement(params: {
       ? () =>
           runContextCleanup(async () => {
             result = await runPluginHostCleanup({
-              cfg,
+              cfg: params.skipPersistentSessionState ? cfg : (cfg ?? (await readConfig())),
               registry: previousRegistry,
               pluginId,
               reason: restarted ? "restart" : "disable",

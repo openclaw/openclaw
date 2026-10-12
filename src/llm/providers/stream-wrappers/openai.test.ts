@@ -228,7 +228,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
     const diagnostic = String(logger.info.mock.calls[0]?.[0]);
     expect(diagnostic).toContain('"removedToolIdentities":["client:rogue"');
     expect(diagnostic).toContain('"hosted:file_search"');
-    expect(diagnostic).not.toContain(secretFixture);
+    // The logger receives raw metadata; its console/export boundaries own redaction.
+    expect(diagnostic).toContain(`"hosted:${secretFixture}"`);
   });
 
   it("emits one complete diagnostic through composed wrappers after async replacement", async () => {

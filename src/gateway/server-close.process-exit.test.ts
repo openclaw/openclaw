@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -19,6 +20,7 @@ import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js"
 
 it("settles accepted writes and all cleanup before Gateway close resolves", async ({ signal }) => {
   const state = await createOpenClawTestState({ scenario: "minimal" });
+  setRuntimeConfigSnapshot({});
   const scheduler = createTestGatewayScheduler();
   const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner(scheduler);
   const writerEntered = createDeferredCore();

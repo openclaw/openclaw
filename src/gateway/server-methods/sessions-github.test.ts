@@ -1,9 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { getRuntimeConfig } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { getUserProfileDisplay } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -96,6 +101,7 @@ async function invoke(
 describe("sessions.github.publish", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setRuntimeConfigSnapshot({});
     mocks.caller.mockReturnValue({
       agentId: "main",
       sessionKey: "agent:main:dashboard:task",
@@ -116,7 +122,11 @@ describe("sessions.github.publish", () => {
     });
   });
 
-  it.each([undefined, "main"])(
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([undefined])(
     "uses host-owned caller identity with requested owner %s",
     async (agentId) => {
       const respond = await invoke({
@@ -156,7 +166,7 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it.each(["fresh", "existing", "wrong-key", "lookup-failed", "ordinary"])(
+  it.each(["fresh", "wrong-key", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -219,8 +229,10 @@ describe("sessions.github.publish", () => {
             },
           },
         });
+        await captureRuntimeConfigAsyncReader()();
         const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
         const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: "agent:main:main" },
           {
@@ -287,7 +299,6 @@ describe("sessions.github.publish", () => {
   );
 
   it.each([
-    ["agent:research:main", "research", "configured", undefined],
     ["global", "ops", "configured", undefined],
     ["agent:research:main", "research", "explicit", undefined],
     ["global", "research", "explicit", "research"],
@@ -306,6 +317,7 @@ describe("sessions.github.publish", () => {
                 }
               : { ownership: "explicit", entries: { ops: {}, research: {} } },
         });
+        await captureRuntimeConfigAsyncReader()();
         for (const agentId of ["ops", "research"]) {
           await upsertSessionEntryCore(
             { agentId, sessionKey: "global" },

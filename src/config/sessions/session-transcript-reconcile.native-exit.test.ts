@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   readSessionTranscriptMessageEvents,
@@ -133,6 +134,7 @@ it.each(cases)(
   async ({ stage, scheduled, replace }) => {
     const stateDir = tempDirs.make("openclaw-native-worker-exit-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      setRuntimeConfigSnapshot({});
       const fence = createQueuedProjectionFence(stage, () => {
         if (replace) {
           runOpenClawAgentWriteTransaction((database) => {
@@ -249,6 +251,7 @@ it.each(cases)(
         closeOpenClawAgentDatabasesForTest();
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
       }
     });
   },

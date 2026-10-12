@@ -35,6 +35,7 @@ const [
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
+  { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
@@ -44,6 +45,7 @@ const [
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
   ),
+  import("../../config/runtime-snapshot.js"),
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -52,6 +54,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 let workspaceDir: string;
@@ -156,6 +159,7 @@ async function withPersistentTranscriptFixture(
 beforeEach(async () => {
   workspaceDir = await realpath(tempDirs.make("openclaw-queued-successor-"));
   resetCompactHooksHarnessMocks(workspaceDir);
+  setRuntimeConfigSnapshot({});
   maintain.mockClear();
   hookRunner.hasHooks.mockReturnValue(true);
   resolveContextEngineMock.mockResolvedValue({
@@ -239,6 +243,7 @@ describe("queued compaction successor ownership", () => {
             }
           : {}),
       };
+      setRuntimeConfigSnapshot(config, config);
       const entry: SessionEntry = {
         ...owner,
         updatedAt: 1,

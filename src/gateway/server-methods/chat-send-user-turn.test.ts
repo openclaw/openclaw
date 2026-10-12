@@ -17,6 +17,7 @@ import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-me
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
@@ -31,6 +32,7 @@ import {
 } from "../../sessions/session-participant-input.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -118,6 +120,7 @@ describe("prepareChatSendUserTurn", () => {
     "records only accepted authenticated external input after retargeting: %s",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
         const creator = ensureProfileForEmail("session-creator@example.test", { env: state.env });
         const { controller } = createUserTurnInputController();
@@ -247,9 +250,11 @@ describe("prepareChatSendUserTurn", () => {
     "preserves sandbox policy for attributed chat (system actor: %s)",
     async (systemActor) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const profile = systemActor
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("chat-sandbox-creator@example.com");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const { controller } = createUserTurnInputController();
         const prepared = prepareChatSendUserTurn({
           request: {

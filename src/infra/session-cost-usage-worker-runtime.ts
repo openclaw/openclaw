@@ -591,10 +591,12 @@ async function runPreparedUsageCostWorker(
                     output = await requireLock("write cache rows").writeRollup(
                       {
                         rollupId: request.input.key,
-                        previousValueJson: request.input.previousValue,
                         valueJson: request.input.value,
                         blob: request.input.blob,
                         updatedAt: request.input.updatedAt,
+                        partitions: request.input.partitions,
+                        removedDates: request.input.removedDates,
+                        replacePartitions: request.input.replacePartitions,
                       },
                       context.signal,
                     );

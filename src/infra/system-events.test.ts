@@ -271,10 +271,12 @@ async function drainFormattedEvents(
 
 describe("system events (session routing)", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot(cfg);
     resetSystemEventsForTest();
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.useRealTimers();
   });
 

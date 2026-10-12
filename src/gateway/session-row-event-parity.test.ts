@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -36,6 +37,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       ...rolePolicyConfig(),
       agents: { entries: { main: {} }, defaults: { model: { primary: "openai/gpt-5.4" } } },
     };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:parent";
     const childKey = "agent:main:child";
     const lineageKey = "agent:main:completed-lineage";
@@ -393,6 +395,8 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       });
       for (const [index, peer] of peers.entries()) {
         const frame = JSON.parse(peer.send.mock.lastCall![0]);
+        expect(frame.event).toBe("sessions.changed");
+        expect(frame.payload.sessionKey).toBe(key);
         expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
       }
     } finally {

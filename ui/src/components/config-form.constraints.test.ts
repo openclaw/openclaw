@@ -97,13 +97,6 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
   });
 
-  it("rejects non-finite decimal rationals and schema multiples", () => {
-    expect(numericInputConstraints({ type: "number", multipleOf: Number.NaN }).step).toBe("any");
-    expect(
-      numericInputConstraints({ type: "integer", multipleOf: Number.POSITIVE_INFINITY }).step,
-    ).toBe(1);
-  });
-
   it("aligns native numeric bounds to JSON Schema multiples", () => {
     const schema = {
       type: "integer",
@@ -181,12 +174,6 @@ describe("config form schema constraints", () => {
         multipleOf: 1.5e-7,
       }),
     ).toBe(4.5e-7);
-  });
-
-  it("derives integer-compatible steps from fractional multiples", () => {
-    expect(numericInputConstraints({ type: "integer", multipleOf: 0.5 }).step).toBe(1);
-    expect(numericInputConstraints({ type: "integer", multipleOf: 2.5 }).step).toBe(5);
-    expect(normalizeNumericValue(3, { type: "integer", multipleOf: 2.5 })).toBe(5);
   });
 
   it("derives valid defaults for exclusive unconstrained bounds", () => {

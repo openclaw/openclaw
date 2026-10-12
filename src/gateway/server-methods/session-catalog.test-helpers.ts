@@ -1,4 +1,8 @@
 import { afterEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -53,8 +57,8 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
+// mock-isolation: Control the synthetic catalog's sharing policy without opening profile storage.
 vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 const { markPluginRegistryActive } = await import("../../plugins/registry-lifecycle.js");
@@ -70,6 +74,7 @@ afterEach(() => {
     projection.dispose();
   }
   projections.clear();
+  clearRuntimeConfigSnapshot();
 });
 
 export function setSessionCatalogEntries(
@@ -93,6 +98,7 @@ export function createSessionCatalogTestContext(
   config: OpenClawConfig = {},
   overrides: Record<string, unknown> = {},
 ) {
+  setRuntimeConfigSnapshot(config);
   const projection = createSessionRowProjectionFixture({ cfg: config, store: sessionStore });
   projections.add(projection);
   return bindSessionRowProjection(

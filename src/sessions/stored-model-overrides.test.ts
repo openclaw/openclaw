@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -160,7 +161,9 @@ describe("resolveStoredModelOverride", () => {
           readSessionEntryReadOnlyInWorker({ ...parent, sessionKey }),
       });
     try {
-      await state.writeConfig({ agents: { entries: { main: {} } } });
+      const config = { agents: { entries: { main: {} } } };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       for (const [index, entry] of [
         {
           providerOverride: "anthropic",

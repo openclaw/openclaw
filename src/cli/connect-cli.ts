@@ -11,7 +11,7 @@ import {
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -253,7 +253,7 @@ async function runConnectCommand(
   }
   const joinCredentials = await resolveNodeHostCloudflareAccess({
     value: initialCloudflareAccess,
-    config: getRuntimeConfig(),
+    config: await captureRuntimeConfigAsyncReader()(),
     env: process.env,
   });
   const payload = joinTarget

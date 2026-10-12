@@ -8,6 +8,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -257,6 +258,7 @@ describe("exec approval signed agent runtime", () => {
         env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
       },
       async () => {
+        setRuntimeConfigSnapshot({});
         clearSubagentRunsReadCacheForTest();
         const child = "agent:main:subagent:incognito-approval-child";
         const parent = "agent:main:dashboard:incognito-approval-parent";

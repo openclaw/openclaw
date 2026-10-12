@@ -2195,10 +2195,13 @@ describe("server-channels auto restart", () => {
       const registry = installTestRegistry(
         createTestPlugin({ startAccount, stopAccount, isConfigured }),
       );
-      const manager = createManager({ getPluginRegistry: () => registry });
+      const config: OpenClawConfig = {};
+      const getRuntimeConfig = () => config;
+      const manager = createManager({ getRuntimeConfig, getPluginRegistry: () => registry });
       const server = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
         overrides: {
+          getRuntimeConfig,
           handlePluginRequest: createGatewayPluginRequestHandler({
             registry,
             log: createSubsystemLogger("gateway/server-channels-route-test"),
@@ -3166,6 +3169,7 @@ describe("server-channels auto restart", () => {
       expect(monitor.drain()).toEqual({
         stalls: [{ elapsedMs: 1_928, task: "unattributed", taskMs: 1_928 }],
         dropped: 0,
+        delayMaxMs: 1_928,
       });
     } finally {
       monitor.stop();

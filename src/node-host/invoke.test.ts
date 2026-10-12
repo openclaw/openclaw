@@ -7,9 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient as TestGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -22,6 +27,7 @@ import { handleInvoke } from "./invoke.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
 });
 
@@ -188,6 +194,7 @@ describe("node host invoke", () => {
   );
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     approvalResolutionFailure.error = null;
     execApprovalsStoreMock.ensureError = undefined;
     execApprovalsStoreMock.ensureResult = undefined;
@@ -207,6 +214,15 @@ describe("node host invoke", () => {
   it("passes the owning agent session to plugin node commands", async () => {
     const handle = vi.fn(async () => '{"ok":true}');
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "canvas",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "canvas",
@@ -871,6 +887,7 @@ describe("node host invoke", () => {
       const state = await createOpenClawTestState({ label: "node-default-policy" });
       try {
         await state.writeConfig({});
+        setRuntimeConfigSnapshot({});
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
         const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
         fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {

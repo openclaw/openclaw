@@ -35,6 +35,7 @@ import {
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -60,6 +61,7 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 
 it("lists current membership evidence while transcript reads wait", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
     const entry = { sessionId: "worker-members", updatedAt: 1 };
     await patchSessionEntryCore(scope, () => entry, {
@@ -216,6 +218,7 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
   "%s reads full member rows off the Gateway thread, including cached statements",
   async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
       await upsertSessionEntryCore(scope, { sessionId: "worker-members", updatedAt: 1 });
       await addSessionMember(scope, { identityId: "zoe", addedBy: "owner", addedAt: 2 });
@@ -252,6 +255,7 @@ it.each(["session.members.list", "session.members.listEvidence"] as const)(
 
 it("rechecks the current manager after the membership read yields", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = { agentId: "main", sessionKey: "agent:main:member-reader-authority" };
     await upsertSessionEntryCore(scope, {
       sessionId: "member-reader-authority",
@@ -353,7 +357,11 @@ it("commits aliased worker membership and participant facts before publishing, a
           promptedAt: 4,
         }),
       ).toBe("updated");
-      expect(changes).toHaveLength(publications);
+      expect(changes).toHaveLength(publications + 1);
+      expect(changes.at(-1)).toMatchObject({
+        sessionKey: scope.sessionKey,
+        facts: { kind: "participants" },
+      });
       expect(participantLifecycle).toHaveBeenCalledTimes(2);
       await expect(
         addSessionMember(scope, {
@@ -458,6 +466,7 @@ it.each([
   "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost",
   async ({ mutation, receipt }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:lost-member-reply",

@@ -17,6 +17,7 @@ import {
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   dispatchInboundMessageMock,
   onceMessage,
@@ -24,7 +25,11 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
+import {
+  sessionStoreEntry,
+  directSessionReq,
+  getGatewayConfigModule,
+} from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
 
@@ -237,6 +242,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 test("incognito webchat rejects a vanished non-default-agent session before dispatch", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { entries: { main: {}, work: {} } };
+  await (await getGatewayConfigModule()).writeConfigFile(loadGatewayTestConfig());
   const { ws } = await openClient({
     browserOrigin: "http://127.0.0.1",
     client: {
@@ -320,6 +326,7 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
 });
 
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
+  testState.agentsConfig = { entries: { main: {} } };
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
     scopes: ["operator.admin"],

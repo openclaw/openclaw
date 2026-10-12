@@ -31,6 +31,7 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
@@ -195,7 +196,7 @@ describe("executeAgentTurn: terminal failures", () => {
     const error = createSessionPlacementSettlementClosedAbortError();
     state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
     try {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
       expect(result.outcome.kind).toBe("rejected");
       if (result.outcome.kind === "rejected") {
@@ -279,7 +280,7 @@ describe("executeAgentTurn: terminal failures", () => {
       });
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
+        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
         const result = await executeAgentTurn({
           ...createMinimalRunAgentTurnParams({
             replyOperation: "supersededError" in testCase ? undefined : replyOperation,
@@ -312,7 +313,7 @@ describe("executeAgentTurn: terminal failures", () => {
   it.for([false, true])(
     "preserves the prior terminal row when cancellation precedes execution (started=%s)",
     async (started, { signal }) => {
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
       const { emitAgentEvent } = await import("../../infra/agent-events.js");
       const reachedBoundary = createDeferred();
       const release = createDeferred();
@@ -420,7 +421,7 @@ describe("executeAgentTurn: terminal failures", () => {
       complete,
     } satisfies typeof replyOperation;
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
     const execution = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),

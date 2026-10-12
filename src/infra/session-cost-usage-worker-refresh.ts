@@ -13,13 +13,32 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
-import {
-  resolveUsageCostTranscriptFile,
-  type UsageCostCollectionAccess,
-} from "./session-cost-usage-collection.js";
+import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+
+/** Reuse resolved model prices across the bounded pages of one worker operation. */
+export function createUsageCostWorkerPriceResolver(
+  resolveMissing: (
+    pairs: Array<{ provider?: string; model?: string }>,
+  ) => Promise<Array<ModelCostConfig | undefined>>,
+) {
+  const prices = new Map<string, ModelCostConfig | undefined>();
+  return async (pairs: Array<{ provider?: string; model?: string }>) => {
+    const missing = new Map(
+      pairs
+        .filter((pair) => !prices.has(JSON.stringify(pair)))
+        .map((pair) => [JSON.stringify(pair), pair]),
+    );
+    if (missing.size > 0) {
+      const keys = [...missing.keys()];
+      const costs = await resolveMissing([...missing.values()]);
+      keys.forEach((key, index) => prices.set(key, costs[index]));
+    }
+    return pairs.map((pair) => prices.get(JSON.stringify(pair)));
+  };
+}
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
@@ -121,12 +140,12 @@ type RollupScanInput = {
   resolveCosts: (
     pairs: Array<{ provider?: string; model?: string }>,
   ) => Promise<Array<ModelCostConfig | undefined>>;
+  readGeneration: (marker: SqliteSessionFileMarker) => Promise<string | null | undefined>;
   readRows: (
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
   ) => Promise<Array<{ seq: number; event: unknown }>>;
-  access: UsageCostCollectionAccess;
 };
 
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
@@ -156,12 +175,22 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
       if (pendingRecords.length === 128) {
         const batch = pendingRecords;
         pendingRecords = [];
-        return scan.addRecords(batch);
+        return scan.addEntries(
+          batch.flatMap((item) => {
+            const entry = parseUsageCostTranscriptRecord(item);
+            return entry ? [entry] : [];
+          }),
+        );
       }
       return undefined;
     },
   });
-  await scan.addRecords(pendingRecords);
+  await scan.addEntries(
+    pendingRecords.flatMap((record) => {
+      const entry = parseUsageCostTranscriptRecord(record);
+      return entry ? [entry] : [];
+    }),
+  );
   const postStats = await fs.promises.stat(params.file.filePath);
   if (
     postStats.dev !== params.file.device ||
@@ -223,42 +252,40 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const maxSeq = params.file.maxSeq ?? 0;
   const eventCount = params.file.eventCount ?? 0;
-  const readAtSeq = async (seq: number) => (await params.readRows(scope, seq - 1, seq))[0];
-  const snapshotLastRow = maxSeq > 0 ? await readAtSeq(maxSeq) : undefined;
-  if (maxSeq > 0 && !snapshotLastRow) {
-    throw new Error(`SQLite transcript checkpoint unavailable: ${params.file.filePath}`);
-  }
-  const snapshotAnchorHash = snapshotLastRow
-    ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
-    : sha256Base64Url("");
+  // The transcript owner changes this existing watermark on rewrites. Read it
+  // once, rather than rereading old payloads to guess whether the prefix survived.
+  const generation = await params.readGeneration(scope);
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
-  const previousAnchor = previousCheckpoint?.maxSeq
-    ? await readAtSeq(previousCheckpoint.maxSeq)
-    : undefined;
-  const anchorMatches =
-    previousCheckpoint?.maxSeq === 0 ||
-    (previousAnchor &&
-      sqliteCheckpointAnchorHash(previousAnchor.event) === previousCheckpoint?.anchorHash);
   const appendCandidate = Boolean(
     params.previous &&
     previousCheckpoint &&
+    generation !== undefined &&
+    previousCheckpoint.generation === generation &&
     previousCheckpoint.maxSeq < maxSeq &&
-    previousCheckpoint.eventCount < eventCount &&
-    anchorMatches,
+    previousCheckpoint.eventCount < eventCount,
   );
   const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
-  // Branch selection retains only navigation facts, never transcript bodies.
-  const readNavigation = async (startSeq: number) => {
+  type UsageRecord = Record<string, unknown> & {
+    seq: number;
+    usageEntry: ParsedTranscriptEntry | null;
+  };
+  let anchorHash = sha256Base64Url("");
+  // Keep navigation and small usage contributions, never retained message bodies.
+  // Each payload page is parsed once, including during a branch rebuild.
+  const readRange = async (startSeq: number, endSeq: number) => {
     let after = startSeq;
-    const records: Array<Record<string, unknown> & { seq: number }> = [];
-    while (after < maxSeq) {
-      const page = await params.readRows(scope, after, maxSeq);
+    const records: UsageRecord[] = [];
+    while (after < endSeq) {
+      const page = await params.readRows(scope, after, endSeq);
       if (page.length === 0) {
-        break;
+        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
       }
       for (const { seq, event } of page) {
-        const record: Record<string, unknown> & { seq: number } = { seq };
+        const record: UsageRecord = {
+          seq,
+          usageEntry: isRecord(event) ? parseUsageCostTranscriptRecord(event) : null,
+        };
         if (isRecord(event)) {
           for (const key of [
             "type",
@@ -273,65 +300,44 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
             }
           }
         }
+        if (seq === maxSeq) {
+          anchorHash = sqliteCheckpointAnchorHash(event);
+        }
         records.push(record);
       }
       after = page.at(-1)!.seq;
     }
     return records;
   };
-  let navigation = await readNavigation(afterSeq);
+  let records = await readRange(afterSeq, maxSeq);
   const incremental = appendCandidate
-    ? selectIncrementalSqliteRecords(navigation, previousCheckpoint?.visibleLeafId)
+    ? selectIncrementalSqliteRecords(records, previousCheckpoint?.visibleLeafId)
     : undefined;
   const appendOnly = Boolean(incremental && params.previous);
   if (!appendOnly && afterSeq > 0) {
-    navigation = await readNavigation(0);
+    // A rewind or side branch needs the prefix, but the suffix is already decoded.
+    records = [...(await readRange(0, afterSeq)), ...records];
   }
   const selected = appendOnly
-    ? navigation.filter(isCanonicalSessionTranscriptEntry)
-    : selectVisibleTranscriptEvents(navigation);
+    ? records.filter(isCanonicalSessionTranscriptEntry)
+    : selectVisibleTranscriptEvents(records);
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  let page = new Map<number, unknown>();
-  let pending: Record<string, unknown>[] = [];
-  for (const record of selected) {
-    if (!page.has(record.seq)) {
-      await scan.addRecords(pending);
-      pending = [];
-      page.clear();
-      page = new Map(
-        (await params.readRows(scope, record.seq - 1, maxSeq)).map((row) => [row.seq, row.event]),
-      );
-      if (!page.has(record.seq)) {
-        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-      }
-    }
-    const event = page.get(record.seq);
-    if (isRecord(event)) {
-      pending.push(event);
-    }
-  }
-  await scan.addRecords(pending);
-  const postFile = await resolveUsageCostTranscriptFile(params.file.filePath, params.access);
-  if (!postFile || (postFile.maxSeq ?? 0) < maxSeq || (postFile.eventCount ?? 0) < eventCount) {
-    throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-  }
-  const currentLastRow = maxSeq > 0 ? await readAtSeq(maxSeq) : undefined;
-  if (
-    (maxSeq > 0 && !currentLastRow) ||
-    (currentLastRow && sqliteCheckpointAnchorHash(currentLastRow.event) !== snapshotAnchorHash)
-  ) {
-    throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-  }
+  await scan.addEntries(
+    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),
+  );
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
-    : (scanSessionTranscriptTree(navigation).leafId ?? undefined);
+    : (scanSessionTranscriptTree(records).leafId ?? undefined);
+  // A rewrite arriving during this background scan is handled by its publication;
+  // the next refresh observes the new generation and rebuilds this derived cache.
   return scan.finish({
     kind: "sqlite",
     maxSeq,
     eventCount,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    anchorHash: snapshotAnchorHash,
+    anchorHash,
+    ...(generation !== undefined ? { generation } : {}),
     ...(visibleLeafId ? { visibleLeafId } : {}),
   });
 }

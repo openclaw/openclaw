@@ -17,6 +17,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
+  captureRuntimeConfigAsyncReader,
   getRuntimeConfig,
   resetConfigRuntimeState,
   withConfigMutationExclusive,
@@ -33,6 +34,7 @@ import type {
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
@@ -44,6 +46,7 @@ import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js"
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
@@ -284,6 +287,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           },
           plugins: { slots: { memory: "none" } },
         });
+        await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
         signal.throwIfAborted();
@@ -685,8 +689,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             } finally {
               legacy.close();
             }
+            revokeSqliteDatabaseAdmissionsForPath(sharedDatabasePath);
           }
           resetConfigRuntimeState();
+          await captureRuntimeConfigAsyncReader()();
           if (scenario === "restart-draining") {
             await deletionRecovery.resumeAgentDeletions(context, AbortSignal.abort());
             const scope = { agentId, env: state.env, sessionKey };
@@ -735,7 +741,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
             const upgraded = new DatabaseSync(sharedDatabasePath);
             try {
-              expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+              expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+                user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+              });
               expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
                 expect.arrayContaining([
                   expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),

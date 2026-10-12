@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import {
   createCronScheduledToolProjection,
@@ -11,6 +12,7 @@ import { resolveAgentHarnessScheduledToolProjectionCapability } from "./host-pri
 
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
 async function createHost(runId: string) {
+  setRuntimeConfigSnapshot({});
   const host = await createAdmittedHostCapabilityTestFixture({
     runId,
     agentId: "main",
@@ -30,6 +32,7 @@ afterEach(() => {
     host.closeAdmission();
   }
   resetAgentRunRegistryForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("agent harness scheduled tool projection", () => {

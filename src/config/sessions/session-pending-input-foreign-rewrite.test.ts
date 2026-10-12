@@ -7,19 +7,21 @@ import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-
 import { roleClient, rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 
 it.each([false, true])(
   "retains foreign input authority through transcript rewrite (revoked: %s)",
   async (revoked) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const client = roleClient("view", "foreign-mirror-member");
       const profileId = expectDefined(client.authenticatedUserProfile, "fixture profile").profileId;
       const source = {

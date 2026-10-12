@@ -7,6 +7,10 @@ import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -43,6 +47,7 @@ async function createSqliteTranscriptFixture(params: {
   const sessionKey = "main";
   const agentId = "main";
   const storePath = path.join(dir, "sessions.json");
+  setRuntimeConfigSnapshot({});
   await replaceSessionEntry(
     { agentId, sessionKey, storePath },
     { sessionId: params.sessionId, updatedAt: Date.now() },
@@ -55,6 +60,7 @@ async function cleanupFixture(fixture: { dir: string }) {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   fs.rmSync(fixture.dir, { recursive: true, force: true });
 }
 
@@ -164,7 +170,7 @@ describe("gateway chat.inject transcript writes", () => {
     },
   );
 
-  it("emits a redacted injected message through its persisted transcript owner", async () => {
+  it("preserves injected source text through its persisted transcript owner", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-redact-",
       sessionId: "sess-redact",
@@ -184,14 +190,14 @@ describe("gateway chat.inject transcript writes", () => {
       });
 
       expect(appended.ok).toBe(true);
-      expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(appended.message)).toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
 
       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
-      expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(last.message)).toContain(fakeApiKey);
       expect(updates[0]?.message).toEqual(last.message);
-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
     } finally {
       unsubscribe();
       await cleanupFixture(fixture);

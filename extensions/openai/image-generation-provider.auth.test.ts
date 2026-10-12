@@ -1,6 +1,5 @@
 import type { ImageGenerationProviderConfiguredContext } from "openclaw/plugin-sdk/image-generation";
 import {
-  isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
   listProfilesForProvider,
   type AuthProfileStore,
@@ -14,19 +13,13 @@ import {
 
 let authStore: AuthProfileStore = { version: 1, profiles: {} };
 let authConfigured = false;
-const ensureAuthProfileStoreMock = vi.fn(() => authStore);
 const ensureAuthProfileStoreAsyncMock = vi.fn(async () => authStore);
-const isProviderApiKeyConfiguredMock = vi.fn<typeof isProviderApiKeyConfigured>(
-  () => authConfigured,
-);
 const isProviderApiKeyConfiguredAsyncMock = vi.fn<typeof isProviderApiKeyConfiguredAsync>(
   async () => authConfigured,
 );
 const provider = buildOpenAIImageGenerationProvider({
-  ensureAuthProfileStore: ensureAuthProfileStoreMock,
   ensureAuthProfileStoreAsync: ensureAuthProfileStoreAsyncMock,
   listProfilesForProvider,
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
   isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 });
 
@@ -34,7 +27,6 @@ async function expectConfigured(
   context: ImageGenerationProviderConfiguredContext,
   configured: boolean,
 ) {
-  expect(provider.isConfigured?.(context)).toBe(configured);
   expect(await provider.isConfiguredAsync?.(context)).toBe(configured);
 }
 
@@ -42,9 +34,7 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
   authStore = { version: 1, profiles: {} };
   authConfigured = false;
-  ensureAuthProfileStoreMock.mockImplementation(() => authStore);
   ensureAuthProfileStoreAsyncMock.mockImplementation(async () => authStore);
-  isProviderApiKeyConfiguredMock.mockImplementation(() => authConfigured);
   isProviderApiKeyConfiguredAsyncMock.mockImplementation(async () => authConfigured);
 });
 
@@ -64,7 +54,6 @@ describe("OpenAI image generation auth availability", () => {
       store: undefined,
       capability: "image-generation",
     };
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith(authInput);
     expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(authInput);
 
     authConfigured = false;
@@ -72,7 +61,6 @@ describe("OpenAI image generation auth availability", () => {
   });
 
   it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", async () => {
-    isProviderApiKeyConfiguredMock.mockImplementation(isProviderApiKeyConfigured);
     isProviderApiKeyConfiguredAsyncMock.mockImplementation(isProviderApiKeyConfiguredAsync);
 
     await expectConfigured(
@@ -84,7 +72,6 @@ describe("OpenAI image generation auth availability", () => {
       },
       true,
     );
-    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreAsyncMock).not.toHaveBeenCalled();
   });
 
@@ -149,8 +136,6 @@ describe("OpenAI image generation auth availability", () => {
       }),
     ).toBe(true);
     expect(ensureAuthProfileStoreAsyncMock).toHaveBeenCalledTimes(1);
-    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
-    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
     expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
       expect.objectContaining({ store }),
     );

@@ -108,11 +108,13 @@ vi.mock("../agents/provider-secret-egress.js", async () => ({
   unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
+// mock-isolation: Image fixtures supply credential setters and model results without opening real stores.
 vi.mock("../agents/agent-model-discovery.js", () => ({
   discoverAuthStorage: () => ({
     [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
   }),
-  discoverModels: discoverModelsMock,
+  discoverModelsAsync: async (...args: Parameters<typeof discoverModelsMock>) =>
+    discoverModelsMock(...args),
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({

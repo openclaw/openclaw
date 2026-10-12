@@ -392,7 +392,6 @@ function createIncognitoAgentExecutionOwner(
           identity,
           assertBorrowed,
           assertReferenceCurrent,
-          assertRetainedCurrent,
           retain: (operation) => retain(operation, "settlement"),
           run: (actorAuthority, operation, actorAdmission) =>
             run(actorAuthority, operation, undefined, actorAdmission, false),

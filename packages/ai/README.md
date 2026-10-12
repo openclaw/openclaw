@@ -26,6 +26,11 @@ runtime-local policy can use `createNodeLlmRuntime`; it preserves that host acro
 provider work without replacing the process default. `createLlmRuntime` continues
 to use the process-default host.
 
+OpenAI HTTP adapters report rejected response status and headers through
+`onResponse` before consuming the error body. Successful streaming responses
+invoke the callback before the first event. Retry and failover policy remains
+with the application.
+
 Hosts that attach request state to async contexts should supply
 `runInDetachedAsyncContext` from a context-free root initialized before requests
 start. Retained HTTP continuation timers use it at creation so completed caller

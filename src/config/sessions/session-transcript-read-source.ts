@@ -127,6 +127,7 @@ export async function withSessionTranscriptReadSource<T>(
                   claim,
                   expectedIdentity,
                   assertCurrent,
+                  reader: owner,
                 })
               : undefined;
           try {

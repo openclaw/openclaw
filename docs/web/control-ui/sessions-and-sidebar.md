@@ -319,7 +319,7 @@ device and platform labels are combined. Architecture labels such as **ARM** app
 when explicitly reported; a browser's `MacIntel` value does not identify an Intel
 CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
-Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
+Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K**, **⌘P**, or **⌘Shift+P** on Mac, or **Ctrl+K**, **Ctrl+P**, or **Ctrl+Shift+P** on Windows/Linux. These shortcuts also work while typing and inside embedded widgets; the P shortcuts open the palette instead of browser printing. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
 The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
 
@@ -383,6 +383,9 @@ When the list refreshes, sessions that have disappeared, left the current filter
 or been replaced are deselected. A replacement never inherits the old session's
 selection. Bulk deletion remains bound to the sessions you selected, including
 while its confirmation dialog is open.
+If you select a replacement while the earlier deletion is still finishing, its
+late confirmation keeps your new selection and the replacement's details open.
+It does not switch the current conversation away from the replacement.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
@@ -435,8 +438,8 @@ including while the team directory is loading or unavailable.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
 The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Credential-pattern redaction is best effort, so review the
-conversation itself before publishing. Public access does not let visitors send
+and internal metadata. Included text is not secret-masked, so review the
+conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
 messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
 backup behavior, and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).

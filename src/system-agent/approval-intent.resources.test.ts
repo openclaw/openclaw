@@ -190,7 +190,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           expect(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
-          const builds = vi.spyOn(ModelRegistry, "create");
+          const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
           spies.push(builds);
           if (mode === "cancel-drain") {
             const plugin = getAiTransportHost().plugin;

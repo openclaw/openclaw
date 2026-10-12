@@ -26,12 +26,12 @@ import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { readChildSessionPublication } from "../channels/message-access/child-session-publication.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
   setRuntimeConfigSnapshot,
-} from "../config/config.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -217,11 +217,12 @@ describe("X publication production-owner composition", () => {
       },
     };
     clearRuntimeConfigSnapshot();
+    const baseConfig = await captureRuntimeConfigAsyncReader()();
     const config: OpenClawConfig = {
-      ...getRuntimeConfig(),
+      ...baseConfig,
       agents: {
         defaults: {
-          ...getRuntimeConfig().agents?.defaults,
+          ...baseConfig.agents?.defaults,
           model: { primary: "x-proof/proof-model" },
         },
         entries: {

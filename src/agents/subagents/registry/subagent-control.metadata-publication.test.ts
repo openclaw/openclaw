@@ -2,9 +2,9 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { withSessionEntryWorker } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
@@ -29,6 +29,10 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 
 const fixture = useSubagentControlFixture();
 
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
+
 it.for([
   { replacement: true, competingIdle: false, publication: "tombstone" },
   { replacement: false, competingIdle: true, publication: "tombstone" },
@@ -47,10 +51,13 @@ it.for([
       agentId: "main",
       sessionKey: childKey,
       defaultSessionId: sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
     });
     await registerSubagentRun({
       runId,
       childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
       requesterSessionKey: parentKey,
       requesterAgentId: "main",
       requesterDisplayKey: parentKey,
@@ -391,10 +398,13 @@ it("joins a pending session publication before a collector terminal commit", asy
     agentId: "main",
     sessionKey: childKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: `${sessionId}-revision`,
   });
   await registerSubagentRun({
     runId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,

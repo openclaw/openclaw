@@ -389,6 +389,26 @@ export function createOpenAIProviderAcceptanceHook(
   return () => notifyProviderHttpResponse({ options, response, model });
 }
 
+export function withOpenAIErrorResponseHook(
+  fetch: typeof globalThis.fetch,
+  onResponse: BaseOpenAIStreamOptions["onResponse"],
+  model: Model,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    // The SDK consumes rejected bodies before exposing its response promise.
+    if (!response.ok) {
+      await notifyProviderHttpResponse({
+        options: { onResponse },
+        response,
+        model,
+        signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
+      });
+    }
+    return response;
+  };
+}
+
 /** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
 export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
   let bytes = Buffer.byteLength(chunk, "utf8");

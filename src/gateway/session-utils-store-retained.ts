@@ -3,7 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorHotState } from "../config/sessions/session-actor-contract.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -118,7 +122,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
   preparedSource?: SessionEntryWorkerRead["preparedSource"];
   readOptions?: Pick<
     SessionEntryWorkerRead,
-    "projection" | "snapshotFields" | "lifecycleSessionKey"
+    "projection" | "snapshotFields" | "lifecycleSessionKey" | "transcript"
   >;
   consume: (
     target: GatewaySessionStoreTargetWithStore,
@@ -156,7 +160,6 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           storePath: params.logicalStorePath,
           preparedSource: params.preparedSource,
           sessionKeys: params.target.storeKeys,
-          lifecycleSessionKey: params.target.storeKey,
           projection: "full",
           includeMembers: params.includeMembership,
           includeAuthorization: true,
@@ -193,6 +196,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
             ),
             readSource: selected.database,
             lifecycleTimestamps: selected.result.lifecycleTimestamps,
+            ...(selected.result.transcript ? { transcript: selected.result.transcript } : {}),
             ...(capturedReadSource ? { capturedReadSource } : {}),
             capturedReadSources: capturedReadSource ? [capturedReadSource] : [],
           },
@@ -234,13 +238,14 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
       agentId,
       env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
     });
-    actor.assertReadable();
-    const snapshot =
-      agentId === memory.agentId &&
-      storePath === memory.path &&
-      actor.target.sessionKey === sessionKey
-        ? actor.snapshot(authority)
-        : undefined;
+    const captured = captureSessionActorStorageOwner({ agentId, storePath, sessionActor: memory });
+    let snapshot: SessionActorHotState | undefined;
+    if (actor.target.sessionKey === sessionKey) {
+      snapshot = actor.snapshot(authority);
+    } else {
+      actor.assertReadable();
+      snapshot = captured?.owner?.readSession(sessionKey, authority);
+    }
     let consuming = true;
     const assertCurrent = () => {
       if (!consuming) {
@@ -254,14 +259,12 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
         {
           agentId,
           canonicalKey: sessionKey,
-          storePath,
+          storePath: captured?.path ?? storePath,
           storeKeys: [sessionKey],
           store: snapshot?.entry ? { [sessionKey]: snapshot.entry } : {},
-          readSource: { agentId, path: storePath },
+          readSource: { agentId, path: captured?.path ?? storePath },
         },
-        params.includeMembership && snapshot
-          ? new Map([[sessionKey, snapshot.members]])
-          : new Map(),
+        params.includeMembership ? new Map([[sessionKey, snapshot?.members ?? []]]) : new Map(),
         assertCurrent,
       );
       if (isPromiseLike(result)) {

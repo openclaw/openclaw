@@ -9,7 +9,7 @@ import {
   readMentionStoreHead,
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
-} from "./mention-inbox-store.js";
+} from "./mention-inbox-store.worker.js";
 import type { MentionMutation, MentionMutationResult } from "./mention-inbox.worker-contract.js";
 
 export const mentionReadOperations = {

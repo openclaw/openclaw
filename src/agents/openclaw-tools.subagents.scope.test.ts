@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   callGatewayMock,
   resetSubagentsConfigOverride,
@@ -22,7 +23,13 @@ describe("subagents scope isolation", () => {
     resetSubagentsConfigOverride();
     callGatewayMock.mockReset();
     storePath = path.join(os.tmpdir(), `openclaw-subagents-scope-${randomUUID()}.json`);
-    setSubagentsConfigOverride({ session: createPerSenderSessionConfig({ store: storePath }) });
+    const config = { session: createPerSenderSessionConfig({ store: storePath }) };
+    setSubagentsConfigOverride(config);
+    setRuntimeConfigSnapshot(config);
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it.each([

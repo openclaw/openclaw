@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../../../../src/config/config.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -196,6 +200,7 @@ describe("gateway usage and memory APIs", () => {
         clearConfigCache();
         clearModelAuthStatusUsageCache();
 
+        await captureRuntimeConfigAsyncReader()();
         const { databasePath } = await seedCompletedUsageSession(state);
         const databaseStats = await fs.stat(databasePath);
         expect(databaseStats.isFile()).toBe(true);

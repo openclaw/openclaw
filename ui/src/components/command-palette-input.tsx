@@ -1,15 +1,74 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, onCleanup, onSettled } from "solid-js";
-import {
-  COMMAND_PALETTE_INPUT_ID,
-  handlePaletteInputScroll,
-  updatePaletteInputLayout,
-  type CommandPaletteInputProps,
-} from "./command-palette-input.ts";
 
-export function CommandPaletteInput(
-  props: Omit<CommandPaletteInputProps, "actions"> & { actions?: JSX.Element },
-) {
+export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
+
+type CommandPaletteInputProps = {
+  value: string;
+  placeholder: string;
+  onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
+  onValueChange: (value: string, event: InputEvent) => void;
+  onBeforeInput?: (event: InputEvent) => void;
+  onSelectionChange?: (event: Event) => void;
+  onCompositionStart?: () => void;
+  onCompositionEnd?: () => void;
+  actions?: JSX.Element;
+  onPaste?: (event: ClipboardEvent) => void;
+  disabled?: boolean;
+  readOnly?: boolean;
+  controls?: string;
+  activeDescendant?: string;
+  describedBy?: string;
+};
+
+function updatePaletteInputOverflow(textarea: HTMLTextAreaElement) {
+  const root = textarea.closest(".cmd-palette__entry");
+  const overflow = textarea.scrollHeight - textarea.clientHeight;
+  root?.toggleAttribute("data-scroll-fade-top", overflow > 1 && textarea.scrollTop > 1);
+  root?.toggleAttribute(
+    "data-scroll-fade-bottom",
+    overflow > 1 && textarea.scrollTop < overflow - 1,
+  );
+}
+
+// Cold and loaded palettes share geometry without pulling in the session draft.
+function updatePaletteInputLayout(textarea: HTMLTextAreaElement, editing = false) {
+  const root = textarea.closest<HTMLElement>(".cmd-palette__entry");
+  const actions = root?.querySelector<HTMLElement>(".cmd-palette__input-actions");
+  if (root && actions) {
+    root.style.setProperty(
+      "--cmd-palette-actions-width",
+      `${actions.getBoundingClientRect().width}px`,
+    );
+  }
+  const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight);
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+    return;
+  }
+  const previousScroll = textarea.scrollTop;
+  // Rerenders and resizes preserve manual scroll; only editing follows the caret.
+  const followCaret =
+    editing &&
+    document.activeElement === textarea &&
+    textarea.selectionStart === textarea.selectionEnd &&
+    textarea.selectionEnd === textarea.value.length;
+  textarea.style.overflowY = "hidden";
+  textarea.style.height = "0px";
+  textarea.style.height = `${Math.max(lineHeight, Math.min(lineHeight * 3, textarea.scrollHeight))}px`;
+  const overflowing = textarea.scrollHeight > textarea.clientHeight + 1;
+  textarea.style.overflowY = overflowing ? "auto" : "hidden";
+  textarea.scrollTop = overflowing ? (followCaret ? textarea.scrollHeight : previousScroll) : 0;
+  updatePaletteInputOverflow(textarea);
+}
+
+function handlePaletteInputScroll(event: Event) {
+  const textarea = event.currentTarget;
+  if (textarea instanceof HTMLTextAreaElement && textarea.isConnected) {
+    updatePaletteInputOverflow(textarea);
+  }
+}
+
+export function CommandPaletteInput(props: CommandPaletteInputProps) {
   let textarea!: HTMLTextAreaElement;
   let observer: ResizeObserver | undefined;
   let frame: number | undefined;
@@ -50,7 +109,8 @@ export function CommandPaletteInput(
     scheduleLayout();
   });
   onCleanup(() => {
-    props.onInputRef(undefined);
+    // A replacement field can mount before the old interop root is disposed.
+    props.onInputRef(undefined, textarea);
     observer?.disconnect();
     if (frame !== undefined) {
       cancelAnimationFrame(frame);

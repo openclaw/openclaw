@@ -19,6 +19,7 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
@@ -39,6 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeStateDatabaseForTest();
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 let scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string; storePath?: string };
@@ -102,6 +104,7 @@ beforeEach(async () => {
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
     sessionKey: `agent:main:reaction-${sessionIndex++}`,
   };
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
   await seedMessages("session-a", ["message-a", "message-b", "overflow", "replacement"]);
 });

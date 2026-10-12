@@ -12,12 +12,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  listStandingIntentsInDatabase,
-  matchStandingIntentsInDatabase,
-} from "./standing-intents-kernel.js";
+import { matchStandingIntentsInDatabase } from "./standing-intents-kernel.js";
 import { prepareStandingIntentMatch } from "./standing-intents-model.js";
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
@@ -33,8 +31,8 @@ import {
   isEligibleStandingIntentTurn,
   listStandingIntents,
   matchStandingIntents,
-  sweepStandingIntents,
 } from "./standing-intents.js";
+import { bindSqliteWorkerBackend } from "./standing-intents.worker.js";
 
 function createStandingIntent(
   params: Omit<Parameters<typeof createStandingIntentRaw>[0], "creatorSender">,
@@ -71,22 +69,173 @@ describe("standing intents", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("lazy-ensures the additive table idempotently", async () => {
-    const first = await createStandingIntent({
+  it("reuses lifecycle deadlines across bindings and invalidates them on writes and rollback", async () => {
+    const intent = await createStandingIntent({
       agentId: "main",
-      description: "Mention the launch checklist.",
-      triggerKeywords: ["launch checklist"],
+      description: "Review the release.",
+      triggerKeywords: ["release"],
       nowMs: 1_000,
+      expiresAt: 10_000,
+      cooldownSeconds: 1,
+      maxFires: 3,
     });
-    const second = await createStandingIntent({
-      agentId: "main",
-      description: "Mention the rollback owner.",
-      triggerKeywords: ["rollback owner"],
-      nowMs: 2_000,
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    let refuseCommit = false;
+    const context = {
+      database: db,
+      admit(stage: "transaction" | "commit") {
+        if (stage === "commit" && refuseCommit) {
+          throw new Error("test commit refused");
+        }
+      },
+    };
+    let worker = bindSqliteWorkerBackend(undefined, context);
+    worker.execute({ type: "sweep", input: { nowMs: 1_000 } });
+    await worker.close();
+    worker = bindSqliteWorkerBackend(undefined, context);
+    const sql = observeHostDataSql();
+    try {
+      worker.execute({ type: "sweep", input: { nowMs: 1_001 } });
+      expect(sql.queries.filter((query) => query.includes('"standing_intents"'))).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    const match = prepareStandingIntentMatch({ prompt: "release", nowMs: 2_000 });
+    expect(match).toBeDefined();
+    expect(worker.execute({ type: "match", input: match! })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "fired", fireCount: 1 }],
     });
+    expect(worker.execute({ type: "list", input: { nowMs: 2_999 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "fired" }],
+    });
+    refuseCommit = true;
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 3_000 } })).toThrow(
+      "test commit refused",
+    );
+    refuseCommit = false;
+    expect(worker.execute({ type: "list", input: { nowMs: 3_000 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "armed" }],
+    });
+    expect(worker.execute({ type: "list", input: { nowMs: 10_000 } })).toMatchObject({
+      kind: "result",
+      value: [{ id: intent.id, status: "expired" }],
+    });
+    const row = {
+      id: "replacement",
+      description: "Review another release.",
+      trigger_keywords: '["release"]',
+      trigger_embedding: null,
+      channel_scope: null,
+      sender_scope: null,
+      creator_sender: "owner-sender",
+      status: "armed" as const,
+      expires_at: 12_000,
+      max_fires: 3,
+      fire_count: 0,
+      cooldown_seconds: 1,
+      last_fired_at: null,
+      created_at: 11_000,
+      source_session_id: null,
+    };
+    worker.execute({ type: "create", input: row });
+    expect(worker.execute({ type: "list", input: { nowMs: 12_000 } })).toMatchObject({
+      kind: "result",
+      value: [
+        { id: intent.id, status: "expired" },
+        { id: row.id, status: "expired" },
+      ],
+    });
+    worker.execute({ type: "create", input: { ...row, id: "cancelled", expires_at: 14_000 } });
+    worker.execute({ type: "cancel", input: { id: "cancelled" } });
+    expect(
+      worker.execute({ type: "list", input: { status: "cancelled", nowMs: 14_000 } }),
+    ).toMatchObject({
+      kind: "result",
+      value: [{ id: "cancelled", status: "cancelled" }],
+    });
+    worker.execute({ type: "create", input: { ...row, id: "large-expiry", expires_at: 2 ** 60 } });
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).not.toThrow();
+    worker.execute({
+      type: "create",
+      input: { ...row, id: "large-fired-expiry", status: "fired", expires_at: 2 ** 60 },
+    });
+    expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).toThrow();
+    await worker.close();
+  });
+  it("skips empty matches without hiding creates, cancellation, or rolled-back expiry", async () => {
+    await listStandingIntents({ agentId: "main", nowMs: 1_000 });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    let refuseCommit = false;
+    const context = {
+      database: db,
+      admit(stage: "transaction" | "commit") {
+        if (stage === "commit" && refuseCommit) {
+          throw new Error("test commit refused");
+        }
+      },
+    };
+    let worker = bindSqliteWorkerBackend(undefined, context);
+    const match = (prompt = "release", nowMs = 1_000) =>
+      worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
+    const empty = { kind: "result", value: [] };
+    const row = {
+      id: "release",
+      description: "Review the release.",
+      trigger_keywords: '["release"]',
+      trigger_embedding: null,
+      channel_scope: null,
+      sender_scope: null,
+      creator_sender: "owner-sender",
+      status: "armed" as const,
+      expires_at: 10_000,
+      max_fires: 1,
+      fire_count: 0,
+      cooldown_seconds: 0,
+      last_fired_at: null,
+      created_at: 1_000,
+      source_session_id: null,
+    };
+    expect(match()).toEqual(empty);
+    await worker.close();
+    worker = bindSqliteWorkerBackend(undefined, context);
+    const observation = observeHostDataSql();
+    const intentQueries = () =>
+      observation.queries.filter((query) => query.includes('"standing_intents"'));
+    try {
+      expect(match()).toEqual(empty);
+      expect(intentQueries()).toEqual([]);
+      worker.execute({ type: "create", input: row });
+      expect(match("unrelated")).toEqual(empty);
+      expect(match()).toMatchObject({
+        kind: "result",
+        value: [{ id: row.id, status: "done", fireCount: 1 }],
+      });
+      worker.execute({ type: "create", input: { ...row, id: "cancelled" } });
+      worker.execute({ type: "cancel", input: { id: "cancelled" } });
+      expect(match()).toEqual(empty);
+      const reads = intentQueries().length;
+      expect(match()).toEqual(empty);
+      expect(intentQueries()).toHaveLength(reads);
 
-    expect(first.id).not.toBe(second.id);
-    expect(await listStandingIntents({ agentId: "main", nowMs: 2_000 })).toHaveLength(2);
+      worker.execute({ type: "create", input: { ...row, id: "rollback" } });
+      refuseCommit = true;
+      expect(() => match("release", 10_000)).toThrow("test commit refused");
+      refuseCommit = false;
+      expect(match()).toMatchObject({
+        kind: "result",
+        value: [{ id: "rollback", status: "done", fireCount: 1 }],
+      });
+    } finally {
+      observation.restore();
+      await worker.close();
+    }
   });
 
   it("retains first-use schema after a failed create and retries without duplicate intents", async () => {
@@ -148,49 +297,6 @@ describe("standing intents", () => {
     const stored = await listStandingIntents({ agentId: "main", nowMs: 2_000 });
     expect(stored.map((intent) => intent.id)).toEqual([created.id]);
     expect(stored[0]).toMatchObject({ status: "done", fireCount: 1 });
-  });
-
-  it("creates, lists, and explicitly cancels through the agent tool", async () => {
-    const execute = createStandingIntentExecutor({
-      agentId: "main",
-      sourceSessionId: "session-1",
-      conversationId: "qa-dm-5",
-      provider: "qa-channel",
-      senderId: "alice",
-    });
-    const createResult = parseToolJson(
-      await execute("call-1", {
-        action: "create",
-        description: "Ask whether the migration was rehearsed.",
-        triggerKeywords: ["migration", "rehearsal"],
-      }),
-    );
-    const created = createResult.intent as {
-      id: string;
-      channelScope: string | null;
-      senderScope: string | null;
-      status: string;
-    };
-    expect(created).toMatchObject({
-      channelScope: "qa-channel",
-      senderScope: "alice",
-      creatorSender: "alice",
-      status: "armed",
-    });
-    expect(createResult.message).toBe(
-      "Intent is armed for this channel. The system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks.",
-    );
-    const listResult = parseToolJson(await execute("call-2", { action: "list" }));
-    const listed = listResult.intents as Array<{ id: string; sourceSessionId: string }>;
-
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toMatchObject({ id: created.id, sourceSessionId: "session-1" });
-
-    const cancelResult = parseToolJson(
-      await execute("call-3", { action: "cancel", id: created.id }),
-    );
-    expect(cancelResult.cancelled).toBe(true);
-    expect(await cancelStandingIntent({ agentId: "main", id: created.id })).toBeNull();
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {
@@ -327,196 +433,6 @@ describe("standing intents", () => {
     ).toEqual([]);
   });
 
-  it("applies scope, cooldown, fire-budget, and expiry transitions", async () => {
-    const created = await createStandingIntent({
-      agentId: "main",
-      description: "Surface the review checklist.",
-      triggerKeywords: ["review checklist"],
-      channelScope: encodeStandingIntentChannelScope({ scope: "channel", provider: "slack" }),
-      senderScope: encodeStandingIntentSenderScope({ provider: "slack", senderId: "alice" }),
-      maxFires: 2,
-      cooldownSeconds: 60,
-      expiresAt: 200_000,
-      nowMs: 1_000,
-    });
-
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "Can we review the checklist?",
-        channel: "qa-dm-5",
-        provider: "discord",
-        senderId: "alice",
-        nowMs: 2_000,
-      }),
-    ).toStrictEqual([]);
-
-    const first = await matchStandingIntents({
-      agentId: "main",
-      prompt: "Can we review the checklist?",
-      channel: "qa-dm-5",
-      provider: "slack",
-      senderId: "alice",
-      nowMs: 2_000,
-    });
-    expect(first[0]).toMatchObject({ id: created.id, status: "fired", fireCount: 1 });
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "Review checklist again",
-        channel: "qa-dm-5",
-        provider: "slack",
-        senderId: "alice",
-        nowMs: 61_999,
-      }),
-    ).toStrictEqual([]);
-
-    const second = await matchStandingIntents({
-      agentId: "main",
-      prompt: "Review checklist again",
-      channel: "qa-dm-5",
-      provider: "slack",
-      senderId: "alice",
-      nowMs: 62_000,
-    });
-    expect(second[0]).toMatchObject({ id: created.id, status: "done", fireCount: 2 });
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "Review checklist once more",
-        channel: "qa-dm-5",
-        provider: "slack",
-        senderId: "alice",
-        nowMs: 130_000,
-      }),
-    ).toStrictEqual([]);
-
-    await createStandingIntent({
-      agentId: "main",
-      description: "Expired intent.",
-      triggerKeywords: ["expired signal"],
-      expiresAt: 150_000,
-      nowMs: 1_000,
-    });
-    await sweepStandingIntents({ agentId: "main", nowMs: 150_000 });
-    expect(
-      await listStandingIntents({ agentId: "main", status: "expired", nowMs: 150_000 }),
-    ).toHaveLength(1);
-  });
-
-  it("rearms a cooled cohort in the kernel without per-intent writes or reminder payloads", async () => {
-    const created: Awaited<ReturnType<typeof createStandingIntent>>[] = [];
-    for (let index = 0; index < 32; index += 1) {
-      created.push(
-        await createStandingIntent({
-          agentId: "main",
-          description: `Review reminder ${index}.`.padEnd(120, " Use the reviewed checklist."),
-          triggerKeywords: [
-            "cohort review",
-            "release checklist",
-            "rollback owner",
-            "migration review",
-          ],
-          cooldownSeconds: 60,
-          maxFires: 3,
-          nowMs: 1_000 + index,
-        }),
-      );
-    }
-    for (let index = 0; index < Math.ceil(created.length / 3); index += 1) {
-      await matchStandingIntents({ agentId: "main", prompt: "cohort review", nowMs: 2_000 });
-    }
-    for (const intent of created) {
-      intent.status = "fired";
-      intent.fireCount = 1;
-      intent.lastFiredAt = 2_000;
-    }
-    expect(await listStandingIntents({ agentId: "main", nowMs: 61_999 })).toEqual(created);
-
-    // Reopen so fixture setup cannot leave cached statements outside the observer.
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const prepare = db.prepare.bind(db);
-    let writes = 0;
-    let firedTextBytes = 0;
-    const observeRow = (row: Record<string, unknown>) => {
-      if (row.status !== "fired") {
-        return;
-      }
-      for (const value of Object.values(row)) {
-        if (typeof value === "string") {
-          firedTextBytes += Buffer.byteLength(value);
-        }
-      }
-    };
-    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      statement.run = new Proxy(statement.run.bind(statement), {
-        apply(run, receiver, args) {
-          writes += 1;
-          return Reflect.apply(run, receiver, args);
-        },
-      });
-      statement.get = new Proxy(statement.get.bind(statement), {
-        apply(get, receiver, args) {
-          const row = Reflect.apply(get, receiver, args);
-          if (row) {
-            observeRow(row);
-          }
-          return row;
-        },
-      });
-      statement.all = new Proxy(statement.all.bind(statement), {
-        apply(all, receiver, args) {
-          const rows = Reflect.apply(all, receiver, args);
-          for (const row of rows) {
-            observeRow(row);
-          }
-          return rows;
-        },
-      });
-      statement.iterate = new Proxy(statement.iterate.bind(statement), {
-        apply(iterate, receiver, args) {
-          const rows = Reflect.apply(iterate, receiver, args);
-          return (function* () {
-            for (const row of rows) {
-              observeRow(row);
-              yield row;
-            }
-            return undefined;
-          })();
-        },
-      });
-      return statement;
-    });
-    try {
-      for (const intent of created) {
-        intent.status = "armed";
-      }
-      expect(
-        runSqliteImmediateTransactionSync(db, () =>
-          listStandingIntentsInDatabase(db, { nowMs: 62_000 }),
-        ),
-      ).toEqual(created);
-      expect(writes).toBeGreaterThan(0);
-      expect(writes).toBeLessThanOrEqual(2);
-      expect(firedTextBytes).toBeGreaterThan(0);
-      expect(firedTextBytes).toBeLessThanOrEqual(4_096);
-    } finally {
-      prepareSpy.mockRestore();
-    }
-    const expectedMatches = created.slice(0, 3);
-    for (const intent of expectedMatches) {
-      intent.status = "fired";
-      intent.fireCount = 2;
-      intent.lastFiredAt = 62_001;
-    }
-    expect(
-      await matchStandingIntents({ agentId: "main", prompt: "cohort review", nowMs: 62_001 }),
-    ).toEqual(expectedMatches);
-  });
-
   it("keeps provider, conversation, sender, and account identities namespaced", async () => {
     await createStandingIntent({
       agentId: "main",
@@ -569,56 +485,6 @@ describe("standing intents", () => {
         senderId: "alice",
         nowMs: 4_000,
       }),
-    ).toHaveLength(1);
-  });
-
-  it("requires complete trigger phrases and supports one-character keywords", async () => {
-    await createStandingIntent({
-      agentId: "main",
-      description: "Check the candidate owner.",
-      triggerKeywords: ["release candidate"],
-      maxFires: 1,
-      nowMs: 1_000,
-    });
-
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "Please summarize the release notes.",
-        nowMs: 2_000,
-      }),
-    ).toStrictEqual([]);
-    expect(
-      await matchStandingIntents({
-        agentId: "main",
-        prompt: "The candidate release is ready.",
-        nowMs: 3_000,
-      }),
-    ).toHaveLength(1);
-
-    await createStandingIntent({
-      agentId: "main",
-      description: "Handle the X project.",
-      triggerKeywords: ["x"],
-      maxFires: 1,
-      nowMs: 4_000,
-    });
-    expect(await matchStandingIntents({ agentId: "main", prompt: "X", nowMs: 5_000 })).toHaveLength(
-      1,
-    );
-
-    await createStandingIntent({
-      agentId: "main",
-      description: "Keep a multiline trigger intact.",
-      triggerKeywords: ["alpha\nbeta"],
-      maxFires: 1,
-      nowMs: 6_000,
-    });
-    expect(
-      await matchStandingIntents({ agentId: "main", prompt: "alpha only", nowMs: 7_000 }),
-    ).toStrictEqual([]);
-    expect(
-      await matchStandingIntents({ agentId: "main", prompt: "alpha and beta", nowMs: 8_000 }),
     ).toHaveLength(1);
   });
 

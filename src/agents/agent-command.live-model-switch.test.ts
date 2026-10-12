@@ -39,6 +39,7 @@ import {
   createTestModelSelection,
   createTestModelVisibilityPolicy,
   makeSuccessResult,
+  requireArray,
   resetTestSessionReaders,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import { registerAgentCommandPreparedConfigCases } from "./agent-command.prepared-config.test-support.js";
@@ -640,8 +641,9 @@ vi.mock("./defaults.js", () => ({
 }));
 
 // Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+// mock-isolation: Model-switch tests isolate exec-policy storage and node discovery.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./lanes.js", () => ({
@@ -907,13 +909,6 @@ function setupAcpSession(): void {
 }
 
 const requireRecord = createRequireRecord("object", "expected-label-object");
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   return expectDefined(mock.mock.calls[callIndex], `mock call ${callIndex}`)[argIndex];
@@ -1949,7 +1944,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.isThinkingLevelSupportedMock.mockReturnValue(false);
     state.resolveSupportedThinkingLevelMock.mockReturnValue("high");
 
-    await agentCommand({
+    const result = await agentCommand({
       message: "hello",
       sessionKey: state.resolvedSessionKeyMock,
       thinking: "xhigh",
@@ -1959,6 +1954,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalled();
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
       resolvedThinkLevel: "high",
+    });
+    expect(result?.meta.requestShaping).toEqual({
+      thinking: "high",
+      thinkingClamp:
+        "Thinking level clamped to high for anthropic/claude-fable-5 (requested xhigh; preference retained).",
     });
   });
 

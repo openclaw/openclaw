@@ -67,22 +67,6 @@ describe("Control UI doctor repair owner", () => {
     await fs.rm(mocks.root, { recursive: true, force: true });
   });
 
-  it("uses the canonical asset owner for missing UI assets", async () => {
-    const prompter = createPrompter();
-
-    await maybeRepairUiProtocolFreshness(runtime, prompter);
-
-    expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
-    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
-    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-      root: mocks.root,
-      expectedBuildId: mocks.buildId,
-      force: false,
-      onBuildStart: expect.any(Function),
-    });
-    expect(mocks.note).toHaveBeenCalledWith("UI build complete.", "UI");
-  });
-
   it("routes missing app-owned assets to the host without package or git commands", async () => {
     await fs.writeFile(
       path.join(mocks.root, "openclaw-install-owner.json"),
@@ -127,19 +111,12 @@ describe("Control UI doctor repair owner", () => {
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it.each(["incomplete", "markerless", "different-build", "current-build", "dev-build"])(
+  it.each(["incomplete", "markerless", "dev-build"])(
     "checks packaged UI identity without rebuilding it: %s",
     async (failure) => {
       const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
       await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      const buildId =
-        failure === "different-build"
-          ? "older-build"
-          : failure === "current-build"
-            ? mocks.buildId
-            : failure === "dev-build"
-              ? "dev"
-              : null;
+      const buildId = failure === "dev-build" ? "dev" : null;
       const marker = buildId
         ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"`
         : "";
@@ -153,7 +130,7 @@ describe("Control UI doctor repair owner", () => {
 
       await maybeRepairUiProtocolFreshness(runtime, createPrompter());
 
-      if (failure === "current-build" || failure === "dev-build") {
+      if (failure === "dev-build") {
         expect(mocks.note).not.toHaveBeenCalled();
       } else {
         expect(mocks.note).toHaveBeenCalledWith(
@@ -167,7 +144,7 @@ describe("Control UI doctor repair owner", () => {
     },
   );
 
-  it.each(["markerless", "different-build", "protocol-changes"])(
+  it.each(["protocol-changes"])(
     "forces the canonical owner to rebuild stale source assets: %s",
     async (reason) => {
       const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");

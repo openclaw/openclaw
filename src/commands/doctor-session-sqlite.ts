@@ -19,13 +19,13 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  captureDeferredPluginSessionSources,
   deferredPluginSessionStoreIds,
   readDeferredPluginSessionImport,
   readStaleDeferredPluginSessionImport,
   recordDeferredPluginSessionImport,
   type DeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
+import { captureDeferredPluginSessionSources } from "../infra/deferred-plugin-session-verification.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readMigrationArtifactIdentity,

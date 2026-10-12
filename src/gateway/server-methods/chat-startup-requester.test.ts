@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -44,6 +45,7 @@ async function request(
 
 it("prepares the startup requester without SQLite and observes a merge after history work", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const original = ensureProfileForEmail("original@example.test");
     const current = ensureProfileForEmail("current@example.test");
     await upsertSessionEntryCore(scope, { sessionId: "requester-history", updatedAt: 1 });
@@ -142,6 +144,7 @@ it("prepares the startup requester without SQLite and observes a merge after his
 
 it("preserves legacy email creation and failed identity synchronization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const existing = ensureProfileForEmail("legacy@example.test");
     await upsertSessionEntryCore(scope, { sessionId: "requester-history", updatedAt: 1 });
     const readChatStartupProjection = vi.fn<

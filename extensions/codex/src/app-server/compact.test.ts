@@ -47,6 +47,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import * as threadOwnershipQueue from "./thread-ownership-queue.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-compact-");
@@ -170,7 +171,9 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result).toMatchObject({
       ok: false,
       compacted: false,
-      reason: expect.stringContaining("Codex session execution policy changed"),
+      reason: expect.stringMatching(
+        /Codex session (generation is no longer current|execution policy changed)/,
+      ),
     });
     expect(bindingStore.read(current)).toEqual(binding);
   });
@@ -205,6 +208,17 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
     await queueEntered.promise;
 
+    const compactionQueued = createDeferred<void>();
+    const enqueueMutation = threadOwnershipQueue.withCodexAppServerThreadMutation;
+    const queueSpy = vi
+      .spyOn(threadOwnershipQueue, "withCodexAppServerThreadMutation")
+      .mockImplementation((threadId, run) => {
+        const pending = enqueueMutation(threadId, run);
+        if (threadId === binding.threadId) {
+          compactionQueued.resolve();
+        }
+        return pending;
+      });
     const pending = maybeCompactCodexAppServerSessionImpl(
       {
         sessionId: current.sessionId,
@@ -218,16 +232,19 @@ describe("maybeCompactCodexAppServerSession", () => {
       { bindingStore, clientFactory },
     );
     try {
-      await flushAsyncTasks();
+      await compactionQueued.promise;
       expect(clientFactory).not.toHaveBeenCalled();
 
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
     } finally {
+      queueSpy.mockRestore();
       releaseQueue.resolve();
       await held;
     }
 
-    await expect(pending).rejects.toThrow("Codex session generation is no longer current");
+    await expect(pending).rejects.toThrow(
+      "Codex session execution policy changed; prepare the operation again.",
+    );
     expect(clientFactory).not.toHaveBeenCalled();
     expect(fake.request).not.toHaveBeenCalled();
     expect(bindingStore.read(current)).toEqual(binding);

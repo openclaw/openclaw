@@ -15,6 +15,7 @@ import {
   TSGO_ROOT_TEST_SHARDS,
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
+  orderChangedTsgoCoreTestShards,
   selectChangedCiTsgoGraphs,
   resolveChangedCiTsgoInputs,
   resolveCiTsgoGraphs,
@@ -159,10 +160,13 @@ export function createChangedCoreTestCheck(
       const selected = stripeConfigs
         ? candidates.filter((shard) => stripeConfigs.has(shard.config))
         : candidates;
+      const ordered = inspected
+        ? orderChangedTsgoCoreTestShards(selected, paths, inspected)
+        : selected;
       console.error(
-        `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
+        `[check:changed] core test graphs: ${ordered.map((shard) => shard.name).join(", ")}`,
       );
-      return await runTsgoCoreTestShards(selected, { env, concurrency });
+      return await runTsgoCoreTestShards(ordered, { env, concurrency });
     },
   };
 }

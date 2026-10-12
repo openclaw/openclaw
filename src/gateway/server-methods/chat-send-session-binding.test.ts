@@ -13,6 +13,7 @@ import * as dispatch from "../../auto-reply/dispatch.js";
 import { mintReplyMessageActionTurnCapability } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -82,6 +83,7 @@ it.each(admissionScenarios)(
             ? "released"
             : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
@@ -397,6 +399,7 @@ it.each(
   "keeps authenticated $mode prompt reactions scoped through SQLite ($outcome)",
   async ({ mode, outcome }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:reaction-source";
       const sessionId = "reaction-source-session";
       const scope = { agentId: "main", sessionKey, sessionId };

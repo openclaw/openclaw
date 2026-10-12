@@ -13,6 +13,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -125,10 +129,15 @@ it.each(["none", "middleware", "handler"] as const)(
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
     let menuSync: Promise<void> | undefined;
-    const readHandlerAnswer = vi.spyOn(
-      callbackQueryAnswerState,
-      "getTelegramCallbackQueryAnswerPromise",
-    );
+    const handlerAnswerRead = Promise.withResolvers<void>();
+    const getHandlerAnswer = callbackQueryAnswerState.getTelegramCallbackQueryAnswerPromise;
+    const readHandlerAnswer = vi
+      .spyOn(callbackQueryAnswerState, "getTelegramCallbackQueryAnswerPromise")
+      .mockImplementation((ctx) => {
+        const answer = getHandlerAnswer(ctx);
+        handlerAnswerRead.resolve();
+        return answer;
+      });
     try {
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
@@ -138,6 +147,7 @@ it.each(["none", "middleware", "handler"] as const)(
         channels: { telegram: { apiRoot, dmPolicy: "open", allowFrom: ["*"] } },
         session: { store: path.join(stateDir, "sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const bot = await createTelegramBot({
         token: "123456:loopback-token",
         botInfo: telegramBotInfoForTest,
@@ -220,8 +230,8 @@ it.each(["none", "middleware", "handler"] as const)(
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
         if (recovery === "handler") {
-          // Let the real router consume the pending admission answer before rejecting it.
-          await vi.waitFor(() => expect(readHandlerAnswer).toHaveBeenCalled(), { interval: 10 });
+          // Wait for the router, not a polling deadline, before rejecting its pending answer.
+          await handlerAnswerRead.promise;
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
           firstResponse!.writeHead(503, { "content-type": "application/json" });
@@ -297,6 +307,7 @@ it.each(["none", "middleware", "handler"] as const)(
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      clearRuntimeConfigSnapshot();
       clearTelegramRuntimeForTest();
       resetTelegramAccountThrottlersForTest();
       resetPluginStateStoreForTests({ closeDatabase: false });

@@ -113,6 +113,10 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -309,6 +313,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
   pluginPolicyMock.channels.clear();
@@ -597,6 +602,8 @@ describe("/model chat UX", () => {
       const tempRoot = tempDirs.make("openclaw-model-terminal-display-");
       const stateDir = path.join(tempRoot, "state");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const cfg = baseConfig();
+        setRuntimeConfigSnapshot(cfg);
         const sessionKey = "agent:main:main";
         const storePath = path.join(tempRoot, "custom-store", "openclaw-agent.sqlite");
         const scope = { agentId: "main", sessionKey, sessionId: "terminal-display", storePath };
@@ -637,6 +644,7 @@ describe("/model chat UX", () => {
           const before = structuredClone(sessionEntry);
           const reply = await handleDirectiveOnly(
             createDirectiveHandlingParams({
+              cfg,
               directives: parseInlineSessionDirectives(command),
               sessionEntry,
               sessionKey,
@@ -953,7 +961,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
   });
 
-  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+  it("preserves unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o",
@@ -961,10 +969,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       sessionEntry,
     });
 
-    expect(sessionEntry.thinkingLevel).toBe("medium");
-    expect(persisted.directiveAck?.text).toContain(
-      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
-    );
+    expect(sessionEntry.thinkingLevel).toBe("adaptive");
+    expect(persisted.directiveAck?.text).not.toContain("Thinking level set to");
   });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {
@@ -1088,7 +1094,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("rejects a grouped directive when its implicit thinking remap conflicts", async () => {
+  it("preserves a concurrent thinking preference while applying an unrelated directive", async () => {
     setDirectiveTestProviders([
       {
         id: "anthropic",
@@ -1116,11 +1122,12 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         storePath,
       });
 
-      expect(result?.text).toContain("Session settings were not applied");
-      expect(result?.isError).toBe(true);
-      expect(sessionEntry).toMatchObject({ thinkingLevel: "low" });
-      expect(sessionEntry.fastMode).toBeUndefined();
-      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(concurrentEntry);
+      expect(result?.isError).not.toBe(true);
+      expect(sessionEntry).toMatchObject({ thinkingLevel: "low", fastMode: true });
+      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+        thinkingLevel: "low",
+        fastMode: true,
+      });
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }

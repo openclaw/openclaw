@@ -26,9 +26,9 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOrigina
     diagnostics: [],
   }),
 }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfig(),
 }));
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;

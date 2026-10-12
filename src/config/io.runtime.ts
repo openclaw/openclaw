@@ -100,6 +100,7 @@ export function registerConfigWriteListener(
   };
 }
 
+/** @deprecated Use the prepared runtime snapshot or await captureRuntimeConfigAsyncReader()(). */
 export function loadConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
@@ -113,9 +114,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
-  return loadConfig(options);
-}
+export { readRuntimeConfig as getRuntimeConfig } from "./runtime-snapshot.js";
 
 type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => void };
 
@@ -123,13 +122,15 @@ type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => v
 export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
+  skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
+  skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
-  options: { assertCurrent?: () => void; capture?: boolean } = {},
+  options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
   const sourceEnv = process.env;
   const cwd = tryProcessCwd();
@@ -138,7 +139,10 @@ export function captureRuntimeConfigAsyncReader(
   let selectors = readSelectors();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
-  const io = createConfigIO({ env: stage.env });
+  const io = createConfigIO({
+    env: stage.env,
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+  });
   const assertCurrent = () => {
     options.assertCurrent?.();
     if (

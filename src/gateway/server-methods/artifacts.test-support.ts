@@ -1,4 +1,6 @@
 import { expect } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
 import type { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
@@ -49,7 +51,8 @@ export function withArtifactFixtureReader(
   };
 }
 
-export function runtimeContext(config: Record<string, unknown>) {
+export function runtimeContext(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config);
   return { getRuntimeConfig: () => config };
 }
 

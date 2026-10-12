@@ -2,18 +2,19 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
+import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -267,6 +268,7 @@ describe("buildStatusText prepared context windows", () => {
     } = {},
   ) {
     return await withTempHome(async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionId: "terminal-fallback",
@@ -415,7 +417,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it("skips terminal transcript access for a stale selected notice", async () => {
-    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync");
     const parts = await renderTerminalFallback({
       entry: {
         fallbackNotice: {
@@ -452,8 +454,8 @@ describe("buildStatusText prepared context windows", () => {
     ["legacy usage fallback", "usage/previous-model"],
   ])("keeps %s through independent usage hydration", async (_name, notice) => {
     const readUsage = vi
-      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscript")
-      .mockReturnValue({
+      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync")
+      .mockResolvedValue({
         modelProvider: "usage",
         model: "previous-model",
         inputTokens: 10,
@@ -594,10 +596,8 @@ describe("buildStatusText prepared context windows", () => {
     { error: new Error("unexpected reader failure"), unavailable: false },
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
-      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,

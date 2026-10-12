@@ -23,11 +23,11 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
+import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
@@ -641,7 +641,7 @@ export async function resolveApiKeyForProviderCore(input: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(agentDir);
+  const authStorePath = await resolveAuthStorePathForDisplayAsync(agentDir);
   const agentDirContext = agentDir ? ` (agentDir: ${resolveUserPath(agentDir)})` : "";
   throw new ProviderAuthError(
     "missing-provider-auth",

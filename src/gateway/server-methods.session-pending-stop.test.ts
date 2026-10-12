@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
@@ -30,6 +31,7 @@ describe("pending Stop producer binding", () => {
         client.connId = "pending-owner";
         client.connect.scopes = ["operator.sessions.write"];
         const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const entry = {
           sessionId: "original",
@@ -114,6 +116,7 @@ describe("pending Stop producer binding", () => {
       client.connId = "pending-owner";
       client.connect.scopes = ["operator.sessions.write"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },

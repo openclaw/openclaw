@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -12,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
@@ -95,6 +100,7 @@ describe("sessions cleanup applied summary", () => {
           },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const now = Date.now();
         const old = now - 31 * 24 * 60 * 60_000;
         const scope = (name: string) => ({
@@ -120,13 +126,16 @@ describe("sessions cleanup applied summary", () => {
             cfg,
             opts: { enforce: true },
             targets: [{ agentId: "main", storePath }],
+            commitGuard: () => {},
           });
         const activeCount = () =>
           listSessionEntriesCore({ storePath }).filter(
             ({ entry }) => entry.archivedAt === undefined,
           ).length;
         expect(activeCount()).toBe(3);
-        const result = await run();
+        const sql = observeHostDataSql();
+        const result = await run().finally(sql.restore);
+        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         expect(activeCount()).toBe(1);
         const expected = {
           beforeCount: 4,
@@ -288,6 +297,7 @@ describe("sessions cleanup applied summary", () => {
           session: { maintenance: { mode: "enforce", maxDiskBytes: false, pruneAfter: "1s" } },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(state.sessionsDir(), { recursive: true });
         const orphan = path.join(state.sessionsDir(), "orphan.jsonl");
         await fs.writeFile(orphan, "");
@@ -329,6 +339,7 @@ describe("sessions cleanup applied summary", () => {
         session: { store: storePath, maintenance: { mode: "warn", pruneAfter: "1d" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scopes = ["main", "beta"].map((agentId) => ({
         agentId,
         sessionKey: `agent:${agentId}:hook:stale`,
@@ -360,6 +371,38 @@ describe("sessions cleanup applied summary", () => {
       });
       expect(loadSessionEntry(scopes[0]!)).toMatchObject({ sessionId: "main-stale" });
       expect(loadSessionEntry(scopes[1]!)).toBeUndefined();
+    });
+  });
+
+  it("preserves sessions when cleanup authority is revoked after preview", async () => {
+    await withOpenClawTestState({}, async (state) => {
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const scope = { sessionKey: "agent:main:hook:guard", storePath };
+      await replaceSessionEntry(scope, { sessionId: "guarded-cleanup", updatedAt: Date.now() });
+      let authorized = true;
+      cleanupRace.afterPreview = () => {
+        authorized = false;
+      };
+
+      await expect(
+        runSessionsCleanup({
+          cfg: {},
+          opts: { enforce: true, fixMissing: true },
+          targets: [{ agentId: "main", storePath }],
+          commitGuard: () => {
+            if (!authorized) {
+              throw new Error("cleanup authority revoked");
+            }
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionsCleanupFailureError",
+        failure: {
+          lifecycleCommitted: false,
+          message: expect.stringContaining("cleanup authority revoked"),
+        },
+      });
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "guarded-cleanup" });
     });
   });
 

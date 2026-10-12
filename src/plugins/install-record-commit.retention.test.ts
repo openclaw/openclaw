@@ -6,7 +6,7 @@ import * as leaseStore from "../state/openclaw-state-lease-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
@@ -87,7 +87,9 @@ describe("retained managed npm record commits", () => {
         }),
       ).rejects.toBe(failure);
       expect(await readPersistedInstalledPluginIndex({ env: state.env })).toEqual(initial);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(records);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(records);
       expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(false);
       expect(
         listRecoveredManagedNpmInstallCandidates({ stateDir: state.stateDir }).map(
@@ -189,9 +191,9 @@ describe("retained managed npm record commits", () => {
           expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(
             tentativeRow,
           );
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-            records,
-          );
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual(records);
           expect(fs.existsSync(markerPath)).toBe(false);
           const directoryAfter = fs.statSync(markerDir, { bigint: true });
           expect([directoryAfter.dev, directoryAfter.ino]).toEqual([
@@ -209,7 +211,9 @@ describe("retained managed npm record commits", () => {
         nextInstallRecords: records,
         nextConfig: { ...config, gateway: { port: 18792 } },
       });
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(records);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(records);
       expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
         gateway: { port: 18792 },
       });

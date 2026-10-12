@@ -7,6 +7,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
@@ -33,6 +34,7 @@ it("observes foreground traversal completion while foreign writes continue", asy
   const stateDir = tempDirs.make("openclaw-projection-backlog-admission-");
   const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
   const scope = { ...options, sessionId: "zz-late", sessionKey: "agent:main:zz-late" };
+  setRuntimeConfigSnapshot({});
   let restoreDrain: (() => void) | undefined;
   try {
     await persistSessionTranscriptTurn(scope, {
@@ -129,6 +131,7 @@ it("observes foreground traversal completion while foreign writes continue", asy
     await waitForSessionTranscriptIndexReconcile(options);
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
   }
 });
 
@@ -142,6 +145,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
       sessionId: "retired-read",
       sessionKey: "agent:main:retired-read",
     };
+    setRuntimeConfigSnapshot({});
     const paused = createDeferred();
     let resume: (() => void) | undefined;
     try {
@@ -287,6 +291,7 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
       await waitForSessionTranscriptIndexReconcile(options);
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
+      clearRuntimeConfigSnapshot();
     }
   },
   30_000,

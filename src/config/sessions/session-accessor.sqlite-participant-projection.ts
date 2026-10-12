@@ -7,6 +7,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
   runSqliteReadOperationSync,
@@ -42,7 +43,20 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-// The last exact read belongs to this connection's admitted revision, including its snapshot.
+let participantWriteSnapshot: DatabaseSync | undefined;
+
+/** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
+export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, read: () => T): T {
+  const previous = participantWriteSnapshot;
+  participantWriteSnapshot = database;
+  try {
+    return read();
+  } finally {
+    participantWriteSnapshot = previous;
+  }
+}
+
+// Deferred readers must execute their first SELECT to establish the native snapshot.
 const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
@@ -57,14 +71,21 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   return (key: string) =>
     runSqliteReadOperationSync(database, () => {
       const revision = getSqliteReadScopeRevision(database);
-      if (revision && last?.revision === revision && last.key === key) {
+      if (
+        revision &&
+        last?.key === key &&
+        (last.revision === revision ||
+          (participantWriteSnapshot === database &&
+            last.revision.snapshot === undefined &&
+            last.revision.schema === revision.schema &&
+            last.revision.mutationRevision === revision.mutationRevision &&
+            last.revision.writeRevision === readSqliteDatabaseWriteRevision(database)))
+      ) {
+        last.revision = revision;
         return last.rows;
       }
       const rows = query(key).rows;
-      last =
-        revision && getSqliteReadScopeRevision(database) === revision
-          ? { key, revision, rows }
-          : undefined;
+      last = revision ? { key, revision, rows } : undefined;
       return rows;
     });
 });

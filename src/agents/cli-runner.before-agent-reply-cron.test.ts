@@ -295,7 +295,7 @@ describe("runCliAgent before_agent_reply seam", () => {
           expect(effect).toHaveBeenCalledOnce();
           if (scenario === "current root") {
             expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("generation is unavailable");
+            expect(heldClaim).toThrow("no longer active");
           }
         }
         expect(prepareMock).not.toHaveBeenCalled();

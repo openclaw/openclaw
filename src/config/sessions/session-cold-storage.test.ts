@@ -45,7 +45,10 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
   restoreSessionColdTranscript,
@@ -57,7 +60,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -589,7 +592,11 @@ describe("cold transcript storage workers", () => {
       historicalId,
     );
     const events = loadTranscriptEventsSync(fixture.scope);
+    assertSessionTranscriptHot(fixture.database(), historicalId);
     await archiveFixture(fixture);
+    expect(() => assertSessionTranscriptHot(fixture.database(), historicalId)).toThrow(
+      expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
+    );
     expect(readTranscriptStatsSync(fixture.scope)).toEqual(stats);
     expect(
       readTranscriptContextVersionInTransaction({ db: fixture.database() }, historicalId),
@@ -616,6 +623,7 @@ describe("cold transcript storage workers", () => {
     } finally {
       hostSql.restore();
     }
+    assertSessionTranscriptHot(fixture.database(), historicalId);
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 

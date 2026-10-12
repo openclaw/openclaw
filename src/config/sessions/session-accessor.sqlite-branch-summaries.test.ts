@@ -1,9 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -11,6 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionBranches,
@@ -35,6 +36,7 @@ afterEach(async () => {
     await cleanupSessionStateForTest({ stateDir });
   }
   tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 function message(
@@ -256,6 +258,7 @@ const cases: Array<{
 ];
 
 async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
+  setRuntimeConfigSnapshot({});
   const agentId = "main";
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-branch-summary-") };
   const scope = {
@@ -459,7 +462,8 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
     message("tail", "root", "tool payload", { role: "toolResult" }),
   ]);
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-  const writer = new DatabaseSync(database.path);
+  const writer = sqliteRuntime.openNodeSqliteDatabase(database.path);
+  admitSqliteSchema(writer);
   const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
   if (typeof databaseIdentity !== "string") {
     throw new Error("expected a persisted branch fixture");

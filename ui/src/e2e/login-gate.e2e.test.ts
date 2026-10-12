@@ -660,6 +660,13 @@ suite.define(() => {
       });
       await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
 
+      const failure = page.locator(".login-gate__failure");
+      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
+      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
+      expect(await page.locator(".login-gate__help").count()).toBe(0);
+
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");
         const card = document.querySelector<HTMLElement>(".login-gate__card");
@@ -727,23 +734,6 @@ suite.define(() => {
         throw new Error("Missing failure documentation link bounds");
       }
       expect(failureDocsBox.y + failureDocsBox.height).toBeLessThanOrEqual(500);
-    } finally {
-      await closeContext(context);
-    }
-  });
-
-  it("keeps failure recovery visible without generic help", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-
-    try {
-      await renderLoginGate(page, suite.server.baseUrl);
-      const failure = page.locator(".login-gate__failure");
-      expect(await failure.evaluate((element) => element.tagName)).toBe("SECTION");
-      expect(await page.locator(".login-gate__failure-summary").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-steps").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__failure-docs").isVisible()).toBe(true);
-      expect(await page.locator(".login-gate__help").count()).toBe(0);
     } finally {
       await closeContext(context);
     }

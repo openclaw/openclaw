@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -43,6 +47,7 @@ describe("worker session placement moves", () => {
 
   afterEach(async () => {
     await closeStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -592,6 +597,7 @@ describe("worker session placement moves", () => {
   });
 
   it("completes a persisted abandonment only after a later sweep makes its placement local", async () => {
+    setRuntimeConfigSnapshot({});
     const { active, begun } = await beginGatewayMove(true);
     const reconciling = await reconcileMove(active, begun.placement.generation);
     const recoveryError = "Worker result abandoned by forced operator teardown";
@@ -641,6 +647,7 @@ describe("worker session placement moves", () => {
   });
 
   it("completes an ordinary reconciled move with one durable Gateway placement", async () => {
+    setRuntimeConfigSnapshot({});
     const { active, begun } = await beginGatewayMove();
     const reconciling = await reconcileMove(active, begun.placement.generation);
     const moves = createWorkerPlacementMoveService({

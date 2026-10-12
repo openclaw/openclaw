@@ -12,7 +12,8 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -28,6 +29,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -61,6 +63,13 @@ afterEach(() => vi.restoreAllMocks());
 
 it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:acp:row-receipts",
@@ -100,12 +109,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     });
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const query = { agentId: scope.agentId, key: scope.sessionKey };
@@ -159,6 +163,10 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
         label: "Published label",
         activitySummary: { text: "First input", state: "current" },
       });
+      emitSessionTranscriptUpdate({ target: scope });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+      expect(rowReads).toEqual([]);
       await persistSessionTranscriptTurn(scope, {
         messages: [{ message: { role: "assistant", content: "Second message" } }],
         touchSessionEntry: false,
@@ -168,6 +176,15 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
         hasBoard: true,
         acpMeta: acp,
+        activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+      });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ message: { role: "assistant", content: "Combined entry and transcript" } }],
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        hasBoard: true,
         activitySummaryWatermark: readSessionTranscriptWatermark(scope),
       });
       expect(rowReads).toEqual([]);

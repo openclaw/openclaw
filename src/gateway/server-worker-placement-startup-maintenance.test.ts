@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -130,10 +131,10 @@ function createMaintenanceRuntime(params: {
       workspaceResultInstanceId: () => "gateway-test",
       get: (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
-      list: () => params.placements,
-      listForReconcile: (sessionKey?: string) =>
+      listAsync: async () => params.placements,
+      listForReconcileAsync: async (sessionKey?: string) =>
         params.preservationStore
-          ? params.preservationStore.listForReconcile(sessionKey)
+          ? await params.preservationStore.listForReconcileAsync(sessionKey)
           : params.placements.filter(
               (placement) =>
                 placement.state !== "local" &&
@@ -330,7 +331,7 @@ describe("worker placement session maintenance ownership", () => {
                 claim = await store.claimTurn(localTurn);
               }
               if (publication !== "worker dispatch") {
-                expect(store.listForReconcile()).toEqual([]);
+                expect(await store.listForReconcileAsync()).toEqual([]);
               }
               return prepared;
             } catch (error) {
@@ -406,7 +407,9 @@ describe("worker placement session maintenance ownership", () => {
   it("retains a configured-store repository base after its placement manifest advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("custom-sessions", "openclaw-agent.sqlite");
-      await state.writeConfig({ session: { store: storePath } });
+      const cfg = { session: { store: storePath } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot({});
       const placement = {
         ...createPlacementFixture("agent:main:dashboard:repository-retention"),
         workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
@@ -435,6 +438,7 @@ describe("worker placement session maintenance ownership", () => {
         skipMaintenance: true,
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
+      setRuntimeConfigSnapshot(cfg);
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
       let prepared:
         | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>

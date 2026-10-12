@@ -1,8 +1,8 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as kysely from "../infra/kysely-sync.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,6 +12,8 @@ import {
   initializeCachedClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
 } from "./provenance-runtime-read.js";
+import { deleteClawInstallRecord, persistClawInstallRecord } from "./provenance.js";
+import { makeProvenancePlan } from "./provenance.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -32,7 +34,7 @@ describe("Claw runtime provenance cache", () => {
     });
   });
 
-  it("refreshes install ownership written by another process", () => {
+  it("reuses committed install and deletion facts until the database closes", async () => {
     const root = tempDirs.make("openclaw-claw-runtime-provenance-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     const database = openOpenClawStateDatabase(options);
@@ -43,43 +45,11 @@ describe("Claw runtime provenance cache", () => {
       schemaVersions: new Map(),
     });
 
-    const external = new DatabaseSync(database.path);
-    try {
-      external
-        .prepare(
-          `INSERT INTO claw_installs (
-             agent_id, schema_version, source_kind, claw_name, claw_version,
-             package_root, manifest_path, integrity_kind, integrity, source_byte_length,
-             manifest_schema_version, plan_integrity, workspace, agent_config_digest,
-             agent_owned_paths_json, bootstrap_source_path, bootstrap_content_digest,
-             status, added_at_ms, updated_at_ms
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`,
-        )
-        .run(
-          "worker",
-          "openclaw.clawInstallRecord.v2",
-          "package",
-          "@acme/worker",
-          "1.0.0",
-          root,
-          `${root}\\openclaw.claw.json`,
-          "artifact",
-          "sha256:manifest",
-          100,
-          1,
-          "sha256:plan",
-          `${root}\\workspace`,
-          "sha256:agent-config",
-          '["agents.entries[\\"worker\\"]"]',
-          "complete",
-          1,
-          1,
-        );
-    } finally {
-      external.close();
-    }
-
+    const { plan } = await makeProvenancePlan(root, { schemaVersion: 1, agent: { id: "worker" } });
+    const record = persistClawInstallRecord(plan, options);
+    const query = vi.spyOn(kysely, "executeSqliteQuerySync");
     initializeCachedClawInstallSchemaVersions(options);
+    expect(query).not.toHaveBeenCalled();
     const refreshed = readCachedClawInstallSchemaVersions(options);
     expect(refreshed.kind).toBe("ready");
     if (refreshed.kind !== "ready") {
@@ -87,9 +57,20 @@ describe("Claw runtime provenance cache", () => {
     }
     expect(refreshed.schemaVersions.get("worker")).toMatchObject({
       kind: "ok",
-      schemaVersion: "openclaw.clawInstallRecord.v2",
-      agentConfigDigest: "sha256:agent-config",
+      schemaVersion: record.schemaVersion,
+      agentConfigDigest: record.agentConfigDigest,
     });
+
+    deleteClawInstallRecord("worker", options);
+    query.mockClear();
+    initializeCachedClawInstallSchemaVersions(options);
+    expect(query).not.toHaveBeenCalled();
+    expect(readCachedClawInstallSchemaVersions(options)).toEqual({
+      kind: "ready",
+      schemaVersions: new Map(),
+    });
+
+    persistClawInstallRecord(plan, options);
 
     closeOpenClawStateDatabaseForTest();
     rmSync(database.path);

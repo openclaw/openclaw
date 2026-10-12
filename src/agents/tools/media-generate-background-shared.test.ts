@@ -12,7 +12,11 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
@@ -101,7 +105,12 @@ beforeEach(() => {
     .mockReturnValue({ sessionId: "media-requester", updatedAt: 1 });
 });
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 function createImageMediaLifecycle() {
+  setRuntimeConfigSnapshot({});
   return createMediaGenerationTaskLifecycle("image");
 }
 

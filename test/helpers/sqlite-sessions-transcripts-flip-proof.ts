@@ -12,7 +12,6 @@ import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { AGENT_RUN_ABORTED_ERROR } from "../../src/agents/run-termination.js";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -1720,15 +1719,18 @@ async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<
 }
 
 async function waitForAgentRunSettled(client: GatewayClient, runId: string): Promise<void> {
-  const result: { endedAt?: number; status?: string; stopReason?: string; error?: string } =
-    await client.request("agent.wait", { runId, timeoutMs: 60_000 }, { timeoutMs: 65_000 });
+  const result: { endedAt?: number; status?: string; stopReason?: string } = await client.request(
+    "agent.wait",
+    { runId, timeoutMs: 60_000 },
+    { timeoutMs: 65_000 },
+  );
   if (typeof result?.status !== "string") {
     throw new Error(`agent.wait returned no status for ${runId}: ${JSON.stringify(result)}`);
   }
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle with its action or an admission/runtime abort reason.
+  // Deletion can settle with its action or the runtime's terminal abort error.
   // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
@@ -1736,10 +1738,7 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
     (result.stopReason === "delete" ||
       result.stopReason === "rpc" ||
       result.stopReason === "stop" ||
-      result.stopReason === "aborted" ||
-      (result.status === "error" &&
-        result.stopReason === undefined &&
-        result.error === `AbortError: ${AGENT_RUN_ABORTED_ERROR}`)) &&
+      result.stopReason === "aborted") &&
     typeof result.endedAt === "number"
   ) {
     return;

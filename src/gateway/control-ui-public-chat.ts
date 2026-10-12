@@ -5,12 +5,14 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import {
   PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
 import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
+import { mintExistingPublicSessionShareToken } from "./control-ui-public-session-token.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -137,8 +139,6 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
-    const { mintExistingPublicSessionShareToken } =
-      await import("./control-ui-public-session-token.js");
     const token = await mintExistingPublicSessionShareToken(locator);
     return await servePublicSessionRepresentation({
       ...params,
@@ -156,6 +156,7 @@ export async function serveControlUiPublicChat(params: {
       ]),
       document: {
         latestUrl: url.pathname,
+        ...(token ? { mediaBaseUrl: buildPublicSessionMediaBaseUrl(basePath, token) } : {}),
         entryUrl,
         clientAuthBasePath,
         assetBasePath: basePath,

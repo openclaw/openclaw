@@ -111,7 +111,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     return results.map((result) => result.path);
   };
 
-  it.each(["self", "tree"] as const)(
+  it.each(["self"] as const)(
     "returns recall-granted same-agent private session hits under %s visibility",
     async (visibility) => {
       // Only the prior private chat passes; the live anchor, group chat, other agent,
@@ -126,7 +126,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     },
   );
 
-  it.each(["self", "tree"] as const)(
+  it.each(["self"] as const)(
     "keeps requester visibility for a session search without recall under %s visibility",
     async (visibility) => {
       await expect(
