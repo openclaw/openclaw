@@ -190,6 +190,8 @@ export function isRecoverableOpenClawNpmRegistryReadbackFailure(jobs: unknown): 
     ) &&
     steps.some((step) => step.name === "Publish" && step.conclusion === "success") &&
     failedSteps.length === 1 &&
+    // Historical protected publishers can fail after npm accepted the bytes.
+    // Keep their recovery path even though new publishers leave readback to the parent.
     failedSteps[0]?.name === "Verify extended-stable registry readback"
   );
 }
