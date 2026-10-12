@@ -18,6 +18,7 @@ import {
 } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -114,15 +115,19 @@ describe("openclaw delegation tool", () => {
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
-    expect(callGateway).toHaveBeenCalledWith("openclaw.chat", {
-      sessionId: expect.stringMatching(/^delegate-[a-f0-9]{32}$/),
-      message: "Add channel.",
-      delegation: {
-        agentId: "main",
-        sessionKey: "agent:main:dm:one",
-        turnSourceChannel: "webchat",
+    expect(callGateway).toHaveBeenCalledWith(
+      "openclaw.chat",
+      {
+        sessionId: expect.stringMatching(/^delegate-[a-f0-9]{32}$/),
+        message: "Add channel.",
+        delegation: {
+          agentId: "main",
+          sessionKey: "agent:main:dm:one",
+          turnSourceChannel: "webchat",
+        },
       },
-    });
+      { timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
+    );
     expect(result.details).toEqual({
       reply: "Applied.",
     });

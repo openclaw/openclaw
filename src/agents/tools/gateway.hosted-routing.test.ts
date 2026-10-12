@@ -42,7 +42,10 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
@@ -235,6 +238,48 @@ describe("Gateway tool identity and hosted routing", () => {
     for (const token of capabilities.splice(0)) {
       revokeMessageActionTurnCapability(token);
     }
+  });
+
+  it("carries delegated OpenClaw Full Access on a source-run-bound wire identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ sessionId: "delegate-1", reply: "Applied" });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-openclaw-wire");
+    const toolLifetime = new AbortController();
+    const wireContext = { ...context, localEmbedded: true } as GatewayRequestContext;
+
+    await withCaller(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        operationalRunInstance,
+        fullPermission: true,
+        approvalSignals: [toolLifetime.signal],
+        gatewayContextResolver: () => wireContext,
+      },
+      async () => {
+        expect(getGatewayToolCallerIdentity()).toMatchObject({ fullPermission: true });
+        await callGatewayTool(
+          "openclaw.chat",
+          {},
+          {
+            sessionId: "delegate-1",
+            message: "Apply the change",
+            delegation: { agentId: "ops", sessionKey: "agent:ops:main" },
+          },
+        );
+        const call = capturedGatewayCall();
+        expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+        const [payload] = call.agentRuntimeIdentityToken!.split(".");
+        expect(JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"))).toMatchObject({
+          fullPermission: true,
+        });
+        const verified = await verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken);
+        expect(verified).toMatchObject({ operationalRunInstance, fullPermission: true });
+        expect(verified && createAgentRuntimeApprovalAuthorityValidator()(verified)).toBe(true);
+
+        toolLifetime.abort(new Error("tool call ended"));
+        expect(verified && createAgentRuntimeApprovalAuthorityValidator()(verified)).toBe(false);
+      },
+    );
   });
 
   it("dispatches hosted screen commands with the admitted UI identity", async () => {
