@@ -652,6 +652,47 @@ private func makeNodeModelWithMockServices() -> NodeAppModel {
 }
 
 @MainActor
+private func withOperatorCredentialFixture(
+    _ body: (NodeAppModel, URL, String) throws -> Void) throws
+{
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("operator-credentials-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try DeviceIdentityPaths.$scopedStateDirURL.withValue(directory) {
+        let model = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService(),
+            audioAdmissionInitiallyAllowed: false)
+        let gatewayID = "operator-credentials-fixture"
+        model.activeGatewayConnectConfig = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://gateway.example.test")),
+            stableID: gatewayID,
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil,
+                deviceAuthGatewayID: gatewayID))
+        defer {
+            // No connection loop starts, and this synchronous MainActor fixture
+            // retires the route before queued weak-self Watch work can run.
+            model.activeGatewayConnectConfig = nil
+            model.setOperatorConnected(false)
+        }
+        try body(model, directory, gatewayID)
+    }
+}
+
+@MainActor
 private func makeNotificationModel(
     status: NotificationAuthorizationStatus) -> (MockBootstrapNotificationCenter, NodeAppModel)
 {
@@ -9148,70 +9189,84 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
+        try withOperatorCredentialFixture { appModel, _, gatewayID in
+            let identity = DeviceIdentityStore.loadOrCreate()
+            #expect(appModel.hasOperatorAdminScope == false)
+
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "operator-token",
+                scopes: ["operator.read", "operator.admin", "operator.approvals"],
+                gatewayID: gatewayID)
+            appModel.refreshOperatorAdminScopeFromStore()
+            #expect(appModel.hasOperatorAdminScope == true)
+            #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: gatewayID))
+            #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
+                gatewayID: gatewayID,
+                forceTalkPermissionUpgradeRequest: true))
+
+            let otherStableID = "manual|other.example.com|443"
+            #expect(!appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: otherStableID))
+            #expect(!appModel._test_shouldRequestStoredOperatorApprovalScope(
+                gatewayID: otherStableID,
+                forceTalkPermissionUpgradeRequest: true))
+
+            DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)
+            appModel.refreshOperatorAdminScopeFromStore()
+            #expect(appModel.hasOperatorAdminScope == false)
         }
+    }
 
-        let appModel = NodeAppModel()
-        defer { appModel.disconnectGateway() }
-        let stableID = "manual|gateway.example.com|443"
-        let authenticationOwnerID = stableID
-        let config = try GatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: stableID,
-            tls: nil,
-            token: nil,
-            bootstrapToken: nil,
-            password: nil,
-            nodeOptions: GatewayConnectOptions(
-                role: "node",
-                scopes: [],
-                caps: [],
-                commands: [],
-                permissions: [:],
-                clientId: "openclaw-ios",
-                clientMode: "node",
-                clientDisplayName: nil,
-                deviceAuthGatewayID: authenticationOwnerID))
-        appModel.applyGatewayConnectConfig(config)
-        let identity = DeviceIdentityStore.loadOrCreate()
-        #expect(appModel.hasOperatorAdminScope == false)
+    @Test @MainActor func `operator route invalidation clears admin scope until reconnect`() throws {
+        try withOperatorCredentialFixture { appModel, _, gatewayID in
+            let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted())
+            try #require(DeviceAuthStore.storeTokenPersisted(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "synthetic-admin-token",
+                scopes: ["operator.read", "operator.admin"],
+                gatewayID: gatewayID))
+            appModel.setOperatorConnected(true)
+            #expect(appModel.isOperatorGatewayConnected)
+            #expect(appModel.hasOperatorAdminScope)
 
-        _ = DeviceAuthStore.storeToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: "operator-token",
-            scopes: ["operator.read", "operator.admin", "operator.approvals"],
-            gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == true)
-        #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
-        #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
-            gatewayID: authenticationOwnerID,
-            forceTalkPermissionUpgradeRequest: true))
+            appModel.invalidateOperatorTalkRoute()
+            #expect(!appModel.isOperatorGatewayConnected)
+            #expect(!appModel.hasOperatorAdminScope)
+            #expect(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)?.token == "synthetic-admin-token")
 
-        let otherStableID = "manual|other.example.com|443"
-        #expect(!appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: otherStableID))
-        #expect(!appModel._test_shouldRequestStoredOperatorApprovalScope(
-            gatewayID: otherStableID,
-            forceTalkPermissionUpgradeRequest: true))
+            appModel.setOperatorConnected(true)
+            #expect(appModel.isOperatorGatewayConnected)
+            #expect(appModel.hasOperatorAdminScope)
+            appModel.invalidateOperatorTalkRoute()
+            try #require(DeviceAuthStore.storeTokenPersisted(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "synthetic-limited-token",
+                scopes: ["operator.read"],
+                gatewayID: gatewayID))
+            appModel.setOperatorConnected(true)
+            #expect(appModel.isOperatorGatewayConnected)
+            #expect(!appModel.hasOperatorAdminScope)
+        }
+    }
 
-        DeviceAuthStore.clearToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == false)
+    @Test @MainActor func `operator route invalidation does not create credential storage`() throws {
+        try withOperatorCredentialFixture { appModel, directory, _ in
+            let databaseURL = directory.appendingPathComponent("state/openclaw.sqlite")
+            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
+
+            appModel.invalidateOperatorTalkRoute()
+            appModel.invalidateOperatorTalkRoute()
+
+            #expect(!appModel.isOperatorGatewayConnected)
+            #expect(!appModel.hasOperatorAdminScope)
+            #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+        }
     }
 
     @Test @MainActor func `send voice transcript throws when gateway offline`() async {

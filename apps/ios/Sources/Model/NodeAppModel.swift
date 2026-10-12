@@ -4699,14 +4699,17 @@ extension NodeAppModel {
             self.isDesktopObserveAvailable = false
         }
         self.operatorStatusText = connected ? "Connected" : "Offline"
-        self.refreshOperatorAdminScopeFromStore()
         guard connected else {
+            // Disconnect callbacks can outlive the background task. Revoke cached
+            // authority without opening credential storage as the app suspends.
+            self.hasOperatorAdminScope = false
             guard changed else { return }
             Task { [weak self] in
                 await self?.syncWatchAppSnapshot(reason: "operator_offline")
             }
             return
         }
+        self.refreshOperatorAdminScopeFromStore()
         Task { [weak self] in
             guard let self else { return }
             await self.flushPendingExecApprovalResolvedPushes()
