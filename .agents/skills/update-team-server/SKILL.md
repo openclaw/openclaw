@@ -63,18 +63,32 @@ For an accepted update, the back-online notice includes concise highlights of ch
 
 If service returns through rollback or same-release recovery, say it is restored on the previous version and the requested update has not succeeded; do not advertise candidate changes as deployed. Send the back-online notice only after the owner's applicable recovery/readiness verification, keep unresolved update blockers private, and continue the requested update through the canonical owner unless paused, canceled, or externally blocked. Keep detailed receipts, logs, private access details, and full hashes out of Team notices.
 
-## Cross schemas safely
+## Cross schemas through OpenClaw
 
-The canonical updater owns the exact incumbent/candidate reader contracts, supported Doctor migration, and durable phase/recovery checks before stopping writers. Consume its recorded results rather than independently revalidating them. Package versions and numeric schema ceilings alone are insufficient. Preserve these native gates; trusting the owner does not remove or weaken them:
+The candidate release's native update/Doctor owner decides whether every
+installed database can migrate. The controller must not enumerate schema edges,
+rehearse each crossing, implement migrations, or copy database SQL into its
+admission rules. Older databases use OpenClaw's supported forward migrations;
+unknown future schemas and downgrades are refused by that owner.
 
-- A complete database inventory, including configured external agent roots and registered stores; verified WAL-aware backups covering that inventory and protected state. The owner checks backup omissions and sanitization: a portable export is not necessarily a full recovery image. Doctor does not create the backup.
-- The original pre-cutover session-preservation witness, retained through recovery; a filtered session-list page, empty baseline, or fresh-current witness cannot prove historical continuity.
-- Stopped writers and maintenance authority fencing new claims. Only the candidate's supported upstream Doctor flow performs migration; the owner accounts for its full repair scope, not a presumed single-table operation.
-- Per-database integrity, physical schema, `PRAGMA user_version`, `schema_meta`, ownership, registry, and candidate runtime-readiness checks before and after migration. One successful database or healthy HTTP cannot prove all-agent readiness.
+Keep the incumbent serving during the off-path build. Under the existing
+maintenance authority, drain and stop it, then invoke the candidate's internal
+`update migrate` command. That owner captures WAL-safe database and authored
+configuration backups and records the recovery receipt before running Doctor.
+The controller switches the release pointer only after migration succeeds,
+starts the candidate, and performs its existing readiness and session-continuity
+acceptance. Retain the original pre-cutover session witness.
 
-Transactions may commit per database, leaving mixed schemas or stale registry metadata after interruption. Once any database advances beyond the old reader's contract, never automatically restart that old reader, even when candidate verification fails. Preserve the journal and backups; continue through the canonical forward-recovery owner until every store is ready. Before mutation, a safe refusal leaves the incumbent serving. No custom schema SQL, version-marker edits, downgrade, or wholesale backup restoration.
+On failure, stop the owned candidate before invoking the same candidate's
+`update restore` with the original backup root. Restore the predecessor pointer
+and verify the predecessor only after native restoration succeeds. Retain the
+journal, backups, and displaced candidate state if recovery fails; never start
+an older reader against partially migrated stores. Settle older controller
+transactions with their original closure before adopting the generic path.
 
-For a concrete migration or recovery issue, consult [database contracts](https://docs.openclaw.ai/reference/database-schemas) and [backup semantics](https://docs.openclaw.ai/cli/backup); their general recovery examples do not expand this workflow's authority.
+For a concrete migration or recovery issue, consult
+[database contracts](https://docs.openclaw.ai/reference/database-schemas) and
+[backup semantics](https://docs.openclaw.ai/cli/backup).
 
 ## Verify and recover
 
