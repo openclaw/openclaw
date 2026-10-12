@@ -764,6 +764,10 @@ const config = {
     // Focused outbox tests seed and recover rows through these kernels; production
     // reaches them only through the agent database worker's command dispatcher.
     "src/agents/harness/context-engine-turn-outbox.kernel.worker.ts": ["exports"],
+    // Focused per-turn send-budget tests assert the ledger's caps, peek accessor, reset seam,
+    // and reservation result/handle types; production wires only the reserve/commit/release
+    // helpers and key builders, so the module keeps those exports test-only in the prod graph.
+    "src/agents/tools/turn-send-ledger.ts": ["exports", "types"],
     // Runtime reason values are exported now so protocol schemas can derive from one tuple later.
     "src/agents/failover/signal.ts": ["exports"],
     "src/context-engine/registry.ts": ["exports", "types"],

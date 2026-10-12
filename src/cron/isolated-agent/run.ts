@@ -5,8 +5,13 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import {
+  clearTurnSendLedgerForRun,
+  type TurnSendLedgerScope,
+} from "../../agents/tools/turn-send-ledger.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -123,6 +128,9 @@ async function runCronIsolatedAgentTurnInTrace(
     },
   };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
+  // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
+  const runId = randomUUID();
+  const turnSendLedgerScopes: TurnSendLedgerScope[] = [];
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -131,8 +139,6 @@ async function runCronIsolatedAgentTurnInTrace(
       preparedRuntimeLease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
-          // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.
-          const runId = randomUUID();
           const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
           const ownsSessionRuntime = params.job.sessionTarget === "isolated";
           let runContextOwnerToken: string | undefined;
@@ -260,6 +266,7 @@ async function runCronIsolatedAgentTurnInTrace(
             const executionParams: Parameters<typeof executeCronRun>[0] = {
               ...prepared.context,
               runId,
+              retainTurnSendLedgerScope: (scope) => turnSendLedgerScopes.push(scope),
               cfg: params.cfg,
               job: params.job,
               deliveryAttemptFence: params.deliveryAttemptFence,
@@ -457,5 +464,28 @@ async function runCronIsolatedAgentTurnInTrace(
     );
   } finally {
     leaseActive = false;
+    // Release the per-turn send budget at the cron logical-run terminal. Embedded prompts
+    // (including live model-switch retries) hand their exact scopes here. The CLI loopback
+    // message tool commits under the canonical grant slot, which a non-final candidate's own
+    // settlement defers to an outer owner; reconstruct that exact canonical key for this
+    // invocation's runId so a deferred slot cannot outlive the run.
+    for (const scope of turnSendLedgerScopes) {
+      clearTurnSendLedgerForRun(scope);
+    }
+    try {
+      clearTurnSendLedgerForRun({
+        agentId: prepared.context.agentId,
+        sessionKey: canonicalizeMainSessionAlias({
+          cfg: prepared.context.cfgWithAgentDefaults,
+          agentId: prepared.context.agentId,
+          sessionKey: prepared.context.runSessionKey?.trim() || "main",
+        }),
+        runId,
+      });
+    } catch (ledgerError) {
+      logWarn(
+        `[cron:${params.job.id}] Failed to clear per-turn send ledger during cleanup: ${String(ledgerError)}`,
+      );
+    }
   }
 }

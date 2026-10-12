@@ -202,6 +202,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           : undefined;
       },
       abortSignal: params.runAbortSignal,
+      // Live model-switch cycles reuse this runId; the turn's lifecycle owner clears the
+      // send budget once at the turn terminal.
+      retainTurnSendLedgerScope: params.state.deferredLifecycle.retainTurnSendLedgerScope,
       onFallbackStep: (step) => {
         emitAgentEvent({
           runId: params.runId,

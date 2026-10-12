@@ -8,8 +8,6 @@ import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/i
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureMessageActionDecisionSink } from "../../audit/message-action-decision.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
-import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
-import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -40,6 +38,8 @@ import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
+import { createChannelPlugin } from "./message-tool.test-support.js";
+import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 
 type CreateMessageTool = typeof createMessageTool;
 
@@ -49,12 +49,6 @@ const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
-
-type DescribeMessageTool = NonNullable<
-  NonNullable<ChannelPlugin["actions"]>["describeMessageTool"]
->;
-type MessageToolDiscoveryContext = Parameters<DescribeMessageTool>[0];
-type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
 function createTelegramPollExtraToolSchemas() {
   return {
@@ -343,6 +337,7 @@ beforeEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
+  resetTurnSendLedgerForTest();
   mocks.runMessageAction.mockReset();
   bootMocks.agentCommandFromSystem.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -360,55 +355,6 @@ afterEach(() => {
     revokeMessageActionTurnCapability(token);
   }
 });
-
-function createChannelPlugin(params: {
-  id: string;
-  aliases?: string[];
-  actions?: ChannelMessageActionName[];
-  capabilities?: readonly ChannelMessageCapability[];
-  toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
-  describeMessageTool?: DescribeMessageTool;
-  messageActionTargetAliases?: NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"];
-  config?: Partial<ChannelPlugin["config"]>;
-  message?: ChannelMessageAdapterShape;
-  messaging?: ChannelPlugin["messaging"];
-  outbound?: ChannelPlugin["outbound"];
-}): ChannelPlugin {
-  return {
-    id: params.id as ChannelPlugin["id"],
-    meta: {
-      id: params.id as ChannelPlugin["id"],
-      label: params.id,
-      selectionLabel: params.id,
-      docsPath: `/channels/${params.id}`,
-      blurb: "Test channel",
-      aliases: params.aliases,
-    },
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      ...params.config,
-    },
-    ...(params.message ? { message: params.message } : {}),
-    ...(params.messaging ? { messaging: params.messaging } : {}),
-    ...(params.outbound ? { outbound: params.outbound } : {}),
-    actions: {
-      describeMessageTool:
-        params.describeMessageTool ??
-        ((ctx) => {
-          const schema =
-            typeof params.toolSchema === "function" ? params.toolSchema(ctx) : params.toolSchema;
-          return {
-            actions: params.actions ?? [],
-            capabilities: params.capabilities,
-            ...(schema ? { schema } : {}),
-          };
-        }),
-      messageActionTargetAliases: params.messageActionTargetAliases,
-    },
-  };
-}
 
 function registerPlugins(...plugins: ChannelPlugin[]) {
   setActivePluginRegistry(

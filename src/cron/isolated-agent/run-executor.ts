@@ -307,6 +307,7 @@ function createCronPromptExecutor(
       behavior: { kind: "command-rpc", hasCommittedSideEffect: currentAttemptCommittedMedia },
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
+      retainTurnSendLedgerScope: params.retainTurnSendLedgerScope,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
         params.lifecycle.beginAttempt();
         const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
@@ -447,6 +448,7 @@ function createCronPromptExecutor(
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            onDeferredTurnSendLedgerScope: runOptions.onDeferredTurnSendLedgerScope,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,

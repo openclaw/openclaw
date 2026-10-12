@@ -167,6 +167,15 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
   ])("does not stamp source-only authority for $label", ({ overrides }) => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
+
+  it("carries both the native channel id and the routable messaging target", () => {
+    const grant = buildGrant({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+    });
+    expect(grant.currentChannelId).toBe("D123");
+    expect(grant.currentMessagingTarget).toBe("user:U123");
+  });
 });
 
 describe("buildCliMcpGrantContext delegationCapability", () => {

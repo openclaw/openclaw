@@ -145,6 +145,11 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
         authProfileFailurePolicy: params.authProfileFailurePolicy,
+        // An embedded candidate can internally dispatch a CLI backend
+        // (cli-backend-dispatch.ts), which commits loopback sends under a
+        // canonicalized grant scope. Forward the owner's collector so that scope
+        // is cleared at terminal instead of leaking.
+        onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
         },
