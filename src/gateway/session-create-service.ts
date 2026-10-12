@@ -23,20 +23,16 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
-  loadExactSessionEntryFromStoreReadOnly,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -104,6 +100,7 @@ import type {
 import {
   readRequestedSessionCreateTarget,
   readSessionCreateTarget,
+  validateSessionCreateIncognitoTarget,
 } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
@@ -123,9 +120,11 @@ import {
   sessionCreationFailure,
   unavailableSessionRequest,
 } from "./session-request-error.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
@@ -182,36 +181,16 @@ export async function createGatewaySession(
     agentId,
     requestedKey,
   });
-  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
   const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
-  const explicitDashboardIncognito =
-    explicitIncognito &&
-    explicitTargetParts?.agentId === agentId &&
-    explicitTargetParts.rest.startsWith("dashboard:");
-  if (explicitIncognito && params.incognito !== true) {
-    return invalidSessionRequest("incognito-shaped session keys require incognito: true");
-  }
-  if (params.incognito === true && explicitTargetKey) {
-    if (!explicitDashboardIncognito) {
-      return invalidSessionRequest("incognito sessions are web-only");
-    }
-    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableLookup = {
+  if (explicitIncognito || params.incognito === true) {
+    const incognitoTarget = await validateSessionCreateIncognitoTarget(
+      params,
       agentId,
-      storePath: durableStorePath,
-      sessionKey: explicitTargetKey,
-      projection: "list" as const,
-    };
-    const memory = getSessionActorStorageBinding({ agentId, sessionKey: explicitTargetKey });
-    // A legacy durable collision contains user data and must still block creation.
-    const durableEntry = memory
-      ? await withSessionEntriesFromStoresInWorker(
-          [{ ...durableLookup, sessionKeys: [explicitTargetKey] }],
-          ([read]) => read!.result.entries[0]?.entry,
-        )
-      : loadExactSessionEntryFromStoreReadOnly(durableLookup);
-    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
-      return invalidSessionRequest("incognito is immutable and requires a new session key");
+      explicitTargetKey,
+      commitGuard,
+    );
+    if (!incognitoTarget.ok) {
+      return incognitoTarget;
     }
   }
   if (
@@ -486,10 +465,12 @@ export async function createGatewaySession(
     onPhase?.("entry");
     let currentParentSessionEntry = parentSessionEntry;
     if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
-      const currentParent = loadGatewaySessionEntryReadOnly(
-        canonicalParentSessionKey,
-        parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
-      );
+      const currentParent = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        assertActive: commitGuard,
+      });
       const currentParentEntry = currentParent.entry;
       if (
         !currentParentEntry?.sessionId ||
@@ -1222,6 +1203,6 @@ export async function createGatewaySession(
     return result;
   }
   onPhase?.("initialTurn");
-  return await completeGatewaySessionCreation(params, result, createdContext);
+  return await completeGatewaySessionCreation(params, result, createdContext, commitGuard);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
