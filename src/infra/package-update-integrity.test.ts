@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import {
