@@ -3,7 +3,7 @@ import { LitElement, nothing, render } from "lit";
 import { vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -46,6 +46,7 @@ class RecordingResizeObserver implements ResizeObserver {
   }
 
   observe(target: Element): void {
+    resizeObservers.add(this);
     this.targets.add(target);
     observedElements.add(target);
   }
@@ -86,6 +87,17 @@ class RecordingResizeObserver implements ResizeObserver {
       borderBoxSize: [{ inlineSize: width, blockSize: height }],
     } as unknown as ResizeObserverEntry;
   }
+}
+
+export function stubTranscriptFrames() {
+  const flushFrames = stubAnimationFrames();
+  return () => {
+    flushFrames();
+    // The shared layout owner observes the root after rAF, then reads after layout.
+    for (const observer of [...resizeObservers]) {
+      observer.emitTarget(document.documentElement, 0, 0);
+    }
+  };
 }
 
 const defaultMessages = [

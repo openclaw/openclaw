@@ -5,7 +5,7 @@ import { VirtualizerController } from "@tanstack/lit-virtual";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -17,6 +17,7 @@ import {
   installTranscriptDomMocks,
   mountTestTranscript,
   resetTranscriptTestDom,
+  stubTranscriptFrames,
   resizeObservers,
   threadProps,
   transcriptDomState,
@@ -31,7 +32,7 @@ describe("chat transcript geometry", () => {
   it.each([null, 4_800])(
     "keeps one bounded scrolling buffer from the first presented frame at offset %s",
     (offset) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       const paneId = `render-window-${offset}`;
       const sessionKey = `agent:main:${paneId}`;
       if (offset !== null) {
@@ -176,7 +177,7 @@ describe("chat transcript geometry", () => {
   it.each([false, true])(
     "coalesces end geometry across commits and retires disconnected work=%s",
     async (disconnect) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       const rows = [
         { kind: "content", key: "reply", content: html`<div>Reply</div>` },
       ] satisfies TranscriptRow[];
@@ -216,7 +217,7 @@ describe("chat transcript geometry", () => {
   );
 
   it("updates rail geometry for size changes without measuring streamed content or retired transcripts", async () => {
-    const flushFrames = stubAnimationFrames();
+    const flushFrames = stubTranscriptFrames();
     const transcript = createTestTranscript();
     const region = document.body.appendChild(document.createElement("div"));
     region.className = "chat-main__conversation";

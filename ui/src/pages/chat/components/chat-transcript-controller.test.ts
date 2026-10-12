@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
-import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import {
   handleChatScrollTakeover,
   saveChatSessionScrollPosition,
@@ -21,6 +21,7 @@ import {
   mountTestTranscript,
   observedElements,
   resetTranscriptTestDom,
+  stubTranscriptFrames,
   resizeObservers,
   threadProps,
   TranscriptTestHost,
@@ -361,7 +362,7 @@ describe("chat transcript controller", () => {
   );
 
   it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
-    const flushFrames = stubAnimationFrames();
+    const flushFrames = stubTranscriptFrames();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const messages = Array.from({ length: 18 }, (_, index) => ({
@@ -389,7 +390,7 @@ describe("chat transcript controller", () => {
   });
 
   it("renders the history tail immediately after an empty disconnected shell", () => {
-    const flushFrames = stubAnimationFrames();
+    const flushFrames = stubTranscriptFrames();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const props = threadProps("cold-load-tail", "agent:main:cold-load-tail", []);
@@ -415,7 +416,7 @@ describe("chat transcript controller", () => {
   });
 
   it.each([true, false])("settles a non-overflowing restore (initially loading=%s)", (loading) => {
-    const flushFrames = stubAnimationFrames();
+    const flushFrames = stubTranscriptFrames();
     if (!loading) {
       vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     }
@@ -458,7 +459,7 @@ describe("chat transcript controller", () => {
 
   it("retries a growing scroll restore without pane commits and renders the settled reader", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const flushFrame = stubAnimationFrames();
+    const flushFrame = stubTranscriptFrames();
     transcriptDomState.measuredRowHeight = 120;
     const host = new TranscriptTestHost();
     const container = host.transcriptRoot;
@@ -542,7 +543,7 @@ describe("chat transcript controller", () => {
   it.each(["measurable", "growing", "short"] as const)(
     "applies a saved offset once when the %s range settles",
     async (range) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       const rows = numberedContentRows(12);
       const { container, transcript, renderRows } = await mountTestTranscript(
         `${range}-restore`,
@@ -624,7 +625,7 @@ describe("chat transcript controller", () => {
   ] as const)(
     "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore, wheel=$deltaY, and late offset=$observerLate",
     async ({ behavior, resizeBefore, deltaY, observerLate }) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       transcriptDomState.measuredRowHeight = 120;
       const rows = numberedContentRows(40);
       const { container, renderRows, transcript } = await mountTestTranscript(
@@ -707,7 +708,7 @@ describe("chat transcript controller", () => {
   it.each([0, 252])(
     "retires an end index without losing newer native movement (%s px)",
     async (nativeGrowth) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       const transcript = new ChatTranscriptController(
         {
           addController: vi.fn(),
@@ -835,7 +836,7 @@ describe("chat transcript controller", () => {
   it.each([true, false])(
     "leaves height-resize follow to page policy with reader lock=%s",
     async (locked) => {
-      const flushFrames = stubAnimationFrames();
+      const flushFrames = stubTranscriptFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
       const onViewportResize = vi.fn(() =>
         scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
@@ -1003,7 +1004,7 @@ describe("chat transcript controller", () => {
   );
 
   it("preserves saved reader restoration when initial rows include typing", async () => {
-    const flushFrames = stubAnimationFrames();
+    const flushFrames = stubTranscriptFrames();
     const paneId = "restore-initial-typing";
     saveChatSessionScrollPosition(paneId, `agent:main:${paneId}`, {
       scrollTop: 420,
