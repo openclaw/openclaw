@@ -3,7 +3,7 @@ import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-work
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
 const secondFile = "src/sessions/session-upstream-links.ts";
-const first = "executeSqliteQueryTakeFirstSync";
+const first = "sdkExecuteSqliteQueryTakeFirstSync";
 const second = "deleteSessionUpstreamLink";
 const legacy = `
 /** @deprecated Use the worker API; removal follows a stable deprecation window. */
