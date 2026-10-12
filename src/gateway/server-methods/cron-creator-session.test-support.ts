@@ -1,4 +1,5 @@
 import { expect, it, type Mock } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { CronDeliveryPreview } from "../../cron/types.js";
@@ -19,6 +20,7 @@ export type CronCreatorSessionLookup = {
   entry?: {
     agentHarnessId?: unknown;
     createdActor?: SessionCreatedActor;
+    createdVia?: SessionEntry["createdVia"];
     modelSelectionLocked?: unknown;
     sessionId?: unknown;
     lifecycleRevision?: string;
@@ -99,11 +101,7 @@ export function registerCronCreatorSessionTests(fixture: {
         expect(options).not.toHaveProperty("createdActor");
       } else {
         expect(options.skillLibrarySelections).toEqual([]);
-        expect(options.createdActor).toEqual({
-          type: "human",
-          source: "profile",
-          id: "profile-ada",
-        });
+        expect(options.createdActor).toEqual({ type: "agent", id: "ops" });
       }
       expect(requireCronAddPayload(context)).not.toHaveProperty("sourceConversation");
       expect(resolveCronDeliveryPreview).toHaveBeenCalledWith(
@@ -112,6 +110,28 @@ export function registerCronCreatorSessionTests(fixture: {
       expectCronSuccess(respond);
     },
   );
+
+  it("attributes an agent-created job to the admitted requester, not the session creator", async () => {
+    loadGatewaySessionEntry.mockReturnValue({
+      canonicalKey: "agent:ops:main",
+      entry: {
+        sessionId: "session-ops-main",
+        createdVia: "spawn",
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
+      },
+    });
+    const client = callerClient("ops");
+    client.internal!.operatorRunAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "profile-ada",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), { client });
+    expect(
+      requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options").createdActor,
+    ).toEqual({ type: "human", source: "profile", id: "profile-ada" });
+    expectCronSuccess(respond);
+  });
 
   it.each([undefined, "missing-conversation"])(
     "leaves isolated jobs unbound without an existing creating session: %s",
@@ -159,6 +179,7 @@ export function registerCronCreatorSessionTests(fixture: {
         canonicalKey: "agent:ops:main",
         entry: {
           sessionId: "session-ops-main",
+          createdVia: "spawn",
           createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
         },
       });

@@ -1,3 +1,7 @@
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -28,6 +32,7 @@ type SessionCreationClient = {
     syntheticClient?: true;
     sessionCreation?: TrustedSessionCreation;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    operatorRunAuthority?: AdmittedRunOperatorAuthority;
   };
 };
 
@@ -62,7 +67,12 @@ export function resolveOperatorSessionCreation(
       ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
     };
   }
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const operatorAuthority = client?.internal?.operatorRunAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
+  const profileId = operatorAuthority?.profileId ?? client?.authenticatedUserProfile?.profileId;
   // Profile linking can canonicalize this id after connection attach, so session
   // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {

@@ -9,6 +9,7 @@ import {
   inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
   inheritSpawnSessionOwner,
+  resolveDelegatedSessionCreator,
   type SessionOwnerAssignment,
 } from "../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -137,7 +138,14 @@ export function resolveSessionCreateInheritance(params: {
   return {
     creation: {
       ...params.creation,
-      ...inheritSessionCreationPolicy(params.parent, params.creation.actor),
+      ...inheritSessionCreationPolicy(
+        params.parent,
+        resolveDelegatedSessionCreator(
+          params.parent,
+          params.creation.actor,
+          params.creation.requesterProfileId,
+        ),
+      ),
       inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),

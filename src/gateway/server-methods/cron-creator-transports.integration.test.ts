@@ -52,7 +52,6 @@ import {
 import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
-  CREATOR,
   cfg,
   stateDir,
   admission,
@@ -203,7 +202,11 @@ describe("original caller through Cron creator transports", () => {
                     await created;
                     const before = await fixture.read();
                     expect(before).toMatchObject([
-                      { name: "Recovered caller job", enabled: false },
+                      {
+                        name: "Recovered caller job",
+                        enabled: false,
+                        createdActor: { type: "human", source: "profile", id: profile.id },
+                      },
                     ]);
                     if (revocation !== "none") {
                       hold = true;
@@ -313,7 +316,7 @@ describe("original caller through Cron creator transports", () => {
         const jobs = await fixture.read();
         expect(jobs).toMatchObject([
           {
-            createdActor: CREATOR,
+            createdActor: { type: "agent", id: "main" },
             owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
             scheduledToolPolicy: {
               mode: "account",
@@ -440,7 +443,7 @@ describe("original caller through Cron creator transports", () => {
           expect(before).toMatchObject([
             {
               name: "Live creator",
-              createdActor: CREATOR,
+              createdActor: { type: "agent", id: "main" },
               sessionKey: SESSION,
               sessionTarget: "current",
               payload: {

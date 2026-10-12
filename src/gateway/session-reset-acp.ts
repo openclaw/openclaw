@@ -195,9 +195,10 @@ export async function closeChildAcpRuntimesForParent(params: {
           return false;
         }
         const requesterAgentId =
-          entry.createdVia === "spawn" && entry.createdActor?.type === "agent"
+          entry.spawnedByAgentId ??
+          (entry.createdVia === "spawn" && entry.createdActor?.type === "agent"
             ? entry.createdActor.id
-            : parseAgentSessionKey(params.parentKey)?.agentId;
+            : parseAgentSessionKey(params.parentKey)?.agentId);
         try {
           if (!requesterAgentId) {
             throw new Error("ACP parent ownership is not recorded for this unqualified key");

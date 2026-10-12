@@ -703,6 +703,14 @@ describe("recursive spawn production boundary", () => {
         });
         const details = result.details as { runId: string; childSessionKey: string };
         childRunId = details.runId;
+        expect(
+          loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
+            ?.createdActor,
+        ).toEqual(
+          operatorAuthority
+            ? { type: "human", source: "profile", id: operatorAuthority.profileId }
+            : { type: "agent", id: "main" },
+        );
         expect(subagentRuns.get(childRunId)).toMatchObject({
           requesterTurnRunId: parentRunId,
           execution: { status: "queued" },
