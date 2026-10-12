@@ -1,7 +1,11 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
-import type { CronRunReceiptHandle, CronRunReceiptStatus } from "./run-receipt.types.js";
+import {
+  CronRunReceiptRevisionError,
+  type CronRunReceiptHandle,
+  type CronRunReceiptStatus,
+} from "./run-receipt.types.js";
 
 type CronRunReceiptFinish = {
   handle: CronRunReceiptHandle;
@@ -11,9 +15,7 @@ type CronRunReceiptFinish = {
   env?: NodeJS.ProcessEnv;
 };
 /** One instance belongs to the receipt store; SQL kernels never import this host state. */
-export function createCronRunReceiptSettlementOwner(callbacks: {
-  revisionError: (receiptId: string, message: string) => Error;
-}) {
+function createCronRunReceiptSettlementOwner() {
   const CRON_RUN_RECEIPT_FINISH_RETRY_MS = 1_000;
   const locallyOwnedReceipts = new Set<string>();
   type CronRunReceiptSettlement = {
@@ -80,7 +82,7 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
       pending: pending !== undefined,
       assertCurrent() {
         if (pendingReceiptSettlements.get(handle.receiptId) !== pending) {
-          throw callbacks.revisionError(
+          throw new CronRunReceiptRevisionError(
             handle.receiptId,
             "cron runner settlement changed before commit",
           );
@@ -165,7 +167,7 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
         },
         assertCurrent() {
           if (pendingReceiptSettlements.has(params.handle.receiptId)) {
-            throw callbacks.revisionError(
+            throw new CronRunReceiptRevisionError(
               params.handle.receiptId,
               "cron runner settlement changed before finish",
             );
@@ -225,3 +227,5 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
     releaseLocalCronRunReceiptOwnership,
   };
 }
+
+export const cronRunReceiptSettlement = createCronRunReceiptSettlementOwner();

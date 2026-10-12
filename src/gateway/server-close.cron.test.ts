@@ -8,12 +8,10 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
-import {
-  finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
+  finishCronRunReceiptAsync,
   makeCronReceiptJob,
 } from "../cron/store/run-receipt-store.test-support.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";

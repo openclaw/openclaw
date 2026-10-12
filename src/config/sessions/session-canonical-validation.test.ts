@@ -1,6 +1,7 @@
 import { constants } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -15,6 +16,7 @@ import {
 } from "./session-accessor.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
+  assertCanonicalSqliteSessionKeysCurrent,
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
@@ -24,6 +26,42 @@ import {
   readPendingCanonicalSessionValidationBatch,
   validateCanonicalSessionValidationBatch,
 } from "./session-canonical-validation.js";
+
+it("reuses canonical readiness until an in-process repair invalidates it", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const scope = { agentId: "main", env, sessionKey: "agent:main:selected" };
+    replaceSessionEntrySync(scope, {
+      sessionId: "selected",
+      updatedAt: 1,
+      parentSessionKey: "agent:main:parent",
+    });
+    const writer = openOpenClawAgentDatabase(scope);
+    const opened = openOpenClawAgentDatabaseReadOnly(scope);
+    if (!opened.found) {
+      throw new Error("Expected the existing session database");
+    }
+    const reader = opened.database;
+    const statements = trackSqliteStatementExecutions(reader.db, ["pending"], (query) =>
+      query.includes('"session_canonical_validation_pending"') ? "pending" : null,
+    );
+    try {
+      assertCanonicalSqliteSessionKeysCurrent(reader);
+      assertCanonicalSqliteSessionKeysCurrent(reader);
+      expect(statements.counts.pending).toBe(0);
+
+      markCanonicalSessionValidationPending(writer, [scope.sessionKey]);
+      writer.db
+        .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+        .run("agent:main:other", scope.sessionKey);
+      expect(() => assertCanonicalSqliteSessionKeysCurrent(reader)).toThrow(
+        "openclaw doctor --fix",
+      );
+    } finally {
+      statements.restore();
+      reader.close();
+    }
+  });
+});
 
 it("reads a certified session after closing its writer without decoding unrelated entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

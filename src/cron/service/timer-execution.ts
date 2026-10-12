@@ -2,7 +2,6 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   type HeartbeatRunResult,
 } from "../../infra/heartbeat-wake.js";
-import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import {
   type CronActiveJobMarker,
   isCronActiveJobMarkerCurrent,
@@ -185,10 +184,7 @@ export async function executeJobCore(
             effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
         };
     const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
-    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
-      options?.activeJobMarker,
-      options?.owningCronLaneTaskMarker,
-    );
+    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(options?.activeJobMarker);
     let heartbeatResult: HeartbeatRunResult;
     try {
       heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(heartbeatWake, {
@@ -219,7 +215,6 @@ export async function executeJobCore(
       abortSignal,
       options?.onHeartbeatExecutionStarted,
       options?.activeJobMarker,
-      options?.owningCronLaneTaskMarker,
     );
     return triggerEval ? { ...result, triggerEval } : result;
   }
@@ -234,7 +229,6 @@ async function executeMainSessionCronJob(
   abortSignal: AbortSignal | undefined,
   onHeartbeatExecutionStarted?: ExecuteJobCoreOptions["onHeartbeatExecutionStarted"],
   activeJobMarker?: CronActiveJobMarker,
-  owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry &
@@ -278,10 +272,7 @@ async function executeMainSessionCronJob(
   if (job.wakeMode === "now" && state.deps.requestHeartbeatAndWait) {
     const heartbeatWaitLifecycle = onHeartbeatExecutionStarted?.(heartbeatWake);
     const waitStartedAt = state.deps.nowMs();
-    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
-      activeJobMarker,
-      owningCronLaneTaskMarker,
-    );
+    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(activeJobMarker);
     let handedOff = false;
     let heartbeatResult: HeartbeatRunResult;
     try {

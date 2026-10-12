@@ -26,6 +26,12 @@ vi.mock("../session-utils.js", () => ({
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
+// mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
+}));
+
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
