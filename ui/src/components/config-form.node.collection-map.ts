@@ -51,13 +51,14 @@ export function renderMapField(
   const anySchema = isAnySchema(schema);
   const entryDefault = anySchema ? {} : defaultValue(schema);
   const draftId = configFieldId(path, "map-draft");
+  const occupiedKeys = new Set([...Object.keys(value), ...reservedKeys]);
   const draftProps: ConfigFormCollectionDraftProps = {
     schema,
     label: t("configForm.customEntries"),
     disabled,
     identity: JSON.stringify(path.filter((segment) => typeof segment === "string")),
     sourceIdentity: params.sourceIdentity ?? value,
-    existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
+    existingKeys: [...occupiedKeys],
     validateKey,
   };
   const entries = Object.entries(value).filter(([key]) => !reservedKeys.has(key));
@@ -101,7 +102,7 @@ export function renderMapField(
               const nextValue = { ...value };
               let index = 1;
               let key = `custom-${index}`;
-              while (key in nextValue) {
+              while (occupiedKeys.has(key)) {
                 index += 1;
                 key = `custom-${index}`;
               }
@@ -123,8 +124,7 @@ export function renderMapField(
           const key = event.detail.key;
           if (
             !key ||
-            Object.hasOwn(value, key) ||
-            reservedKeys.has(key) ||
+            occupiedKeys.has(key) ||
             onPatch(path, { ...value, [key]: event.detail.value }) === false
           ) {
             event.preventDefault();
@@ -174,7 +174,7 @@ export function renderMapField(
                               : containsRedactedSentinel(value[key])
                                 ? t("configForm.renameRedactedBlocked")
                                 : "";
-                            if (nextKey in value || error) {
+                            if (occupiedKeys.has(nextKey) || error) {
                               target.value = key;
                               if (error) {
                                 target.setCustomValidity(error);

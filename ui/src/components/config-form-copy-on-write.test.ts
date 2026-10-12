@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 
 describe("config form copy-on-write patching", () => {
   it("patches special own keys without changing object prototypes", () => {
