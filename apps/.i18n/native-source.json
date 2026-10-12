@@ -3540,6 +3540,7 @@
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9e4f0aae5dc1d7a9","source":"OpenClaw active"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0d72c4f3045a12a1","source":"Pairing approval pending"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4746d52ca761661c","source":"Show pairing requests"},
+    {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.13213edf4beb15a9","source":"Update"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.82701e2dbfc77dd1","source":"Voice Wake"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bde7b5b40ae21c79","source":"local"},
     {"path":"apps/macos/Sources/OpenClaw/StatusMenuHeaderView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.af7a06a9db8426bd","source":"remote"},
