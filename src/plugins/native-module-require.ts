@@ -448,9 +448,8 @@ function withNativeRequireAliases<T>(
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {
-      // Callers may pass Jiti alias maps (forward slashes on Windows). The native cache
-      // keys modules by this filename, so another spelling duplicates CJS instances and
-      // crashes Bun 1.4.2's require() of ESM (oven-sh/bun#44473).
+      // Callers may pass Jiti alias maps (forward slashes on Windows). Bun keys native
+      // modules by this filename, so another spelling loads a second SDK instance.
       return path.normalize(aliasTarget);
     }
     return originalResolveFilename(request, parent, isMain, options);
