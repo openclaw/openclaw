@@ -67,7 +67,7 @@ import {
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { resolveTelegramConfigAccessorAccount, telegramConfigAdapter } from "./config-adapter.js";
-import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
+import { prepareTelegramConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
@@ -667,7 +667,7 @@ export const telegramPlugin = createChatChannelPlugin({
     messaging: {
       defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
-      resolveConversationRouteOwner: inspectTelegramConversationRouteOwner,
+      prepareConversationRouteOwnersAsync: prepareTelegramConversationRouteOwnersAsync,
       numericTopicShorthand: true,
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>

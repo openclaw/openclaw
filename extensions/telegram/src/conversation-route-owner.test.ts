@@ -11,11 +11,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
-import {
-  inspectTelegramConversationRoute,
-  touchTelegramConversationRoute,
-} from "./conversation-route.js";
+import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 
 describe("inspectTelegramConversationRouteOwner", () => {
   let adapter: SessionBindingAdapter;
@@ -58,110 +54,53 @@ describe("inspectTelegramConversationRouteOwner", () => {
   it.each([
     { kind: "group", peerId: "-100123:topic:42", threadId: "42", target: undefined },
     { kind: "direct", peerId: "1001", threadId: undefined, target: "2002" },
-  ] as const)("inspects the $kind runtime owner without touching liveness", (conversation) => {
-    const touch = vi.fn();
-    const resolveByConversation = vi.fn((boundConversation) => ({
-      bindingId: "binding-topic",
-      targetSessionKey: "agent:runtime:bound",
-      targetKind: "session" as const,
-      conversation: boundConversation,
-      status: "active" as const,
-      boundAt: 1,
-    }));
-    registerSessionBindingAdapter({
-      channel: "telegram",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation,
-      touch,
-    });
-    expect(
-      inspectTelegramConversationRouteOwner({
-        cfg: {
-          channels: {
-            telegram: {
-              accounts: { default: {} },
-              groups: { "-100123": { topics: { "42": { agentId: "configured" } } } },
+  ] as const)(
+    "inspects the $kind runtime owner without touching liveness",
+    async (conversation) => {
+      const touch = vi.fn();
+      const resolveByConversation = vi.fn((boundConversation) => ({
+        bindingId: "binding-topic",
+        targetSessionKey: "agent:runtime:bound",
+        targetKind: "session" as const,
+        conversation: boundConversation,
+        status: "active" as const,
+        boundAt: 1,
+      }));
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation,
+        touch,
+      });
+      expect(
+        await inspectTelegramConversationRouteOwner({
+          cfg: {
+            channels: {
+              telegram: {
+                accounts: { default: {} },
+                groups: { "-100123": { topics: { "42": { agentId: "configured" } } } },
+              },
             },
           },
-        },
-        accountId: "default",
-        conversation,
-      }),
-    ).toEqual({ kind: "agent", agentId: "runtime" });
-    expect(touch).not.toHaveBeenCalled();
-    if (conversation.kind === "direct") {
-      expect(resolveByConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ conversationId: "2002" }),
-      );
-    }
-  });
-
-  it.each([
-    "unchanged",
-    "reassigned",
-    "replaced",
-    "reassigned during touch",
-    "replaced during touch",
-  ])("touches only the captured native binding after authorization: %s", async (change) => {
-    const touch = vi.fn();
-    let targetSessionKey = "agent:original:bound";
-    let boundAt = 1;
-    const touchAsync = vi.fn(async () => {
-      await Promise.resolve();
-      if (change === "reassigned during touch") {
-        targetSessionKey = "agent:replacement:bound";
-      } else if (change === "replaced during touch") {
-        boundAt = 2;
-      }
-    });
-    registerSessionBindingAdapter({
-      channel: "telegram",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: (conversation) => ({
-        bindingId: "binding-topic",
-        targetSessionKey,
-        targetKind: "session",
-        conversation,
-        status: "active",
-        boundAt,
-      }),
-      touch,
-      ...(change.endsWith("during touch") ? { touchAsync } : {}),
-    });
-    const inspected = inspectTelegramConversationRoute({
-      cfg: { channels: { telegram: { accounts: { default: {} } } } },
-      accountId: "default",
-      chatId: -100123,
-      isGroup: true,
-      threadSpec: { scope: "forum", id: 42 },
-    });
-    expect(touch).not.toHaveBeenCalled();
-    if (change === "reassigned") {
-      targetSessionKey = "agent:replacement:bound";
-    }
-    if (change === "replaced") {
-      boundAt = 2;
-    }
-    if (change === "unchanged") {
-      await touchTelegramConversationRoute(inspected);
-      expect(touch).toHaveBeenCalledWith("binding-topic", undefined);
-    } else {
-      await expect(touchTelegramConversationRoute(inspected)).rejects.toThrow(
-        "command route changed",
-      );
+          accountId: "default",
+          conversation,
+        }),
+      ).toEqual({ kind: "agent", agentId: "runtime" });
       expect(touch).not.toHaveBeenCalled();
-    }
-    expect(touchAsync).toHaveBeenCalledTimes(change.endsWith("during touch") ? 1 : 0);
-    expect(inspected.route.sessionKey).toBe("agent:original:bound");
-  });
+      if (conversation.kind === "direct") {
+        expect(resolveByConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ conversationId: "2002" }),
+        );
+      }
+    },
+  );
 
   const accountCases: Array<{
     name: string;
     accountId?: string;
     cfg: OpenClawConfig;
-    expected: ReturnType<typeof inspectTelegramConversationRouteOwner>;
+    expected: Awaited<ReturnType<typeof inspectTelegramConversationRouteOwner>>;
     topic?: boolean;
   }> = [
     {
@@ -270,11 +209,11 @@ describe("inspectTelegramConversationRouteOwner", () => {
   ];
   it.each(accountCases)(
     "resolves $name without a runtime adapter",
-    ({ accountId = "default", cfg, expected, topic = true }) => {
+    async ({ accountId = "default", cfg, expected, topic = true }) => {
       vi.stubEnv("OPENCLAW_TEST_MISSING_TELEGRAM_TOKEN", undefined);
       unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default", adapter });
       expect(
-        inspectTelegramConversationRouteOwner({
+        await inspectTelegramConversationRouteOwner({
           cfg,
           accountId,
           conversation: {

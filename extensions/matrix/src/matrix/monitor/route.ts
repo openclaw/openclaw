@@ -1,6 +1,5 @@
 import { resolveConfiguredAcpBindingRecord } from "openclaw/plugin-sdk/acp-binding-resolve-runtime";
 import {
-  inspectConversationBinding,
   inspectConversationBindingAsync,
   type ConversationBindingInspection,
 } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
@@ -48,21 +47,13 @@ type MatrixInboundRouteParams = {
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
 };
 
-function resolveMatrixBindingRef(params: MatrixInboundRouteParams) {
+export function resolveMatrixBindingRef(params: MatrixInboundRouteParams) {
   return {
     channel: "matrix",
     accountId: params.accountId,
     conversationId: params.threadId ?? params.roomId,
     parentConversationId: params.threadId ? params.roomId : undefined,
   };
-}
-
-/** Retained synchronous inspection for final route-owner checks. */
-export function resolveMatrixInboundRoute(params: MatrixInboundRouteParams) {
-  return projectMatrixInboundRoute(
-    params,
-    inspectConversationBinding(resolveMatrixBindingRef(params)),
-  );
 }
 
 export async function resolveMatrixInboundRouteAsync(params: MatrixInboundRouteParams) {
@@ -72,7 +63,7 @@ export async function resolveMatrixInboundRouteAsync(params: MatrixInboundRouteP
   );
 }
 
-function projectMatrixInboundRoute(
+export function projectMatrixInboundRoute(
   params: MatrixInboundRouteParams,
   inspection: ConversationBindingInspection,
 ): {

@@ -91,6 +91,20 @@ describe("conversation directory write admission", () => {
         () => release.promise,
       );
       let settled = false;
+      let forcedUnavailable = false;
+      const prepare = routeOwnership.prepareConversationRouteEligibilitiesForAgent;
+      vi.spyOn(routeOwnership, "prepareConversationRouteEligibilitiesForAgent").mockImplementation(
+        async (input) => {
+          const prepared = await prepare(input);
+          return {
+            ...prepared,
+            read: () =>
+              forcedUnavailable
+                ? input.conversations.map(() => "unavailable" as const)
+                : prepared.read(),
+          };
+        },
+      );
       const result = runGatewayConversationList(
         {
           config: fixture.config,
@@ -122,10 +136,7 @@ describe("conversation directory write admission", () => {
             bindings: [{ type: "route", agentId: "finance", match: { channel: "reef" } }],
           };
         } else if (eligibility === "unavailable") {
-          vi.spyOn(
-            routeOwnership,
-            "resolveConversationRouteEligibilitiesForAgent",
-          ).mockImplementation(({ conversations }) => conversations.map(() => "unavailable"));
+          forcedUnavailable = true;
         }
         release.resolve();
         await blocker;

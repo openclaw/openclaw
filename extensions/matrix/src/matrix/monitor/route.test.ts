@@ -8,7 +8,7 @@ import {
   setActivePluginRegistry,
   type OpenClawConfig,
 } from "../../test-support/monitor-route-test-support.js";
-import { resolveMatrixInboundRoute } from "./route.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 
 const baseCfg = {
   session: { mainKey: "main" },
@@ -55,7 +55,7 @@ function resolveDmRoute(
     dmSessionScope?: "per-user" | "per-room";
   } = {},
 ) {
-  return resolveMatrixInboundRoute({
+  return resolveMatrixInboundRouteAsync({
     cfg,
     accountId: "ops",
     roomId: "!dm:example.org",
@@ -66,7 +66,7 @@ function resolveDmRoute(
   });
 }
 
-describe("resolveMatrixInboundRoute", () => {
+describe("resolveMatrixInboundRouteAsync", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
@@ -74,13 +74,13 @@ describe("resolveMatrixInboundRoute", () => {
     );
   });
 
-  it("uses the DM room as a parent-peer fallback before account-level bindings", () => {
+  it("uses the DM room as a parent-peer fallback before account-level bindings", async () => {
     const cfg = {
       ...baseCfg,
       bindings: [matrixBinding("acp-agent"), matrixBinding("room-agent", dmRoomPeer())],
     } satisfies OpenClawConfig;
 
-    const { route, configuredBinding } = resolveDmRoute(cfg);
+    const { route, configuredBinding } = await resolveDmRoute(cfg);
 
     expect(configuredBinding).toBeNull();
     expect(route.agentId).toBe("room-agent");
@@ -90,7 +90,7 @@ describe("resolveMatrixInboundRoute", () => {
 
   it.each(["per-room"] as const)(
     "keeps configured ACP room bindings ahead of DM session scope %s",
-    (dmSessionScope) => {
+    async (dmSessionScope) => {
       const cfg = {
         ...baseCfg,
         bindings: [
@@ -99,7 +99,7 @@ describe("resolveMatrixInboundRoute", () => {
         ],
       } satisfies OpenClawConfig;
 
-      const { route, configuredBinding } = resolveDmRoute(cfg, { dmSessionScope });
+      const { route, configuredBinding } = await resolveDmRoute(cfg, { dmSessionScope });
 
       expect(configuredBinding?.spec.agentId).toBe("acp-agent");
       expect(route.agentId).toBe("acp-agent");
@@ -174,36 +174,39 @@ describe("resolveMatrixInboundRoute", () => {
       },
       expectedBindingId: "ops:!dm:example.org",
     },
-  ])("keeps the core DM route for $name", ({ targetSessionKey, metadata, expectedBindingId }) => {
-    registerSessionBindingAdapter({
-      channel: "matrix",
-      accountId: "ops",
-      listBySession: () => [],
-      resolveByConversation: (conversation) => ({
-        bindingId: "ops:!dm:example.org",
-        targetSessionKey,
-        targetKind: "session",
-        conversation,
-        status: "active",
-        boundAt: Date.now(),
-        metadata,
-      }),
-    });
-    const cfg = {
-      ...baseCfg,
-      bindings: [matrixBinding("sender-agent", senderPeer())],
-    } satisfies OpenClawConfig;
+  ])(
+    "keeps the core DM route for $name",
+    async ({ targetSessionKey, metadata, expectedBindingId }) => {
+      registerSessionBindingAdapter({
+        channel: "matrix",
+        accountId: "ops",
+        listBySession: () => [],
+        resolveByConversation: (conversation) => ({
+          bindingId: "ops:!dm:example.org",
+          targetSessionKey,
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: Date.now(),
+          metadata,
+        }),
+      });
+      const cfg = {
+        ...baseCfg,
+        bindings: [matrixBinding("sender-agent", senderPeer())],
+      } satisfies OpenClawConfig;
 
-    const { route, runtimeBindingId } = resolveDmRoute(cfg, { dmSessionScope: "per-room" });
+      const { route, runtimeBindingId } = await resolveDmRoute(cfg, { dmSessionScope: "per-room" });
 
-    expect(route.sessionKey).toBe("agent:sender-agent:matrix:channel:!dm:example.org");
-    expect(route.agentId).toBe("sender-agent");
-    expect(runtimeBindingId).toBe(expectedBindingId);
-  });
+      expect(route.sessionKey).toBe("agent:sender-agent:matrix:channel:!dm:example.org");
+      expect(route.agentId).toBe("sender-agent");
+      expect(runtimeBindingId).toBe(expectedBindingId);
+    },
+  );
   it.each([["$thread-root", "agent:main:matrix:channel:!room:example.org:thread:$thread-root"]])(
     "resolves session keys for thread %s",
-    (threadId, expectedSessionKey) => {
-      const { route } = resolveMatrixInboundRoute({
+    async (threadId, expectedSessionKey) => {
+      const { route } = await resolveMatrixInboundRouteAsync({
         cfg: threadCfg,
         accountId: "ops",
         roomId: "!room:example.org",

@@ -21,6 +21,7 @@ import {
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
 import { CURRENT_BINDINGS_ID_PREFIX } from "./current-conversation-bindings.kernel.js";
+import { prepareSessionBindingSelection } from "./prepared-session-binding.js";
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingInspection,
@@ -428,6 +429,16 @@ export function inspectSessionBindingsByConversations(
   });
   const records = inspectCurrentConversationBindingRecords(nativeRefs);
   return selections.map((select) => select(records));
+}
+
+/** Prepares worker-backed binding facts without transferring adapter-registry ownership. */
+export function prepareSessionBindingInspections(refs: readonly ConversationRef[]) {
+  return prepareSessionBindingSelection(refs, {
+    resolveAdapterForChannelAccount,
+    assertAdapterSelectionCurrent,
+    isAsyncAdapter,
+    availableBindingInspection,
+  });
 }
 
 function availableBindingInspection(
