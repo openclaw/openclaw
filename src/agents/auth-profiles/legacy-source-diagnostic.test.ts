@@ -83,6 +83,9 @@ describe("assertAuthProfileMigrationReady", () => {
     },
     { name: "malformed JSON", raw: "{broken", scoped: false },
     { name: "metadata-only flat object", raw: '{"metadata":{}}', scoped: false },
+    // A bare `{}` carries no envelope, so it cannot say which shape it meant to
+    // be. It must not be read as an explicit empty profile set.
+    { name: "bare empty object", raw: "{}", scoped: false },
     {
       name: "unknown flat fields",
       raw: '{"anthropic":{"unknown":"value"},"openai":{"other":true}}',
@@ -135,6 +138,27 @@ describe("assertAuthProfileMigrationReady", () => {
       });
     },
   );
+
+  it("scopes an empty retired profile set to no provider instead of refusing all", async () => {
+    await withAuthProfileTestDir("openclaw-auth-empty-profile-scope-", async (agentDir) => {
+      const legacyPath = path.join(agentDir, "auth-profiles.json");
+      const raw = JSON.stringify({ version: 1, profiles: {} });
+      await fs.writeFile(legacyPath, raw);
+      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+
+      // An empty set is a positive fact: the retired file owns nobody's
+      // credentials, so it must not refuse providers it never named.
+      for (const provider of ["anthropic", "openai", "litellm", "deepseek"]) {
+        expect(() => assertAuthProfileMigrationReady(agentDir, undefined, provider)).not.toThrow();
+      }
+      // Unscoped work still cannot publish this owner, and the refusal names
+      // the empty scope instead of printing a blank provider list.
+      expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
+        "affected providers: none (retired files declare no credentials)",
+      );
+      expect(await fs.readFile(legacyPath, "utf8")).toBe(raw);
+    });
+  });
 
   it("reports only credential sources without marking runtime migration state", async () => {
     await withAuthProfileTestDir("openclaw-auth-migration-diagnostic-", async (root) => {
