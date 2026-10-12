@@ -99,3 +99,9 @@ export const PanelEmptyState = defineSolidBridge<PanelEmptyStateProps>(
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-panel-empty-state": PanelEmptyStateElement;
+  }
+}

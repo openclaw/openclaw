@@ -33,6 +33,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantReplyContentFromInputs,
@@ -120,16 +121,18 @@ export function captureWebchatReplyMediaAuthority(
 }
 
 /** Bind reads to the source session; reread its owner after every awaited file operation. */
-export function captureWebchatReplyMediaScope(
+export async function captureWebchatReplyMediaScope(
   params: Omit<WebchatReplyMediaScope, "sessionEntry"> & {
     sessionKey: string;
     sessionLoadOptions?: Parameters<typeof loadSessionEntry>[1];
   },
-): WebchatReplyMediaScope & {
-  sessionKey: string;
-  workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
-  assertCurrent: () => void;
-} {
+): Promise<
+  WebchatReplyMediaScope & {
+    sessionKey: string;
+    workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
+    assertCurrent: () => void;
+  }
+> {
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
   const readPlacement = (entry: SessionEntry | undefined) =>
     entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
@@ -138,8 +141,15 @@ export function captureWebchatReplyMediaScope(
           .get(entry.sessionId)
       : undefined;
   const sessionEntry = readEntry();
+  const placement =
+    sessionEntry?.sessionId && !sessionEntry.execNode && !sessionEntry.repositoryWorkspaceId
+      ? await readSessionWorkerPlacementAsync({
+          context: resolveSessionWorkerPlacementContext(),
+          sessionId: sessionEntry.sessionId,
+        })
+      : undefined;
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
-  const authority = captureWebchatReplyMediaAuthority(scope, readPlacement(sessionEntry));
+  const authority = captureWebchatReplyMediaAuthority(scope, placement);
   return {
     ...scope,
     // The custody fence already read this workspace; preparation consumes that same snapshot.
@@ -155,7 +165,7 @@ export function captureWebchatReplyMediaScope(
 }
 
 type WebchatReplyMediaPreparationParams = {
-  scope: ReturnType<typeof captureWebchatReplyMediaScope>;
+  scope: Awaited<ReturnType<typeof captureWebchatReplyMediaScope>>;
   inputs: readonly ReplyDispatchOperation[];
   storePath?: string;
   transcriptTarget?: { sessionKey: string; agentId?: string };
@@ -291,7 +301,7 @@ function resolveWebchatReplyWorkspaceOnly(params: WebchatReplyMediaScope): boole
 
 /** Trusted audio bypasses staging, but its reader must use the same session workspace. */
 export function getWebchatReplyMediaLocalRoots(
-  params: ReturnType<typeof captureWebchatReplyMediaScope> & { storePath?: string },
+  params: Awaited<ReturnType<typeof captureWebchatReplyMediaScope>> & { storePath?: string },
 ): readonly string[] {
   const { remote, workspaceDir } = params.workspace;
   if (remote) {
@@ -336,7 +346,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */
 export async function normalizeWebchatReplyMediaPathsForDisplay(
-  params: ReturnType<typeof captureWebchatReplyMediaScope> & {
+  params: Awaited<ReturnType<typeof captureWebchatReplyMediaScope>> & {
     payloads: ReplyPayload[];
   },
 ): Promise<ReplyPayload[]> {

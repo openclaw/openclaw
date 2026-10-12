@@ -1,5 +1,5 @@
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .sidebar-region__header > .chat-pane__header .chat-pane__nav-toggle {
+  .sidebar-region__header .chat-pane__header .chat-pane__nav-toggle {
     position: relative;
     display: inline-flex;
     width: 40px;
@@ -20,13 +20,13 @@
     line-height: 1;
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__nav-toggle::after {
+  .sidebar-region__header .chat-pane__header .chat-pane__nav-toggle::after {
     position: absolute;
     inset: -4px;
     content: "";
   }
 
-  .sidebar-region__header > .chat-pane__header .chat-pane__nav-toggle > svg {
+  .sidebar-region__header .chat-pane__header .chat-pane__nav-toggle > svg {
     width: 20px;
     height: 20px;
   }

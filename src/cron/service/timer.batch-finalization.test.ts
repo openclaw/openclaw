@@ -24,11 +24,11 @@ import type { CronJob, CronRunErrorClassification } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import * as runtimeMutation from "./runtime-mutation.js";
+import * as scheduleMaintenance from "./schedule-maintenance.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-service-batch-finalization-" });
 const DUE_AT = Date.parse("2026-02-06T10:05:00.250Z");
@@ -78,7 +78,6 @@ async function finishBatch(
 ) {
   runner.release.resolve({ status: "ok", summary: "completed" });
   await batch;
-  state.timer?.cancel();
 }
 
 function findCronTask(jobId: string) {
@@ -151,6 +150,54 @@ function observeInactiveJobs(jobIds: string[]) {
 }
 
 describe("cron batch outcome finalization", () => {
+  it.each([false, true])(
+    "persists a completed schedule without redundant maintenance (stale sibling: %s)",
+    async (staleSibling) => {
+      const jobs = [
+        dueJob("due", {
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: DUE_AT - 120_000 },
+        }),
+      ];
+      if (staleSibling) {
+        jobs.push(
+          dueJob("stale-sibling", {
+            schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+            state: { nextRunAtMs: DUE_AT + 7 * 24 * 60 * 60_000 + 30_000 },
+            payload: { kind: "systemEvent", text: "repair stale future slot" },
+          }),
+        );
+      }
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const { state, storePath } = await fixture(jobs, { runIsolatedAgentJob });
+      const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
+      try {
+        await onTimer(state);
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        // The actor repairs stale siblings before launch; completion needs no second sweep.
+        expect(maintenance).not.toHaveBeenCalled();
+        const persistedJobs = (await loadCronStore(storePath)).jobs;
+        expect(persistedJobs).toEqual([
+          expect.objectContaining({
+            id: "due",
+            state: expect.objectContaining({ lastRunStatus: "ok", nextRunAtMs: DUE_AT + 60_000 }),
+          }),
+          ...(staleSibling
+            ? [
+                expect.objectContaining({
+                  id: "stale-sibling",
+                  state: expect.objectContaining({
+                    nextRunAtMs: Math.ceil(DUE_AT / 60_000) * 60_000,
+                  }),
+                }),
+              ]
+            : []),
+        ]);
+      } finally {
+        maintenance.mockRestore();
+      }
+    },
+  );
+
   it.each(["scheduled", "startup"] as const)(
     "supersedes a stale %s outcome when its owner becomes unavailable",
     async (trigger) => {
@@ -464,14 +511,17 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it("leaves unrequested startup jobs untouched when terminal finalization fails", async () => {
+  it("keeps a deferred startup job unrequested when immediate finalization fails", async () => {
     const first = dueJob("startup-failed-write-before-stop");
     const unstarted = dueJob("startup-unstarted-after-failed-write");
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "completed before service stop",
     }));
-    const { state, storePath } = await fixture([first, unstarted], { runIsolatedAgentJob });
+    const { state, storePath } = await fixture([first, unstarted], {
+      maxMissedJobsPerRestart: 1,
+      runIsolatedAgentJob,
+    });
     const allowWrites = rejectWrite(first.id);
     const observer = observeFinalizationRejection(() => stop(state));
     try {
@@ -482,12 +532,12 @@ describe("cron batch outcome finalization", () => {
       );
       expect(persisted?.state.queuedAtMs).toBeUndefined();
       expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(persisted?.state.nextRunAtMs).toBe(DUE_AT + 5_000);
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(unstarted.id)).toBe(false);
     } finally {
       observer.mockRestore();
       allowWrites();
-      state.timer?.cancel();
     }
   });
 

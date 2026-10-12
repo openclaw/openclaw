@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { PanelEmptyStateElement } from "./solid/panel-empty-state.tsx";
 import "./solid/panel-empty-state.tsx";
 
 export function renderPanelEmptyState(params: {
@@ -18,10 +17,4 @@ export function renderPanelEmptyState(params: {
         : nothing
     }
   </openclaw-panel-empty-state>`;
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-panel-empty-state": PanelEmptyStateElement;
-  }
 }

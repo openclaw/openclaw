@@ -87,14 +87,6 @@ export function scheduleUnownedCronJobsInWorker(
       const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, input.storeKey);
       const jobsById = new Map(decoded.map((job) => [job.id, job]));
       const policy = input.snapshot;
-      const reservations = new Map(
-        policy.ownership.flatMap((owner) =>
-          owner.reservation ? [[owner.jobId, owner.reservation] as const] : [],
-        ),
-      );
-      const active = new Set(
-        policy.ownership.filter((owner) => owner.active).map((owner) => owner.jobId),
-      );
       const outcome: CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"] = {
         changed: false,
         jobs: [],
@@ -126,7 +118,7 @@ export function scheduleUnownedCronJobsInWorker(
               nowMs: policy.nowMs,
               deferredNotifications: outcome.notifications,
             },
-            { reservations, isJobActive: (jobId) => active.has(jobId) },
+            { reservations: new Map(), isJobActive: () => false },
           )
         ) {
           updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);

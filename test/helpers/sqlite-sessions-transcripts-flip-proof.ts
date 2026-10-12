@@ -1730,7 +1730,7 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle with its action or an admission/runtime abort reason.
+  // Deletion can settle with its action or the runtime's terminal abort error.
   // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (

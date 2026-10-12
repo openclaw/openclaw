@@ -16,7 +16,7 @@ import {
   type SessionModelContextLimits,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   assertCurrentSessionTranscriptHeader,
@@ -301,7 +301,7 @@ export class SessionManager extends SessionManagerBranching {
             };
             for (const entry of entries) {
               if (entry.type === "message") {
-                entry.message = redactTranscriptMessageForStorage(entry.message, {});
+                entry.message = sanitizeTranscriptMessageForStorage(entry.message);
               }
             }
             const { withSessionMetadataWorker } =
@@ -679,7 +679,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** Consume full-fidelity context outside SQL; validate its source after the consumer settles. */
+  /** Consume a full-fidelity snapshot while retaining its owner through the consumer. */
   static async readSessionContextAsync<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T | Promise<T>,

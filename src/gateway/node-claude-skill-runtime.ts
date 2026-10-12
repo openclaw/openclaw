@@ -15,6 +15,11 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import {
+  composeSessionSourceAssertion,
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import {
   NODE_CLAUDE_SKILLS_CAPABILITY,
@@ -45,7 +50,7 @@ export type NodeClaudeSkillRuntime = {
   init: NodeClaudeSkillInit;
   workshop?: AnyAgentTool;
   run: PreparedCliRunContext["params"];
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   signal: AbortSignal;
   close: () => Promise<void>;
 };
@@ -165,70 +170,79 @@ export async function prepareNodeClaudeSkillRuntime(
     controller.abort();
     return releaseSource();
   };
-  const assertCurrent = () => {
-    assertRun();
-    combinedSignal.throwIfAborted();
-    binding?.admissionSignal?.throwIfAborted();
-    sessionClaim?.assertCurrent();
-    const nativeCurrent = memory || binding ? undefined : loadSessionEntryReadOnly(sessionScope);
-    const current = memory
-      ? memory.actor.snapshot(memory.authority)?.entry
-      : binding
-        ? binding.actor.sessions.readPolicy(sessionKey)
-        : nativeCurrent;
-    const currentPlacement = readPlacement();
-    if (
-      closed ||
-      gateway.nodeRegistry.get(node.nodeId) !== node ||
-      node.connId !== connectionId ||
-      node.pairingGeneration !== pairingGeneration ||
-      node.client.socket.readyState !== 1 ||
-      !node.caps.includes(NODE_CLAUDE_SKILLS_CAPABILITY) ||
-      !isNodeCommandAllowed({
-        command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-        declaredCommands: node.commands,
-        allowlist: resolveNodeCommandAllowlist(gateway.getRuntimeConfig(), {
-          ...node,
-          approvedCommands: node.commands,
-        }),
-      }).ok ||
-      !session ||
-      session.sessionId !== run.sessionId ||
-      ((run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision) !== undefined &&
-        session.lifecycleRevision !==
-          (run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision)) ||
-      current?.sessionId !== session.sessionId ||
-      (memory && current?.lifecycleRevision !== session.lifecycleRevision) ||
-      (!memory && !binding && nativeCurrent?.lifecycleRevision !== session.lifecycleRevision) ||
-      current.execHost !== "node" ||
-      current.execNode?.trim() !== node.nodeId ||
-      (current.execCwd?.trim() || undefined) !==
-        (target.kind === "node" ? target.placement.cwd : undefined) ||
-      (caller?.receiptAuthority && caller.receiptAuthority() === false) ||
-      currentPlacement?.generation !== placement?.generation ||
-      currentPlacement?.environmentId !== placement?.environmentId ||
-      currentPlacement?.activeOwnerEpoch !== placement?.activeOwnerEpoch ||
-      (placement &&
-        (!claim ||
-          !stopClaim ||
-          claim.runId !== run.runId ||
-          !currentPlacement ||
-          !isCurrentPlacementTurnClaim(currentPlacement, claim)))
-    ) {
+  const assertCallerCurrent = Object.assign(() => {
+    if (caller?.receiptAuthority?.() === false) {
       throw new Error(
         "Paired-node skill assignment or run authority changed. Retry from a fresh turn.",
       );
     }
-  };
+  }, caller?.receiptAuthority);
+  const assertCurrent = composeSessionSourceAssertion(
+    [assertRun, assertCallerCurrent],
+    (assertSources) => {
+      assertSources();
+      combinedSignal.throwIfAborted();
+      binding?.admissionSignal?.throwIfAborted();
+      sessionClaim?.assertCurrent();
+      const nativeCurrent = memory || binding ? undefined : loadSessionEntryReadOnly(sessionScope);
+      const current = memory
+        ? memory.actor.snapshot(memory.authority)?.entry
+        : binding
+          ? binding.actor.sessions.readPolicy(sessionKey)
+          : nativeCurrent;
+      const currentPlacement = readPlacement();
+      if (
+        closed ||
+        gateway.nodeRegistry.get(node.nodeId) !== node ||
+        node.connId !== connectionId ||
+        node.pairingGeneration !== pairingGeneration ||
+        node.client.socket.readyState !== 1 ||
+        !node.caps.includes(NODE_CLAUDE_SKILLS_CAPABILITY) ||
+        !isNodeCommandAllowed({
+          command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+          declaredCommands: node.commands,
+          allowlist: resolveNodeCommandAllowlist(gateway.getRuntimeConfig(), {
+            ...node,
+            approvedCommands: node.commands,
+          }),
+        }).ok ||
+        !session ||
+        session.sessionId !== run.sessionId ||
+        ((run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision) !== undefined &&
+          session.lifecycleRevision !==
+            (run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision)) ||
+        current?.sessionId !== session.sessionId ||
+        (memory && current?.lifecycleRevision !== session.lifecycleRevision) ||
+        (!memory && !binding && nativeCurrent?.lifecycleRevision !== session.lifecycleRevision) ||
+        current.execHost !== "node" ||
+        current.execNode?.trim() !== node.nodeId ||
+        (current.execCwd?.trim() || undefined) !==
+          (target.kind === "node" ? target.placement.cwd : undefined) ||
+        currentPlacement?.generation !== placement?.generation ||
+        currentPlacement?.environmentId !== placement?.environmentId ||
+        currentPlacement?.activeOwnerEpoch !== placement?.activeOwnerEpoch ||
+        (placement &&
+          (!claim ||
+            !stopClaim ||
+            claim.runId !== run.runId ||
+            !currentPlacement ||
+            !isCurrentPlacementTurnClaim(currentPlacement, claim)))
+      ) {
+        throw new Error(
+          "Paired-node skill assignment or run authority changed. Retry from a fresh turn.",
+        );
+      }
+    },
+  );
   try {
     assertCurrent();
-    const resources: SkillResourceDelivery | undefined = run.skillsSnapshot?.librarySelections
-      ?.length
-      ? await prepareSkillResourceDelivery(
-          run.skillsSnapshot,
+    const skillsSnapshot = run.skillsSnapshot;
+    const resources: SkillResourceDelivery | undefined = skillsSnapshot?.librarySelections?.length
+      ? await runWithSessionSourceScope(
           assertCurrent,
-          [],
-          context.workspaceDir,
+          () =>
+            prepareSkillResourceDelivery(skillsSnapshot, assertCurrent, [], context.workspaceDir),
+          { checkAfter: false },
         )
       : undefined;
     assertCurrent();
@@ -267,8 +281,8 @@ export async function invokeNodeClaudeSkillRuntime(params: {
   const signal = AbortSignal.any([runtime.signal, controller.signal]);
   let invokeId: string | undefined;
   let open = true;
-  const assertCurrent = () => {
-    runtime.assertCurrent();
+  const assertCurrent = composeSessionSourceAssertion([runtime.assertCurrent], (assertSource) => {
+    assertSource();
     signal.throwIfAborted();
     if (
       !open ||
@@ -277,7 +291,7 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     ) {
       throw new Error("Paired-node Workshop invocation is no longer active.");
     }
-  };
+  });
   const identity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: runtime.run.admittedRunContext,
     agentId: runtime.run.agentId,
@@ -297,9 +311,16 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     },
     onReady() {
       assertCurrent();
-      void endpoint
-        .send(encodeNodeClaudeSkillMessage(runtime.init, NODE_CLAUDE_SKILLS_MESSAGE_BYTES))
-        .catch((error: unknown) => controller.abort(error));
+      void runWithSessionSourceScope(
+        assertCurrent,
+        async () => {
+          assertCurrent();
+          await endpoint.send(
+            encodeNodeClaudeSkillMessage(runtime.init, NODE_CLAUDE_SKILLS_MESSAGE_BYTES),
+          );
+        },
+        { checkAfter: false },
+      ).catch((error: unknown) => controller.abort(error));
     },
     onError: (error) => controller.abort(error),
   });
@@ -313,7 +334,14 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       throw new Error("Invalid paired-node skill message.");
     }
     if (message.type === "stdout") {
-      params.onProgress(message.text);
+      await runWithSessionSourceScope(
+        assertCurrent,
+        async () => {
+          assertCurrent();
+          params.onProgress(message.text);
+        },
+        { checkAfter: false },
+      );
       return;
     }
     if (!runtime.workshop || !identity || calls.has(message.id) || calls.size >= 64) {
@@ -325,12 +353,18 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     const result = await withGatewayToolCallerIdentity(identity, () =>
       handlers.callTool({ name: "skill_workshop", arguments: message.arguments }, signal),
     );
-    assertCurrent();
-    await endpoint.send(
-      encodeNodeClaudeSkillMessage(
-        { type: "result", id: message.id, result },
-        NODE_CLAUDE_WORKSHOP_RESULT_BYTES,
-      ),
+    await runWithSessionSourceScope(
+      assertCurrent,
+      async () => {
+        assertCurrent();
+        await endpoint.send(
+          encodeNodeClaudeSkillMessage(
+            { type: "result", id: message.id, result },
+            NODE_CLAUDE_WORKSHOP_RESULT_BYTES,
+          ),
+        );
+      },
+      { checkAfter: false },
     );
   };
   endpoint.onMessage((bytes) => {
@@ -346,10 +380,10 @@ export async function invokeNodeClaudeSkillRuntime(params: {
       signal,
       expectedConnId: runtime.node.connId,
       expectedPairingGeneration: runtime.node.pairingGeneration,
-      isDispatchAuthorized: () => {
+      isDispatchAuthorized: Object.assign(() => {
         runtime.assertCurrent();
         return !signal.aborted && params.invocation.isDispatchAuthorized?.() !== false;
-      },
+      }, runtime.assertCurrent),
       onDispatchReady: (id) => {
         invokeId = id;
       },

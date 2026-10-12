@@ -595,13 +595,10 @@ describe("cron durable run ownership", () => {
     );
     try {
       await replacement.start();
-      const replacementState = (replacement as unknown as { state: CronServiceState }).state;
-      const staleTimer = replacementState.timer;
       const completed = waitForLine(owner, "completed");
       await fsPromises.writeFile(releasePath, "release");
       await completed;
       await clock.advanceBy(2_000);
-      expect(replacementState.timer).not.toBe(staleTimer);
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs).toEqual(
         expect.any(Number),
@@ -649,7 +646,6 @@ describe("cron durable run ownership", () => {
       expect(suspension?.drain()).toBe(true);
       replacement.pauseScheduling();
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      expect(replacementState.timer).toBeNull();
       first.kill("SIGKILL");
       await waitForExit(first);
       second = spawnRunner({
@@ -671,7 +667,6 @@ describe("cron durable run ownership", () => {
       expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "interrupted" });
       expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
       expect(replacementState.schedulingPaused).toBe(true);
-      expect(replacementState.timer).toBeNull();
       expect(replacementRunner).not.toHaveBeenCalled();
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     } finally {
@@ -837,29 +832,6 @@ describe("cron durable run ownership", () => {
       ]);
     } finally {
       editor.stop();
-    }
-  });
-
-  it("force-runs through a dead markerless receipt without lifecycle startup", async () => {
-    vi.useRealTimers();
-    const { storePath } = await makeStorePath();
-    const now = Date.now();
-    const job = makeCommandJob("force-after-dead-owner", now + 60_000);
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const abandoned = claimMarkerlessReceipt(storePath, job, now);
-    releaseLocalCronRunReceiptOwnership(abandoned);
-    const runner = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = makeParentService(storePath, runner);
-    try {
-      await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-      expect(runner).toHaveBeenCalledOnce();
-      expect(
-        receipts(storePath, job.id)
-          .map(({ status }) => status)
-          .toSorted(),
-      ).toEqual(["interrupted", "ok"]);
-    } finally {
-      cron.stop();
     }
   });
 

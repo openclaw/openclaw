@@ -287,60 +287,6 @@ suite.define(() => {
     }
   });
 
-  it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const prompt = "stream markdown through the GUI";
-      await gateway.deferNext("chat.send");
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
-      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      const streamingText = "## Streaming heading\n\nworking **tail";
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: streamingText,
-        message: {
-          content: [{ text: streamingText, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "main",
-        state: "delta",
-      });
-
-      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
-        timeout: 10_000,
-      });
-      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
-        timeout: 10_000,
-      });
-      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
-
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
-        timeout: 10_000,
-      });
-
-      await gateway.emitChatFinal({
-        runId,
-        text: "## Streaming heading\n\nworking **tail**",
-      });
-
-      await page.locator(".chat-thread strong").getByText("tail").waitFor({ timeout: 10_000 });
-      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
@@ -380,9 +326,12 @@ suite.define(() => {
       expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
+        timeout: 10_000,
+      });
       await gateway.emitChatFinal({
         runId,
-        text: "## Unicode final\u2028\u2028- first\u2029- second",
+        text: "## Unicode final\u2028\u2028- first\u2029- **second**",
       });
 
       await page.locator(".chat-thread h2").getByText("Unicode final").waitFor({
@@ -391,6 +340,8 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-thread li").allTextContents(), { timeout: 10_000 })
         .toEqual(["first", "second"]);
+      await page.locator(".chat-thread strong").getByText("second").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
       const finalChatText = await page.locator(".chat-thread .chat-text").last().textContent();
       expect(finalChatText).not.toContain("\u2028");
       expect(finalChatText).not.toContain("\u2029");

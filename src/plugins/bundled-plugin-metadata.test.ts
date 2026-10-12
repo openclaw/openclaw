@@ -27,7 +27,8 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
-const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["memory-core", "xai"] as const;
+// llama-cpp starts for its enabled local_image tool factory, not a startup sidecar.
+const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["llama-cpp", "memory-core", "xai"] as const;
 
 installGeneratedPluginTempRootCleanup();
 

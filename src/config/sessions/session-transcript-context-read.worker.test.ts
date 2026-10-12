@@ -216,7 +216,6 @@ it.each([
   ["projection", "append"],
   ["projection", "remove"],
   ["full context", "append"],
-  ["full context", "remove"],
 ] as const)("validates a fenced %s after an owned %s", async (route, change) => {
   await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
     const target = {

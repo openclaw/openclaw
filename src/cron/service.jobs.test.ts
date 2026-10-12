@@ -8,9 +8,9 @@ import {
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   nextWakeAtMs,
-  recomputeNextRunsForMaintenance,
   recomputeSingleJobForMaintenance,
 } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";

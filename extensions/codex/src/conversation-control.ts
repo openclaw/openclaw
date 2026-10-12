@@ -73,6 +73,7 @@ export async function stopCodexConversationTurn(params: {
   identity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding | undefined;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<{ stopped: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   if (!active) {
@@ -88,7 +89,15 @@ export async function stopCodexConversationTurn(params: {
   await active.client.request(
     "turn/interrupt",
     { threadId: active.threadId, turnId: active.turnId },
-    { timeoutMs: active.requestTimeoutMs, assertCurrent: params.assertCurrent },
+    {
+      timeoutMs: active.requestTimeoutMs,
+      assertCurrent: params.assertCurrent,
+      withCurrent: async (write) => {
+        await params.assertCurrentAsync?.();
+        params.assertCurrent();
+        write();
+      },
+    },
   );
   return { stopped: true, message: "Codex stop requested." };
 }
@@ -98,6 +107,7 @@ export async function steerCodexConversationTurn(params: {
   binding: CodexAppServerThreadBinding | undefined;
   message: string;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<{ steered: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   const text = params.message.trim();
@@ -121,7 +131,15 @@ export async function steerCodexConversationTurn(params: {
       expectedTurnId: active.turnId,
       input: [{ type: "text", text, text_elements: [] }],
     },
-    { timeoutMs: active.requestTimeoutMs, assertCurrent: params.assertCurrent },
+    {
+      timeoutMs: active.requestTimeoutMs,
+      assertCurrent: params.assertCurrent,
+      withCurrent: async (write) => {
+        await params.assertCurrentAsync?.();
+        params.assertCurrent();
+        write();
+      },
+    },
   );
   return { steered: true, message: "Sent steer message to Codex." };
 }
@@ -135,9 +153,11 @@ export async function setCodexConversationModel(input: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   assertCommitAllowed?: SessionEntrySourceAuthority;
 }): Promise<string> {
   const params = { ...input };
+  await params.assertCurrentAsync?.();
   const model = params.model.trim();
   if (!model) {
     return "Usage: /codex model <model>";

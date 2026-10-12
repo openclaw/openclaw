@@ -22,6 +22,7 @@ export {
   syncDirectorySync,
   type DirectorySyncOutcome,
   type DirectoryReceipt,
+  type ExactDirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "@openclaw/fs-safe/durability";
@@ -84,6 +85,7 @@ function postPublicationFailure(params: {
           dev: params.published.identity.dev,
           ino: params.published.identity.ino,
         },
+        exactTargetIdentity: params.published.exactIdentity,
         // After publication succeeds, pathname cleanup cannot atomically prove
         // it still owns the target. Callers use this receipt with their pinned guards.
         cleanup: "preserved",
@@ -102,7 +104,7 @@ export async function publishFileNoClobber(
     durability: "fail-closed" | "degrade";
   },
 ) {
-  const sourceIdentity = await fs.lstat(sourcePath);
+  const sourceIdentity = await fs.lstat(sourcePath, { bigint: true });
   const published = await publishFileExclusive({
     sourcePath,
     targetPath,
@@ -124,7 +126,7 @@ export async function publishFileNoClobber(
 
   if (options.moveSource) {
     try {
-      const currentSource = await fs.lstat(sourcePath);
+      const currentSource = await fs.lstat(sourcePath, { bigint: true });
       if (!currentSource.isFile() || !sameFileIdentity(currentSource, sourceIdentity)) {
         throw new Error(`File publication source changed before removal: ${sourcePath}`);
       }

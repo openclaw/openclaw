@@ -149,7 +149,7 @@ export function registerSlackAgentEvents(params: {
         }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
-        authority: { kind: "source", source: routing.assertCurrentSession },
+        authority: { kind: "source", source: routing.sessionSource },
         prepare: () => ({ displayName: event.title }),
       });
       if (!updated) {

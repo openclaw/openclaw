@@ -425,7 +425,7 @@ describe("worker launch capabilities", () => {
           );
           expect(placements.get(SESSION_ID)).toEqual(placementBefore);
           expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-          expect(placements.get("session-remote-successor")).toBeUndefined();
+          expect(await placements.getAsync("session-remote-successor")).toBeUndefined();
           if (nodeDeviceId) {
             const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
             expect(assertCurrent).toBeTypeOf("function");

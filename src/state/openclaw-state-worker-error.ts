@@ -3,6 +3,7 @@ import {
   isSqliteNativeOpenFailure,
   markSqliteNativeOpenFailure,
 } from "../infra/sqlite-error-diagnostics.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
   OpenClawQuarantineReadCleanupError,
@@ -201,14 +202,19 @@ function decodeErrorGraph(
   }
 }
 
-const retainedPayloadKey = Symbol.for("openclaw.sharedStateWorkerErrorPayload");
+const retainedPayloads = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedStateWorkerErrorPayloads"),
+  () => new WeakMap<Error, OpenClawStateWorkerErrorPayload>(),
+);
 
 /** Keep the closed wire graph until the receiving caller hydrates it. */
 export function retainOpenClawStateWorkerErrorPayload(
   error: Error,
   payload: OpenClawStateWorkerErrorPayload | undefined,
 ): void {
-  Object.defineProperty(error, retainedPayloadKey, { value: payload });
+  if (payload) {
+    retainedPayloads.set(error, payload);
+  }
 }
 
 /** Hydrate each caller independently; never rewrite a cached opening rejection. */
@@ -237,10 +243,7 @@ export function hydrateOpenClawStateWorkerError(
       }
       // A circular local cause stays on its original object; wire graphs keep their aliases.
       replacements.set(error, error);
-      const payload: OpenClawStateWorkerErrorPayload | undefined = Object.getOwnPropertyDescriptor(
-        error,
-        retainedPayloadKey,
-      )?.value;
+      const payload = retainedPayloads.get(error);
       const graph = payload === undefined ? undefined : decodeErrorGraph(payload, options);
       if (graph) {
         replacements.set(error, graph.errors[graph.root]!);
@@ -274,7 +277,6 @@ export function hydrateOpenClawStateWorkerError(
         : new Error(error.message);
     Object.setPrototypeOf(replacement, Object.getPrototypeOf(error));
     const descriptors = Object.getOwnPropertyDescriptors(error);
-    Reflect.deleteProperty(descriptors, retainedPayloadKey);
     if ("cause" in error) {
       descriptors.cause = {
         configurable: true,

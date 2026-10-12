@@ -5,6 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
+import {
+  createSessionEntryWithTranscript,
+  prepareSessionEntryMutationDatabases,
+} from "../config/sessions/session-accessor.entry-mutation.js";
+import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { retireSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-resources.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -777,6 +782,40 @@ it("keeps a queued usage lock and release in its mixed-case Windows state root",
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
       }
+    }
+  });
+});
+
+it("allows first session creation while a fresh usage refresh awaits acquisition", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = state.statePath("fresh-usage.sqlite");
+    const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
+    const lock = prepareSessionCostUsageRefreshLock(agentId, storePath, { env: state.env });
+    try {
+      await using preparation = prepareSessionEntryMutationDatabases(
+        [{ scope, assertCurrent() {} }],
+        Promise.resolve(),
+      );
+      const storage = await preparation.preparations[0]!;
+      const created = await createSessionEntryWithTranscript(
+        scope,
+        () => ({ ok: true, entry: { sessionId: "created-during-refresh", updatedAt: 1 } }),
+        { commitGuard: storage.assertCurrent },
+      );
+      expect(created).toMatchObject({
+        ok: true,
+        entry: { sessionId: "created-during-refresh" },
+      });
+      expect(await lock.acquire()).toBe(true);
+      const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+        "created-during-refresh",
+      );
+      await lock.release();
+      expect(await isSessionCostUsageRefreshRunning(agentId, storePath)).toBe(false);
+    } finally {
+      await lock.release();
     }
   });
 });

@@ -39,6 +39,7 @@ import {
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -64,8 +65,15 @@ type CacheWriteKey = Extract<keyof AgentDatabaseOperations, `usageCache.${string
 
 function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOptions>) {
   // Incognito and maintenance scopes retain their process-held native owner.
-  const execution = supportsOpenClawAgentDatabaseExecution(options)
-    ? captureOpenClawAgentDatabaseExecution(options)
+  const observed = supportsOpenClawAgentDatabaseExecution(options)
+    ? readDatabasePathIdentitySync(options.path)
+    : undefined;
+  // Refresh-lock discovery can yield before the first write; retain its creation witness.
+  const execution = observed
+    ? captureOpenClawAgentDatabaseExecution(
+        options,
+        observed.key.startsWith("path:") ? { expectedCreationIdentity: observed } : undefined,
+      )
     : undefined;
   let database: OpenClawAgentDatabase | undefined;
   let releaseBorrow: (() => void) | undefined;
@@ -317,6 +325,7 @@ export function prepareSessionCostUsageRefreshLock(
   const writer = createCacheWriter(options);
   let acquiring: Promise<boolean> | undefined;
   let releasing: Promise<void> | undefined;
+  let lockReleased = false;
   let closed = false;
   let acquired = false;
   const assertCurrent = () => {
@@ -329,7 +338,7 @@ export function prepareSessionCostUsageRefreshLock(
     closed = true;
     releasing ??= (async () => {
       await acquiring?.catch(() => undefined);
-      try {
+      if (!lockReleased) {
         if (writer.lockWriteStarted) {
           await writer.write(
             "usageCache.releaseLock",
@@ -338,10 +347,14 @@ export function prepareSessionCostUsageRefreshLock(
             "session-cost-usage.refresh-lock.delete",
           );
         }
-      } finally {
-        await writer.close();
+        lockReleased = true;
       }
-    })();
+      await writer.close();
+    })().catch((error: unknown) => {
+      // Keep the writer after a failed DELETE; retry only the unfinished cleanup stage.
+      releasing = undefined;
+      throw error;
+    });
     return releasing;
   };
   return {

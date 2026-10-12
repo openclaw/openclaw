@@ -595,9 +595,7 @@ describe("buildStatusText prepared context windows", () => {
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
       .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,

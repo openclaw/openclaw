@@ -27,13 +27,11 @@ import {
   drainSessionStateForTest,
 } from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { isCodeModeExecTool } from "../code-mode-control-tools.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { registerHeadlessToolSearchCatalog } from "../tool-search.js";
-import { wrapStreamFnCodeModeSource } from "../transcript-code-mode-source.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -86,7 +84,7 @@ describe("AgentSession runtime and transcript projections", () => {
   const registeredLiteral = "fixture-registered-source-value";
   const vendorLiteral = "sk-fixturesyntheticcredential1234567890";
   const customLiteral = "fixture-custom-source-value";
-  const maskedSource = `const API_TOKEN = "${genericLiteral}"; const vendor = "${vendorLiteral}"; const registered = "${registeredLiteral}"; const custom = "${customLiteral}";\n${source.replaceAll("API_TOKEN", "OTHER_TOKEN")}`;
+  const credentialSource = `const API_TOKEN = "${genericLiteral}"; const vendor = "${vendorLiteral}"; const registered = "${registeredLiteral}"; const custom = "${customLiteral}";\n${source.replaceAll("API_TOKEN", "OTHER_TOKEN")}`;
   const sourceCases = [
     { label: "JavaScript code", args: { code: source }, outcome: "completed" },
     {
@@ -118,7 +116,7 @@ describe("AgentSession runtime and transcript projections", () => {
       outcome: "error",
     },
     { label: "both blank", args: { code: " ", command: "" }, outcome: "error" },
-    { label: "credential masking", args: { code: maskedSource }, outcome: "completed" },
+    { label: "credential-shaped literals", args: { code: credentialSource }, outcome: "completed" },
   ];
 
   it.each(sourceCases)(
@@ -167,15 +165,15 @@ describe("AgentSession runtime and transcript projections", () => {
         });
         const model = session.agent.state.model!;
         let modelCallSeq = 0;
-        session.agent.streamFn = wrapStreamFnCodeModeSource(
-          wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn!, {
+        session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+          session.agent.streamFn!,
+          {
             runId: scope.sessionId,
             provider: model.provider,
             model: model.id,
             trace: createDiagnosticTraceContext(),
             nextCallId: () => `${scope.sessionId}:${++modelCallSeq}`,
-          }),
-          new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
+          },
         );
         await session.prompt("Compute the harmless number.");
         expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
@@ -215,50 +213,12 @@ describe("AgentSession runtime and transcript projections", () => {
         const assistant = providerContext.messages.find((message) => message.role === "assistant");
         expect(assistant).toMatchObject({
           content: [
-            { text: expect.not.stringContaining("API_TOKEN = computeToken()") },
-            {
-              type: "toolCall",
-              id: "call_source",
-              name: "exec",
-              arguments: {
-                apiKey: expect.not.stringContaining("fixture-structured-secret"),
-                note: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                nested: {
-                  code: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                  command: expect.not.stringContaining("API_TOKEN = computeToken()"),
-                },
-              },
-            },
+            { text: source },
+            { type: "toolCall", id: "call_source", name: "exec", arguments: originalArgs },
           ],
         });
         assert(assistant?.content[1]?.type === "toolCall");
-        const persistedArgs = assistant.content[1].arguments;
-        for (const field of ["code", "command"] as const) {
-          const value = field === "code" ? args.code : "command" in args ? args.command : undefined;
-          if (typeof value !== "string") {
-            expect(persistedArgs).not.toHaveProperty(field);
-            continue;
-          }
-          if (label.startsWith("invalid language")) {
-            expect(persistedArgs[field]).not.toContain("fixtureUnquotedLiteral");
-          } else if (label.startsWith("retired")) {
-            expect(persistedArgs[field]).not.toContain("computeToken(); return API_TOKEN");
-          } else if (label === "credential masking") {
-            expect(persistedArgs[field]).toContain(
-              "OTHER_TOKEN = computeToken(); return OTHER_TOKEN;",
-            );
-            for (const literal of [
-              genericLiteral,
-              registeredLiteral,
-              vendorLiteral,
-              customLiteral,
-            ]) {
-              expect(persistedArgs[field]).not.toContain(literal);
-            }
-          } else {
-            expect(persistedArgs[field]).toBe(value);
-          }
-        }
+        expect(assistant.content[1].arguments).toEqual(originalArgs);
         const replayResult = providerContext.messages.find((item) => item.role === "toolResult");
         assert(replayResult);
         expect(replayResult.toolCallId).toBe(assistant.content[1].id);
@@ -272,7 +232,7 @@ describe("AgentSession runtime and transcript projections", () => {
   );
 
   it.each(["message_end", "before_message_write"] as const)(
-    "revalidates source ownership after %s replacements",
+    "preserves hook-supplied source bytes after %s replacements",
     async (hook) => {
       const { dir, scope } = createSessionScope("source-hooks");
       const { tools, catalogRef } = createCodeModeHarness();
@@ -345,7 +305,7 @@ describe("AgentSession runtime and transcript projections", () => {
               content: [
                 {
                   ...call,
-                  arguments: { title: "Compute the harmless number", code: maskedSource },
+                  arguments: { title: "Compute the harmless number", code: credentialSource },
                 },
               ],
             };
@@ -388,10 +348,6 @@ describe("AgentSession runtime and transcript projections", () => {
         customTools: [...toToolDefinitions(tools), other],
         resourceLoader,
       });
-      session.agent.streamFn = wrapStreamFnCodeModeSource(
-        session.agent.streamFn!,
-        new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
-      );
       try {
         for (const nextAction of cases) {
           action = nextAction;
@@ -439,14 +395,15 @@ describe("AgentSession runtime and transcript projections", () => {
             if (block.type !== "toolCall") {
               throw new Error("unexpected stored block");
             }
-            if (action === "unchanged") {
-              expect(block.arguments.code).toBe(source);
-            } else {
-              expect(block.arguments.code).not.toContain("API_TOKEN = computeToken()");
-            }
-            expect(block.arguments.code).not.toContain(genericLiteral);
+            const expectedSource =
+              action === "mutate-source"
+                ? source.replaceAll("42", "43")
+                : action === "replace-with-literal"
+                  ? credentialSource
+                  : source;
+            expect(block.arguments.code).toBe(expectedSource);
           }
-          // Retaining or copying a completed response cannot reuse its append authority.
+          // A later ordinary append has the same source fidelity as a live model response.
           const late = structuredClone(original!);
           late.content = [
             { type: "toolCall", id: `late_${action}`, name: "exec", arguments: { code: source } },
@@ -456,9 +413,7 @@ describe("AgentSession runtime and transcript projections", () => {
           const lateStored = manager.getLeafEntry();
           expect(lateStored).toMatchObject({
             message: {
-              content: [
-                { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-              ],
+              content: [{ arguments: { code: source } }],
             },
           });
         }
@@ -477,7 +432,7 @@ describe("AgentSession runtime and transcript projections", () => {
     },
   );
 
-  it("keeps mixed outer calls separate from a reentrant direct SQLite append", async () => {
+  it("preserves mixed tool arguments through a reentrant direct SQLite append", async () => {
     const { dir, scope } = createSessionScope("source-mixed");
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
@@ -489,7 +444,7 @@ describe("AgentSession runtime and transcript projections", () => {
           handler: (event: unknown) => {
             const { message } = event as { message: AgentMessage };
             if (message.role === "assistant" && message.stopReason === "toolUse" && !reentrant) {
-              // Even the exact live object cannot borrow its outer append's private options.
+              // A direct append during the hook must preserve the same source bytes.
               const outcome = appendTranscriptMessageSync(scope, {
                 message,
                 eventId: "reentrant_source",
@@ -541,10 +496,6 @@ describe("AgentSession runtime and transcript projections", () => {
         sessionManager: manager,
         customTools: [...toToolDefinitions(tools), other],
       });
-      session.agent.streamFn = wrapStreamFnCodeModeSource(
-        session.agent.streamFn!,
-        new Set(tools.filter(isCodeModeExecTool).map((tool) => tool.name)),
-      );
       await session.prompt("Run both independent calls.");
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
       expect(
@@ -555,10 +506,7 @@ describe("AgentSession runtime and transcript projections", () => {
         { toolCallId: "mixed_other", details: { receivedOriginal: true } },
       ]);
       expect(reentrant).toMatchObject({
-        content: [
-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-          { arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") } },
-        ],
+        content: [{ arguments: { code: source } }, { arguments: { code: source } }],
       });
       const stored = manager
         .getEntries()
@@ -575,7 +523,7 @@ describe("AgentSession runtime and transcript projections", () => {
             { id: "mixed_code", arguments: { code: source } },
             {
               id: "mixed_other",
-              arguments: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
+              arguments: { code: source },
             },
           ],
         },
@@ -594,7 +542,7 @@ describe("AgentSession runtime and transcript projections", () => {
     }
   });
 
-  it("does not lend a previous run's source ownership to a reused manager or ordinary append batches", async () => {
+  it("preserves source across reused managers and ordinary append batches", async () => {
     const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope, dir);
@@ -641,10 +589,6 @@ describe("AgentSession runtime and transcript projections", () => {
           sessionManager: manager,
           customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
         });
-        session.agent.streamFn = wrapStreamFnCodeModeSource(
-          session.agent.streamFn!,
-          new Set(mode === "code" ? tools.filter(isCodeModeExecTool).map((tool) => tool.name) : []),
-        );
         await session.prompt(`Use ${mode} mode.`);
         const latestCall = manager
           .buildSessionContext()
@@ -660,7 +604,7 @@ describe("AgentSession runtime and transcript projections", () => {
         if (mode === "code") {
           expect(latestCall.arguments.code).toBe(source);
         } else {
-          expect(latestCall.arguments.command).not.toContain("API_TOKEN = computeToken()");
+          expect(latestCall.arguments.command).toBe(source);
         }
         session.dispose();
       }
@@ -710,12 +654,12 @@ describe("AgentSession runtime and transcript projections", () => {
             toolCallId: "nested_shell",
             parentToolCallId: "reused_id",
             input: {
-              command: expect.not.stringContaining("API_TOKEN = computeToken()"),
-              code: expect.not.stringContaining("API_TOKEN = computeToken()"),
-              nested: { code: expect.not.stringContaining("API_TOKEN = computeToken()") },
+              command: source,
+              code: source,
+              nested: { code: source },
             },
             result: {
-              content: [{ text: expect.not.stringContaining("API_TOKEN = computeToken()") }],
+              content: [{ text: source }],
             },
           },
         },

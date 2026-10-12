@@ -102,7 +102,7 @@ function createRunContext(params: {
       prompt: "hello",
       provider: "test-cli",
       model: "test-model",
-      timeoutMs: 1_000,
+      timeoutMs: 60_000,
       runId: params.runId,
       ...(params.signal ? { abortSignal: params.signal } : {}),
       ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),

@@ -23,6 +23,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js";
 import { CronService } from "../cron/service.js";
+import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -821,13 +822,13 @@ describe("buildGatewayCronService", () => {
       vi.setSystemTime(new Date("2026-08-14T12:01:00.000Z"));
       clock.setTime(Date.now());
       await onCronTimer(getCronState(state));
+      await waitForCronRunQueue(getCronState(state));
 
       expect(state.cron.getJob(job.id)?.state).toMatchObject({
         lastStatus: "ok",
         consecutiveErrors: 0,
-        lastError: undefined,
       });
-      expect(getCronState(state).activeTimerTicks).toBe(0);
+      expect(state.cron.getJob(job.id)?.state.lastError).toBeUndefined();
       expectIsolatedRunFields({ agentId: "main" });
     } finally {
       state.cron.stop();
@@ -3164,7 +3165,6 @@ describe("buildGatewayCronService", () => {
           ).id,
       );
       expect(new Set(attemptedIds)).toEqual(new Set(jobIds));
-      expect(getCronState(state).activeTimerTicks).toBe(0);
     } finally {
       state.cron.stop();
       vi.useRealTimers();

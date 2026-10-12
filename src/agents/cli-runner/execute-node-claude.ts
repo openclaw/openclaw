@@ -5,6 +5,7 @@ import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-r
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../../infra/exec-approvals.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
@@ -193,32 +194,36 @@ export async function executeNodeClaudeRun(params: {
         return hardTimeoutResult();
       }
       assertCurrent();
-      return await params.deps.invokeNodeClaudeCliRun({
-        assertCurrent,
-        nodeId: params.nodePlacement.nodeId,
-        argv: params.executionArgs,
-        stdin: params.stdinPayload,
-        ...(params.nodePlacement.cwd ? { cwd: params.nodePlacement.cwd } : {}),
-        ...(params.nodeSystemPrompt !== undefined ? { systemPrompt: params.nodeSystemPrompt } : {}),
-        ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
-        ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
-        ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
-        ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
-        ...(approval
-          ? {
-              approvalDecision: approval.decision,
-              systemRunPlan: approval.plan,
-            }
-          : {}),
-        timeoutMs: remainingTimeoutMs,
-        idleTimeoutMs: Math.max(
-          1_000,
-          Math.min(params.noOutputTimeoutMs, NODE_CLI_MAX_IDLE_TIMEOUT_MS),
-        ),
-        onProgress: params.consumeStdout,
-        signal: skillRuntime?.signal ?? nodeAbortController.signal,
-        ...(skillRuntime ? { skillRuntime } : {}),
-      });
+      return await runWithAgentToolSourceExecutionScope(assertCurrent, () =>
+        params.deps.invokeNodeClaudeCliRun({
+          assertCurrent,
+          nodeId: params.nodePlacement.nodeId,
+          argv: params.executionArgs,
+          stdin: params.stdinPayload,
+          ...(params.nodePlacement.cwd ? { cwd: params.nodePlacement.cwd } : {}),
+          ...(params.nodeSystemPrompt !== undefined
+            ? { systemPrompt: params.nodeSystemPrompt }
+            : {}),
+          ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
+          ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
+          ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
+          ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
+          ...(approval
+            ? {
+                approvalDecision: approval.decision,
+                systemRunPlan: approval.plan,
+              }
+            : {}),
+          timeoutMs: remainingTimeoutMs,
+          idleTimeoutMs: Math.max(
+            1_000,
+            Math.min(params.noOutputTimeoutMs, NODE_CLI_MAX_IDLE_TIMEOUT_MS),
+          ),
+          onProgress: params.consumeStdout,
+          signal: skillRuntime?.signal ?? nodeAbortController.signal,
+          ...(skillRuntime ? { skillRuntime } : {}),
+        }),
+      );
     };
     nodeResult = await invokeNode();
     const approval = parseNodeClaudeApprovalRequired(nodeResult);

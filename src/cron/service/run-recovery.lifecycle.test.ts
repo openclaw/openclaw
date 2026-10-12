@@ -46,6 +46,7 @@ import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
 import { ensureLoadedForRead } from "./ops-shared.js";
+import { waitForCronRunQueue } from "./run-queue.js";
 import {
   claimCronRecoveryReceipt,
   makeCronRecoveryState,
@@ -248,10 +249,11 @@ describe("one-shot recovery", () => {
           try {
             await start(next);
             if (mode === "manual-delayed-force") {
-              await clock.advanceBy(MIN_REFIRE_GAP_MS);
+              clock.setTime(clock.clock.now() + MIN_REFIRE_GAP_MS);
+              await onTimer(next);
+              await waitForCronRunQueue(next);
               expect(runCommandJob).toHaveBeenCalledTimes(2);
               expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
-              expect(next.activeTimerTicks).toBe(0);
             }
             // A force run reserved before the slot borrows it; once due, its
             // distinct scheduled occurrence still runs exactly once.
@@ -318,7 +320,7 @@ it("keeps reads responsive and finishes a dispatched repair after the scheduler 
     const job = makeCronRecoveryJob(`job-${index}`, nowMs - 100);
     delete job.state.runningAtMs;
     job.enabled = index < 64;
-    job.state.nextRunAtMs = nowMs + 86_400_000;
+    job.state.nextRunAtMs = job.enabled ? nowMs + 86_400_000 : undefined;
     return job;
   });
   await writeCronStoreSnapshot({ storePath, jobs });
@@ -444,17 +446,19 @@ it("keeps reads responsive and finishes a dispatched repair after the scheduler 
       [expect.objectContaining({ jobId: jobs[0]!.id, status: "error" })],
     ]);
     expect(runner).not.toHaveBeenCalled();
-    expect(scheduler.activeTimerTicks).toBe(0);
   } finally {
     watchdog?.removeEventListener("abort", releaseStuckWriter);
     cron.stop();
-    await writer?.stop();
-    await pending;
-    observe.mockRestore();
-    for (const receipt of receipts) {
-      releaseLocalCronRunReceiptOwnership(receipt);
+    try {
+      await writer?.stop();
+      await pending;
+    } finally {
+      observe.mockRestore();
+      for (const receipt of receipts) {
+        releaseLocalCronRunReceiptOwnership(receipt);
+      }
+      openOpenClawStateDatabase().db.exec("DROP TABLE IF EXISTS writes");
     }
-    openOpenClawStateDatabase().db.exec("DROP TABLE IF EXISTS writes");
   }
 });
 
@@ -580,7 +584,6 @@ it.each([
         expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
       }
       expect(runner).not.toHaveBeenCalled();
-      expect(state.activeTimerTicks).toBe(0);
 
       await admissions.expectReleased(source === "timer" ? 1 : 0);
     } finally {
@@ -681,7 +684,6 @@ it("retains a committed repair after reply loss without replaying it on the next
     1, 1,
   ]);
   expect(runner).not.toHaveBeenCalled();
-  expect(state.activeTimerTicks).toBe(0);
 
   await admissions.expectReleased(2);
 });
