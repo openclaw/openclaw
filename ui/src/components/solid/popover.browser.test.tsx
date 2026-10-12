@@ -2,7 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush, untrack } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
-import { phase } from "./menu-test-fixture.tsx";
+import { phase } from "../../test-helpers/solid-menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 
 afterEach(cleanup);

@@ -1,5 +1,5 @@
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { expect } from "vitest";
 import "./tooltip.ts";
 
 export type TooltipElement = HTMLElementTagNameMap["openclaw-tooltip"];
@@ -71,51 +71,6 @@ export async function settleTooltip(tooltip: TooltipElement) {
   await Promise.resolve();
   flush();
 }
-
-let restorePlatform: (() => void) | undefined;
-beforeEach(() => {
-  if (typeof HTMLElement.prototype.showPopover === "function") {
-    return;
-  }
-  const shown = new WeakSet<Element>();
-  const matches = Element.prototype.matches;
-  const spy = vi.spyOn(Element.prototype, "matches").mockImplementation(function (selector) {
-    return selector === ":popover-open" ? shown.has(this) : matches.call(this, selector);
-  });
-  Object.defineProperties(HTMLElement.prototype, {
-    showPopover: {
-      configurable: true,
-      value(this: HTMLElement) {
-        shown.add(this);
-      },
-    },
-    hidePopover: {
-      configurable: true,
-      value(this: HTMLElement) {
-        shown.delete(this);
-      },
-    },
-  });
-  const animations = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
-  if (!animations) {
-    Object.defineProperty(Element.prototype, "getAnimations", {
-      configurable: true,
-      value: () => [],
-    });
-  }
-  restorePlatform = () => {
-    spy.mockRestore();
-    delete (HTMLElement.prototype as Partial<HTMLElement>).showPopover;
-    delete (HTMLElement.prototype as Partial<HTMLElement>).hidePopover;
-    if (!animations) {
-      delete (Element.prototype as Partial<Element>).getAnimations;
-    }
-  };
-});
-afterEach(() => {
-  restorePlatform?.();
-  restorePlatform = undefined;
-});
 
 export function expectSharedTooltipSkin(tooltip: TooltipElement) {
   const root = tooltip.shadowRoot!;

@@ -68,7 +68,7 @@ export function useMenuMachine(
       return;
     }
     const id = service.computed("highlightedId");
-    const node = id ? service.scope.getById<HTMLElement>(id) : undefined;
+    const node = id ? service.scope.getById(id) : undefined;
     const active = service.scope.getActiveElement();
     if (
       active instanceof HTMLElement &&
@@ -227,7 +227,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = false;
-          (result.onPointerMove as ((event: PointerEvent) => void) | undefined)?.(event);
+          result.onPointerMove?.(event);
         },
         tabIndex: api.highlightedValue === value ? 0 : -1,
         onFocusIn: () => {
@@ -251,7 +251,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = true;
-          (result.onClick as ((event: MouseEvent) => void) | undefined)?.(event);
+          result.onClick?.(event);
         },
         onKeyDown: (e: KeyboardEvent) => {
           if (disabled || e.key === "Escape") {
@@ -261,7 +261,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = true;
-          (result.onKeyDown as ((e: KeyboardEvent) => void) | undefined)?.(e);
+          result.onKeyDown?.(e);
         },
         onPointerMove: (event: PointerEvent) => {
           const trigger = overlay.trigger;
@@ -294,7 +294,7 @@ export function useMenuMachine(
             parent.context.set("pointerRoutingMode", "interactive");
           }
           const item = parentBinding.read().getItemProps({ value: trigger.id });
-          (item.onPointerMove as ((e: PointerEvent) => void) | undefined)?.(event);
+          item.onPointerMove?.(event);
           // The document pointer listener releases the old child's corridor lock.
           // Decide child opening after that same event, rather than dropping it.
           queueMicrotask(() => {
@@ -330,23 +330,26 @@ export function useMenuMachine(
           lastPointerX = event.clientX;
         },
         onKeyDown: (e: KeyboardEvent) => {
-          if ((e.target as HTMLElement).closest('[role="menu"]') !== overlay.surface) {
+          const target = e.target;
+          if (
+            !(target instanceof HTMLElement) ||
+            target.closest('[role="menu"]') !== overlay.surface
+          ) {
             return;
           }
           if (
             e.key === "Tab" ||
             e.key === "Escape" ||
-            (e.target as HTMLElement).matches("input,textarea,select,[data-form-control]")
+            target.matches("input,textarea,select,[data-form-control]")
           ) {
             return;
           }
           focusFromKeyboard = true;
-          const target = e.target as HTMLElement;
           const value = target.dataset.value;
           if (value && value !== read().highlightedValue) {
             read().setHighlightedValue(value);
           }
-          (result.onKeyDown as ((e: KeyboardEvent) => void) | undefined)?.(e);
+          result.onKeyDown?.(e);
         },
       };
     },

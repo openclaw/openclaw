@@ -267,6 +267,40 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", () => {
+  it.each(["trigger", "ancestor"] as const)(
+    "does not open a duplicate label or capture Escape during a %s entrance fade",
+    async (target) => {
+      const { userEvent } = await import("vitest/browser");
+      const f = await fixture();
+      f.tooltip.content = f.trigger.textContent!;
+      await commitTooltip(f.tooltip);
+      const animation = (target === "trigger" ? f.trigger : f.host).animate(
+        { opacity: [0, 1] },
+        { duration: 140 },
+      );
+      animation.pause();
+      animation.currentTime = 0;
+      let escapes = 0;
+      f.host.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          escapes += 1;
+        }
+      });
+      try {
+        expect(f.trigger.checkVisibility({ checkOpacity: true })).toBe(false);
+        f.trigger.focus();
+        await commitTooltip(f.tooltip);
+        expect(f.tooltip.hasAttribute("open")).toBe(false);
+        expect(tooltipBody(f.tooltip).matches(":popover-open")).toBe(false);
+        await userEvent.keyboard("{Escape}");
+        expect(escapes).toBe(1);
+        expect(f.events).toEqual([]);
+      } finally {
+        animation.cancel();
+      }
+    },
+  );
+
   it("repositions an open tooltip after placement changes without reopening or moving focus", async () => {
     const f = await fixture();
     await openTooltip(f);

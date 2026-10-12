@@ -269,7 +269,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
-    dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, detail: 1 }));
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
 

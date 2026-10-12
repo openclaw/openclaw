@@ -1,6 +1,12 @@
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
-import type { TooltipProvider } from "./tooltip.ts";
+
+interface TooltipProviderPolicy extends HTMLElement {
+  delayed: boolean;
+  focusOpensTooltip(): boolean;
+  openTooltip(): void;
+  closeTooltip(): void;
+}
 
 const DESCRIBABLE_SELECTOR =
   'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -80,7 +86,7 @@ export class TooltipController {
     return true;
   };
 
-  static closeForProvider(provider: TooltipProvider) {
+  static closeForProvider(provider: TooltipProviderPolicy) {
     const active =
       TooltipController.#pendingByDocument.get(provider.ownerDocument) ??
       TooltipController.#activeByDocument.get(provider.ownerDocument);
@@ -105,7 +111,7 @@ export class TooltipController {
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentObserver: MutationObserver | null = null;
   readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
-  #tooltipProvider: TooltipProvider | null = null;
+  #tooltipProvider: TooltipProviderPolicy | null = null;
   #presentationAncestors: Node[] = [];
   readonly #presentationObserver = new MutationObserver(() => {
     if (!this.#isPresented()) {
@@ -193,7 +199,7 @@ export class TooltipController {
     this.#tooltipProvider = null;
     let owner: Element | null = trigger;
     while (owner) {
-      const provider = owner.closest<TooltipProvider>("openclaw-tooltip-provider");
+      const provider = owner.closest<TooltipProviderPolicy>("openclaw-tooltip-provider");
       if (provider) {
         this.#tooltipProvider = provider;
         break;

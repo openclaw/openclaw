@@ -329,7 +329,7 @@ describe("openclaw-modal-dialog", () => {
     const onCancel = vi.fn();
     modal.addEventListener("modal-cancel", onCancel);
 
-    dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, detail: 1 }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });

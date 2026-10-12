@@ -150,7 +150,7 @@ export function defineNativeModuleBoundaryTests(
         beforeNavigate: async (nextPage) => {
           popupModule = await holdModuleResponse(
             nextPage,
-            moduleRequest("node_modules/@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
+            moduleRequest("ui/src/components/solid/tooltip.tsx"),
           );
         },
       });
@@ -178,15 +178,18 @@ export function defineNativeModuleBoundaryTests(
       const hoverCard = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");
       const surface = hoverCard.locator(".tooltip-surface[popover]");
       await surface.waitFor({ state: "attached" });
-      // Hold the real opening animation at its first sample; there is no lazy
-      // Web Awesome upgrade to hold after the native renderer cutover.
+      // Pause native motion before releasing the first-use renderer.
       await surface.evaluate((element) => {
         (element as HTMLElement).style.animationPlayState = "paused";
       });
       await page.clock.install();
+      expect(popupModule.requests()).toBe(0);
       await buildLink.hover();
       await page.clock.runFor(600);
-      expect(popupModule.requests()).toBe(0);
+      await popupModule.request;
+      expect(popupModule.requests()).toBe(1);
+      expect(await surface.isVisible()).toBe(false);
+      popupModule.release();
       await surface.waitFor({ state: "visible" });
       const hoverCardMotion = await sidebar
         .locator("openclaw-sidebar-build-chip openclaw-tooltip")
@@ -215,7 +218,7 @@ export function defineNativeModuleBoundaryTests(
       });
       await page.clock.resume();
       await page.keyboard.press("Escape");
-      expect(popupModule.requests()).toBe(0);
+      expect(popupModule.requests()).toBe(1);
 
       await page.setViewportSize({ width: 900, height: 900 });
       const drawer = page.locator(".shell-nav.nav-drawer");

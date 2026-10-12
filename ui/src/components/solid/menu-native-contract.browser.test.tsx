@@ -3,7 +3,14 @@ import { createSignal, flush, untrack } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
-import { item, mountMenu, openMenu, phase, surface, trigger } from "./menu-test-fixture.tsx";
+import {
+  item,
+  mountMenu,
+  openMenu,
+  phase,
+  surface,
+  trigger,
+} from "../../test-helpers/solid-menu.tsx";
 import { Menu } from "./menu.tsx";
 import "../resizable-divider.ts";
 import "../../styles/base.css";

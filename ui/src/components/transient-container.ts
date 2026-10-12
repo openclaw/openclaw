@@ -1,4 +1,6 @@
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
+interface TransientModalHost extends HTMLElement {
+  getOverlayContainer(): HTMLElement | null;
+}
 
 /** Keep transient UI inside the native modal's non-inert, separately owned range. */
 export function resolveTransientContainer(
@@ -7,7 +9,7 @@ export function resolveTransientContainer(
 ): HTMLElement | null {
   const path = [...ancestry];
   const modal = path.find(
-    (target): target is OpenClawModalDialog =>
+    (target): target is TransientModalHost =>
       target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
   );
   if (modal) {

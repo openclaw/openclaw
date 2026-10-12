@@ -61,6 +61,17 @@ function agentAttentionRow(
   });
 }
 
+async function errorDescription(container: ParentNode): Promise<string> {
+  const attention = container.querySelector('[data-session-attention="error"]')!;
+  expect(attention).not.toBeNull();
+  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
+    .updateComplete;
+  return (attention.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/u)
+    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
 describe("AppSidebar session attention", () => {
   it("keeps an active waiting session hand-only and restores its ring after resolution", async () => {
     const client = {
@@ -123,9 +134,9 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
-    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`)!;
 
-    expect(row?.textContent).toContain(
+    expect(await errorDescription(row)).toContain(
       "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
     );
   });
@@ -485,8 +496,9 @@ describe("AppSidebar session attention", () => {
     } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
-    expect(parentRow().textContent).toContain(childFailure);
-    expect(parentRow().textContent).not.toContain("Run failed:");
+    const description = await errorDescription(parentRow());
+    expect(description).toContain(childFailure);
+    expect(description).not.toContain("Run failed:");
 
     sidebar.sidebarAgentsMode = "roster";
     await waitForFast(() => {
@@ -524,8 +536,7 @@ describe("AppSidebar session attention", () => {
     setRows(sessionsHarness, [failedRow(sessionKey, { endedAt: 3, updatedAt: 3, lastReadAt: 2 })]);
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector('[data-session-attention="error"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Run failed: Provider credits exhausted");
+    expect(await errorDescription(sidebar)).toContain("Run failed: Provider credits exhausted");
   });
 
   it("marks a collapsed section that contains agent-declared attention", async () => {

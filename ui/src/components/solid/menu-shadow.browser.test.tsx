@@ -2,7 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
-import { phase } from "./menu-test-fixture.tsx";
+import { phase } from "../../test-helpers/solid-menu.tsx";
 import { Menu } from "./menu.tsx";
 import "../../styles/base.css";
 

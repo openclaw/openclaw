@@ -92,6 +92,42 @@ async function mountModal(
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it("keeps a double-clicked opener's modal open and dismisses a fresh backdrop click", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const opener = document.createElement("button");
+    opener.textContent = "Open modal";
+    opener.style.cssText = "position: fixed; left: 8px; top: 8px;";
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.manual = true;
+    modal.label = "Double-click preview";
+    modal.setReturnFocusTarget(opener);
+    modal.textContent = "Preview content";
+    container.append(opener, modal);
+    await modal.updateComplete;
+    const dialog = modalDialog(modal);
+    const opened = vi.fn();
+    const cancelled = vi.fn(() => modal.remove());
+    modal.addEventListener("wa-show", opened);
+    modal.addEventListener("modal-cancel", cancelled);
+    opener.addEventListener("click", () => modal.show());
+
+    await userEvent.dblClick(opener);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(cancelled).not.toHaveBeenCalled();
+    expect(modal.open).toBe(true);
+    expect(dialog.open).toBe(true);
+
+    // The document corner is the native backdrop, outside the centered dialog.
+    await userEvent.click(document.documentElement, {
+      position: { x: 1, y: 1 },
+      force: true,
+    });
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(modal.isConnected).toBe(false);
+    expect(dialog.open).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
   it("retains presentation through native exit transitions after closing during opening", async () => {
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
     let occluded = false;

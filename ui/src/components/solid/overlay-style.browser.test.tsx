@@ -3,8 +3,15 @@ import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { emulateOverlayMedia } from "../../test-helpers/overlay-browser-media.ts";
+import {
+  item,
+  mountMenu,
+  openMenu,
+  phase,
+  surface,
+  trigger,
+} from "../../test-helpers/solid-menu.tsx";
 import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
-import { item, mountMenu, openMenu, phase, surface, trigger } from "./menu-test-fixture.tsx";
 import { Menu } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";

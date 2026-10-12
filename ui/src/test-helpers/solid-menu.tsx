@@ -2,7 +2,7 @@ import { render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { expect } from "vitest";
 import { userEvent } from "vitest/browser";
-import { Menu, type MenuHandle, type MenuItem, type MenuProps } from "./menu.tsx";
+import { Menu, type MenuHandle, type MenuItem, type MenuProps } from "../components/solid/menu.tsx";
 
 export const navigationItems: readonly MenuItem[] = [
   {

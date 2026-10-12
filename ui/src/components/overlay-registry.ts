@@ -1,4 +1,4 @@
-import type { Overlay, OverlayOptions } from "./overlay-lifecycle.ts";
+import type { Overlay, OverlayOptions } from "./overlay-types.ts";
 
 type OverlayRoot = Document | ShadowRoot;
 type RegisteredOverlay = {
@@ -300,8 +300,13 @@ function createRegistryEvents(registry: OverlayRegistry) {
     }
     return false;
   };
+  const eventNode = (event: Event): Node | null => {
+    const target = event.composedPath()[0];
+    const view = registry.document.defaultView;
+    return view && target instanceof view.Node ? target : null;
+  };
   const captureInteraction = (event: PointerEvent | FocusEvent): Node | null => {
-    const target = event.composedPath()[0] as Node | undefined;
+    const target = eventNode(event);
     if (!registry.stack.some((overlay) => registry.members.get(overlay)?.options.onInteraction)) {
       return target ?? null;
     }
@@ -396,7 +401,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
         finishRelease(released),
       );
     }
-    release.target = event.composedPath()[0] as Node;
+    release.target = eventNode(event);
   };
   const pointerup = (event: PointerEvent) => {
     const released = releases.get(event);
@@ -486,6 +491,7 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       ["focusin", events.focusin, false],
     ] as const;
     for (const [type, listener, capture] of listeners) {
+      // SAFETY: Each table entry pairs its native event name with that event's handler.
       root.addEventListener(type, listener as EventListener, capture);
     }
     const observer = new MutationObserver(() => {
@@ -506,6 +512,7 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       release() {
         observer.disconnect();
         for (const [type, listener, capture] of listeners) {
+          // SAFETY: These are the same native event/handler pairs installed above.
           root.removeEventListener(type, listener as EventListener, capture);
         }
       },

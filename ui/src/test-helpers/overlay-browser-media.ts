@@ -1,9 +1,7 @@
 import { commands } from "vitest/browser";
+import type { OverlayMedia } from "../../../test/vitest/overlay-browser-commands.js";
 
-export interface OverlayMedia {
-  reducedMotion?: "reduce" | "no-preference" | null;
-  forcedColors?: "active" | "none" | null;
-}
+export type { OverlayMedia } from "../../../test/vitest/overlay-browser-commands.js";
 
 declare module "vitest/internal/browser" {
   interface BrowserCommands {

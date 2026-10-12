@@ -155,6 +155,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   let programmatic = false;
   let dismissing = false;
   let returnFocus: HTMLElement | null = null;
+  let returnFocusCaptured = false;
   let returnOverride: HTMLElement | null | undefined;
   let returnFocusPending = false;
   let openingInteraction = false;
@@ -187,12 +188,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
 
   const clearReturnFocus = () => {
     returnFocus = null;
+    returnFocusCaptured = false;
     returnOverride = undefined;
     returnFocusPending = false;
   };
 
   const restoreReturnFocus = () => {
-    if (dialog.open) {
+    if (dialog.open || !returnFocusCaptured) {
       return;
     }
     const target = returnOverride === undefined ? returnFocus : returnOverride;
@@ -256,6 +258,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
             clearReturnFocus();
           }
           returnFocus = activeElement(host);
+          returnFocusCaptured = true;
           if (returnFocus) {
             overlay.setReturnTarget(returnFocus);
           }
@@ -417,11 +420,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       request(false, false);
     }
   };
-  const pointerdown = (event: PointerEvent) => {
+  const pointerdown = () => {
     if (initialFocusPending) {
       openingInteraction = true;
     }
-    if (event.target === dialog) {
+  };
+  const mousedown = (event: MouseEvent) => {
+    // A second press can land on the backdrop of the modal the first press opened.
+    if (event.target === dialog && event.button === 0 && event.detail === 1) {
+      // A caller can remove the modal synchronously; native focus must not overwrite its return.
+      event.preventDefault();
       request(false, false);
     }
   };
@@ -450,6 +458,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     dialog.addEventListener("overlay-after-hide", afterHide);
     dialog.addEventListener("cancel", cancel);
     dialog.addEventListener("pointerdown", pointerdown, true);
+    dialog.addEventListener("mousedown", mousedown, true);
     dialog.addEventListener("keydown", keydown, true);
     dialog.addEventListener("focusin", focusin);
     overlay.bindSurface(dialog);
@@ -480,6 +489,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       dialog.removeEventListener("overlay-after-hide", afterHide);
       dialog.removeEventListener("cancel", cancel);
       dialog.removeEventListener("pointerdown", pointerdown, true);
+      dialog.removeEventListener("mousedown", mousedown, true);
       dialog.removeEventListener("keydown", keydown, true);
       dialog.removeEventListener("focusin", focusin);
       if (state.policy === policy) {

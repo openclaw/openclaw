@@ -12,11 +12,12 @@ it("keeps controlled selection authoritative through rejection, acceptance, and 
     { value: "b", id: "b-tab", panelId: "b-panel", label: "Beta" },
   ]);
   let reject = true;
-  const onSelect = vi.fn((value: string) => {
+  const onSelect = vi.fn((value: string): boolean => {
     if (reject) {
       return false;
     }
     setActive(value);
+    return true;
   });
   const view = render(() => (
     <>

@@ -4,8 +4,8 @@ export type ModalDialogContentProps = {
   label: string;
   description: string;
   children?: JSX.Element;
-  bindDialog(element: HTMLDialogElement): void;
-  bindOverlayContainer(element: HTMLElement): void;
+  bindDialog: (element: HTMLDialogElement) => void;
+  bindOverlayContainer: (element: HTMLElement) => void;
 };
 
 /** The caller's content range and transient overlays have separate DOM owners. */

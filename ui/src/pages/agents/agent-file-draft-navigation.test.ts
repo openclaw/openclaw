@@ -134,9 +134,11 @@ it.each([
   };
   const tab = (name: string) => {
     paint();
-    const target = container.querySelector(`[panel="${name}"]`);
+    const target = container.querySelector<HTMLButtonElement>(
+      `.agent-file-tabs [role="tab"][data-tab-value="${name}"]`,
+    );
     expect(target).not.toBeNull();
-    target!.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    target!.click();
   };
   const save = () => {
     paint();

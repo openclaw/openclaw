@@ -11,7 +11,7 @@ import {
   phase,
   surface,
   trigger,
-} from "./menu-test-fixture.tsx";
+} from "../../test-helpers/solid-menu.tsx";
 import type { MenuItem } from "./menu.tsx";
 
 afterEach(() => {

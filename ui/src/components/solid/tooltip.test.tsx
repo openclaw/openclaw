@@ -4,52 +4,13 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Tooltip, type TooltipElement } from "./tooltip.tsx";
 
-let open: WeakSet<Element>;
-let restorePopover: () => void;
-
 beforeEach(() => {
   vi.useFakeTimers();
-  open = new WeakSet();
-  // oxlint-disable-next-line typescript/unbound-method -- The DOM intrinsic is called below with its explicit element receiver.
-  const matches = Element.prototype.matches;
-  vi.spyOn(Element.prototype, "matches").mockImplementation(function (selector) {
-    return selector === ":popover-open" ? open.has(this) : matches.call(this, selector);
-  });
-  const show = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "showPopover");
-  const hide = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "hidePopover");
-  Object.defineProperties(HTMLElement.prototype, {
-    showPopover: {
-      configurable: true,
-      value() {
-        open.add(this);
-      },
-    },
-    hidePopover: {
-      configurable: true,
-      value() {
-        open.delete(this);
-      },
-    },
-  });
-  restorePopover = () => {
-    if (show) {
-      Object.defineProperty(HTMLElement.prototype, "showPopover", show);
-    } else {
-      delete (HTMLElement.prototype as Partial<HTMLElement>).showPopover;
-    }
-    if (hide) {
-      Object.defineProperty(HTMLElement.prototype, "hidePopover", hide);
-    } else {
-      delete (HTMLElement.prototype as Partial<HTMLElement>).hidePopover;
-    }
-  };
 });
 
 afterEach(() => {
   cleanup();
-  restorePopover();
   vi.useRealTimers();
-  vi.restoreAllMocks();
 });
 
 function pointer(target: Element, type: "pointerenter" | "pointerleave" | "pointerdown") {
@@ -90,7 +51,7 @@ describe("Solid tooltip policy", () => {
     vi.advanceTimersByTime(1);
     await host.updateComplete;
     flush();
-    expect(open.has(surface)).toBe(true);
+    expect(surface.matches(":popover-open")).toBe(true);
     expect(surface.querySelector(".tooltip-content")?.textContent).toBe("Action details");
     expect(trigger.getAttribute("aria-describedby")).toBe(description?.id);
   });
@@ -305,7 +266,7 @@ describe("Solid tooltip policy", () => {
     flush();
     expect(first.host.hasAttribute("open")).toBe(true);
     expect(second.host.hasAttribute("open")).toBe(false);
-    expect(open.has(second.surface)).toBe(false);
+    expect(second.surface.matches(":popover-open")).toBe(false);
     const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     first.trigger.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(true);
@@ -322,7 +283,7 @@ describe("Solid tooltip policy", () => {
       view.container.setAttribute(attribute, attribute === "aria-hidden" ? "true" : "");
       await Promise.resolve();
       expect(host.hasAttribute("open")).toBe(false);
-      expect(open.has(surface)).toBe(false);
+      expect(surface.matches(":popover-open")).toBe(false);
       view.container.removeAttribute(attribute);
       await Promise.resolve();
       expect(host.hasAttribute("open")).toBe(false);

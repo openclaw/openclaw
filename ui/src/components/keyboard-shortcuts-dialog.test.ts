@@ -140,6 +140,8 @@ describe("keyboard shortcuts dialog", () => {
         const otherModal = document.body.appendChild(
           document.createElement("openclaw-modal-dialog"),
         );
+        await otherModal.updateComplete;
+        expect(otherModal.querySelector("dialog")?.open).toBe(true);
         expect(key({}).defaultPrevented).toBe(false);
         expect(dialog.isOpen).toBe(true);
         otherModal.remove();

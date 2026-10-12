@@ -274,7 +274,7 @@ describe("Solid native modal policy", () => {
         modalDialog(handle).dispatchEvent(
           source === "cancel"
             ? new Event("cancel", { bubbles: true, cancelable: true })
-            : new MouseEvent("pointerdown", { bubbles: true }),
+            : new MouseEvent("mousedown", { bubbles: true, detail: 1 }),
         );
         expect(handle.open).toBe(true);
         expect(modalDialog(handle).open).toBe(true);

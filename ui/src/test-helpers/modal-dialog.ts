@@ -11,7 +11,7 @@ export function nextFrame() {
 }
 
 export function afterModalHidden(modal: OpenClawModalDialog): Promise<void> {
-  const dialog = modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
+  const dialog = modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog");
   if (!dialog) {
     throw new Error("Expected a rendered native modal dialog");
   }
@@ -175,12 +175,7 @@ export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "c
 }
 
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
-export async function waitForRenderedModalDialog(container: HTMLElement) {
-  await waitForDialog(() => {
-    if (!container.querySelector("openclaw-modal-dialog")) {
-      throw new Error("Expected openclaw-modal-dialog");
-    }
-  });
+export function waitForRenderedModalDialog(container: HTMLElement) {
   return getRenderedModalDialog(container);
 }
 
@@ -205,18 +200,21 @@ export async function submitInputDialog(value: string): Promise<void> {
 }
 
 export async function getRenderedModalDialog(container: ParentNode) {
-  const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).toBeInstanceOf(HTMLElement);
-  if (!modal) {
-    throw new Error("Expected openclaw-modal-dialog");
-  }
+  const modal = await waitForDialog(() => {
+    const element = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
+    if (!element) {
+      throw new Error("Expected openclaw-modal-dialog");
+    }
+    return element;
+  });
   await modal.updateComplete;
   await nextFrame();
-  const dialog = modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
+  const dialog = modal.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog");
   expect(dialog).toBeInstanceOf(HTMLDialogElement);
   if (!(dialog instanceof HTMLDialogElement)) {
     throw new Error("Expected rendered dialog");
   }
+  expect(dialog.parentElement).toBe(modal);
   await nextFrame();
   return { modal, dialog };
 }
