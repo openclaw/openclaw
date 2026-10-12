@@ -33,7 +33,7 @@ export type ControlUiPublicSessionRequestGate = {
     sessionKey: string;
     requestKey: string;
     config: OpenClawConfig;
-    work: () => Promise<string | null>;
+    work: () => Promise<string | Buffer | null>;
   }): Promise<PublicSessionAdmissionResult>;
 };
 

@@ -55,7 +55,7 @@ describe("public session document", () => {
         content: "[Inter-session message] sourceSession=private\nprivate legacy handoff",
       },
       { role: "toolResult", content: "private tool output" },
-      { role: "assistant", phase: "commentary", content: "private commentary" },
+      { role: "assistant", phase: "commentary", content: "Public progress" },
       {
         role: "assistant",
         content: "<think>private tagged reasoning</think>Public visible answer",
@@ -95,7 +95,7 @@ describe("public session document", () => {
           },
           {
             type: "text",
-            text: "Private phased commentary",
+            text: "Public phased commentary",
             textSignature: '{"v":1,"phase":"commentary"}',
           },
           {
@@ -109,11 +109,96 @@ describe("public session document", () => {
     ]);
     expect(html).toContain("First public question");
     expect(html).toContain("Public visible answer");
+    expect(html).toContain("Public progress");
+    expect(html).toContain("Public phased commentary");
     expect(html).toContain("Second public question");
     expect(html).toContain("<strong>Public final answer</strong>");
     expect(html).not.toMatch(
       /private|Private|hidden user input|internal handoff|unknown source|NO_REPLY|HEARTBEAT_OK|heartbeat poll/,
     );
+  });
+
+  it("groups tool work between every assistant message with bounded redacted summaries", () => {
+    const secret = `sk-${"a".repeat(48)}`;
+    const html = render([
+      { role: "assistant", phase: "commentary", content: "Checking the files." },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "exec",
+            arguments: { command: `cat file ${secret} ${"x".repeat(300)} TAIL_MARKER` },
+          },
+        ],
+      },
+      { role: "toolResult", content: "RESULT_BODY_MUST_STAY_PRIVATE" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "THOUGHT_MUST_STAY_PRIVATE" },
+          { type: "tool_use", name: "read", input: { path: "src/example.ts" } },
+        ],
+      },
+      { role: "assistant", phase: "commentary", content: "The cause is clear." },
+      { role: "assistant", phase: "final_answer", content: "Fixed the issue." },
+    ]);
+    expect(html).toContain("Checking the files.");
+    expect(html).toContain("The cause is clear.");
+    expect(html).toContain("Fixed the issue.");
+    expect(html.match(/<details class="tools">/g)).toHaveLength(1);
+    expect(html).toContain("Ran 2 tools");
+    expect(html).toContain("src/example.ts");
+    expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
+    expect(html).not.toContain(secret);
+    expect(html).not.toContain('<details class="tools" open');
+    expect(html.indexOf("Checking the files.")).toBeLessThan(html.indexOf("Ran 2 tools"));
+    expect(html.indexOf("Ran 2 tools")).toBeLessThan(html.indexOf("The cause is clear."));
+  });
+
+  it("links user, assistant, and tool images only through entry-scoped public media", () => {
+    const html = render(
+      [
+        {
+          role: "user",
+          __openclaw: { id: "user-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES", fileName: "photo.png" },
+            { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
+          ],
+        },
+        {
+          role: "assistant",
+          __openclaw: { id: "assistant-entry" },
+          content: [{ type: "image", data: "PRIVATE_BYTES" }],
+        },
+        {
+          role: "toolResult",
+          __openclaw: { id: "tool-entry" },
+          content: [
+            { type: "image", data: "PRIVATE_BYTES" },
+            { type: "text", text: "PRIVATE_RESULT" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "[Inter-session message] private input" },
+            { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
+          ],
+        },
+      ],
+      { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
+    );
+    expect(html.match(/<img /g)).toHaveLength(3);
+    for (const entry of ["user-entry", "assistant-entry", "tool-entry"]) {
+      expect(html).toContain(`&amp;entry=${entry}&amp;attachment=content-0`);
+    }
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('<span class="attachment">notes.pdf</span>');
+    expect(html).not.toMatch(/PRIVATE_BYTES|PRIVATE_RESULT|file:\/\/|HIDDEN_IMAGE/);
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("img-src 'self'");
   });
 
   it("strips generated envelopes and applies built-in and operator redaction", () => {
@@ -249,9 +334,7 @@ describe("public session document", () => {
     const html = render([], { truncated: true });
     expect(html).toContain("No public conversation text yet");
     expect(html).toContain("Public · Read-only");
-    expect(html).toContain(
-      "Tool output, files, images, reasoning, and interactive content are omitted",
-    );
+    expect(html).toContain("Tool result text, reasoning, and interactive content are omitted");
     expect(html).toContain('http-equiv="refresh" content="15"');
     expect(html).toContain('property="og:title" content="A shared conversation"');
     expect(html).toContain('aria-label="Conversation"');

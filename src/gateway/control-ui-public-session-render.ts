@@ -1,22 +1,19 @@
 import { createHash } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt from "markdown-it";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
-import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaOutput } from "../media/parse-output.js";
-import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import {
   CONTROL_UI_TOKEN_SESSION_KEY_PREFIX,
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
 } from "../shared/control-ui-storage.js";
 import { escapeHtml } from "../shared/html-escape.js";
-import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
-import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
+import {
+  buildPublicSessionMediaUrl,
+  collectPublicSessionAttachments,
+  getPublicSessionEntryId,
+} from "./control-ui-public-session-attachments.js";
+import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 
 /** Public-reader lifecycle only: login probe, live refresh, and copy controls; never the operator app, socket, or roster. */
 const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
@@ -117,7 +114,7 @@ const ENTRY_SCRIPT_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIP
  * font stylesheet are the Control UI's own root assets, served under the same mount. */
 export const PUBLIC_SESSION_CONTENT_SECURITY_POLICY = `default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'sha256-${ENTRY_SCRIPT_HASH}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
 
-const MAX_MESSAGES = 100;
+const MAX_ITEMS = 51;
 const MAX_MESSAGE_CHARS = 32_768;
 const MAX_DOCUMENT_CHARS = 262_144;
 
@@ -162,6 +159,7 @@ const PUBLIC_SESSION_STYLES = `:root{color-scheme:dark;--bg:#0e1015;--bg-muted:#
 .article-head{padding:56px 0 32px;margin-bottom:40px;border-bottom:1px solid var(--border)}.article-head:last-child{border-bottom:0}.eyebrow{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;margin:0 0 16px;color:var(--muted);font-size:13px;font-weight:500}.eyebrow .sep{color:var(--border-strong)}.live{display:inline-flex;align-items:center;gap:7px;color:var(--ok);font-weight:600}.live::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-weight:650;line-height:1.12;letter-spacing:-.035em;overflow-wrap:anywhere;text-wrap:balance}.intro{max-width:600px;margin:0;color:var(--muted);font-size:14px;line-height:1.65}.intro strong{color:var(--text);font-weight:600}
 .notice,.pagination{position:relative;margin:0 0 28px;color:var(--muted);font-size:13px;line-height:1.6}.notice{padding-left:14px}.notice::before{content:"";position:absolute;top:3px;bottom:3px;left:0;width:3px;border-radius:9999px;background:var(--border-strong)}.pagination a{color:var(--muted);font-weight:500;text-decoration:none}.pagination a:hover{color:var(--text-strong)}.transcript+.pagination{margin:36px 0 0}
+.tools{min-width:0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.tools summary{cursor:pointer;font-weight:600}.tools ul{margin:12px 0 0;padding-left:20px}.tools li{margin:6px 0}.tools code{color:var(--text-strong);font-family:var(--mono)}.image{display:block;margin-top:12px}.image img{display:block;max-width:100%;height:auto;border-radius:8px}.attachment{display:inline-block;max-width:100%;margin:8px 8px 0 0;padding:4px 9px;border:1px solid var(--border-strong);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
 .transcript{display:flex;flex-direction:column;gap:28px}.message.continued{margin-top:-18px}.speaker{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .assistant{display:grid;grid-template-columns:28px minmax(0,1fr);gap:0 12px}.avatar{display:grid;place-items:center;width:28px;height:28px;margin-top:2px;border:1px solid var(--border);border-radius:50%;background:var(--panel)}.avatar .mark{width:17px;height:17px}.assistant .content{grid-column:2}
 .user{display:flex;justify-content:flex-end}.user .content{max-width:min(78%,560px);padding:12px 16px;border-radius:10px;background:var(--bubble);color:var(--bubble-ink);font-size:15px}
@@ -177,76 +175,9 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 @media(min-width:840px){.assistant{grid-template-columns:minmax(0,1fr);margin-left:-44px;padding-left:44px}.avatar{position:absolute;margin-left:-44px}.assistant .content{grid-column:1}}
 @media(max-width:640px){.page{width:calc(100% - 36px)}.topbar{height:56px}.article-head{padding-top:36px;margin-bottom:32px}.user .content{max-width:88%}.content{font-size:15.5px}.install pre{white-space:pre-wrap;overflow-wrap:anywhere}.status{display:block}.status a{display:inline-block;margin-top:8px}}`;
 
-function publicMessageText(
-  message: unknown,
-): { role: "user" | "assistant"; text: string } | undefined {
-  const entry = asOptionalRecord(message);
-  if (
-    !entry ||
-    (entry.role !== "user" && entry.role !== "assistant") ||
-    entry.display === false ||
-    entry.customType !== undefined ||
-    entry.senderSession !== undefined ||
-    entry.toolCallId !== undefined ||
-    entry.tool_call_id !== undefined
-  ) {
-    return undefined;
-  }
-  const provenance = asOptionalRecord(entry.provenance);
-  // A user role can also carry private runtime and cross-session input.
-  // Unknown explicit provenance is not an external user's publication grant.
-  if (entry.provenance !== undefined && provenance?.kind !== "external_user") {
-    return undefined;
-  }
-  let text: string | undefined;
-  if (entry.role === "assistant") {
-    if (entry.phase !== undefined && entry.phase !== "final_answer") {
-      return undefined;
-    }
-    text = extractAssistantPhaseText(entry);
-  } else if (typeof entry.content === "string") {
-    text = entry.content;
-  } else if (Array.isArray(entry.content)) {
-    text = entry.content
-      .flatMap((value) => {
-        const block = asOptionalRecord(value);
-        return (block?.type === "text" || block?.type === "input_text") &&
-          typeof block.text === "string"
-          ? [block.text]
-          : [];
-      })
-      .join("\n\n");
-  } else if (typeof entry.text === "string") {
-    text = entry.text;
-  }
-  if (!text || text.includes(INTER_SESSION_PROMPT_PREFIX_BASE)) {
-    return undefined;
-  }
-  text =
-    entry.role === "user"
-      ? stripUserEnvelopeForDisplay(text)
-      : stripInternalMetadataForDisplay(text);
-  if (entry.role === "assistant") {
-    // Live transcripts can end mid-tag. Never recover unfinished reasoning as public prose.
-    text = sanitizeAssistantVisibleTextWithProfile(text, "history", true);
-  }
-  const roleContent = { role: entry.role, content: text };
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) || isHeartbeatOkResponse(roleContent)) {
-    return undefined;
-  }
-  if (entry.role === "assistant") {
-    text = stripSuppressedControlReplyToken(text);
-  }
-  // The canonical parser removes attachment directives while preserving fenced examples.
-  text = splitMediaOutput(text, {
-    extractAudioDirectives: false,
-  }).text;
-  text = redactToolPayloadText(text).trim();
-  return text ? { role: entry.role, text } : undefined;
-}
-
 export function renderPublicSessionDocument(params: {
   messages: unknown[];
+  mediaBaseUrl?: string;
   title: string;
   truncated: boolean;
   latestUrl: string;
@@ -271,30 +202,64 @@ export function renderPublicSessionDocument(params: {
       200,
     ).trim() || "Shared conversation",
   );
-  let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
+  const projected = projectPublicSessionItems(params.messages);
+  let truncated = params.truncated || projected.length > MAX_ITEMS;
   let remaining = MAX_DOCUMENT_CHARS;
-  const entries: { role: "user" | "assistant"; html: string }[] = [];
-  // Budget newest messages first, then restore conversational order.
-  for (const value of params.messages.slice(-MAX_MESSAGES).toReversed()) {
-    const message = publicMessageText(value);
-    if (!message) {
-      continue;
-    }
+  const entries: { role: "user" | "assistant" | "tools"; html: string }[] = [];
+  // Budget newest visible items first, then restore conversational order.
+  for (const item of projected.slice(-MAX_ITEMS).toReversed()) {
     if (remaining <= 0) {
       truncated = true;
       break;
     }
-    const text = truncateUtf16Safe(message.text, Math.min(MAX_MESSAGE_CHARS, remaining));
-    const clipped = text.length < message.text.length;
+    if (item.kind === "tools") {
+      const lines: string[] = [];
+      for (const call of item.calls) {
+        const line = `<li><code>${escapeHtml(call.name)}</code>${call.summary ? ` <span>${escapeHtml(call.summary)}</span>` : ""}</li>`;
+        if (line.length > remaining) {
+          truncated = true;
+          break;
+        }
+        remaining -= line.length;
+        lines.push(line);
+      }
+      entries.push({
+        role: "tools",
+        html: `<details class="tools"><summary>Ran ${item.calls.length} ${item.calls.length === 1 ? "tool" : "tools"}</summary><ul>${lines.join("")}</ul>${lines.length < item.calls.length ? '<p class="omitted">More steps omitted for this public view.</p>' : ""}</details>`,
+      });
+      continue;
+    }
+    const text = truncateUtf16Safe(item.text, Math.min(MAX_MESSAGE_CHARS, remaining));
+    const clipped = text.length < item.text.length;
     truncated ||= clipped;
     remaining -= text.length;
+    const entryId = getPublicSessionEntryId(item.message);
+    const media: string[] = [];
+    for (const attachment of collectPublicSessionAttachments(item.message)) {
+      const name = escapeHtml(truncateUtf16Safe(redactToolPayloadText(attachment.name), 200));
+      const url =
+        params.mediaBaseUrl && entryId && attachment.image
+          ? escapeHtml(buildPublicSessionMediaUrl(params.mediaBaseUrl, entryId, attachment.id))
+          : undefined;
+      const html = url
+        ? `<a class="image" href="${url}" target="_blank" rel="noreferrer noopener"><img src="${url}" alt="${name}" loading="lazy"></a>`
+        : `<span class="attachment">${name}</span>`;
+      if (html.length > remaining) {
+        truncated = true;
+        break;
+      }
+      remaining -= html.length;
+      media.push(html);
+    }
     entries.push({
-      role: message.role,
-      html: `${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}`,
+      role: item.role,
+      html: `${markdown.render(text)}${clipped ? '<p class="omitted">Message shortened for this public view.</p>' : ""}${media.join("")}`,
     });
   }
-  // Consecutive turns from one speaker read as one group, as in the Control UI chat.
   const rows = entries.toReversed().map((entry, index, ordered) => {
+    if (entry.role === "tools") {
+      return entry.html;
+    }
     const continued = ordered[index - 1]?.role === entry.role;
     return `<article class="message ${entry.role}${continued ? " continued" : ""}" aria-label="${entry.role === "user" ? "User" : "Assistant"} message"><h2 class="speaker">${entry.role === "user" ? "User" : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content">${entry.html}</div></article>`;
   });
@@ -308,7 +273,8 @@ export function renderPublicSessionDocument(params: {
   const navigation = params.olderUrl
     ? `<nav class="pagination" aria-label="Conversation pages"><a href="${escapeHtml(params.olderUrl)}" rel="prev">← Older messages</a></nav>`
     : "";
-  const count = `${rows.length} ${rows.length === 1 ? "message" : "messages"}`;
+  const messageCount = entries.filter((entry) => entry.role !== "tools").length;
+  const count = `${messageCount} ${messageCount === 1 ? "message" : "messages"}`;
   const eyebrow = params.unavailable
     ? ""
     : isLatest
@@ -334,7 +300,7 @@ ${PUBLIC_SESSION_STYLES}
 <header class="article-head">${entryPending ? '<div class="entry-status" role="status"><h1>Loading conversation</h1><p class="intro">Checking access…</p></div><div class="entry-result">' : ""}${eyebrow}<h1>${title}</h1><p class="intro">${
     params.unavailable
       ? "This conversation is not publicly available. Log in to open conversations you have access to."
-      : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
+      : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text, tool steps, and shared images. Tool result text, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
   }</p>${entryPending ? "</div>" : ""}</header>
 ${truncated ? '<aside class="notice">Some messages or long text are omitted to keep this public page within its size limit.</aside>' : ""}
 ${navigation}

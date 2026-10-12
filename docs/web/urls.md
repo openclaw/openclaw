@@ -235,7 +235,7 @@ access from this feature.
 A thread has one normal `/chat/<agentId>/<sessionRef>` URL for signed-in people
 and anonymous readers. Session creators and Gateway admins can open **Session
 sharing → Public access → Enable public access** to publish its existing and
-future conversation text. **Copy public link** copies the normal thread URL,
+future conversation, including images and tool-call summaries. **Copy public link** copies the normal thread URL,
 not a separate viewer address. The chat header shows **Public** while access is enabled.
 
 A signed-out visitor sees the public conversation with a **Log in** button.
@@ -273,19 +273,13 @@ and you are its creator or a Gateway admin. See
 
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
-roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting in the Control UI's
-chat layout and typeface, offers a copy control on code blocks, and closes with a
-short OpenClaw introduction for readers who are new to it. Tool output,
-reasoning, files, images, executable widgets, internal metadata, and hidden
-messages are omitted. Credential-pattern redaction is best effort, not a
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with redacted tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Credential-pattern redaction is best effort, not a
 guarantee that sensitive prose is detected. Review the conversation before
 publishing and remember that future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible. **Older messages** opens earlier pages without automatic refresh;
-**Back to latest** returns to the live view. Pages and long messages are bounded,
-with visible omission notices. The initial conversation and social metadata
+**Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 
 Public reads wait for current sharing facts when a session changes during the

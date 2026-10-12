@@ -270,3 +270,29 @@ export async function resolvePublicSessionShareToken(
     )?.resolve(token) ?? null
   );
 }
+
+const canonicalTokensByCodec = new WeakMap<PublicSessionShareTokenCodec, Map<string, string>>();
+
+/** Canonical public pages may mint links only from an identity that already exists. */
+export async function mintExistingPublicSessionShareToken(
+  locator: PublicSessionShareLocator,
+): Promise<string | null> {
+  const codec = await resolveProcessCodec({ create: false });
+  if (!codec) {
+    return null;
+  }
+  let tokens = canonicalTokensByCodec.get(codec);
+  if (!tokens) {
+    tokens = new Map();
+    canonicalTokensByCodec.set(codec, tokens);
+  }
+  const key = JSON.stringify(locator);
+  const existing = tokens.get(key);
+  if (existing) {
+    return existing;
+  }
+  const token = codec.mint(locator);
+  pruneMapToMaxSize(tokens, 127);
+  tokens.set(key, token);
+  return token;
+}
