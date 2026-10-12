@@ -6,9 +6,16 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import type {
+  GatewayApprovalEventSubscriber,
+  GatewayNativeApprovalRuntime,
+} from "./approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
+import { createApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
+import { normalizeApprovalRequest } from "./approval-types.js";
 import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
   createChannelApprovalHandlerFromCapability: vi.fn(),
@@ -66,6 +73,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
   const startTestBootstrap = (params: {
     channelRuntime: ReturnType<typeof createRuntimeChannel>;
+    abortSignal?: AbortSignal;
     logger?: unknown;
   }) =>
     startChannelApprovalHandlerBootstrap({
@@ -74,19 +82,144 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       cfg: {} as never,
       accountId: "default",
       channelRuntime: params.channelRuntime,
+      abortSignal: params.abortSignal,
       logger: params.logger as never,
     });
 
   const registerApprovalContext = (
     channelRuntime: ReturnType<typeof createRuntimeChannel>,
     app: unknown = { ok: true },
+    abortSignal?: AbortSignal,
   ) =>
     channelRuntime.runtimeContexts.register({
       channelId: "slack",
       accountId: "default",
       capability: "approval.native",
       context: { app },
+      abortSignal,
     });
+
+  it("delivers once after aborted accounts are replaced before provider cleanup settles", async () => {
+    const actual = await vi.importActual<typeof import("./approval-handler-runtime.js")>(
+      "./approval-handler-runtime.js",
+    );
+    createChannelApprovalHandlerFromCapability.mockImplementation(
+      actual.createChannelApprovalHandlerFromCapability,
+    );
+    const channelRuntime = createRuntimeChannel();
+    const subscribers = new Set<GatewayApprovalEventSubscriber>();
+    const routeCoordinator = createApprovalNativeRouteCoordinator();
+    let subscribed = createDeferred();
+    const delivered = createDeferred();
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      request: async <T>() => [] as T,
+      requestRoute: vi.fn(),
+      routeCoordinator,
+      subscribe: (subscriber) => {
+        subscribers.add(subscriber);
+        subscribed.resolve();
+        return () => subscribers.delete(subscriber);
+      },
+    };
+    const deliverPending = vi.fn(async () => {
+      delivered.resolve();
+      return { messageId: "pending" };
+    });
+    const plugin: Parameters<typeof startChannelApprovalHandlerBootstrap>[0]["plugin"] = {
+      id: "slack",
+      meta: {
+        id: "slack",
+        label: "Slack",
+        selectionLabel: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "test channel",
+      },
+      approvalCapability: {
+        native: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "approver-dm" as const,
+            supportsOriginSurface: false,
+            supportsApproverDmSurface: true,
+          }),
+          resolveApproverDmTargets: () => [{ to: "approver" }],
+        },
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs({
+          eventKinds: ["system-agent"],
+          deliverPending,
+        }),
+      },
+    };
+    const cleanups: Array<() => Promise<void>> = [];
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const abort = new AbortController();
+        subscribed = createDeferred();
+        cleanups.push(
+          await startChannelApprovalHandlerBootstrap({
+            scheduler,
+            plugin,
+            cfg: {},
+            accountId: "default",
+            channelRuntime,
+            gatewayRuntime,
+            abortSignal: abort.signal,
+          }),
+        );
+        registerApprovalContext(channelRuntime, { index }, abort.signal);
+        await subscribed.promise;
+        if (index < 4) {
+          abort.abort();
+          await flushTransitions();
+          // A hung provider withholds task cleanup until after its replacement starts.
+        }
+      }
+      const request: SystemAgentApprovalRequest = {
+        id: "account-replacement",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+        request: {
+          title: "OpenClaw change",
+          description: "Change an agent name",
+          command: "rename the test agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+          sessionId: "test-delegation",
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "default",
+          turnSourceTo: "origin-chat",
+        },
+      };
+      const normalizedRequest = normalizeApprovalRequest(request);
+      for (const subscriber of subscribers) {
+        if (await subscriber.shouldHandle(normalizedRequest)) {
+          subscriber.onRequested(normalizedRequest);
+        }
+      }
+      await delivered.promise;
+      expect(deliverPending).toHaveBeenCalledOnce();
+    } finally {
+      for (const cleanup of cleanups) {
+        await cleanup();
+      }
+      routeCoordinator.close();
+    }
+  });
+
+  it("does not activate approvals for an already-aborted account", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const abort = new AbortController();
+    abort.abort();
+    const cleanup = await startTestBootstrap({ channelRuntime, abortSignal: abort.signal });
+    const lease = registerApprovalContext(channelRuntime);
+    try {
+      await flushTransitions();
+      expect(createChannelApprovalHandlerFromCapability).not.toHaveBeenCalled();
+    } finally {
+      await cleanup();
+      lease.dispose();
+    }
+  });
 
   it("starts immediately when the runtime context was already registered", async () => {
     const channelRuntime = createRuntimeChannel();
@@ -119,31 +252,40 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
-    const channelRuntime = createRuntimeChannel();
-    const { promise: runtimePromise, resolve: resolveRuntime } = createDeferred<{
-      start: ReturnType<typeof vi.fn>;
-      stop: ReturnType<typeof vi.fn>;
-    }>();
-    createChannelApprovalHandlerFromCapability.mockReturnValue(runtimePromise);
+  it.each(["context unregistration", "account abort"])(
+    "does not start a handler after %s during its factory",
+    async (cancellation) => {
+      const channelRuntime = createRuntimeChannel();
+      const abort = new AbortController();
+      const { promise: runtimePromise, resolve: resolveRuntime } = createDeferred<{
+        start: ReturnType<typeof vi.fn>;
+        stop: ReturnType<typeof vi.fn>;
+      }>();
+      createChannelApprovalHandlerFromCapability.mockReturnValue(runtimePromise);
 
-    const cleanup = await startTestBootstrap({ channelRuntime });
+      const cleanup = await startTestBootstrap({ channelRuntime, abortSignal: abort.signal });
 
-    const lease = registerApprovalContext(channelRuntime);
-    await flushTransitions();
+      const lease = registerApprovalContext(channelRuntime);
+      await flushTransitions();
 
-    const start = vi.fn().mockResolvedValue(undefined);
-    const stop = vi.fn().mockResolvedValue(undefined);
+      const start = vi.fn().mockResolvedValue(undefined);
+      const stop = vi.fn().mockResolvedValue(undefined);
 
-    lease.dispose();
-    resolveRuntime?.({ start, stop });
-    await flushTransitions();
+      if (cancellation === "account abort") {
+        abort.abort();
+      } else {
+        lease.dispose();
+      }
+      resolveRuntime?.({ start, stop });
+      await flushTransitions();
 
-    expect(start).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledTimes(1);
 
-    await cleanup();
-  });
+      await cleanup();
+      lease.dispose();
+    },
+  );
 
   it("restarts the shared approval handler when the runtime context is replaced", async () => {
     const channelRuntime = createRuntimeChannel();
@@ -276,31 +418,41 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it.each(["unregister", "cleanup"] as const)("cancels a pending retry on %s", async (action) => {
-    const channelRuntime = createRuntimeChannel();
-    const start = vi.fn().mockRejectedValue(new Error("boom"));
-    const stop = vi.fn().mockResolvedValue(undefined);
-    const logger = createLogger();
-    const failed = createDeferred();
-    logger.error.mockImplementation(() => failed.resolve());
-    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
+  it.each(["unregister", "cleanup", "account abort"] as const)(
+    "cancels a pending retry on %s",
+    async (action) => {
+      const channelRuntime = createRuntimeChannel();
+      const abort = new AbortController();
+      const start = vi.fn().mockRejectedValue(new Error("boom"));
+      const stop = vi.fn().mockResolvedValue(undefined);
+      const logger = createLogger();
+      const failed = createDeferred();
+      logger.error.mockImplementation(() => failed.resolve());
+      createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
 
-    const cleanup = await startTestBootstrap({ channelRuntime, logger });
-    const lease = registerApprovalContext(channelRuntime);
-    await failed.promise;
+      const cleanup = await startTestBootstrap({
+        channelRuntime,
+        logger,
+        abortSignal: abort.signal,
+      });
+      const lease = registerApprovalContext(channelRuntime);
+      await failed.promise;
 
-    if (action === "unregister") {
-      lease.dispose();
-    } else {
+      if (action === "unregister") {
+        lease.dispose();
+      } else if (action === "account abort") {
+        abort.abort();
+      } else {
+        await cleanup();
+      }
+      await clock.advanceBy(1_000);
+
+      expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+      expect(scheduler.nextWakeAtMs).toBeNull();
       await cleanup();
-    }
-    await clock.advanceBy(1_000);
-
-    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await cleanup();
-    lease.dispose();
-  });
+      lease.dispose();
+    },
+  );
 
   it("joins an in-flight retry on scheduler shutdown without starting its retired handler", async () => {
     const channelRuntime = createRuntimeChannel();
