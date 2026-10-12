@@ -171,6 +171,30 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   expect(output).not.toContain(directory);
 });
 
+it("Doctor reclaims npm global runtime placed above node_modules", async () => {
+  const original = packageRoot;
+  const npmParent = path.join(parent, "lib");
+  const nodeModules = path.join(npmParent, "node_modules");
+  packageRoot = path.join(nodeModules, "openclaw");
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.renameSync(path.join(original, "package.json"), path.join(packageRoot, "package.json"));
+  mocks.packageRoots.mockReturnValue([packageRoot]);
+  // The updater places the retained runtime as a sibling of node_modules
+  // (inside lib/), not as a sibling of the package root (inside node_modules/).
+  const abandoned = projection("Npm001", npmParent);
+  const manifest = path.join(packageRoot, "extensions/discord/openclaw.plugin.json");
+  const retainedManifest = projectedPath(abandoned, manifest);
+  fs.mkdirSync(path.dirname(manifest), { recursive: true });
+  fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
+  fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
+  fs.linkSync(manifest, retainedManifest);
+  expect(fs.statSync(manifest).nlink).toBe(2);
+  const output = await runDoctor(true);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.statSync(manifest).nlink).toBe(1);
+  expect(output).toContain(`Removed abandoned updater runtime: ${abandoned}`);
+});
+
 it.each([
   { reason: "Doctor does not hold Gateway maintenance", maintenance: false, census: { pids: [] } },
   { reason: "PIDs: 4242", maintenance: true, census: { pids: [4242] } },

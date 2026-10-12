@@ -94,12 +94,21 @@ export async function maintainRetainedUpdateRuntimes(params: {
   // Native spelling matches the projection, registration, and marker realpaths
   // even when callers pass a Windows 8.3 or differently cased spelling.
   const packages = params.packageRoots.map(resolveIdentityPathViaExistingAncestorSync);
+  // npm global installs place the package under .../lib/node_modules/openclaw.
+  // The updater creates its retained runtime as a sibling of the module owner
+  // (node_modules), not the package root, so Doctor must also search the
+  // grandparent when the immediate parent is a node_modules directory.
+  const searchParents = packages.flatMap((root) => {
+    const parent = path.dirname(root);
+    if (path.basename(parent) === "node_modules") {
+      return [parent, path.dirname(parent)];
+    }
+    return [parent];
+  });
   const roots = new Set(
-    [
-      os.tmpdir(),
-      ...(params.temporaryDirectories ?? []),
-      ...packages.map((root) => path.dirname(root)),
-    ].map(resolveIdentityPathViaExistingAncestorSync),
+    [os.tmpdir(), ...(params.temporaryDirectories ?? []), ...searchParents].map(
+      resolveIdentityPathViaExistingAncestorSync,
+    ),
   );
   for (const parent of roots) {
     try {
