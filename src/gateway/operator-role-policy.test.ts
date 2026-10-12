@@ -18,7 +18,6 @@ import {
   prepareUserProfileCatalog,
   publishUserProfilesChange,
 } from "../state/user-profile-list.js";
-import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import {
   linkEmail,
   setDisplayName,
@@ -701,7 +700,7 @@ describe("operator role policy", () => {
         );
         sql.expectIdle();
 
-        await setCanonicalUserProfileRole(profile.id, "guest");
+        setUserProfileRole(profile.id, "guest");
         sql.clear();
         expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
         expect(

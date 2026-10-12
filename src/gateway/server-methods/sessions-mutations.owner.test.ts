@@ -24,6 +24,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
@@ -571,6 +572,7 @@ describe("sessions.patch", () => {
   it("keeps a newly created session visible to its identified non-admin creator", async () => {
     await withSessionMutationState(async (state) => {
       const profileId = ensureProfileForEmail(`patch-creator-${caseNumber}@example.test`).id;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:patch-created";
       const requestClient = client(profileId);
       const cfg: OpenClawConfig = {

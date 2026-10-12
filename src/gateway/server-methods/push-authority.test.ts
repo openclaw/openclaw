@@ -61,6 +61,7 @@ vi.mock("../../state/user-preferences.js", () => ({
   getCanonicalUserPreferences: vi.fn(async () => ({ profileId: "profile-owner", entries: {} })),
   setCanonicalUserPreferences: vi.fn(),
 }));
+// mock-isolation: Drive identity revocation through synthetic authority without opening profile storage.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
     const profileId = resolveProfileId(id);
@@ -69,6 +70,7 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
       : undefined;
   }),
 }));
+// mock-isolation: Resolve synthetic push recipients without opening a shared-state worker.
 vi.mock("../../state/user-profile-list.js", () => ({
   prepareUserProfileCatalog: async () => ({
     readCurrentIdentity: (id: string) => ({ profileId: resolveProfileId(id) }),

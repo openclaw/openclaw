@@ -52,6 +52,7 @@ vi.mock("../../state/user-preferences.js", () => ({
   })),
 }));
 
+// mock-isolation: Bind synthetic push profiles without opening profile storage.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
     const profileId = mocks.resolveProfileId(id);
@@ -60,6 +61,7 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
       : undefined;
   }),
 }));
+// mock-isolation: Resolve synthetic push recipients without opening a shared-state worker.
 vi.mock("../../state/user-profile-list.js", () => ({
   prepareUserProfileCatalog: async () => ({
     readCurrentIdentity: (id: string) => ({ profileId: mocks.resolveProfileId(id) }),

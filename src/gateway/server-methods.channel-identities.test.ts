@@ -9,7 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
-import { readUserProfileIdentity } from "../state/user-profile-list.js";
+import { prepareUserProfileCatalog, readUserProfileIdentity } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -68,6 +68,7 @@ it.each(["person", "shared owner"] as const)(
       if (kind === "person") {
         setUserProfileRole(admin.id, "admin");
       }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
