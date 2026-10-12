@@ -37,9 +37,13 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
+  OPENAI_GPT_61_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
+import {
+  OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+} from "./shared.js";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
@@ -194,6 +198,10 @@ function resolveCodexForwardCompatModel(
     return {
       ...catalogModel,
       contextWindow: catalogModel.contextWindow,
+      contextTokens:
+        lower === OPENAI_GPT_61_SOL_MODEL_ID
+          ? OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS
+          : catalogModel.contextTokens,
       input: catalogModel.input.filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
