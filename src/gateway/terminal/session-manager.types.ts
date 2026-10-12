@@ -55,6 +55,10 @@ export type TerminalSession = {
 };
 
 export type TerminalSessionManagerOptions = {
+  withOpenAdmission?: (
+    request: TerminalOpenRequest,
+    run: (request: TerminalOpenRequest) => Promise<TerminalOpenOutcome>,
+  ) => Promise<TerminalOpenOutcome>;
   emit: TerminalEventSink;
   getBufferedAmount?: (connId: string) => number | undefined;
   spawn?: typeof spawnTerminalPty;
