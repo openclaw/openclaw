@@ -578,6 +578,38 @@ suite.define(() => {
     expect(surface.pageErrors).toEqual([]);
   });
 
+  it("renders changed Gateway content after reload instead of a hard-coded fixture", async () => {
+    const pending = pendingApproval("");
+    if (pending.presentation.kind !== "exec") {
+      throw new Error("Expected an exec approval fixture");
+    }
+    const surface = await createSurface({
+      basePath: "",
+      pending,
+      viewport: MOBILE_VIEWPORT,
+    });
+
+    await surface.page.goto(approvalUrl(""));
+    await waitForApprovalPage(surface.page);
+    const changed = {
+      ...pending,
+      presentation: {
+        ...pending.presentation,
+        commandText: "printf 'fixture changed at the Gateway'",
+        warningText: "Changed warning from the live approval fixture.",
+      },
+    } satisfies PendingApprovalSnapshot;
+    await surface.gateway.setMethodResponse("approval.get", { approval: changed });
+
+    await surface.page.reload();
+    await surface.gateway.waitForRequest("approval.get");
+    await surface.page.getByText("Changed warning from the live approval fixture.").waitFor();
+    await surface.page
+      .getByText("printf 'fixture changed at the Gateway'", { exact: true })
+      .waitFor();
+    expect(surface.pageErrors).toEqual([]);
+  });
+
   it("fails closed on malformed Gateway data", async () => {
     const surface = await createSurface({
       basePath: "",

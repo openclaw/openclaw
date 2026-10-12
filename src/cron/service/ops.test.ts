@@ -18,7 +18,7 @@ import * as runReceiptStore from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
-import { add, removeStaleJobFamily, update } from "./ops-mutations.js";
+import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
 import { createOkIsolatedCronStateFactory } from "./ops.test-support.js";
@@ -788,6 +788,38 @@ describe("cron service ops seam coverage", () => {
         jobId: "startup-timeout",
       });
     });
+  });
+
+  it("uses explicit lifecycle events instead of scheduled duplicates for the target job", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const events: CronEvent[] = [];
+    const state = createOkIsolatedCronState({
+      storePath,
+      now,
+      onEvent: (event) => events.push(structuredClone(event)),
+    });
+
+    const job = await add(state, {
+      id: "lifecycle-target",
+      name: "lifecycle target",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    expect(events.map((event) => event.action)).toEqual(["added"]);
+
+    events.length = 0;
+    await update(state, job.id, {
+      schedule: { kind: "every", everyMs: 120_000, anchorMs: now },
+    });
+    expect(events.map((event) => event.action)).toEqual(["updated"]);
+
+    events.length = 0;
+    await remove(state, job.id);
+    expect(events.map((event) => event.action)).toEqual(["removed"]);
   });
 
   it("emits repaired sibling schedules during add before the target lifecycle event", async () => {
