@@ -8,11 +8,14 @@ import {
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
 import {
@@ -110,7 +113,7 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
   });
 });
 
-it("refuses legacy incognito callbacks while prepared unbound writes retain the native owner", async () => {
+it("refuses legacy incognito callbacks while prepared unbound writes use the memory owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const target = {
       agentId: "main",
@@ -144,45 +147,55 @@ it("refuses legacy incognito callbacks while prepared unbound writes retain the 
     expect(prepare).not.toHaveBeenCalled();
     expect(guard).not.toHaveBeenCalled();
     expect(locked).not.toHaveBeenCalled();
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const candidate = { ...message, idempotencyKey: "native-private" };
-    const prepareNative = vi.fn(async (value: typeof candidate) => ({
-      ...value,
-      content: "native prepared",
-    }));
-    const events = await withSessionTranscriptWrite(target, async (transcript) => {
-      const options = {
-        eventId: "native-private",
-        message: candidate,
-        idempotencyLookup: "scan" as const,
-        preparation: { prepareMessage: prepareNative },
-      };
-      await expect(transcript.appendMessage(options)).resolves.toMatchObject({
-        appended: true,
-        messageId: "native-private",
-        message: { content: "native prepared" },
+    const location = {
+      agentId: target.agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath(target),
+    };
+    const sql = observeHostDataSql();
+    try {
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const candidate = { ...message, idempotencyKey: "memory-private" };
+      const prepareMemory = vi.fn(async (value: typeof candidate) => ({
+        ...value,
+        content: "memory prepared",
+      }));
+      const events = await withSessionTranscriptWrite(target, async (transcript) => {
+        const options = {
+          eventId: "memory-private",
+          message: candidate,
+          idempotencyLookup: "scan" as const,
+          preparation: { prepareMessage: prepareMemory },
+        };
+        await expect(transcript.appendMessage(options)).resolves.toMatchObject({
+          appended: true,
+          messageId: "memory-private",
+          message: { content: "memory prepared" },
+        });
+        await expect(transcript.appendMessage(options)).resolves.toMatchObject({
+          appended: false,
+          messageId: "memory-private",
+          message: { content: "memory prepared" },
+        });
+        await expect(
+          transcript.appendMessage({
+            message: { ...message, idempotencyKey: "suppressed" },
+            preparation: { prepareMessage: async () => undefined },
+          }),
+        ).resolves.toBeUndefined();
+        return await transcript.readEvents();
       });
-      await expect(transcript.appendMessage(options)).resolves.toMatchObject({
-        appended: false,
-        messageId: "native-private",
-        message: { content: "native prepared" },
+      expect(prepareMemory).toHaveBeenCalledOnce();
+      expect(events).toHaveLength(2);
+      expect(events.at(-1)).toMatchObject({
+        type: "message",
+        id: "memory-private",
+        message: { content: "memory prepared" },
       });
-      await expect(
-        transcript.appendMessage({
-          message: { ...message, idempotencyKey: "suppressed" },
-          preparation: { prepareMessage: async () => undefined },
-        }),
-      ).resolves.toBeUndefined();
-      return await transcript.readEvents();
-    });
-    expect(prepareNative).toHaveBeenCalledOnce();
-    expect(events).toHaveLength(2);
-    expect(events.at(-1)).toMatchObject({
-      type: "message",
-      id: "native-private",
-      message: { content: "native prepared" },
-    });
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      memorySessionActorOwners.closeDatabase(location);
+    }
   });
 });
 

@@ -1,15 +1,20 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
+import {
+  retainGatewaySessionEntryReadOnly,
+  withGatewaySessionEntryReadOnly,
+} from "./session-utils-read-lifetime.js";
 
 it("reads committed durable rows without host SQL and checks caller authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

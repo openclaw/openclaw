@@ -292,10 +292,9 @@ export function readCollaborationTarget(
   projection: Pick<SessionRowProjection, "describe" | "sharingTargetState">,
   query: { key: string; agentId: string },
   actorFacts?: ReturnType<typeof captureSessionSharingMemoryFacts>,
-) {
+): (SessionSharingTarget & { generation?: string | symbol }) | null {
   if (actorFacts) {
-    const target = actorFacts.readCurrent().target;
-    return target && { ...target, generation: target.readSource.databaseIdentity };
+    return actorFacts.readCurrent().target;
   }
   const current = projection.sharingTargetState(query);
   return current.status === "ready" ? current.target : null;

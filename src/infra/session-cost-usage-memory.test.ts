@@ -115,11 +115,13 @@ describe("actor memory usage", () => {
         kind: "inventory",
         files: [{ sessionId }],
       });
-      expect(
-        (await Array.fromAsync(readTranscriptRecords(sessionFile))).filter(
-          (record) => record.type === "message",
-        ),
-      ).toMatchObject([{ message: { usage: { input: 5 } } }]);
+      const messages: Record<string, unknown>[] = [];
+      for await (const record of readTranscriptRecords(sessionFile)) {
+        if (record.type === "message") {
+          messages.push(record);
+        }
+      }
+      expect(messages).toMatchObject([{ message: { usage: { input: 5 } } }]);
     }
     const refresh = () =>
       runSessionActorUsage(

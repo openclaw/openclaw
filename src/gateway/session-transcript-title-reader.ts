@@ -166,9 +166,10 @@ export function readSessionTitleFieldsFromTranscript(
       type: "session.history.title" as const,
       input: { sessionId: input.sessionId, includeInterSession: opts?.includeInterSession },
     };
+    const binding = memory.binding;
     const result =
-      memory.binding?.actor.target.sessionKey === key
-        ? memory.binding.actor.storage!.readCurrent(command, memory.authority)
+      binding && binding.actor.target.sessionKey === key
+        ? binding.actor.storage!.readCurrent(command, memory.authority)
         : key
           ? memory.owner?.readStorage(key, command, memory.authority)
           : undefined;

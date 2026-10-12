@@ -204,7 +204,11 @@ it.each(["durable", "memory"] as const)(
       ["b-exact", "legacy", 1],
     ] as const) {
       const sessionKey = `${prefix}${suffix}`;
-      const entry = { sessionId, updatedAt, ...(mode === "memory" ? { incognito: true } : {}) };
+      const entry = {
+        sessionId,
+        updatedAt,
+        ...(mode === "memory" ? { incognito: true as const } : {}),
+      };
       if (mode === "memory") {
         await createMemoryEntry(env, sessionKey, entry);
       } else {

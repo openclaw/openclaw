@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -184,12 +185,12 @@ describe.each(["HTTP", "WebSocket"] as const)(
         };
         if (testCase.stored) {
           const sessionKey = expectDefined(testCase.sessionKey, "stored fixture session key");
-          const entry = {
+          const entry: InternalSessionEntry = {
             sessionId: "standalone-guest-session",
             updatedAt: 1,
-            visibility: "shared" as const,
-            createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
-            sandbox: "required" as const,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profile.id },
+            sandbox: "required",
             ...(testCase.incognito ? { incognito: true } : {}),
           };
           await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);

@@ -37,7 +37,7 @@ it("acquires unbound actor entries and joins shared ACP receipts at the control 
       incognito: true,
     });
     const binding = await acquireSessionActorStorage(scope, {
-      lifetime: { assertCurrent() {} },
+      lifetime: { assertCurrent() {}, assertReadable() {} },
       authority: { assertCurrent() {}, authorize() {} },
     });
     if (!binding) {

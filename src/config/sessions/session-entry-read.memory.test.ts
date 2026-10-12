@@ -71,20 +71,28 @@ it("unbound readers observe committed entry and sharing changes without replacin
     const created = await binding!.actor.storage.mutate(
       {
         type: "session.entry.create",
-        input: { entry: { sessionId: "memory-read", updatedAt: 1, incognito: true } },
+        input: {
+          entry: {
+            sessionId: "memory-read",
+            updatedAt: 1,
+            incognito: true,
+            modelSelectionLocked: false,
+          },
+        },
       },
       authority,
     );
     expect(created.kind).toBe("committed");
     const current = captureNativeSessionEntryCurrentRead(scope);
     const list = createSessionEntryListReader(scope);
-    expect(current.readCurrent()?.updatedAt).toBe(1);
+    expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(1);
-    const patched = await binding!.actor.patch(
+    const patched = await binding!.actor.storage.mutate(
       {
-        commandId: "read-after-write",
-        phaseId: "read-test",
-        reducers: [{ kind: "activity", updatedAt: 2 }],
+        type: "session.entry.patch",
+        input: {
+          operation: { kind: "fields", patch: { updatedAt: 2, modelSelectionLocked: true } },
+        },
       },
       authority,
     );
@@ -97,7 +105,7 @@ it("unbound readers observe committed entry and sharing changes without replacin
       authority,
     );
     expect(shared.kind).toBe("committed");
-    expect(current.readCurrent()?.updatedAt).toBe(2);
+    expect(current.readCurrent()?.modelSelectionLocked).toBe(true);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(2);
     expect((await readSessionEntryInWorker(scope))?.updatedAt).toBe(2);
     expect(
@@ -168,12 +176,14 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
     ).toBe("committed");
     expect((await readResolvedSessionEntryInWorker({ ...scope, cfg: {} }))?.updatedAt).toBe(2);
     expect(
-      resolveSessionEntryCandidateTargetForRuntime({
-        agentId: scope.agentId,
-        env: scope.env,
-        cfg: {},
-        candidateKeys: ["agent:main:absent", scope.sessionKey],
-      })?.entry.updatedAt,
+      (
+        await resolveSessionEntryCandidateTargetForRuntime({
+          agentId: scope.agentId,
+          env: scope.env,
+          cfg: {},
+          candidateKeys: ["agent:main:absent", scope.sessionKey],
+        })
+      )?.entry.updatedAt,
     ).toBe(2);
     next = await claim.afterTransition?.({ current: { sessionId: "created-memory" } }, () => {});
     expect(next?.incarnation).toBe(claim.incarnation);

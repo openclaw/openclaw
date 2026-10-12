@@ -168,12 +168,12 @@ function seedHistoricalTranscriptProjection(
   const firstTimestamp = Number(events[0]?.timestamp ?? 1);
   const tree = scanSessionTranscriptTree(events);
   const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const activeIndexes =
+  const activeEvents =
     visiblePath.length > 0
-      ? visiblePath.map((node) => node.index)
+      ? visiblePath.map((node) => ({ index: node.index, event: node.entry }))
       : tree.hasLeafControl
         ? []
-        : events.map((_, index) => index);
+        : events.map((event, index) => ({ index, event }));
   // Keep fixture writes on the historical schema; current projection readers need newer columns.
   const active = database.prepare(`INSERT INTO session_transcript_active_events
     (session_id,active_position,event_seq,message_position,context_eligible) VALUES(?,?,?,?,?)`);
@@ -181,8 +181,7 @@ function seedHistoricalTranscriptProjection(
     (text,session_id,message_id,role,timestamp) VALUES(?,?,?,?,?)`);
   let activeEventCount = 0;
   let activeMessageCount = 0;
-  for (const index of activeIndexes) {
-    const event = events[index];
+  for (const { index, event } of activeEvents) {
     const row = extractTranscriptIndexEntry(event, Number(event.timestamp ?? firstTimestamp) + 100);
     if (row) {
       fts.run(row.text, sessionId, row.messageId, row.role, row.timestamp);

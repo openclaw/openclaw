@@ -1,13 +1,13 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
@@ -28,9 +28,9 @@ import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test
 
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness();
 
-async function closeIncognitoSessionDatabases() {
-  for (const { agentId, storePath } of listOpenIncognitoAgentDatabases()) {
-    await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
+function closeIncognitoSessions() {
+  for (const owner of memorySessionActorOwners.list()) {
+    memorySessionActorOwners.closeDatabase(owner);
   }
 }
 
@@ -60,15 +60,8 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(entry?.incognito).toBe(true);
     expect(entry?.parentSessionKey).toBeUndefined();
     expect(entry).not.toHaveProperty("sessionFile");
-    const openedIncognitoDatabase = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-    expect(
-      openedIncognitoDatabase.db
-        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-        .get(key),
-    ).toEqual({ session_key: key });
+    const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    expect(existsSync(incognitoPath)).toBe(false);
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.incognito).toBe(true);
     expect(loadCombinedSessionStoreForGatewayCore(getRuntimeConfig()).store[key]?.incognito).toBe(
       true,
@@ -167,37 +160,14 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(resolveGatewaySessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
-    const incognitoDatabase = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-    for (const table of ["session_nodes", "session_windows", "transcript_events"] as const) {
-      expect(incognitoDatabase.db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
-        count: 0,
-      });
-    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toBeUndefined();
+    expect(existsSync(incognitoPath)).toBe(false);
     const afterReset = await directSessionReq<{ sessions: Array<{ key: string }> }>(
       "sessions.list",
       {},
     );
     expect(afterReset.payload?.sessions.some((session) => session.key === key)).toBe(false);
-
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: key, storePath },
-      { sessionId: "rematerialized-incognito", updatedAt: Date.now() },
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.incognito).toBe(
-      undefined,
-    );
-    const resetRematerialized = await directSessionReq<{ deleted?: boolean }>("sessions.reset", {
-      key,
-    });
-    expect(resetRematerialized.payload).toMatchObject({ deleted: true });
-    expect(
-      openedIncognitoDatabase.db
-        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-        .get(key),
-    ).toBeUndefined();
 
     const rejected = await directSessionReq("sessions.create", {
       agentId: "main",
@@ -230,7 +200,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       },
     });
   } finally {
-    await closeIncognitoSessionDatabases();
+    closeIncognitoSessions();
   }
 });
 
@@ -255,7 +225,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
     const sessionKey = requireNonEmptyString(created.payload?.key, "incognito webchat key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "incognito webchat id");
 
-    await closeIncognitoSessionDatabases();
+    closeIncognitoSessions();
     dispatchInboundMessageMock.mockClear();
     const stale = await rpcReq(ws, "chat.send", {
       sessionKey,
@@ -269,7 +239,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
       message: `Incognito session "${sessionKey}" was not found.`,
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(listOpenIncognitoAgentDatabases()).toEqual([]);
+    expect(memorySessionActorOwners.list()).toEqual([]);
 
     const persistentDatabase = openOpenClawAgentDatabase({
       agentId: "work",
@@ -282,7 +252,7 @@ test("incognito webchat rejects a vanished non-default-agent session before disp
     ).toBeUndefined();
   } finally {
     ws.close();
-    await closeIncognitoSessionDatabases();
+    closeIncognitoSessions();
   }
 });
 
@@ -315,7 +285,7 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
       createGatewaySession({ ...base, requestingOperatorScopes: ["operator.admin"] }),
     ).resolves.toMatchObject({ ok: true, entry: { incognito: true } });
   } finally {
-    await closeIncognitoSessionDatabases();
+    closeIncognitoSessions();
   }
 });
 
@@ -409,6 +379,6 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
     admin.ws.close();
     reader.ws.close();
     writer.ws.close();
-    await closeIncognitoSessionDatabases();
+    closeIncognitoSessions();
   }
 });

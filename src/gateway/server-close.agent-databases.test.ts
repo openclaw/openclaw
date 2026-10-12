@@ -17,6 +17,7 @@ import {
   readSessionGoalOperationInDatabase,
 } from "../config/sessions/goals-operations.js";
 import { createSessionGoal } from "../config/sessions/goals.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -116,6 +117,11 @@ it("settles accepted incognito outbox work after the close prelude and before ac
           sessionKey: target.sessionKey,
           options: {
             expectedSessionId: target.sessionId,
+            sessionFile: formatSqliteSessionFileMarker({
+              agentId: memoryOwner.agentId,
+              storePath: memoryOwner.path,
+              sessionId: target.sessionId,
+            }),
             messages: [
               {
                 eventId: "accepted-question",

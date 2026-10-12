@@ -240,7 +240,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           getSessionRowProjection(context) !== projection ||
           (selected &&
             (!target ||
-              target.generation !== selected.generation ||
+              (!actorFacts && target.generation !== selected.generation) ||
               target.storePath !== selected.storePath ||
               target.entry.sessionId !== selected.entry.sessionId ||
               target.entry.lifecycleRevision !== selected.entry.lifecycleRevision))

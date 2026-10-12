@@ -305,6 +305,9 @@ describe("SessionManager selected memory actor", () => {
       expect(() => handle.assertReadable()).toThrow(/released/);
     }
     const id = await manager.appendMessageAsync(makeUserMessage("after caller release", 1));
+    if (!id) {
+      throw new Error("Missing message entry after caller release");
+    }
     expect(manager.getEntry(id)).toMatchObject({ message: { content: "after caller release" } });
     owner.close();
     await expect(

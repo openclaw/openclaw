@@ -79,6 +79,7 @@ it("settles accepted memory usage and trajectory work across the real close prel
                 sessionKey: target.sessionKey,
                 options: {
                   expectedSessionId: target.sessionId,
+                  sessionFile: formatSqliteSessionFileMarker(target),
                   messages: [
                     {
                       eventId: `message-${index}`,

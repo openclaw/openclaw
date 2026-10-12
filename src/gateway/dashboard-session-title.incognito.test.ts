@@ -15,7 +15,7 @@ const generate = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));
-const authority = { assertCurrent() {} };
+const authority = { assertCurrent() {}, authorize() {} };
 const cfg: OpenClawConfig = {
   agents: { entries: { main: {} }, defaults: { model: { primary: "openai/gpt-5.5" } } },
 };

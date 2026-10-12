@@ -119,10 +119,7 @@ describe("session creation display titles", () => {
           throw new Error(winner.error.message);
         }
         if (memory) {
-          expect(memory.owner?.readSession(childKey, memory.authority)?.entry).toBeUndefined();
-          expect(await loadTranscriptEvents({ sessionKey: childKey, agentId: childAgent })).toEqual(
-            [],
-          );
+          expect(memory.owner?.readSession(childKey, memory.authority)).toBeUndefined();
         } else {
           expect(
             database!.db

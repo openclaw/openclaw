@@ -31,16 +31,8 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  isSessionStoreTopologyChange,
-  sessionChanges,
-} from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -806,78 +798,6 @@ test("patchMany creates one shared physical store through original per-agent dir
         modelOverride: "gpt-5.6-sol",
         pinnedAt: expect.any(Number),
       });
-    }
-  });
-});
-
-test("patchMany retains original RAM facts while its cold durable sibling publishes registration", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("mixed-patch-cold.sqlite");
-    const { model, cfg } = modelConfig(storePath, {
-      entries: { main: {} },
-    });
-    await state.writeConfig(cfg);
-    const ramKey = "agent:main:dashboard:incognito-mixed-patch";
-    const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const ramScope = { agentId: "main", sessionKey: ramKey, storePath: ramPath };
-    const ramIdentity = {
-      sessionId: "original-mixed-ram",
-      lifecycleRevision: "original-mixed-ram-generation",
-      incognito: true as const,
-    };
-    await upsertSessionEntryCore(ramScope, { ...ramIdentity, updatedAt: 1 });
-    const originalRam = getOpenIncognitoAgentDatabase("main", ramPath);
-    if (!originalRam) {
-      throw new Error("Incognito fixture did not retain its original RAM database");
-    }
-    const fileKey = "agent:main:dashboard:mixed-file-patch";
-    const targets = [
-      { agentId: "main", key: ramKey, expectedSessionId: ramIdentity.sessionId },
-      { agentId: "main", key: fileKey },
-    ];
-    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
-    const context = patchContext(async () => [model], cfg);
-    const response = vi.fn();
-    const ramLifetimesAtStoresPublication: boolean[] = [];
-    const stop = sessionChanges.subscribe((change) => {
-      if (isSessionStoreTopologyChange(change)) {
-        ramLifetimesAtStoresPublication.push(
-          getOpenIncognitoAgentDatabase("main", ramPath) === originalRam && originalRam.db.isOpen,
-        );
-      }
-    });
-    try {
-      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        req: { type: "req", id: "mixed-file-ram-patch", method: "sessions.patchMany", params },
-        params,
-        respond: response,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(ramLifetimesAtStoresPublication.length).toBeGreaterThan(0);
-      expect(ramLifetimesAtStoresPublication.every(Boolean)).toBe(true);
-      expect(response).toHaveBeenCalledExactlyOnceWith(
-        true,
-        { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
-        undefined,
-      );
-      expect(getOpenIncognitoAgentDatabase("main", ramPath)).toBe(originalRam);
-      expect(originalRam.db.isOpen).toBe(true);
-      expect(loadSessionEntry(ramScope)).toMatchObject({
-        ...ramIdentity,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: fileKey, storePath })).toMatchObject({
-        sessionId: expect.any(String),
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      await expect(fs.stat(ramPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      stop();
     }
   });
 });

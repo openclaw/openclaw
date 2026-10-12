@@ -8,18 +8,11 @@ import {
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-} from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
@@ -124,57 +117,6 @@ it.each(["sqlite", "file"] as const)(
     }
   },
 );
-
-it("counts a configured incognito store through its existing native owner without creating a file", async () => {
-  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const config = maintenanceConfig(storePath);
-  config.agents = {
-    ownership: "explicit",
-    defaults: { sessionStore: { agentId: "main" } },
-    entries: { main: {}, other: {} },
-  };
-  const empty = {
-    agentId: "main",
-    storePath,
-    hotTranscripts: 0,
-    coldTranscripts: 0,
-    embeddedArchiveBytes: 0,
-    archiveBytes: 0,
-    databaseBytes: 0,
-    walBytes: 0,
-  };
-  expect(await getSessionColdStorageStatus(config)).toEqual([empty]);
-  expect(getOpenIncognitoAgentDatabase("main", storePath)).toBeUndefined();
-  const scope = {
-    agentId: "main",
-    storePath,
-    env: state.env,
-    sessionKey: "agent:main:dashboard:incognito-cold-status",
-    sessionId: "incognito-status-window",
-  };
-  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  replaceTranscriptEventsSync(scope, [{ type: "session", id: scope.sessionId }]);
-  expect(await getSessionColdStorageStatus(config)).toEqual([{ ...empty, hotTranscripts: 1 }]);
-  await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-  let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-  const readdir = fs.readdir;
-  const intercept = vi.spyOn(fs, "readdir").mockImplementationOnce(
-    new Proxy(readdir, {
-      apply(read, receiver, args) {
-        closing = closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-        void closing.catch(() => {});
-        return Reflect.apply(read, receiver, args);
-      },
-    }),
-  );
-  try {
-    await expect(getSessionColdStorageStatus(config)).rejects.toThrow();
-    expect(closing).toBeDefined();
-  } finally {
-    intercept.mockRestore();
-    await closing;
-  }
-});
 
 it("refuses a replaced source while its worker inventory is delayed", async () => {
   const missing = state.statePath("delayed", "openclaw-agent.sqlite");

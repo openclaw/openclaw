@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -92,7 +93,9 @@ describe("memory assistant transcript entry points", () => {
       expect.objectContaining({ role: "assistant", text: "Prepared answer" }),
     ]);
     expect(
-      (await loadTranscriptEvents(scope)).filter((event) => event.type === "message"),
+      (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "message",
+      ),
     ).toHaveLength(1);
   });
 
@@ -107,9 +110,11 @@ describe("memory assistant transcript entry points", () => {
     expect(second.ok).toBe(true);
     expect(second).not.toEqual(first);
     expect(
-      (await loadTranscriptEvents(scope)).filter((event) => event.type === "message"),
+      (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "message",
+      ),
     ).toHaveLength(2);
-    expect(owner.readSession(scope.sessionKey, authority)?.entry.updatedAt).toBeGreaterThan(1);
+    expect(owner.readSession(scope.sessionKey, authority)?.entry?.updatedAt).toBeGreaterThan(1);
   });
 
   it("refuses revoked writes and never recreates a closed session", async () => {
@@ -130,9 +135,11 @@ describe("memory assistant transcript entry points", () => {
         },
       }),
     ).rejects.toThrow("delivery authority ended");
-    expect((await loadTranscriptEvents(scope)).filter((event) => event.type === "message")).toEqual(
-      [],
-    );
+    expect(
+      (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "message",
+      ),
+    ).toEqual([]);
     owner.closeSession(scope.sessionKey);
     await expect(
       appendExactAssistantMessageToSessionTranscript({ ...scope, message: message("Closed") }),

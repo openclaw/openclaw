@@ -118,11 +118,11 @@ describe("memory actor effect adapters", () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/delivery-effect" };
     const target = {
       agentId: scope.agentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath({ env }),
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
     };
     const source = { ...scope, env, storePath: target.path };
     const facts = { ...source, lifecycleRevision: null };
-    const entry = { sessionId: source.sessionId, updatedAt: 1, incognito: true };
+    const entry: SessionEntry = { sessionId: source.sessionId, updatedAt: 1, incognito: true };
     try {
       await expect(prepareSessionGenerationFacts(facts)).rejects.toThrow("no longer accepts");
       expect(memorySessionActorOwners.read(target)).toBeUndefined();
@@ -165,7 +165,7 @@ describe("memory actor effect adapters", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const target = {
       agentId: scope.agentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath(),
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId }),
     };
     const source = { ...scope, storePath: target.path };
     const entry: SessionEntry = {
@@ -211,10 +211,10 @@ describe("memory actor effect adapters", () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/reset-cleanup-effect" };
     const target = {
       agentId: scope.agentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath({ env }),
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
     };
     const source = { ...scope, env, storePath: target.path };
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: scope.sessionId,
       lifecycleRevision: "accepted-reset",
       updatedAt: 1,
