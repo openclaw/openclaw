@@ -104,4 +104,20 @@ describe("Tlon pending approval limit", () => {
     });
     expect(fixture.poke).toHaveBeenCalledTimes(2);
   });
+
+  it("moves verified provenance with the stored message when a request is updated", async () => {
+    const fixture = createFixture();
+    const message = { messageId: "m", messageText: "t", messageContent: "t", timestamp: 1 };
+    await fixture.approvalRuntime.queueApprovalRequest({
+      ...createApproval(0),
+      verifiedDirect: true,
+      originalMessage: message,
+    });
+    expect(fixture.getPendingApprovals()[0]?.verifiedDirect).toBe(true);
+    await fixture.approvalRuntime.queueApprovalRequest({
+      ...createApproval(0),
+      originalMessage: message,
+    });
+    expect(fixture.getPendingApprovals()[0]?.verifiedDirect).toBeUndefined();
+  });
 });

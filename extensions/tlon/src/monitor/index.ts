@@ -70,6 +70,11 @@ type MonitorTlonOpts = {
   accountId?: string | null;
 };
 
+/** Identity for an unverified group DM (club) author claim; never matches a bare ship. */
+function clubSenderId(clubId: string, claimedShip: string): string {
+  return `club:${clubId}:${claimedShip}`;
+}
+
 export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> {
   const discoveryScheduler = opts.scheduler.scope();
   const core = getTlonRuntime();
@@ -247,9 +252,33 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     return normalizeShip(ship) === settingsState.effectiveOwnerShip;
   }
 
+  /** DM ingress allowlist for one chat event; club claims only match as their club-scoped id. */
+  function resolveChatAllowFrom(params: {
+    ownerDm: boolean;
+    isClubMessage: boolean;
+    senderShip: string;
+    senderId: string;
+  }): string[] {
+    if (params.ownerDm) {
+      return [params.senderShip];
+    }
+    if (!params.isClubMessage) {
+      return settingsState.effectiveDmAllowlist;
+    }
+    const claimedShipAllowed = settingsState.effectiveDmAllowlist.some(
+      (ship) => normalizeShip(ship) === params.senderShip,
+    );
+    return claimedShipAllowed ? [params.senderId] : [];
+  }
+
   const processMessage = async (params: {
     messageId: string;
     senderShip: string;
+    /**
+     * Group DM (club) id when the message came from a club. senderShip is then only the
+     * unverified author claim: authorization uses a club-scoped id and it never acts as owner.
+     */
+    clubId?: string;
     messageText: string;
     messageContent?: unknown; // Raw Tlon content for media extraction
     isGroup: boolean;
@@ -277,6 +306,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       resolveChannelIngress,
     } = params;
     let messageText = params.messageText;
+    const clubId = params.clubId;
+    const senderId = clubId === undefined ? senderShip : clubSenderId(clubId, senderShip);
 
     let attachments: Array<{ path: string; contentType: string }> = [];
     let unavailableMediaCount = 0;
@@ -403,10 +434,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       senders.add(senderShip);
     }
 
-    const senderRole = isOwner(senderShip) ? "owner" : "user";
+    const senderRole = clubId === undefined && isOwner(senderShip) ? "owner" : "user";
     const fromLabel = isGroup
       ? `${senderShip} [${senderRole}] in ${channelNest}`
-      : `${senderShip} [${senderRole}]`;
+      : clubId !== undefined
+        ? `${senderShip} (unverified) [${senderRole}] in group DM ${clubId}`
+        : `${senderShip} [${senderRole}]`;
 
     const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
       messageText,
@@ -416,7 +449,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     if (shouldComputeAuth) {
       const commandAccess = await resolveTlonCommandAuthorizationWithIngress({
-        senderShip,
+        senderShip: senderId,
         ownerShip: settingsState.effectiveOwnerShip,
       });
       commandAuthorized = commandAccess.commandAccess.authorized;
@@ -451,10 +484,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       accountId: route.accountId,
       messageId,
       timestamp,
-      from: isGroup ? `tlon:group:${channelNest}` : `tlon:${senderShip}`,
+      from: isGroup ? `tlon:group:${channelNest}` : `tlon:${senderId}`,
       sender: {
-        id: senderShip,
-        name: senderShip,
+        id: senderId,
+        // Club authors are unverified, so the display name must not match name-based allowlists.
+        name: clubId === undefined ? senderShip : senderId,
         roles: [senderRole],
       },
       conversation: {
@@ -619,9 +653,24 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         if (isGroup && !conversationId) {
           return;
         }
+        // A club-originated request replays with the same club-scoped, non-owner identity.
+        const clubId = !isGroup ? approval.clubId : undefined;
+        // DM requests stored before provenance was recorded may be group DM claims; approving
+        // still allowlists the ship, but the unverifiable message is not replayed.
+        if (!isGroup && clubId === undefined && approval.verifiedDirect !== true) {
+          runtime.log?.(
+            `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown`,
+          );
+          return;
+        }
+        const replaySenderId =
+          clubId === undefined
+            ? approval.requestingShip
+            : clubSenderId(clubId, approval.requestingShip);
         await processMessage({
           messageId: approval.originalMessage.messageId,
           senderShip: approval.requestingShip,
+          clubId,
           messageText: approval.originalMessage.messageText,
           messageContent: approval.originalMessage.messageContent,
           timestamp: approval.originalMessage.timestamp,
@@ -635,10 +684,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             : {}),
           resolveChannelIngress: async (contextBinding) =>
             await resolveTlonMessageIngress({
-              senderShip: approval.requestingShip,
+              senderShip: replaySenderId,
               accountId: account.accountId,
               conversation: { kind: isGroup ? "group" : "direct", id: conversationId },
-              allowFrom: [approval.requestingShip],
+              allowFrom: [replaySenderId],
               ...(isGroup ? { groupPolicy: "allowlist" } : {}),
               contextBinding,
             }),
@@ -876,6 +925,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       const authorShip = normalizeShip(readString(essay, "author") ?? "");
       const partnerShip = extractDmPartnerShip(whom);
       const senderShip = partnerShip || authorShip;
+      // Club (group DM) events name the conversation, not the sender. Their author is
+      // whatever the sending ship wrote, so it must never carry owner or command identity.
+      const clubId = partnerShip ? undefined : typeof whom === "string" && whom ? whom : "unknown";
+      const isClubMessage = clubId !== undefined;
+      const senderId = isClubMessage ? clubSenderId(clubId, senderShip) : senderShip;
 
       if (authorShip === botShipName) {
         return;
@@ -896,23 +950,23 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
 
       const messageText = rawText;
-      if (isOwner(senderShip) && (await handleApprovalResponse(messageText))) {
+      const ownerDm = !isClubMessage && isOwner(senderShip);
+      if (ownerDm && (await handleApprovalResponse(messageText))) {
         runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
         return;
       }
 
-      if (isOwner(senderShip) && (await handleAdminCommand(messageText))) {
+      if (ownerDm && (await handleAdminCommand(messageText))) {
         runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
         return;
       }
 
-      const ownerDm = isOwner(senderShip);
       const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
         await resolveTlonMessageIngress({
-          senderShip,
+          senderShip: senderId,
           accountId: account.accountId,
           conversation: { kind: "direct", id: senderShip },
-          allowFrom: ownerDm ? [senderShip] : settingsState.effectiveDmAllowlist,
+          allowFrom: resolveChatAllowFrom({ ownerDm, isClubMessage, senderShip, senderId }),
           contextBinding,
         });
       if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {
@@ -921,12 +975,18 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             type: "dm",
             requestingShip: senderShip,
             messagePreview: sliceUtf16Safe(messageText, 0, 100),
-            originalMessage: {
-              messageId,
-              messageText,
-              messageContent: essay.content,
-              timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
-            },
+            ...(isClubMessage ? { clubId } : { verifiedDirect: true }),
+            // Never store a club message claiming the owner for replay, even as a non-owner.
+            ...(isClubMessage && isOwner(senderShip)
+              ? {}
+              : {
+                  originalMessage: {
+                    messageId,
+                    messageText,
+                    messageContent: essay.content,
+                    timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),
+                  },
+                }),
           });
           await queueApprovalRequest(approval);
         } else {
@@ -944,6 +1004,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         messageText: resolvedMessageText,
         messageId,
         senderShip,
+        clubId,
         messageContent: essay.content,
         isGroup: false,
         timestamp: asFiniteNumber(essay?.sent) ?? Date.now(),

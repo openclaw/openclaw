@@ -71,6 +71,47 @@ describe("tlon settings store", () => {
     expect(settings.pendingApprovals).toEqual(pendingApprovals);
   });
 
+  it("loads pre-upgrade and current pending approval records from persisted settings", async () => {
+    const message = { messageId: "m", messageText: "hi", messageContent: [], timestamp: 1 };
+    const stored = [
+      // Saved before sender provenance existed: no clubId, no verifiedDirect.
+      { id: "dm-old", type: "dm", requestingShip: "~bus", timestamp: 1, originalMessage: message },
+      {
+        id: "dm-new",
+        type: "dm",
+        requestingShip: "~nec",
+        timestamp: 2,
+        verifiedDirect: true,
+        originalMessage: message,
+      },
+      { id: "dm-club", type: "dm", requestingShip: "~zod", timestamp: 3, clubId: "0v3.abc" },
+      // Malformed provenance fields are rejected rather than coerced.
+      { id: "dm-bad-club", type: "dm", requestingShip: "~bus", timestamp: 4, clubId: 7 },
+      {
+        id: "dm-bad-verified",
+        type: "dm",
+        requestingShip: "~bus",
+        timestamp: 5,
+        verifiedDirect: "yes",
+      },
+    ];
+    const { api } = createMockSettingsApi({
+      all: { moltbot: { tlon: { pendingApprovals: JSON.stringify(stored) } } },
+    });
+
+    const settings = await createSettingsManager(api).load();
+
+    expect(settings.pendingApprovals?.map((approval) => approval.id)).toEqual([
+      "dm-old",
+      "dm-new",
+      "dm-club",
+    ]);
+    expect(settings.pendingApprovals?.[0]).toEqual(stored[0]);
+    expect(settings.pendingApprovals?.[0]?.verifiedDirect).toBeUndefined();
+    expect(settings.pendingApprovals?.[1]?.verifiedDirect).toBe(true);
+    expect(settings.pendingApprovals?.[2]?.clubId).toBe("0v3.abc");
+  });
+
   it("applies live autoDiscoverChannels updates delivered over the subscription", async () => {
     const { api, emitSettingsEvent } = createMockSettingsApi({
       all: { moltbot: { tlon: {} } },
