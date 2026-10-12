@@ -6,8 +6,8 @@ const hostHookStateMocks = vi.hoisted(() => ({
 
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
-  forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
 } from "./attempt-prompt-helpers.js";

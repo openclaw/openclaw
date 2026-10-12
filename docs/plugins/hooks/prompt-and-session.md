@@ -68,11 +68,10 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-On the embedded and CLI prompt-preparation paths, ordering is: drain queued
-injections → `agent_turn_prepare` → heartbeat contribution (if applicable) →
-ordinary `before_prompt_build` → finalized tool policy → authorized prompt
-enrichment. `agent_turn_prepare` and queued-injection draining are not wired
-into the Codex or Copilot prompt paths.
+On embedded, CLI, and harness runtime prompt-preparation paths (including
+ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
+`agent_turn_prepare` → heartbeat contribution (if applicable) → ordinary
+`before_prompt_build` → finalized tool policy → authorized prompt enrichment.
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -345,8 +344,9 @@ the `api.session.state` namespace.
 Use `api.session.workflow.enqueueNextTurnInjection(...)` when a plugin needs
 durable context queued for the next prompt build (the top-level
 `api.enqueueNextTurnInjection(...)` is a deprecated alias with the same
-behavior). On the embedded and CLI prompt-preparation paths, OpenClaw drains
-queued injections before prompt hooks. It drops expired entries and entries
+behavior). OpenClaw drains queued injections before prompt hooks on embedded,
+CLI, and harness runtime paths, even when no prompt hooks are registered.
+It drops expired entries and entries
 whose plugin is inactive or has prompt injection disabled. `idempotencyKey`
 deduplicates unexpired pending entries for the same plugin and session; the
 key can be reused after consumption. Drained entries are reused across retries
