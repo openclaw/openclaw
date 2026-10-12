@@ -19,7 +19,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionFallbackModel } from "../../status/session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { resolveSupportedThinkingLevel } from "../thinking.js";
@@ -103,7 +103,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     selectedModel: params.model,
     sessionEntry: params.sessionEntry,
   };
-  const completedModel = readSessionFallbackModel({
+  const completedModel = await readSessionFallbackModelAsync({
     ...modelParams,
     config: params.cfg,
     sessionScope: {

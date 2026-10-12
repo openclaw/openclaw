@@ -102,10 +102,10 @@ describe("parent runtime facts from retained completion obligations", () => {
           provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
         },
       });
-      if (!receipt?.complete) {
+      if (!receipt?.completeAsync) {
         throw new Error("Expected a private processing completion owner");
       }
-      receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
+      await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
       await resetSubagentRegistryForTests({ persist: false });
       await closeOpenClawAgentDatabasesAsync();

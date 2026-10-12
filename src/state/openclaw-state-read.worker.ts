@@ -28,8 +28,8 @@ import {
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
-} from "../gateway/github-publication-store.js";
-import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
 import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
@@ -76,6 +76,7 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
+import { readPluginMetadataStateRowsInDatabase } from "../plugins/installed-plugin-index-row.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -403,6 +404,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readExecApprovalsConfigRow(db),
+              };
+            }
+            if (command.type === "plugins.metadata.read") {
+              return {
+                type: command.type,
+                rows: readPluginMetadataStateRowsInDatabase(db, command.input.stateKeys),
               };
             }
             if (command.type === "skills.library.descriptions") {

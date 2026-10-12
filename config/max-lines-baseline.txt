@@ -380,9 +380,7 @@ src/gateway/mcp-http.test.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts
-src/gateway/openai-http.ts
 src/gateway/openresponses-http.test.ts
-src/gateway/openresponses-http.ts
 src/gateway/server-channels.test.ts
 src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts

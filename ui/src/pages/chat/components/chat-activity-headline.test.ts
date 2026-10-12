@@ -4,7 +4,8 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
-import { activityHeadline, type ActivityHeadline } from "./chat-activity-headline.ts";
+import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
+import { activityHeadline } from "./chat-activity-headline.ts";
 import { renderActivityGroup } from "./chat-message-group.ts";
 import {
   createAssistantMessage,

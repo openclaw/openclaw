@@ -200,31 +200,42 @@ describe("command scope physical settlement", () => {
     },
   );
 
-  it("refuses Doctor-style input admission when custody binding fails", async () => {
-    const fixture = commandFixture();
-    fixture.child.stdin = new PassThrough();
-    const beforeInput = vi.fn();
-    const reservation = {
-      spawned: vi.fn(() => {
-        throw new Error("custody receipt unavailable");
-      }),
-      settled: vi.fn(),
-    };
-    const scope = ownScope(
-      async () => {
-        await runCommandWithTimeout(["fixture"], { input: "private input", beforeInput });
-      },
-      { reserve: () => reservation },
-    );
-    const outcome = scope.catch((error: unknown) => error);
-    fixture.open();
-    await setImmediate();
-    fixture.finish();
-    fixture.cleanup.resolve("forced");
-    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
-    expect(beforeInput).not.toHaveBeenCalled();
-    expect(reservation.settled).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "refuses input after failed binding and settles only extinct groups: %s",
+    async (live) => {
+      const fixture = commandFixture();
+      fixture.child.stdin = new PassThrough();
+      const beforeInput = vi.fn();
+      const reservation = {
+        spawned: vi.fn(() => {
+          throw new Error("custody receipt unavailable");
+        }),
+        settled: vi.fn(),
+      };
+      const scope = ownScope(
+        async () => {
+          await runCommandWithTimeout(["fixture"], { input: "private input", beforeInput });
+        },
+        { reserve: () => reservation },
+      );
+      const outcome = scope.catch((error: unknown) => error);
+      if (live) {
+        vi.useFakeTimers();
+        vi.spyOn(process, "kill").mockReturnValue(true);
+      }
+      fixture.open();
+      await setImmediate();
+      fixture.finish();
+      fixture.cleanup.resolve("forced");
+      if (live) {
+        await vi.advanceTimersByTimeAsync(301);
+        vi.useRealTimers();
+      }
+      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      expect(beforeInput).not.toHaveBeenCalled();
+      expect(reservation.settled).toHaveBeenCalledTimes(live ? 0 : 1);
+    },
+  );
 
   it.each(["forced", "uncertain"] as const)(
     "keeps bounded results pending until %s scope cleanup",

@@ -19,17 +19,14 @@ type SessionFallbackSource = {
   sessionScope?: Pick<SessionTranscriptReadScope, "agentId" | "sessionKey" | "storePath">;
 };
 
-/** Reads a terminal fallback model only when the run, selection, and notice agree. */
-export function readSessionFallbackModel(
-  params: SessionFallbackSource & {
-    selectedProvider: string;
-    selectedModel: string;
-    parseSelectedProvider?: boolean;
-    config?: OpenClawConfig;
-    /** Null is a prepared absence; only undefined permits a synchronous read. */
-    terminalModel?: SessionTerminalModel | null;
-  },
-): SessionTerminalModel | undefined {
+type SessionFallbackParams = SessionFallbackSource & {
+  selectedProvider: string;
+  selectedModel: string;
+  parseSelectedProvider?: boolean;
+  config?: OpenClawConfig;
+};
+
+function resolveCompletedFallbackEntry(params: SessionFallbackParams) {
   const entry = params.sessionEntry;
   if (
     !params.sessionScope?.sessionKey ||
@@ -45,13 +42,16 @@ export function readSessionFallbackModel(
     selectedModel: params.selectedModel,
     parseSelectedProvider: params.parseSelectedProvider,
   }).selected.label;
-  if (normalizeOptionalString(entry.fallbackNotice.selectedModel) !== selectedLabel) {
-    return undefined;
-  }
-  const terminalModel =
-    params.terminalModel === undefined
-      ? readSessionTerminalFallbackModel(params)
-      : params.terminalModel;
+  return normalizeOptionalString(entry.fallbackNotice.selectedModel) === selectedLabel
+    ? { entry, scope: params.sessionScope }
+    : undefined;
+}
+
+function selectCompletedFallbackModel(
+  params: SessionFallbackParams,
+  entry: InternalSessionEntry,
+  terminalModel: SessionTerminalModel | null | undefined,
+): SessionTerminalModel | undefined {
   if (!terminalModel) {
     return undefined;
   }
@@ -67,6 +67,54 @@ export function readSessionFallbackModel(
   }).active
     ? { modelProvider: active.provider, model: active.model }
     : undefined;
+}
+
+/** Present prepared terminal facts without opening storage. */
+export function readSessionFallbackModel(
+  params: SessionFallbackParams & { terminalModel: SessionTerminalModel | null },
+): SessionTerminalModel | undefined {
+  const completed = resolveCompletedFallbackEntry(params);
+  return completed
+    ? selectCompletedFallbackModel(params, completed.entry, params.terminalModel)
+    : undefined;
+}
+
+/** Read terminal facts through the retained asynchronous history owner. */
+export async function readSessionFallbackModelAsync(
+  params: SessionFallbackParams,
+): Promise<SessionTerminalModel | undefined> {
+  const completed = resolveCompletedFallbackEntry(params);
+  if (!completed) {
+    return undefined;
+  }
+  const terminalModel = await readSessionTerminalFallbackModelAsync({
+    sessionEntry: completed.entry,
+    sessionScope: completed.scope,
+  });
+  return selectCompletedFallbackModel(params, completed.entry, terminalModel);
+}
+
+async function readSessionTerminalFallbackModelAsync(params: {
+  sessionEntry: InternalSessionEntry;
+  sessionScope: NonNullable<SessionFallbackSource["sessionScope"]>;
+}) {
+  const { readSessionTranscriptBoundedMessageTailPageAsync } =
+    await import("../gateway/session-transcript-readers.js");
+  try {
+    const page = await readSessionTranscriptBoundedMessageTailPageAsync(
+      { ...params.sessionScope, sessionId: params.sessionEntry.sessionId },
+      { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
+    );
+    return selectSessionTerminalFallbackModel(params.sessionEntry, page.events[0]?.event);
+  } catch (error) {
+    if (
+      !isSessionTranscriptProjectionUnavailableError(error) &&
+      !(error instanceof SessionTranscriptStorageUnavailableError)
+    ) {
+      throw error;
+    }
+  }
+  return undefined;
 }
 
 /** Storage readers prepare terminal facts; the host retains runtime alias policy. */

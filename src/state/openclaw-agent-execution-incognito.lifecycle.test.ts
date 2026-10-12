@@ -39,6 +39,7 @@ import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import {
@@ -996,13 +997,15 @@ it("observes a foreign deletion fence on the retained actor", async () => {
     },
     { env },
   );
-  // A foreign commit has no host publication; the worker must read the current journal row.
+  // Publish both identities when the fixture moves its deletion fence to the retained actor.
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare("UPDATE agent_deletion_journal SET agent_id = ? WHERE agent_id = ?").run(
         actor.agentId,
         "foreign-fence",
       );
+      publishAgentDeletionJournalStatus(db, "foreign-fence", "absent");
+      publishAgentDeletionJournalStatus(db, actor.agentId, "pending");
     },
     { env },
   );

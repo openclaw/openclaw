@@ -7,11 +7,7 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "../../infra/sqlite-worker-transfer.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import type {
   IncognitoSessionAuthority,
   IncognitoSessionFacts,
@@ -133,51 +129,41 @@ export function incognitoEntryPublication<Key extends IncognitoReceiptOperation>
   authorizePrepared?: IncognitoEntryPatchAuthorizer,
   authorizePublication?: (facts: unknown) => void,
 ) {
-  let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
-  let transferId: number | undefined;
-  let completed = false;
   let candidate: IncognitoSessionOperations[Key]["output"] | undefined;
+  const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+    if (
+      candidate ||
+      !isRecord(value) ||
+      value.kind !== "incognito-entry" ||
+      !Array.isArray(value.facts) ||
+      !isRecord(value.value)
+    ) {
+      throw new Error("Incognito entry returned an invalid publication candidate");
+    }
+    // SAFETY: The paired kernel supplies this command's complete framed result.
+    candidate = value as IncognitoSessionOperations[Key]["output"];
+  });
+  const finishTransfer = (facts: unknown) => {
+    if (!isRecord(facts)) {
+      throw new Error("Incognito entry omitted its commit facts");
+    }
+    transfer.accept(facts.transfer);
+    if (!transfer.completed) {
+      throw new Error("Incognito entry returned an incomplete transfer");
+    }
+  };
   return {
     factsKey: "entry" as const,
     prepare(facts: unknown) {
-      if (isRecord(facts) && facts.kind === "session-entry-patch-transfer") {
-        if (
-          receiver ||
-          !isRecord(facts.handle) ||
-          typeof facts.handle.id !== "number" ||
-          !Number.isSafeInteger(facts.handle.id) ||
-          facts.handle.id < 1 ||
-          !Array.isArray(facts.handle.kinds) ||
-          facts.handle.kinds.length !== 1 ||
-          facts.handle.kinds[0] !== "patch"
-        ) {
-          throw new Error("Incognito entry returned an invalid publication transfer");
-        }
-        // SAFETY: The paired kernel supplies the validated transfer descriptor.
-        const handle = facts.handle as SqliteWorkerTransferHandle;
-        transferId = handle.id;
-        receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-          if (
-            candidate ||
-            record.kind !== "patch" ||
-            !isRecord(record.value) ||
-            record.value.kind !== "incognito-entry" ||
-            !Array.isArray(record.value.facts) ||
-            !isRecord(record.value.value)
-          ) {
-            throw new Error("Incognito entry returned an invalid publication candidate");
-          }
-          // SAFETY: The command's paired kernel transfers its result and exact commit facts.
-          candidate = record.value as IncognitoSessionOperations[Key]["output"];
-        });
-      } else if (isRecord(facts) && facts.kind === "session-entry-patch-frame" && receiver) {
-        // SAFETY: The receiver validates frame identity, ordering, bounds, and completion.
-        completed = receiver.accept(facts.frame as SqliteWorkerTransferFrame) !== undefined;
-      } else {
+      if (!isRecord(facts) || facts.kind !== "session-entry-patch-transfer") {
         throw new Error("Incognito entry returned unexpected publication facts");
       }
+      transfer.accept(facts.transfer);
     },
     authorize(stage: "transaction" | "commit", facts: unknown) {
+      if (stage === "commit" && !transfer.completed) {
+        finishTransfer(facts);
+      }
       const value = candidate?.value;
       if (value != null && "refusedSource" in value && value.refusedSource) {
         authorizePrepared?.(value.refusedSource);
@@ -197,12 +183,16 @@ export function incognitoEntryPublication<Key extends IncognitoReceiptOperation>
       }
     },
     decodeReceipt(receipt: unknown): IncognitoSessionOperations[Key]["output"] {
+      // The actor reads committed target facts before invoking its final authorizer.
+      if (!transfer.completed && isRecord(receipt) && receipt.transfer !== undefined) {
+        finishTransfer(receipt);
+      }
       if (
-        !completed ||
+        !transfer.completed ||
         !candidate ||
         !isRecord(receipt) ||
         receipt.kind !== "session-entry-patch-committed" ||
-        receipt.transferId !== transferId
+        receipt.transferId !== transfer.id
       ) {
         throw new SqliteWorkerError(
           `Incognito ${type} omitted its committed receipt`,

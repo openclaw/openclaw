@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
@@ -9,6 +11,40 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MiB = 1024 * 1024;
+
+it("prewarms the release graph, respecting the disabled cache policy", async () => {
+  const root = tempDirs.make("openclaw-cache-prewarm-");
+  const launcher = path.join(root, "gateway-prewarm.mjs");
+  const cache = path.join(root, "cache");
+  await fs.copyFile(new URL("../../gateway-prewarm.mjs", import.meta.url), launcher);
+  await fs.copyFile(
+    new URL("../../node-compile-cache.mjs", import.meta.url),
+    path.join(root, "node-compile-cache.mjs"),
+  );
+  await fs.mkdir(path.join(root, "dist"));
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module","version":"2026.10.1"}');
+  await fs.writeFile(path.join(root, "dist", "build-info.json"), '{"buildId":"prewarm-release"}');
+  await fs.writeFile(
+    path.join(root, "dist", "gateway-prewarm.js"),
+    `
+    import { writeFileSync } from "node:fs";
+    import { getCompileCacheDir } from "node:module";
+    writeFileSync(new URL("../loaded", import.meta.url), getCompileCacheDir());
+  `,
+  );
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: cache };
+  delete env.NODE_DISABLE_COMPILE_CACHE;
+  const run = promisify(execFile);
+  await run(process.execPath, [launcher], { env: { ...env, NODE_DISABLE_COMPILE_CACHE: "1" } });
+  await expect(fs.stat(path.join(root, "loaded"))).rejects.toMatchObject({ code: "ENOENT" });
+  // Start without an inherited native cache so the release owner chooses its namespace.
+  await run(process.execPath, [launcher], {
+    env: { ...env, NODE_COMPILE_CACHE: undefined, TMPDIR: root, TMP: root, TEMP: root },
+  });
+  const loaded = await fs.readFile(path.join(root, "loaded"), "utf8");
+  expect(loaded).toContain(path.join(root, "node-compile-cache", "openclaw", "2026.10.1"));
+  expect((await fs.readdir(loaded)).length).toBeGreaterThan(0);
+});
 
 async function maintainCompileCache(directory: string) {
   const worker = new Worker(new URL("../../node-compile-cache.mjs", import.meta.url), {

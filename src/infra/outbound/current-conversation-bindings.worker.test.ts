@@ -28,6 +28,7 @@ import {
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
   bindCurrentConversationRecordAsync,
+  bindGenericCurrentConversation,
   listCurrentConversationBindingRecordsBySessionsAsync,
   removeCurrentConversationBindingsAsync,
   inspectCurrentConversationBindingRecordAsync,
@@ -43,6 +44,7 @@ import { conversationBindingOperations } from "./current-conversation-bindings.w
 import { expectedCurrentSessionBinding } from "./session-binding-native-selection.js";
 import {
   getSessionBindingService,
+  prepareSessionBindingInspections,
   listSessionBindingsBySessionsAsync,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -327,6 +329,46 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
     run.mockClear();
     expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+it("invalidates prepared effect ownership after committed binding replacement and deletion", async () => {
+  await withOpenClawTestState({ label: "binding-prepared-ownership" }, async () => {
+    const conversation = {
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      accountId: "default",
+      conversationId: "prepared",
+    };
+    const original = await bindGenericCurrentConversation({
+      conversation,
+      targetSessionKey: "agent:main:original",
+      targetKind: "session",
+    });
+    expect(original).not.toBeNull();
+    const prepared = await prepareSessionBindingInspections([conversation]);
+    try {
+      const sql = observeHostDataSql();
+      try {
+        expect(prepared.inspect()).toMatchObject([{ binding: original }]);
+      } finally {
+        sql.restore();
+      }
+      expect(sql.queries).toEqual([]);
+      const replacement = { ...original!, targetSessionKey: "agent:main:replacement" };
+      await bindCurrentConversationRecordAsync({ record: replacement });
+      expect(() => prepared.inspect()).toThrow("ownership changed");
+      const current = await prepareSessionBindingInspections([conversation]);
+      try {
+        expect(current.inspect()).toMatchObject([{ binding: replacement }]);
+        await removeCurrentConversationBindingsAsync({ conversation });
+        expect(() => current.inspect()).toThrow("ownership changed");
+      } finally {
+        current.dispose();
+      }
+    } finally {
+      prepared.dispose();
+    }
+    expect(() => prepared.inspect()).toThrow("no longer active");
   });
 });
 

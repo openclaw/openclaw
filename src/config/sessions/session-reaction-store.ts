@@ -1,9 +1,7 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -16,26 +14,29 @@ import {
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
-  setSessionReactionInDatabase,
-} from "./session-reaction-store.kernel.js";
-import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
+} from "./session-reaction-errors.js";
 import type {
   SessionReactionWrite,
   SetSessionReactionParams,
   StoredMessageReactionSummary,
 } from "./session-reaction-store.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 
 export { SessionReactionLimitError, SessionReactionMessageMissingError };
 export type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
@@ -132,6 +133,7 @@ export async function setSessionReactionAsync(
     // Process-held databases cannot be reopened in a worker; retain their sole native owner.
     const resolved = resolveSqliteScope({ ...scope, env });
     const options = toDatabaseOptions(resolved);
+    const { setSessionReactionInDatabase } = await import("./session-reaction-store.kernel.js");
     return runOpenClawAgentWriteAdmission(
       options,
       () => {
@@ -222,14 +224,46 @@ export async function setSessionReactionAsync(
   }
 }
 
-export function listSessionReactions(
-  scope: SessionAccessScope,
+export async function listSessionReactions(
+  scope: SessionCollaborationScope,
   params: { sessionId: string },
-): Record<string, StoredMessageReactionSummary[]> {
-  const resolved = resolveSqliteScope(scope);
-  return listSessionReactionsInDatabase(
-    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
-    resolved.sessionKey,
-    params,
+): Promise<Record<string, StoredMessageReactionSummary[]>> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.reactions.read", input: params },
+      memory.authority,
+    );
+  }
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return incognito.actor.sessions.sideData(incognito.authority, {
+      type: "session.reactions.read",
+      input: {
+        sessionKey: resolveSqliteSessionKey(scope.sessionKey, incognito.actor.agentId),
+        ...params,
+      },
+    });
+  }
+  const storePath = resolveSessionStorePathForScope(scope);
+  const logical = resolveSqliteScope({ ...scope, storePath: undefined });
+  if (isIncognitoOpenClawAgentSqlitePath(storePath, toDatabaseOptions(logical))) {
+    // The native incognito owner remains until its separate actor cutover.
+    const database = getOpenIncognitoAgentDatabase(logical.agentId, storePath);
+    if (!database) {
+      return {};
+    }
+    const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+    return listSessionReactionsInDatabase(database, logical.sessionKey, params);
+  }
+  return withSessionStoreReaderInWorker(
+    { ...scope, storePath },
+    ({ reader, logicalAgentId, database }) =>
+      reader.readReactions({
+        sessionKey: resolveSqliteSessionKey(scope.sessionKey, logicalAgentId),
+        sessionId: params.sessionId,
+        env: database.env,
+      }),
+    { dataOnly: true, lane: projectionLane },
   );
 }

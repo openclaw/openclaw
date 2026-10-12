@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
-import type { SkillSnapshot } from "../types.js";
+import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
@@ -118,6 +118,54 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     await resolveReusableWorkspaceSkillSnapshot(params);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(3);
   });
+
+  it.each(["node permission", "node target", "remote note", "remote platform"])(
+    "rebuilds when %s changes in place during preparation",
+    async (change) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const eligibility: Required<SkillEligibilityContext> = {
+        nodeSkills: { canExec: true, node: "before" },
+        remote: {
+          platforms: ["darwin"],
+          note: "before",
+          hasBin: () => true,
+          hasAnyBin: () => true,
+        },
+      };
+      const describeEligibility = () =>
+        [
+          eligibility.nodeSkills.canExec,
+          eligibility.nodeSkills.node,
+          eligibility.remote.note,
+          ...eligibility.remote.platforms,
+        ].join("/");
+      buildWorkspaceSkillSnapshotMock.mockImplementation(async () => {
+        const prompt = describeEligibility();
+        entered.resolve();
+        await release.promise;
+        return { prompt, skills: [], resolvedSkills: [] };
+      });
+      const pending = resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir,
+        config: {},
+        watch: false,
+        resolveEligibility: () => ({ ...eligibility }),
+      });
+      await entered.promise;
+      if (change === "node permission") {
+        eligibility.nodeSkills.canExec = false;
+      } else if (change === "node target") {
+        eligibility.nodeSkills.node = "after";
+      } else if (change === "remote note") {
+        eligibility.remote.note = "after";
+      } else {
+        eligibility.remote.platforms[0] = "linux";
+      }
+      release.resolve();
+      expect((await pending).snapshot.prompt).toBe(describeEligibility());
+    },
+  );
 
   it("keeps concurrent builds separate by source host", async () => {
     const workspaceBuild = createDeferred<SnapshotFixture>();

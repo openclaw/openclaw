@@ -41,7 +41,7 @@ import {
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
-const UpdateDatabaseBackupSchema = z.object({
+export const UpdateDatabaseBackupSchema = z.object({
   directory: z.string(),
   databases: z.array(
     z.object({

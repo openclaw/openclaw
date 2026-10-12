@@ -52,6 +52,7 @@ import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-r
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
 import { deliveryQueueProcessEntrypoints } from "../../src/infra/outbound/delivery-queue-process-runtime.test-support.ts";
+import { postgresLockTestEntrypoint } from "../../src/infra/postgres-sync/locks-runtime.test-support.ts";
 import { sqliteMaintenanceEntrypoints } from "../../src/infra/sqlite-maintenance-runtime.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
 import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
@@ -316,6 +317,7 @@ export const vitestWorkerBuildEntries = {
     sqliteWorkerStoreCompileCacheParentEntrypoint,
     ...Object.values(nativeProcessTestEntrypoints),
     ...Object.values(storageProcessTestEntrypoints),
+    postgresLockTestEntrypoint,
     ...Object.values(workerTaskPoolEntrypoints),
     nativeWorkerLifecycleEntrypoint,
     nativeWorkerResourceEntrypoint,

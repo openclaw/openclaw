@@ -671,9 +671,11 @@ describe("session message-cut methods", () => {
         updatedAt: 1,
       },
     } as GatewayClient).finally(forkSql.restore);
-    expect(
-      forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
-    ).toHaveLength(1);
+    // The cold fork checks upstream ownership at transaction admission and again at commit.
+    expect(forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"'))).toEqual([
+      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
+      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
+    ]);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -723,6 +725,11 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
+    expect(
+      listSessionEntriesCore({ agentId: "main" })
+        .map((row) => row.sessionKey)
+        .toSorted(),
+    ).toEqual([sessionKey, forkKey ?? ""].toSorted());
   });
 
   it.each([

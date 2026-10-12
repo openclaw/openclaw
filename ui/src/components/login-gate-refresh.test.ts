@@ -186,6 +186,7 @@ describe("login refresh ownership", () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
   });
   it.each(["automatic first", "manual first"])("navigates once with %s", async (order) => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const finish = deferredProbe();
     const element = await mountFailure();
     let automatic: Promise<boolean>;

@@ -16,7 +16,6 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
-  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
@@ -427,10 +426,12 @@ async function mutatePreparedSessionAtMessage({
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       });
-      const memoryOwner = memory && captureSessionActorStorageOwner(memory);
       const readRepositoryEntry = (key: string) => {
         if (memory) {
-          return memoryOwner?.owner?.readSession(key, memory.authority)?.entry;
+          return memory.actor.storage.readCurrent(
+            { type: "session.entry.read", input: { sessionKey: key } },
+            memory.authority,
+          );
         }
         if (repositoryEntrySource) {
           if (key === current.canonicalKey) {

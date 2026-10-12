@@ -122,25 +122,21 @@ function ChatPaneVersionsMenuContent(props: Props) {
   );
 }
 
-export type ChatPaneVersionsMenu = SolidBridgeElement<Props>;
-export const ChatPaneVersionsMenu = defineSolidBridge<Props>(
-  "openclaw-chat-pane-versions-menu",
-  ChatPaneVersionsMenuContent,
-  {
-    properties: {
-      menu: {
-        default: {
-          catalog: true,
-          paneId: "",
-          branches: [],
-          branchSwitchDisabledReason: null,
-          onBranchSelect: () => {},
-        },
-        attribute: false,
+type ChatPaneVersionsMenu = SolidBridgeElement<Props>;
+defineSolidBridge<Props>("openclaw-chat-pane-versions-menu", ChatPaneVersionsMenuContent, {
+  properties: {
+    menu: {
+      default: {
+        catalog: true,
+        paneId: "",
+        branches: [],
+        branchSwitchDisabledReason: null,
+        onBranchSelect: () => {},
       },
+      attribute: false,
     },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

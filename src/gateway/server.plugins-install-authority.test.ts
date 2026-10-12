@@ -153,8 +153,24 @@ describe("gateway plugin install authority", () => {
       logging: { level: "silent", consoleLevel: "silent" },
       agents: { defaults: { workspace: state.workspaceDir } },
     });
-    server = await startGatewayServerCore(port, { controlUiEnabled: false });
-    await server.startupSettled;
+    const startupPlugins = await import("./server-startup-plugins.js");
+    const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
+    const maintenanceSettled = createDeferredCore();
+    const observer = vi
+      .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
+      .mockImplementation((params) => {
+        const maintenance = runMaintenance(params);
+        maintenanceSettled.resolve(maintenance);
+        return maintenance;
+      });
+    try {
+      server = await startGatewayServerCore(port, { controlUiEnabled: false });
+      await server.startupSettled;
+      // Post-ready registry maintenance owns the lease that plugin installs refuse to wait for.
+      await maintenanceSettled.promise;
+    } finally {
+      observer.mockRestore();
+    }
   }
 
   async function connect(
@@ -332,6 +348,12 @@ describe("gateway plugin install authority", () => {
         await withTestTimeout(
           Promise.race([
             reached.promise,
+            reply.then((response) => {
+              if ("error" in response) {
+                throw response.error;
+              }
+              throw new Error("Install replied before boundary");
+            }),
             finished.promise.then(({ error }) => {
               throw error instanceof Error
                 ? error

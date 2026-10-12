@@ -1,17 +1,12 @@
-import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { icons } from "./icons.ts";
 import {
-  SessionMenuCommunication,
+  selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
 import { SessionDetailsController } from "./session-details-controller.ts";
-import type { CompactSessionMenuView } from "./session-menu-compact.ts";
-
-type SessionAdvancedActionKind = "set-icon" | "set-color" | SessionCommunicationMenuAction["kind"];
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -21,30 +16,7 @@ type SessionMenuSettingsOptions = {
       sessionId: string | null;
     };
     selectionCount: number;
-    actionDisabledReasons: Partial<Record<SessionAdvancedActionKind, string>>;
-    forkFromLastCompleted: boolean;
-    navigationAllowed: boolean;
-    worktreePath: string | null;
-    renderOpenInExtra?: (inline: boolean) => TemplateResult;
-    involvingMeContext?: boolean;
   };
-  disabled: (kind: SessionAdvancedActionKind) => boolean;
-  renderSubmenu: (
-    view: Exclude<CompactSessionMenuView, "root">,
-    label: string,
-    icon: TemplateResult,
-    disabled?: boolean,
-    title?: string,
-    inline?: boolean,
-  ) => TemplateResult;
-  renderItem: (
-    kind: "fork",
-    label: string,
-    icon: TemplateResult,
-    options: { inline: boolean; shortcut?: string; title?: string },
-  ) => TemplateResult;
-  renderInvolvement: (inline: boolean) => TemplateResult | typeof nothing;
-  renderDelete: (inline: boolean) => TemplateResult;
   runAction: (action: SessionCommunicationMenuAction) => void;
 };
 
@@ -56,12 +28,6 @@ export class SessionMenuSettings {
     const state = this.options.readState();
     return { ...state, session: this.settingsDetails.row ?? state.session };
   }
-  private readonly communicationMenu = new SessionMenuCommunication({
-    readState: () => this.communicationState(),
-    disabled: () => this.options.disabled("set-communication"),
-    disabledReason: () => this.options.readState().actionDisabledReasons["set-communication"],
-    runAction: (action) => this.options.runAction(action),
-  });
 
   constructor(
     host: ReactiveControllerHost,
@@ -127,65 +93,6 @@ export class SessionMenuSettings {
       this.settingsDetails.synchronize();
       return true;
     }
-    return this.communicationMenu.handleSelect(value);
-  }
-
-  renderAction() {
-    return this.options.readState().selectionCount > 1
-      ? nothing
-      : this.options.renderSubmenu("advanced", t("sessionsView.advanced"), icons.settings);
-  }
-
-  render(inline: boolean): TemplateResult {
-    const state = this.options.readState();
-    return html`
-      ${this.options.renderSubmenu(
-        "icon",
-        t("sessionsView.setIconColorMenu"),
-        icons.palette,
-        this.options.disabled("set-icon") && this.options.disabled("set-color"),
-        state.actionDisabledReasons["set-icon"] ?? state.actionDisabledReasons["set-color"],
-        inline,
-      )}
-      ${this.options.renderItem("fork", t("sessionsView.forkSession"), icons.copy, {
-        inline,
-        shortcut: "f",
-        title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
-      })}
-      ${this.options.renderSubmenu("copy", t("sessionsView.copyDetails"), icons.copy, false, undefined, inline)}
-      ${
-        state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
-          ? this.options.renderSubmenu(
-              "open-in",
-              t("sessionsView.openInEditorMenu"),
-              icons.externalLink,
-              false,
-              undefined,
-              inline,
-            )
-          : nothing
-      }
-      ${this.communicationMenu.renderActions(inline)}
-      ${
-        this.settingsDetails.error
-          ? html`<div slot=${inline ? nothing : "submenu"} class="session-menu__info" role="alert">
-                ${this.settingsDetails.error}
-              </div>
-              <wa-dropdown-item
-                slot=${inline ? nothing : "submenu"}
-                class="session-menu__item"
-                value="reload-settings"
-                ><span class="session-menu__text">${t("common.retry")}</span></wa-dropdown-item
-              >`
-          : nothing
-      }
-      ${!state.involvingMeContext ? this.options.renderInvolvement(inline) : nothing}
-      <div
-        slot=${inline ? nothing : "submenu"}
-        class="session-menu__separator"
-        role="separator"
-      ></div>
-      ${this.options.renderDelete(inline)}
-    `;
+    return selectSessionCommunication(value, this.options.runAction);
   }
 }

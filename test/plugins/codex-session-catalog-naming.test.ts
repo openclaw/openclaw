@@ -9,6 +9,7 @@ import plugin from "../../extensions/codex/index.js";
 import { setRuntimeConfigSnapshot } from "../../src/config/config.js";
 import { loadTranscriptEvents } from "../../src/config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../src/gateway/session-create-service.js";
+import { acquireGatewayStateOwner } from "../../src/infra/gateway-state-owner.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import {
   markPluginRegistryActive,
@@ -16,6 +17,7 @@ import {
 } from "../../src/plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
@@ -23,7 +25,17 @@ it("adopts duplicate native titles without claiming labels or replacing local na
   await withOpenClawTestState({ label: "native-adoption-naming" }, async (state) => {
     const nativeHome = state.path("native-home");
     await fs.mkdir(nativeHome);
-    await withEnvAsync({ CODEX_HOME: nativeHome }, async () => {
+    // Catalog persistence and foreground adoption share the serving Gateway's custody.
+    const lease = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+      },
+    });
+    const run = async () => {
       // Only the native service is synthetic. The public plugin, real client,
       // registry, creator, SQLite history, and binding owner all execute.
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -275,6 +287,15 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           server.close((error) => (error ? reject(error) : resolve()));
         });
       }
-    });
+    };
+    try {
+      await withEnvAsync({ CODEX_HOME: nativeHome }, run);
+    } finally {
+      try {
+        await state.restoreEnv();
+      } finally {
+        lease.release();
+      }
+    }
   });
 });

@@ -710,6 +710,71 @@ console.log("relocated Bash parser works without native grammar package");
     }
   });
 
+  it("renders session cards with fonts from a relocated package", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-session-card-package-"));
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(selected).toBeDefined();
+    const outDir = path.join(root, "build");
+    const entry = "gateway/session-card";
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: { [entry]: path.resolve("src/gateway/control-ui-public-session-card-render.ts") },
+      outDir,
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const installed = path.join(root, "installed package");
+      fs.mkdirSync(installed);
+      fs.writeFileSync(path.join(installed, "package.json"), JSON.stringify({ type: "module" }));
+      fs.renameSync(outDir, path.join(installed, "dist"));
+      fs.symlinkSync(path.resolve("node_modules"), path.join(installed, "node_modules"), "dir");
+      for (const notice of ["Lato-OFL.txt", "InstrumentSerif-OFL.txt", "IBMPlexMono-OFL.txt"]) {
+        expect(
+          fs.readFileSync(path.join(installed, "dist/assets/session-card", notice), "utf8"),
+        ).toContain("SIL OPEN FONT LICENSE");
+      }
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "--eval",
+              `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const { renderPublicSessionCardPng } = await import(pathToFileURL(process.argv[1]).href);
+const png = renderPublicSessionCardPng({
+  title: "A packaged public session",
+  quote: "Render a card after relocating the installed package.",
+  agentName: "Claw",
+  host: "example.test",
+  messageCount: 3,
+  status: "Done",
+});
+assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+assert.equal(png.readUInt32BE(16), 1200);
+assert.equal(png.readUInt32BE(20), 630);
+console.log("relocated session card renders with bundled fonts");
+`,
+              path.join(installed, "dist", `${entry}.js`),
+            ],
+            { cwd: installed, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("relocated session card renders with bundled fonts");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each(["runtime", "worker"])(
     "keeps service relay dependencies inside the emitted %s artifact closure",
     async (target) => {
