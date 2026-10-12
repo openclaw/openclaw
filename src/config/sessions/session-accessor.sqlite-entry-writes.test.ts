@@ -320,7 +320,8 @@ it.each(["entry", "target"] as const)(
           const appendedWatermark = appendedMutation.postimages?.get(
             scope.sessionKey,
           )?.transcriptWatermark;
-          expect(appendedWatermark).toEqual({ generation: expect.any(String), maxSeq: 0 });
+          // The session header precedes the first appended message.
+          expect(appendedWatermark).toEqual({ generation: expect.any(String), maxSeq: 1 });
           const beforePublication = { ...sql.counts };
           const appendedPublication = prepareSessionEntryReplacementPublication(
             { ...committed, ...appendedMutation.identity },
