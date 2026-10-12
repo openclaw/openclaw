@@ -15,6 +15,7 @@ type TranscriptStatsRow = Omit<
   SessionTranscriptStats,
   "lastMutationAtMs" | "lastObservedMutationAtMs"
 > & {
+  position: number;
   lastMutationAtMs: number | null;
   lastObservedMutationAtMs: number | null;
 };
@@ -60,14 +61,21 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
         )
         .leftJoin("session_transcript_cold_archives as cold", "cold.session_id", "target.value")
         .leftJoin("session_windows as session", "session.session_id", "target.value")
+        .where((eb) =>
+          eb.or([
+            eb("events.session_id", "is not", null),
+            eb("cold.session_id", "is not", null),
+            eb("session.session_id", "is not", null),
+          ]),
+        )
         .select((eb) => [
+          "target.key as position",
           eb.fn.coalesce("cold.event_count", "events.event_count", eb.val(0)).as("eventCount"),
           eb.fn.coalesce("cold.last_seq", "events.max_seq", eb.val(0)).as("maxSeq"),
           eb.fn.coalesce("cold.raw_bytes", "events.size_bytes", eb.val(0)).as("sizeBytes"),
           "session.transcript_observed_at as lastObservedMutationAtMs",
           "session.transcript_updated_at as lastMutationAtMs",
-        ])
-        .orderBy("target.key");
+        ]);
     });
   return { point: prepare(true), batch: prepare(false) };
 });
@@ -81,22 +89,24 @@ export function readTranscriptStatsBatchFromDatabase(
   // Keep cheap indexed point reads for small requests; both shapes share projection and decoding.
   const point = sessionIds.length <= 10;
   const read = point ? queries.point : queries.batch;
-  return chunkItems(sessionIds, point ? 1 : 400).flatMap((chunk) =>
-    read(chunk).rows.map((row) => {
+  return chunkItems(sessionIds, point ? 1 : 400).flatMap((chunk) => {
+    const rows = new Map(read(chunk).rows.map((row) => [row.position, row]));
+    return chunk.map((_, position) => {
+      const row = rows.get(position);
       const stats: SessionTranscriptStats = {
-        eventCount: row.eventCount,
-        maxSeq: row.maxSeq,
-        sizeBytes: row.sizeBytes,
+        eventCount: row?.eventCount ?? 0,
+        maxSeq: row?.maxSeq ?? 0,
+        sizeBytes: row?.sizeBytes ?? 0,
       };
-      if (row.lastMutationAtMs !== null) {
+      if (row?.lastMutationAtMs != null) {
         stats.lastMutationAtMs = row.lastMutationAtMs;
       }
-      if (row.lastObservedMutationAtMs !== null) {
+      if (row?.lastObservedMutationAtMs != null) {
         stats.lastObservedMutationAtMs = row.lastObservedMutationAtMs;
       }
       return stats;
-    }),
-  );
+    });
+  });
 }
 
 /** Reads transcript freshness and byte size without materializing event rows. */
