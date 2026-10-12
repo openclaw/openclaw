@@ -22,12 +22,14 @@ export function migratePredicateColumnsV21(db: DatabaseSync, previousVersion: nu
     for (const column of [...columns, "metadata_agent_id"]) {
       changed = ensureColumn(db, "meeting_transcript_sessions", `${column} TEXT`) || changed;
     }
+    // sqlite-allow-raw -- One-time v21 projection backfill reproducing shipped JSON1 predicates.
     db.exec(`UPDATE meeting_transcript_sessions SET
       ${columns.map((column, i) => `${column} = ${text("source_json", `$.${source[i]}`)}`).join(",")},
       metadata_agent_id = ${text("metadata_json", "$.agentId")}`);
   }
   if (tableExists(db, "meeting_transcript_summaries")) {
     changed = ensureColumn(db, "meeting_transcript_summaries", "overview TEXT") || changed;
+    // sqlite-allow-raw -- One-time v21 projection backfill reproducing shipped JSON1 predicates.
     db.exec(
       `UPDATE meeting_transcript_summaries SET overview = ${text("summary_json", "$.overview")}`,
     );
@@ -39,6 +41,7 @@ export function migratePredicateColumnsV21(db: DatabaseSync, previousVersion: nu
       ensureColumn(db, "delivery_queue_entries", "retention_max_entries INTEGER") || changed;
     // Keep the shipped JSON1 eligibility expressions, including true -> INTEGER 1
     // and compound prefixes -> compact JSON text. Invalid policies project all NULL.
+    // sqlite-allow-raw -- One-time v21 projection backfill reproducing shipped JSON1 predicates.
     db.exec(`UPDATE delivery_queue_entries SET
       (retention_id_prefix, retention_max_age_ms, retention_max_entries) = (
         SELECT id_prefix, max_age_ms, max_entries FROM (
