@@ -5,7 +5,6 @@
 
 import {
   createToolArgumentPreviewSchedule,
-  createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
   type ToolArgumentPreviewSchedule,
@@ -155,12 +154,18 @@ async function readProxyErrorData(
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
 }
 
-function assertProxySsePendingBufferWithinLimit(buffer: string): void {
-  const size = new TextEncoder().encode(buffer).byteLength;
+function assertProxySsePendingBytesWithinLimit(size: number): void {
   if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
     return;
   }
   throw new Error(`Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
+}
+
+function assertProxySseCompleteFrameBytesWithinLimit(size: number): void {
+  if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
+    return;
+  }
+  throw new Error(`Proxy SSE frame exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
 }
 
 export function streamProxy(
@@ -245,12 +250,11 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
-      const sseReader = createSseByteGuard(reader, {
-        maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
-        onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),
-      });
+      // Bound one pending/complete SSE frame before decode/alloc (sibling of #166853).
+      // Completed newline-terminated frames release the budget so aggregate traffic may exceed 16 MiB.
       const decoder = new TextDecoder();
-      let buffer = "";
+      let pending = new Uint8Array(Math.min(64 * 1024, PROXY_SSE_PENDING_BUFFER_MAX_BYTES));
+      let pendingSize = 0;
       let terminalEventSeen = false;
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
@@ -273,14 +277,49 @@ export function streamProxy(
         return event.type === "done" || event.type === "error";
       };
 
-      while (!terminalEventSeen) {
+      const flushCompleteFrame = (frameBytes: Uint8Array): boolean => {
+        assertProxySseCompleteFrameBytesWithinLimit(frameBytes.byteLength);
+        const line = decoder.decode(frameBytes);
+        return processSseLine(line);
+      };
+
+      const accountChunk = (chunk: Uint8Array): void => {
+        for (let index = 0; index < chunk.byteLength; index++) {
+          const byte = chunk[index]!;
+          if (byte === 10 /* \n */) {
+            const frame = pending.subarray(0, pendingSize);
+            pendingSize = 0;
+            terminalEventSeen = flushCompleteFrame(frame);
+            if (terminalEventSeen) {
+              return;
+            }
+            continue;
+          }
+          // Enforce the frame budget before growing or decoding retained input.
+          assertProxySsePendingBytesWithinLimit(pendingSize + 1);
+          if (pendingSize === pending.length) {
+            const grown = new Uint8Array(
+              Math.min(Math.max(pending.length * 2, 64 * 1024), PROXY_SSE_PENDING_BUFFER_MAX_BYTES),
+            );
+            grown.set(pending.subarray(0, pendingSize));
+            pending = grown;
+          }
+          pending[pendingSize++] = byte;
+        }
+      };
+
+      // Loop on read progress; terminalEventSeen is updated inside accountChunk.
+      for (;;) {
+        if (terminalEventSeen) {
+          break;
+        }
         const { done, value } = await withResponseBodyTimeout({
           timeoutMs: readIdleTimeoutMs,
           onTimeout: () =>
             new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
           cancel: cancelReader,
           read: () =>
-            sseReader.read().catch((error: unknown) => {
+            reader!.read().catch((error: unknown) => {
               throw toStringifiedError(error);
             }),
         });
@@ -293,26 +332,18 @@ export function streamProxy(
           throw new Error("Request aborted by user");
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer);
-
-        for (const line of lines) {
-          terminalEventSeen = processSseLine(line);
-          if (terminalEventSeen) {
-            break;
-          }
-        }
+        accountChunk(value ?? new Uint8Array());
       }
 
       if (options.signal?.aborted) {
         throw new Error("Request aborted by user");
       }
-      if (readerReachedEof) {
-        buffer += decoder.decode();
-        if (buffer.trim()) {
-          terminalEventSeen = processSseLine(buffer);
+      if (readerReachedEof && pendingSize > 0) {
+        assertProxySsePendingBytesWithinLimit(pendingSize);
+        assertProxySseCompleteFrameBytesWithinLimit(pendingSize);
+        const trailing = decoder.decode(pending.subarray(0, pendingSize));
+        if (trailing.trim()) {
+          terminalEventSeen = processSseLine(trailing);
         }
       }
       if (!terminalEventSeen) {

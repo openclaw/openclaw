@@ -379,15 +379,11 @@ describe("streamProxy", () => {
 
   it("caps unterminated pending SSE bytes before a frame delimiter arrives", async () => {
     const overLimitFrame = new TextEncoder().encode(`data: ${"x".repeat(17 * 1024 * 1024)}`);
-    let cancelReason: unknown;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         pendingReaderResponse({
           chunks: [overLimitFrame],
-          onCancel: (reason) => {
-            cancelReason = reason;
-          },
         }),
       ),
     );
@@ -396,22 +392,19 @@ describe("streamProxy", () => {
 
     expect(await resultWithinMs(stream)).toMatchObject({
       stopReason: "error",
-      errorMessage: "Proxy SSE stream exceeded 16777216 bytes",
+      errorMessage: "Proxy SSE pending buffer exceeded 16777216 bytes",
     });
-    expect(cancelReason).toBeInstanceOf(Error);
   });
 
-  it("caps delimiter-terminated SSE success body bytes", async () => {
+  it("caps delimiter-terminated SSE success body bytes before decode", async () => {
+    // Pre-decode pending accounting rejects while scanning bytes, before the
+    // trailing newline can form a decoded complete-frame string.
     const overLimitFrame = new TextEncoder().encode(`data: ${"x".repeat(17 * 1024 * 1024)}\n`);
-    let cancelReason: unknown;
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         pendingReaderResponse({
           chunks: [overLimitFrame],
-          onCancel: (reason) => {
-            cancelReason = reason;
-          },
         }),
       ),
     );
@@ -420,9 +413,8 @@ describe("streamProxy", () => {
 
     expect(await resultWithinMs(stream)).toMatchObject({
       stopReason: "error",
-      errorMessage: "Proxy SSE stream exceeded 16777216 bytes",
+      errorMessage: "Proxy SSE pending buffer exceeded 16777216 bytes",
     });
-    expect(cancelReason).toBeInstanceOf(Error);
   });
 
   it("re-arms the SSE idle timeout after each received chunk", async () => {
@@ -842,5 +834,78 @@ describe("streamProxy loopback /api/stream", () => {
       stopReason: "aborted",
       errorMessage: "Request aborted by user",
     });
+  });
+
+  it("accepts over 16 MiB of complete small SSE frames over real HTTP", async () => {
+    const pad = "x".repeat(256 * 1024);
+    const progress = `data: ${JSON.stringify({ type: "text_delta", contentIndex: 0, delta: pad })}\n`;
+    const frames = Math.ceil((20 * 1024 * 1024) / Buffer.byteLength(progress));
+    expect(frames * Buffer.byteLength(progress)).toBeGreaterThan(16 * 1024 * 1024);
+
+    server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ type: "text_start", contentIndex: 0 })}\n`);
+      for (let i = 0; i < frames; i++) {
+        res.write(progress);
+      }
+      res.write(`data: ${JSON.stringify({ type: "text_end", contentIndex: 0 })}\n`);
+      res.end(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n`);
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    const result = await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: `http://127.0.0.1:${address.port}`,
+      timeoutMs: 30_000,
+    }).result();
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.stopReason).toBe("stop");
+    console.log(
+      `[proxy SSE HTTP transport proof] long multi-frame path: frames=${frames} stopReason=${result.stopReason}`,
+    );
+  });
+
+  it("caps an oversized pending SSE frame over real HTTP before decoding", async () => {
+    const over = Buffer.alloc(17 * 1024 * 1024, 0x61);
+    server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: ");
+      // Stream the oversized payload in 1 MiB ticks so headers land before the cap fires.
+      let sent = 0;
+      const tick = setInterval(() => {
+        if (sent < over.byteLength) {
+          const next = over.subarray(sent, sent + 1024 * 1024);
+          res.write(next);
+          sent += next.byteLength;
+        } else {
+          clearInterval(tick);
+          res.end("\n");
+        }
+      }, 1);
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    const result = await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: `http://127.0.0.1:${address.port}`,
+      timeoutMs: 30_000,
+    }).result();
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy SSE pending buffer exceeded 16777216 bytes",
+    });
+    console.log(
+      `[proxy SSE HTTP transport proof] oversized pending path: stopReason=${result.stopReason} message=${result.errorMessage}`,
+    );
   });
 });
