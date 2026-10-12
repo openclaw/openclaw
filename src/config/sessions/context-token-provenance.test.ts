@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
 import {
+  resolveProjectedSessionContextTokenBudget,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
   resolveTrustedSessionContextTokens,
 } from "./context-token-provenance.js";
+import type { SessionEntry } from "./types.js";
 
 const currentSelection = {
   provider: "openai",
@@ -256,4 +258,70 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
       }),
     ).toEqual(entry.contextBudgetStatus);
   });
+});
+
+describe("source-bearing synthetic fallback budgets", () => {
+  const producer = {
+    modelProvider: "openai",
+    model: "gpt-5.6-sol",
+    agentHarnessId: "codex",
+  };
+  const cases: Array<{
+    name: string;
+    entry?: Pick<
+      SessionEntry,
+      | "modelProvider"
+      | "model"
+      | "agentHarnessId"
+      | "contextTokens"
+      | "contextTokensSource"
+      | "modelSelectionLocked"
+    >;
+    authoredContextTokens?: number;
+    contextTokens: number;
+    contextTokensSource: SessionEntry["contextTokensSource"];
+  }> = [
+    { name: "unreported owner", contextTokens: 128_000, contextTokensSource: "synthetic" },
+    {
+      name: "authored budget",
+      authoredContextTokens: 200_000,
+      contextTokens: 200_000,
+      contextTokensSource: "resolved",
+    },
+    {
+      name: "matching runtime",
+      entry: { ...producer, contextTokens: 272_000, contextTokensSource: "runtime" },
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+    },
+    {
+      name: "matching effective resolution",
+      entry: { ...producer, contextTokens: 272_000, contextTokensSource: "resolved-v1" },
+      contextTokens: 272_000,
+      contextTokensSource: "resolved-v1",
+    },
+    {
+      name: "locked native window",
+      entry: { ...producer, contextTokens: 272_000, modelSelectionLocked: true },
+      contextTokens: 272_000,
+      contextTokensSource: undefined,
+    },
+  ];
+  it.each(cases)(
+    "preserves $name authority over an estimated window",
+    ({ entry, authoredContextTokens, contextTokens, contextTokensSource }) => {
+      expect(
+        resolveProjectedSessionContextTokenBudget({
+          entry,
+          ...currentSelection,
+          resolvedContextTokens: 128_000,
+          resolvedContextTokensSource: "synthetic",
+          configuredContextTokenLimits: {
+            effectiveConfiguredTokens: authoredContextTokens,
+            authoredContextTokenCap: authoredContextTokens,
+          },
+        }),
+      ).toEqual({ contextTokens, contextTokensSource });
+    },
+  );
 });

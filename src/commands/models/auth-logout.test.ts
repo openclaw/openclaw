@@ -17,6 +17,10 @@ import {
 import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
 import * as catalogs from "../../agents/plugin-model-catalog.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
@@ -432,6 +436,21 @@ describe("models auth logout", () => {
     await withAuthProfileTestState("openclaw-auth-catalog-logout-", async ({ agentDirFor }) => {
       const main = agentDirFor("main");
       const child = agentDirFor("child");
+      let liveConfig: OpenClawConfig = {
+        agents: { entries: { main: { agentDir: main }, child: { agentDir: child } } },
+      };
+      mocks.loadModelsConfig.mockImplementation(async () => liveConfig);
+      mocks.updateConfig.mockImplementation(
+        async (
+          mutator: (
+            current: OpenClawConfig,
+            context: { runtimeConfig: OpenClawConfig },
+          ) => OpenClawConfig | Promise<OpenClawConfig>,
+        ) => {
+          liveConfig = await mutator(liveConfig, { runtimeConfig: liveConfig });
+          return liveConfig;
+        },
+      );
       const selected = createApiKeyCredential("fixture", "selected-secret");
       const survivor = createApiKeyCredential("fixture", "surviving-secret");
       saveAuthProfileStore(createAuthProfileStoreFixture({ selected, survivor }), main);
@@ -495,8 +514,80 @@ describe("models auth logout", () => {
         insert.run("unrelated-cache", "keep", '{"value":"retained"}');
       }
 
+      const storePath = resolveDefaultSessionStorePath("main");
+      const sessionCases = [
+        {
+          name: "removed-current",
+          pin: "selected",
+          fallback: false,
+          locked: false,
+          preserve: false,
+        },
+        { name: "fallback-only", pin: "survivor", fallback: true, locked: false, preserve: true },
+        {
+          name: "unremoved-current",
+          pin: "survivor",
+          fallback: false,
+          locked: false,
+          preserve: true,
+        },
+        { name: "locked-native", pin: "selected", fallback: false, locked: true, preserve: true },
+      ];
+      for (const row of sessionCases) {
+        const entry: SessionEntry = {
+          sessionId: row.name,
+          updatedAt: 1,
+          modelProvider: "fixture",
+          model: "selected-model",
+          authProfileOverride: row.pin,
+          authProfileOverrideSource: "user",
+          modelSelectionLocked: row.locked,
+          agentHarnessId: row.locked ? "codex" : "openclaw",
+          contextTokens: 888_000,
+          contextTokensSource: "resolved-v1",
+          contextBudgetStatus: contextBudgetStatusFixture({
+            sessionId: row.name,
+            contextTokenBudget: 888_000,
+          }),
+          ...(row.fallback
+            ? {
+                modelFallback: {
+                  prevProvider: "fixture",
+                  prevModel: "previous-model",
+                  prevAuthProfileOverride: "selected",
+                  ts: 1,
+                  source: "agent-patch" as const,
+                },
+              }
+            : {}),
+        };
+        await replaceSessionEntry(
+          { storePath, sessionKey: `agent:main:logout-context:${row.name}` },
+          entry,
+        );
+      }
+
       await runRegisteredLogout("selected");
 
+      for (const row of sessionCases) {
+        const persisted = loadSessionEntry({
+          storePath,
+          sessionKey: `agent:main:logout-context:${row.name}`,
+          readConsistency: "latest",
+        });
+        expect(persisted?.sessionId).toBe(row.name);
+        expect(persisted?.authProfileOverride).toBe(row.pin === "selected" ? undefined : row.pin);
+        expect(persisted?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
+        expect.soft(persisted?.contextTokens).toBe(row.preserve ? 888_000 : undefined);
+        expect.soft(persisted?.contextTokensSource).toBe(row.preserve ? "resolved-v1" : undefined);
+        expect
+          .soft(persisted?.contextBudgetStatus)
+          .toEqual(
+            row.preserve
+              ? contextBudgetStatusFixture({ sessionId: row.name, contextTokenBudget: 888_000 })
+              : undefined,
+          );
+      }
       expect(loadAuthProfileStoreWithoutExternalProfiles(main).profiles).toEqual({ survivor });
       for (const agentDir of [main, child]) {
         const { db } = openOpenClawAgentDatabase({

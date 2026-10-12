@@ -1,4 +1,6 @@
 /** One-run rollback for agent-selected session models. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../config/sessions/context-token-provenance.js";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -87,6 +89,11 @@ async function reconcileAgentPatchedSessionModel(params: {
       const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
       note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
       return {
+        ...(entry.modelSelectionLocked !== true &&
+        normalizeOptionalString(entry.authProfileOverride) !==
+          normalizeOptionalString(marker.prevAuthProfileOverride)
+          ? SESSION_CONTEXT_CAPACITY_CLEAR_PATCH
+          : {}),
         model: marker.prevModel,
         modelProvider: marker.prevProvider,
         modelOverride: marker.prevModelOverride,

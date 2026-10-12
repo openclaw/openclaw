@@ -8,6 +8,7 @@ import {
   resolveCollapsedSessionAuthPinSource,
   resolveSessionAuthProfileOverrideSource,
 } from "../config/sessions/auth-profile-override-provenance.js";
+import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../config/sessions/context-token-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -272,20 +273,48 @@ export function entryMatchesAutoFallbackPrimaryProbe(
 export function clearAutoFallbackPrimaryProbeSelection(
   entry: SessionEntry,
   now = Date.now(),
-): void {
+): Partial<SessionEntry> {
+  const clearAuthProfile = resolveSessionAuthProfileOverrideSource(entry) === "auto";
+  const clearCapacity =
+    clearAuthProfile &&
+    entry.modelSelectionLocked !== true &&
+    normalizeOptionalString(entry.authProfileOverride) !== undefined;
   delete entry.providerOverride;
   delete entry.modelOverride;
   delete entry.modelOverrideSource;
   delete entry.modelOverrideRouteResolution;
   delete entry.modelOverrideFallbackOriginProvider;
   delete entry.modelOverrideFallbackOriginModel;
-  if (resolveSessionAuthProfileOverrideSource(entry) === "auto") {
+  if (clearAuthProfile) {
     delete entry.authProfileOverride;
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
   }
+  if (clearCapacity) {
+    for (const key of Object.keys(SESSION_CONTEXT_CAPACITY_CLEAR_PATCH)) {
+      Reflect.deleteProperty(entry, key);
+    }
+  }
   delete entry.fallbackNotice;
   entry.updatedAt = now;
+  return {
+    providerOverride: undefined,
+    modelOverride: undefined,
+    modelOverrideSource: undefined,
+    modelOverrideRouteResolution: undefined,
+    modelOverrideFallbackOriginProvider: undefined,
+    modelOverrideFallbackOriginModel: undefined,
+    ...(clearAuthProfile
+      ? {
+          authProfileOverride: undefined,
+          authProfileOverrideSource: undefined,
+          authProfileOverrideCompactionCount: undefined,
+        }
+      : {}),
+    ...(clearCapacity ? SESSION_CONTEXT_CAPACITY_CLEAR_PATCH : {}),
+    fallbackNotice: undefined,
+    updatedAt: now,
+  };
 }
 
 type SessionAgentResolutionParams = {

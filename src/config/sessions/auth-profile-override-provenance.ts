@@ -1,4 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "./context-token-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 type ProviderLoginSessionEntry = Pick<
@@ -6,6 +10,7 @@ type ProviderLoginSessionEntry = Pick<
   | "sessionId"
   | "providerOverride"
   | "modelProvider"
+  | "modelSelectionLocked"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -19,7 +24,9 @@ type ProviderLoginSessionAdoption =
         authProfileOverride: string;
         authProfileOverrideSource: "user";
         authProfileOverrideCompactionCount: undefined;
-      };
+      } & Partial<
+        Pick<SessionEntry, "contextTokens" | "contextTokensSource" | "contextBudgetStatus">
+      >;
     }
   | { status: "rejected" };
 
@@ -107,6 +114,10 @@ export function decideProviderLoginSessionAdoption(params: {
     ? {
         status: "patch",
         patch: {
+          ...(normalizeOptionalString(params.current.authProfileOverride) !==
+            normalizeOptionalString(params.nextProfileId) && !params.current.modelSelectionLocked
+            ? SESSION_CONTEXT_CAPACITY_CLEAR_PATCH
+            : {}),
           authProfileOverride: params.nextProfileId,
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: undefined,

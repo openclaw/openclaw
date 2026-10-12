@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_CONTEXT_CAPACITY_CLEAR_PATCH } from "../config/sessions/context-token-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -77,6 +78,7 @@ export function applyModelOverrideToSessionEntry(params: {
   let updated = false;
   let selectionUpdated = false;
   let profileUpdated = false;
+  const previousProfile = normalizeOptionalString(entry.authProfileOverride);
 
   if (selection.isDefault) {
     if (params.explicitDefaultSelection && entry.modelOverrideSource !== "default") {
@@ -134,12 +136,6 @@ export function applyModelOverrideToSessionEntry(params: {
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
   const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
-  if (shouldClearModelDerivedState) {
-    updated =
-      clearDefinedFields(entry, "contextTokens", "contextTokensSource", "contextBudgetStatus") ||
-      updated;
-  }
-
   if (profileOverride) {
     profileUpdated = setField(entry, "authProfileOverride", profileOverride);
     profileUpdated =
@@ -155,6 +151,15 @@ export function applyModelOverrideToSessionEntry(params: {
   updated = profileUpdated || updated;
   if (profileOverride || !params.preserveAuthProfileOverride) {
     updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
+  }
+
+  if (
+    shouldClearModelDerivedState ||
+    previousProfile !== normalizeOptionalString(entry.authProfileOverride)
+  ) {
+    for (const key of Object.keys(SESSION_CONTEXT_CAPACITY_CLEAR_PATCH)) {
+      Reflect.deleteProperty(entry, key);
+    }
   }
 
   // Clear stale fallback notice when the user explicitly switches models.

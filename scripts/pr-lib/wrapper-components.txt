@@ -593,6 +593,7 @@ src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
+src/config/sessions/context-token-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts

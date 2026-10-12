@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { FollowupRun } from "./queue.js";
 
 const state = vi.hoisted(() => ({
@@ -11,6 +13,8 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 import { clearRecoveredAutoFallbackPrimaryProbeSelection } from "./agent-runner-auto-fallback.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-primary-probe-");
 
 const probe = {
   provider: "anthropic",
@@ -35,6 +39,8 @@ function createAutoEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 async function clearProbe(
   activeSessionStore: Record<string, SessionEntry>,
   staleAutoEntry: SessionEntry,
+  storePath = "/tmp/sessions.sqlite",
+  sessionKey = "main",
 ) {
   await clearRecoveredAutoFallbackPrimaryProbeSelection({
     run: {
@@ -44,16 +50,57 @@ async function clearProbe(
     } as FollowupRun["run"],
     provider: probe.provider,
     model: probe.model,
-    sessionKey: "main",
+    sessionKey,
     activeSessionStore,
     getActiveSessionEntry: () => staleAutoEntry,
-    storePath: "/tmp/sessions.sqlite",
+    storePath,
   });
 }
 
 describe("clearRecoveredAutoFallbackPrimaryProbeSelection", () => {
   beforeEach(() => {
     state.updateSessionEntryMock.mockReset();
+  });
+
+  it.each([
+    { name: "removed automatic pin", source: "auto" as const, locked: false, clears: true },
+    { name: "user-owned pin", source: "user" as const, locked: false, clears: false },
+    { name: "locked native selection", source: "auto" as const, locked: true, clears: false },
+  ])("persists account budget invalidation for $name", async ({ source, locked, clears }) => {
+    const accessor = await vi.importActual<
+      typeof import("../../config/sessions/session-accessor.js")
+    >("../../config/sessions/session-accessor.js");
+    const storePath = path.join(sessionDirs.make(), "sessions.sqlite");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionKey, storePath };
+    const entry = createAutoEntry({
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: source,
+      modelSelectionLocked: locked,
+      contextTokens: 64000,
+      contextTokensSource: "resolved-v1",
+    });
+    const persisted = await accessor.upsertSessionEntryCore(scope, entry);
+    expect(persisted?.sessionId).toBe(entry.sessionId);
+    expect(persisted).toMatchObject({
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+      authProfileOverrideSource: source,
+    });
+    if (!persisted) {
+      throw new Error("Expected admitted primary-probe session");
+    }
+    state.updateSessionEntryMock.mockImplementation(accessor.updateSessionEntry);
+    const activeSessionStore = { [sessionKey]: persisted };
+    await clearProbe(activeSessionStore, persisted, storePath, sessionKey);
+    const saved = accessor.loadSessionEntry(scope);
+    expect(saved?.sessionId).toBe(entry.sessionId);
+    expect(saved?.authProfileOverride).toBe(source === "auto" ? undefined : "openai:fallback");
+    expect(saved?.contextTokens).toBe(clears ? undefined : 64000);
+    expect(saved?.contextTokensSource).toBe(clears ? undefined : "resolved-v1");
   });
 
   it("refreshes the local selection when the persisted comparison rejects the probe", async () => {
