@@ -1,11 +1,12 @@
-import { consume } from "@lit/context";
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
-import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -14,8 +15,7 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
 import { resolveWorkshopAccess } from "./access.ts";
@@ -24,16 +24,14 @@ import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
 import {
   archivedWorkshopSkills,
-  renderSkillWorkshop,
+  SkillWorkshopView,
   sortWorkshopSkills,
   type WorkshopFilter,
   type WorkshopSort,
   type WorkshopTab,
   type WorkshopViewer,
   type WorkshopViewerTarget,
-} from "./view.ts";
-
-registerSkillWorkshopEnglish();
+} from "./view.tsx";
 
 type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
 
@@ -48,10 +46,7 @@ function resolveWorkshopAgentId(context: ApplicationContext): string {
       : resolveUiSelectedGlobalAgentId(snapshot);
 }
 
-class SkillWorkshopPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context?: ApplicationContext;
-
+class SkillWorkshopPageState {
   private scope: WorkshopScope | null = null;
   private snapshot: WorkshopSnapshot | null = null;
   private loading = false;
@@ -67,13 +62,29 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private sort: WorkshopSort = "uses";
   private tab: WorkshopTab = "instructions";
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watchStore(() => this.context?.gateway)
-    .watchStore(() => this.context?.agentSelection)
-    .watchStore(() => this.context?.agents)
-    .watchStore(() => this.context?.runtimeConfig);
+  constructor(
+    private readonly context: ApplicationContext,
+    private readonly revision: () => number,
+    private readonly changed: () => void,
+  ) {
+    const gateway = projectGateway(context.gateway);
+    const selection = projectAgentSelection(context.agentSelection);
+    const agents = projectAgents(context.agents);
+    const config = projectRuntimeConfig(context.runtimeConfig);
+    createEffect(
+      () =>
+        [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
+      () => {
+        this.syncScope();
+        changed();
+      },
+    );
+    onCleanup(() => {
+      this.scope = null;
+    });
+  }
 
-  override willUpdate() {
+  private syncScope() {
     const context = this.context;
     const snapshot = context?.gateway.snapshot;
     const client = snapshot?.phase === "connected" ? snapshot.client : null;
@@ -105,7 +116,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     void this.context?.runtimeConfig.ensureLoaded();
     this.loading = true;
     this.error = null;
-    this.requestUpdate();
+    this.changed();
     try {
       const snapshot = await loadWorkshopSnapshot(scope.client, scope.agentId);
       if (this.scope !== scope) {
@@ -138,7 +149,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       this.error = formatUiError(error);
     } finally {
       this.loading = false;
-      this.requestUpdate();
+      this.changed();
     }
   }
 
@@ -149,7 +160,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     const viewer: WorkshopViewer = { target, status: "loading" };
     this.viewer = viewer;
-    this.requestUpdate();
+    this.changed();
     const read = (params: Partial<WorkshopViewerTarget>) =>
       scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
         agentId: scope.agentId,
@@ -174,7 +185,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     if (this.scope === scope && this.viewer?.target === target) {
       this.viewer = next;
-      this.requestUpdate();
+      this.changed();
     }
   }
 
@@ -217,7 +228,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     this.filter = filter;
     this.tab = "instructions";
     this.selectFirst();
-    this.requestUpdate();
+    this.changed();
   };
 
   private readonly setTab = (tab: WorkshopTab) => {
@@ -232,7 +243,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         void this.open({ name: target.name, filePath: "SKILL.md", versionId: target.versionId });
       }
     }
-    this.requestUpdate();
+    this.changed();
   };
 
   private readonly mutate = async (mutation: WorkshopMutation, key: string) => {
@@ -245,7 +256,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     this.pendingAction = key;
     this.actionError = null;
-    this.requestUpdate();
+    this.changed();
     try {
       const { method, ...params } = mutation;
       await scope.client.request(method, { agentId: scope.agentId, ...params });
@@ -269,7 +280,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     } finally {
       if (this.scope === scope) {
         this.pendingAction = null;
-        this.requestUpdate();
+        this.changed();
       }
     }
   };
@@ -287,7 +298,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     this.modeBusy = true;
     this.modeError = null;
-    this.requestUpdate();
+    this.changed();
     try {
       const error = await setWorkshopMode(runtimeConfig, mode);
       if (this.context === context) {
@@ -295,7 +306,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       }
     } finally {
       this.modeBusy = false;
-      this.requestUpdate();
+      this.changed();
     }
   };
 
@@ -320,12 +331,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     });
     if (!access.allowed) {
       this.learningError = access.reason;
-      this.requestUpdate();
+      this.changed();
       return;
     }
     this.learningBusy = true;
     this.learningError = null;
-    this.requestUpdate();
+    this.changed();
     const createdAt = Date.now();
     try {
       const result = await context.sessions.createResult(params, { reconciliation: "background" });
@@ -359,7 +370,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           error: result.initialRun.error,
         });
       }
-      if (!isCurrent() || !this.isConnected) {
+      if (!isCurrent()) {
         return;
       }
       context.navigate(
@@ -375,23 +386,15 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     } finally {
       if (isCurrent()) {
         this.learningBusy = false;
-        this.requestUpdate();
+        this.changed();
       }
     }
   };
 
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    this.scope = null;
-    super.disconnectedCallback();
-  }
-
-  override render() {
+  viewProps() {
+    this.revision();
     const context = this.context;
-    if (!context) {
-      return nothing;
-    }
-    return renderSkillWorkshop({
+    return {
       context,
       agentId: this.scope?.agentId ?? null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
@@ -416,20 +419,29 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       learningError: this.learningError,
       onRetry: () => void this.load(),
       onSelectSkill: this.selectSkill,
-      onOpen: (target) => void this.open(target),
-      onMutate: (mutation, key) => void this.mutate(mutation, key),
-      onModeChange: (mode) => void this.setMode(mode),
+      onOpen: (target: WorkshopViewerTarget) => void this.open(target),
+      onMutate: (mutation: WorkshopMutation, key: string) => void this.mutate(mutation, key),
+      onModeChange: (mode: SkillWorkshopMode) => void this.setMode(mode),
       onLearn: () => void this.learn(),
       onFilter: this.setFilter,
-      onSort: (sort) => {
+      onSort: (sort: WorkshopSort) => {
         this.sort = sort;
-        this.requestUpdate();
+        this.changed();
       },
       onTab: this.setTab,
-    });
+    };
   }
 }
 
-if (!customElements.get("openclaw-skill-workshop-page")) {
-  customElements.define("openclaw-skill-workshop-page", SkillWorkshopPage);
-}
+export const SkillWorkshopPage = defineSolidBridge(
+  "openclaw-skill-workshop-page",
+  () => {
+    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+    const state = new SkillWorkshopPageState(useApplication(), revision, () => {
+      setRevision((value) => value + 1);
+    });
+    const view = createMemo(() => state.viewProps());
+    return <SkillWorkshopView view={view} />;
+  },
+  { properties: {} },
+);

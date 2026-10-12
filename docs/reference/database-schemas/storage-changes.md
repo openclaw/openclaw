@@ -2270,7 +2270,9 @@ Owning-writer receipts invalidate the pairing snapshot cache across workers.
 CLI pairing mutations route through the Gateway or hold exclusive offline ownership.
 Workers project lists and node identity bindings;
 the Gateway installs bindings against the pairing revision without reopening
-SQLite. Historical inspection snapshots never publish live node authority.
+SQLite. A lookup or receipt at a newer revision marks the published set incomplete
+but keeps other devices' bindings; only a full list replaces the set.
+Historical inspection snapshots never publish live node authority.
 
 Pairing, approval, role-token, bootstrap, and node-surface mutations execute in
 the shared-state writer. Each synchronous transaction reads the authoritative

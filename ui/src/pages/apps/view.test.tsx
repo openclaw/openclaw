@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
-import { renderApps } from "./view.ts";
+import { Apps } from "./view.tsx";
 
 const EXPECTED_EXTERNAL_HREFS = [
   "https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132",
@@ -26,7 +26,7 @@ const EXPECTED_EXTERNAL_HREFS = [
   "https://docs.openclaw.ai",
 ];
 
-describe("renderApps", () => {
+describe("Apps", () => {
   beforeEach(async () => {
     document.body.innerHTML = "";
     await i18n.setLocale("en");
@@ -34,7 +34,7 @@ describe("renderApps", () => {
 
   function renderIntoContainer(onNavigate = vi.fn(), onPairDevice?: () => void) {
     const container = document.createElement("div");
-    render(renderApps({ onNavigate, onPairDevice }), container);
+    mountSolid(() => <Apps onNavigate={onNavigate} onPairDevice={onPairDevice} />, { container });
     return container;
   }
 
@@ -63,12 +63,14 @@ describe("renderApps", () => {
 
   it("opens the connected Gateway in the Mac app without losing the download option", () => {
     const container = document.createElement("div");
-    render(
-      renderApps({
-        onNavigate: vi.fn(),
-        macGatewayLaunchUrl: buildMacGatewayLaunchUrl("wss://research.example:8443/assistant"),
-      }),
-      container,
+    mountSolid(
+      () => (
+        <Apps
+          onNavigate={vi.fn()}
+          macGatewayLaunchUrl={buildMacGatewayLaunchUrl("wss://research.example:8443/assistant")}
+        />
+      ),
+      { container },
     );
     const launch = container.querySelector<HTMLAnchorElement>("a[href^='openclaw:']");
     expect(launch?.textContent?.trim()).toBe("Open in Mac app");

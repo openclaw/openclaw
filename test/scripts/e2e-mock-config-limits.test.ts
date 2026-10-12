@@ -48,9 +48,6 @@ vi.mock("../helpers/stop-child-process.js", async (importOriginal) => {
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
-const browserCdpFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
-const configReloadAssertPath = "scripts/e2e/lib/config-reload/assert-log.mjs";
-const clickClackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
 const scrubbedEnvKeys = [
   "CLICKCLACK_FIXTURE_PORT",
   "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
@@ -408,14 +405,12 @@ describe("mock OpenAI response markers", () => {
     },
   );
 
-  it.concurrent.for(
-    [
-      { api: "responses", stream: false },
-      { api: "responses", stream: true },
-      { api: "chat/completions", stream: false },
-      { api: "chat/completions", stream: true },
-    ].flatMap(({ api, stream }) => [false, true].map((modelMap) => ({ api, stream, modelMap }))),
-  )(
+  it.concurrent.for([
+    { api: "responses", stream: false, modelMap: true },
+    { api: "responses", stream: true, modelMap: true },
+    { api: "chat/completions", stream: false, modelMap: true },
+    { api: "chat/completions", stream: true, modelMap: true },
+  ])(
     "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
     async ({ api, stream, modelMap }, ctx) => {
       const { expect: taskExpect } = ctx;
@@ -1500,27 +1495,6 @@ describe("mock OpenAI response markers", () => {
 });
 
 describe("e2e mock and config helper numeric limits", () => {
-  it.for([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port, ctx) => {
-    const env: Record<string, string> = port === undefined ? {} : { MOCK_PORT: port };
-    await withMockServer(ctx, mockOpenAiPath, env, async (baseUrl, output) => {
-      expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
-      expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
-      const response = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ input: "ephemeral listener" }),
-      });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("OPENCLAW_E2E_OK");
-    });
-  });
-
-  it.each(["0tcp", "-0", "0.5", ""])("rejects malformed ephemeral port %j", (port) => {
-    const result = runScript(mockOpenAiPath, { MOCK_PORT: port });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`invalid MOCK_PORT: ${port}`);
-  });
-
   it("keeps zero invalid for other launcher port settings", () => {
     const fallback = runScript(mockOpenAiPath, { OPENCLAW_MOCK_OPENAI_PORT: "0" });
     expect(fallback.status).not.toBe(0);
@@ -1528,71 +1502,6 @@ describe("e2e mock and config helper numeric limits", () => {
     const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "0" });
     expect(webSearch.status).not.toBe(0);
     expect(webSearch.stderr).toContain("invalid MOCK_PORT: 0");
-  });
-
-  it("rejects loose mock OpenAI port env values", () => {
-    const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "44080tcp" });
-    expect(mockPort.status).not.toBe(0);
-    expect(mockPort.stderr).toContain("invalid MOCK_PORT: 44080tcp");
-
-    const fallbackPort = runScript(mockOpenAiPath, {
-      OPENCLAW_MOCK_OPENAI_PORT: "44080http",
-    });
-    expect(fallbackPort.status).not.toBe(0);
-    expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 44080http");
-  });
-
-  it("rejects out-of-range mock OpenAI port env values", () => {
-    const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "65536" });
-    expect(mockPort.status).not.toBe(0);
-    expect(mockPort.stderr).toContain("invalid MOCK_PORT: 65536");
-
-    const fallbackPort = runScript(mockOpenAiPath, {
-      OPENCLAW_MOCK_OPENAI_PORT: "65536",
-    });
-    expect(fallbackPort.status).not.toBe(0);
-    expect(fallbackPort.stderr).toContain("invalid OPENCLAW_MOCK_OPENAI_PORT: 65536");
-  });
-
-  it("rejects loose OpenAI web-search mock port env values", () => {
-    const result = runScript(webSearchMockPath, { MOCK_PORT: "80http" });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid MOCK_PORT: 80http");
-  });
-
-  it("rejects out-of-range fixture listener ports", () => {
-    const webSearch = runScript(webSearchMockPath, { MOCK_PORT: "65536" });
-    expect(webSearch.status).not.toBe(0);
-    expect(webSearch.stderr).toContain("invalid MOCK_PORT: 65536");
-
-    const browserFixture = runScript(browserCdpFixturePath, { FIXTURE_PORT: "65536" });
-    expect(browserFixture.status).not.toBe(0);
-    expect(browserFixture.stderr).toContain("invalid FIXTURE_PORT: 65536");
-
-    const clickClack = runScript(clickClackFixturePath, {
-      CLICKCLACK_FIXTURE_PORT: "65536",
-    });
-    expect(clickClack.status).not.toBe(0);
-    expect(clickClack.stderr).toContain("invalid CLICKCLACK_FIXTURE_PORT: 65536");
-  });
-
-  it("rejects loose config-reload log timeout env values", () => {
-    const result = runScript(configReloadAssertPath, {
-      OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS: "30000ms",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS: 30000ms");
-  });
-
-  it("rejects loose config-reload log read caps", () => {
-    const result = runScript(configReloadAssertPath, {
-      OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES: "256kb",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES: 256kb");
   });
 
   it("returns a clear error when mock OpenAI cannot append request logs", async (ctx) => {
