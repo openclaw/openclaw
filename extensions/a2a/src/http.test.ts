@@ -267,12 +267,17 @@ describe("A2A HTTP authentication and request limits", () => {
     ["long invalid token", "x".repeat(200)],
   ])("rejects %s", async (_label, token) => {
     const harness = await startHttpHarness();
-    const denied = await harness.post(sendRequest(), token);
+    for (const request of [
+      sendRequest(),
+      { jsonrpc: "2.0", id: "push", method: "CreateTaskPushNotificationConfig" },
+    ]) {
+      const denied = await harness.post(request, token);
 
-    expect(denied.status).toBe(401);
-    await expect(denied.json()).resolves.toMatchObject({
-      error: expect.stringContaining("channels.a2a.peers"),
-    });
+      expect(denied.status).toBe(401);
+      await expect(denied.json()).resolves.toMatchObject({
+        error: expect.stringContaining("channels.a2a.peers"),
+      });
+    }
   });
 
   it("limits each peer independently and admits requests when the sliding window expires", async () => {
@@ -533,6 +538,67 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: "bad", error: { code: errorCode } });
+  });
+
+  it.each([
+    ["CreateTaskPushNotificationConfig", -32003],
+    ["SetTaskPushNotificationConfig", -32003],
+    ["GetTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfigs", -32003],
+    ["DeleteTaskPushNotificationConfig", -32003],
+    ["SendStreamingMessage", -32004],
+    ["SubscribeToTask", -32004],
+    ["GetExtendedAgentCard", -32004],
+    ["UnknownTaskPushNotificationConfig", -32601],
+  ])("rejects %s with capability-specific error %s", async (method, code) => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const createTask = vi.spyOn(harness.taskStore, "create");
+    const response = await harness.post({ jsonrpc: "2.0", id: "capability", method });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: "2.0",
+      id: "capability",
+      error: { code, message: expect.any(String) },
+    });
+    expect(onDispatch).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("keeps push errors correlated in a mixed batch and omits push notifications", async () => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const task = harness.taskStore.create("ctx-push", "alpha");
+    const createTask = vi.spyOn(harness.taskStore, "create");
+    const notification = {
+      jsonrpc: "2.0",
+      method: "CreateTaskPushNotificationConfig",
+      params: { taskId: task.id, url: "https://example.test/push" },
+    };
+    const response = await harness.post([
+      { ...notification, id: "push" },
+      notification,
+      { jsonrpc: "2.0", id: 0, method: "GetTask", params: { id: task.id } },
+      { jsonrpc: "2.0", id: null, method: "SendStreamingMessage" },
+      { jsonrpc: "2.0", id: "unknown", method: "UnknownTaskPushNotificationConfig" },
+    ]);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual([
+      { jsonrpc: "2.0", id: "push", error: { code: -32003, message: expect.any(String) } },
+      { jsonrpc: "2.0", id: 0, result: task },
+      { jsonrpc: "2.0", id: null, error: { code: -32004, message: expect.any(String) } },
+      { jsonrpc: "2.0", id: "unknown", error: { code: -32601, message: expect.any(String) } },
+    ]);
+
+    const notificationOnly = await harness.post(notification);
+    expect(notificationOnly.status).toBe(200);
+    await expect(notificationOnly.text()).resolves.toBe("");
+    expect(onDispatch).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(harness.taskStore.get(task.id, "alpha")?.status.state).toBe("TASK_STATE_SUBMITTED");
   });
 
   it("executes batch notifications without returning notification response entries", async () => {

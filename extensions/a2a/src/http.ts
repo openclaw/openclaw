@@ -203,6 +203,9 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       if (method === undefined) {
         throw new A2aProtocolError(-32601, `Method not found: ${request.method}`);
       }
+      if (method === "push-unsupported") {
+        throw new A2aProtocolError(-32003, "Push notifications are not supported");
+      }
       if (method === "unsupported") {
         throw new A2aProtocolError(
           -32004,

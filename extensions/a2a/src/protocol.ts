@@ -104,20 +104,26 @@ const A2A_UNSUPPORTED_METHODS = new Set([
   "ListTasks",
   "SendStreamingMessage",
   "SubscribeToTask",
+  "GetExtendedAgentCard",
+]);
+
+const A2A_UNSUPPORTED_PUSH_METHODS = new Set([
   "CreateTaskPushNotificationConfig",
   "SetTaskPushNotificationConfig",
   "GetTaskPushNotificationConfig",
   "ListTaskPushNotificationConfig",
   "ListTaskPushNotificationConfigs",
   "DeleteTaskPushNotificationConfig",
-  "GetExtendedAgentCard",
 ]);
 
 export function resolveA2aRpcMethod(
   method: string,
-): A2aCanonicalMethod | "unsupported" | undefined {
+): A2aCanonicalMethod | "unsupported" | "push-unsupported" | undefined {
   if (Object.hasOwn(A2A_METHOD_ALIASES, method)) {
     return A2A_METHOD_ALIASES[method];
+  }
+  if (A2A_UNSUPPORTED_PUSH_METHODS.has(method)) {
+    return "push-unsupported";
   }
   return A2A_UNSUPPORTED_METHODS.has(method) ? "unsupported" : undefined;
 }

@@ -185,6 +185,8 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
+Recognized push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
+
 Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries. Restarting the gateway discards all tasks and task history.
 
 ## Related
