@@ -97,10 +97,30 @@ In particular, `user_background_images` depends on `user_profiles`; its cascadin
 foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
-Each state artifact also has a `.runtime.postgres.sql` variant, named by the
-manifest's `runtimeFile`. Runtime DDL omits transaction wrappers and fixed schema
-qualification; the owning connection supplies the namespace and transaction.
-The standalone `.postgres.sql` artifacts retain their explicit schema wrappers.
+`state.postgres.sql` and each manifest `file` contain the single runtime form of
+their state DDL. They omit transaction wrappers and fixed schema qualification;
+the owning connection supplies the namespace and transaction. The separate
+`agent.postgres.sql` readiness artifact retains its schema and transaction
+wrappers until the agent-store cutover.
+
+For a manual state-schema check, run `psql` from the generated directory and
+supply the transaction and chosen schema explicitly:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+CREATE SCHEMA review_state;
+SET LOCAL search_path = review_state;
+SET LOCAL standard_conforming_strings = on;
+\i state.postgres.sql
+-- Include each desired fragment's manifest file, dependencies first.
+\i fragment-user_profiles.postgres.sql
+\i fragment-user_background_images.postgres.sql
+COMMIT;
+```
+
+Use a disposable schema for this readiness check; it does not enable shared-state
+PostgreSQL support or migrate an existing store.
 
 Both engines use the same shared-state schema version (currently 21). Every
 future version change must supply both engines' forward migration and catalog

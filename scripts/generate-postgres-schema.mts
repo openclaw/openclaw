@@ -100,11 +100,9 @@ export async function generatePostgresSchemas(
     dependencies,
     activation,
     file: `fragment-${id}.postgres.sql`,
-    runtimeFile: `fragment-${id}.runtime.postgres.sql`,
   }));
   for (const name of ["state", "agent"]) {
     const db = new DatabaseSync(":memory:");
-    let runtime: Catalog | undefined;
     try {
       db.exec(fs.readFileSync(path.join(root, `src/state/openclaw-${name}-schema.sql`), "utf8"));
       if (name === "state") {
@@ -112,10 +110,9 @@ export async function generatePostgresSchemas(
           db.exec(fragment.sql());
         }
       }
-      catalogs[name] = catalog(db, `${prefix}_${name}`);
-      if (name === "state" && root === ROOT) {
-        runtime = catalog(db, "");
-      }
+      const namespace = `${prefix}_${name}`;
+      // State DDL uses the owner's search_path; catalog checks target its chosen namespace.
+      catalogs[name] = { ...catalog(db, name === "state" ? "" : namespace), schema: namespace };
     } finally {
       db.close();
     }
@@ -137,41 +134,37 @@ export async function generatePostgresSchemas(
         }
       }
     }
-    if (name === "state" && root === ROOT) {
-      for (const pending of pendingPromotion) {
-        assert.ok(
-          data.objects.some(
-            (item) =>
-              item.kind === "index" &&
-              item.name === pending.name &&
-              item.category === "pendingPromotion",
-          ),
-          `Stale pendingPromotion entry: ${pending.name}`,
-        );
+    if (name === "state") {
+      if (root === ROOT) {
+        for (const pending of pendingPromotion) {
+          assert.ok(
+            data.objects.some(
+              (item) =>
+                item.kind === "index" &&
+                item.name === pending.name &&
+                item.category === "pendingPromotion",
+            ),
+            `Stale pendingPromotion entry: ${pending.name}`,
+          );
+        }
       }
       const ownership = new Map(
         fragments.flatMap((fragment) =>
           fragment.tables.map((table) => [table, fragment.id] as const),
         ),
       );
-      const eager = { ...data, objects: data.objects.filter((item) => !ownership.has(item.table)) };
       const runtimeDdl = (objects: Catalog["objects"]) =>
-        `${["-- Generated runtime DDL; the owner supplies search_path and the transaction.", ...tableStatements({ ...runtime!, objects })].join("\n\n")}\n`;
-      files["state.runtime.postgres.sql"] = runtimeDdl(
-        runtime!.objects.filter((item) => !ownership.has(item.table)),
+        `${["-- Generated runtime DDL; the owner supplies search_path and the transaction.", ...tableStatements({ ...data, objects })].join("\n\n")}\n`;
+      files["state.postgres.sql"] = runtimeDdl(
+        data.objects.filter((item) => !ownership.has(item.table)),
       );
       for (const fragment of manifest) {
-        const objects = data.objects.filter((item) => ownership.get(item.table) === fragment.id);
-        files[fragment.runtimeFile] = runtimeDdl(
-          runtime!.objects.filter((item) => ownership.get(item.table) === fragment.id),
+        files[fragment.file] = runtimeDdl(
+          data.objects.filter((item) => ownership.get(item.table) === fragment.id),
         );
-        files[fragment.file] =
-          `${["-- Generated lazy feature; create dependencies first.", "BEGIN;", "SET LOCAL standard_conforming_strings = on;", ...tableStatements({ ...data, objects }), "COMMIT;"].join("\n\n")}\n`;
       }
       files["manifest.json"] =
         `${JSON.stringify({ minimumPostgresVersion: 16, fragments: manifest, pendingPromotion, sqliteOnlyAllowList }, null, 2)}\n`;
-      files[`${name}.postgres.sql`] =
-        `${["-- Generated eager shared state; lazy features are listed in manifest.json.", "BEGIN;", "SET LOCAL standard_conforming_strings = on;", `CREATE SCHEMA ${quote(data.schema)};`, ...tableStatements(eager), "COMMIT;"].join("\n\n")}\n`;
       continue;
     }
     const statements = [
@@ -290,7 +283,7 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
     await client.query("BEGIN");
     await client.query(`CREATE SCHEMA ${quote(`${prefix}_state`)}`);
     await client.query(`SET LOCAL search_path = ${quote(`${prefix}_state`)}`);
-    await client.query(generated.files["state.runtime.postgres.sql"]!);
+    await client.query(generated.files["state.postgres.sql"]!);
     const remaining = [...generated.report.fragments];
     const applied = new Set<string>();
     while (remaining.length) {
@@ -301,7 +294,7 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
         throw new Error("Unresolved or cyclic lazy feature dependencies");
       }
       const [fragment] = remaining.splice(next, 1);
-      await client.query(generated.files[fragment!.runtimeFile]!);
+      await client.query(generated.files[fragment!.file]!);
       applied.add(fragment!.id);
     }
     await client.query("COMMIT");

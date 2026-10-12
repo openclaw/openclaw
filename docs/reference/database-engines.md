@@ -113,6 +113,12 @@ tooling lands. A version mismatch refuses admission; restore a matching backup
 with its matching OpenClaw version, or keep the existing version until a supported
 migration exists. Never edit the schema version to bypass admission.
 
+The generated shared-state `state.postgres.sql` and `fragment-*.postgres.sql`
+files contain runtime DDL only. Their caller supplies the transaction and
+`search_path`; no second wrapped copy is generated. For manual readiness checks,
+see [applying the generated state DDL](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation).
+The agent readiness artifact remains wrapped until the agent-store cutover.
+
 PostgreSQL text cannot contain NUL characters. Values containing NUL fail with an
 engine error. Search/vector capabilities remain store-specific; selecting an
 engine does not add PostgreSQL support to an unported store.
