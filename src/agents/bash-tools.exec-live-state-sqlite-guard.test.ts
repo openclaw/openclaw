@@ -171,18 +171,22 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
         ),
       ).resolves.toBeNull();
       // Relative file: URIs keep fileURLToPath semantics (root-relative), so a
-      // private copy reached after `cd` is not newly refused by this change.
+      // private copy is not newly refused by this change even when the exec
+      // workdir sits inside the state directory: resolving under workdir would
+      // be a false refusal, root-relative resolution stays outside stateDir.
+      const workdirInsideState = path.join(stateDir, "workspace");
       await expect(
         detectUnsafeExecControlShellCommand(
           `cd ${quote(root)} && sqlite3 "file:data/app.db?mode=ro" "SELECT 1"`,
-          { stateDir, workdir: path.join(root, "elsewhere") },
+          { stateDir, workdir: workdirInsideState },
         ),
       ).resolves.toBeNull();
-      // A variable-bearing URI resolves the state directory even after a cd.
+      // A variable-bearing URI resolves the state directory even when the
+      // workdir is inside the state directory.
       await expect(
         detectUnsafeExecControlShellCommand(
           `cd ${quote(root)} && sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro"`,
-          { stateDir, workdir: path.join(root, "elsewhere") },
+          { stateDir, workdir: workdirInsideState },
         ),
       ).resolves.toBe("live-state-sqlite");
     });
@@ -259,6 +263,67 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
       );
 
       await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("rejects a variable-bearing file: URI live target before spawn and runs a private-copy URI", async () => {
+    await withTempDir("openclaw-exec-live-sqlite-uri-spawn-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const liveMarkerPath = path.join(root, "live-spawned");
+      const sqlitePath = path.join(root, "sqlite3");
+      // The guard is path-based; no database fixture is created at the live
+      // location (a non-SQLite fixture there would poison the exec tool's own
+      // state access and trip the security=deny fallback).
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(liveMarkerPath)}\n`, {
+        mode: 0o755,
+      });
+
+      await withEnvAsync(
+        {
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        async () => {
+          const tool = createExecTool({
+            host: "gateway",
+            security: "full",
+            ask: "on-miss",
+            allowBackground: false,
+          });
+          // Live target spelled through the variable-bearing file: URI form is
+          // refused before the external process starts.
+          await expect(
+            tool.execute("call-live-sqlite-uri", {
+              command: `${quote(sqlitePath)} "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"`,
+              workdir: root,
+            }),
+          ).rejects.toThrow(
+            /external sqlite3 cannot open databases under the active OpenClaw state directory/,
+          );
+          await expect(fs.stat(liveMarkerPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+          // A private copy spelled as a file: URI outside the state directory
+          // still executes end to end.
+          const copiedDatabasePath = path.join(root, "snapshot", "openclaw.sqlite");
+          await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
+          await fs.writeFile(copiedDatabasePath, "fixture");
+          const privateMarkerPath = path.join(root, "private-spawned");
+          await fs.writeFile(
+            sqlitePath,
+            `#!/bin/sh\nprintf spawned > ${quote(privateMarkerPath)}\n`,
+            { mode: 0o755 },
+          );
+          await tool.execute("call-private-sqlite-uri", {
+            command: `${quote(sqlitePath)} "file:${copiedDatabasePath}?mode=ro" "PRAGMA user_version"`,
+            workdir: root,
+          });
+          await expect(fs.stat(privateMarkerPath)).resolves.toBeDefined();
+        },
+      );
     });
   });
 });
