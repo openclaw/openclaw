@@ -129,17 +129,49 @@ chat behavior. Use `/codex diagnostics [note]` only when you specifically
 want the Codex feedback upload for the currently attached thread without
 the full Gateway diagnostics bundle.
 
+### Verify tool access before a Codex turn
+
+OpenClaw does not currently provide a supported diagnostic that runs the actual
+Codex admission and tool-construction path, captures the final model-facing
+tool surface, and guarantees a stop before inference. There is no command or
+Gateway method that returns that complete pre-turn inventory. Starting a
+Codex thread manually or using a mock harness is not a capture of an admitted
+OpenClaw run.
+
+Before a pilot turn, inspect the saved tool policy and use the Gateway
+[`tools.effective` preview](/gateway/protocol/operator-methods#operator-helper-methods)
+for the target session. Check `/codex status` for app-server connectivity and
+MCP server status. These checks can catch configuration mistakes, but they do
+not prove which native, dynamic, MCP, or app tools the model will receive, or
+the final execution and shell-fallback settings. Discovery, credentials,
+run-specific authority, and Codex's restricted-turn policy can change the
+surface when the turn starts.
+
+When inference is permitted, use an isolated test session with the intended
+policy. Use `/codex threads [filter]` to find the pilot's thread id;
+`/codex binding` can show it only when the conversation was explicitly bound.
+Inspect the native thread on the same host with the same `CODEX_HOME` as the
+pilot runtime. This helps investigate observed behavior, but still does not
+provide a guaranteed complete tool inventory.
+Use `/diagnostics` only when you intentionally want to upload Codex thread
+feedback and logs to OpenAI after approving the command. If inference is not
+permitted yet, keep the pilot offline and treat the preview as provisional.
+
 ### Inspect Codex threads locally
 
 The fastest way to inspect a bad Codex run is often to open the native
 Codex thread directly:
 
 ```bash
-codex resume <thread-id>
+CODEX_HOME="/path/to/selected-native-home" codex resume <thread-id>
 ```
 
-Get the thread id from the completed `/diagnostics` reply, `/codex binding`,
-or `/codex threads [filter]`.
+Get the thread id from `/codex threads [filter]`, an explicitly bound
+conversation's `/codex binding`, or a completed `/diagnostics` reply. Run the
+CLI on the host that ran the pilot, with the same native home: local stdio uses
+the agent directory's `codex-home` by default, while user-home scope uses the
+selected user Codex home. See [environment isolation](/plugins/codex-harness/app-server#environment-isolation)
+for home selection; a plain CLI invocation may search a different home.
 
 For upload mechanics and runtime-level diagnostics boundaries, see
 [Codex harness runtime](/plugins/codex-harness-runtime#codex-feedback-upload).
