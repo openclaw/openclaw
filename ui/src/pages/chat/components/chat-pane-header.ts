@@ -1,7 +1,7 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing, type TemplateResult } from "lit";
-import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
+import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
@@ -311,7 +311,8 @@ export function canRevealSessionWorkspace(params: {
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
-  const incognito = (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
+  const incognito =
+    (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
 
   const runningSubagents =
     (props.runningSubagentCount ?? 0) > 0
