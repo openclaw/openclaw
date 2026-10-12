@@ -209,8 +209,10 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 </ParamField>
 
 OpenAI-compatible, Gemini, and LM Studio embeddings use the same private-network policy as model inference.
-Configured custom and local origins are trusted by default, without extending that trust
-to redirects to another origin. The selected provider's
+For OpenAI-compatible and Gemini embeddings, configured custom and local origins are
+trusted by default, without extending that trust to redirects to another origin.
+LM Studio defaults to allowing private-network requests, including redirects, matching
+its inference behavior. The selected provider's
 `models.providers.<id>.request.allowPrivateNetwork` also applies: `false` blocks private
 destinations, while `true` explicitly permits private-network requests. Known provider hostnames
 that resolve to private addresses (for example, Azure OpenAI private endpoints or
