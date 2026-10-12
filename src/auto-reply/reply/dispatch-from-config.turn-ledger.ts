@@ -12,10 +12,10 @@ import {
   ReplyDispatchDeliveryError,
   resolveRoutedReplyDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import {
   captureReplyDispatchDeliveryOutcome,
   type ReplyDispatchDeliveryOutcome,
-  waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type {
   ReplyDispatchKind,

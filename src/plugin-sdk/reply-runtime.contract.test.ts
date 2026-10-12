@@ -108,11 +108,14 @@ describe("reply runtime public dispatcher compatibility", () => {
     type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof Options>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof Options>();
+    expectTypeOf<"onTypingHandoff">().not.toExtend<keyof Options>();
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof RuntimeOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"onTypingHandoff">().not.toExtend<keyof RuntimeOptions>();
     type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onTypingHandoff">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
   });
@@ -124,6 +127,7 @@ describe("reply runtime public dispatcher compatibility", () => {
       onReplyStart: callback,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
       onReplyOperationOwned: callback,
+      onTypingHandoff: callback,
       [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const },
     };
     const delivered: string[] = [];
@@ -142,6 +146,7 @@ describe("reply runtime public dispatcher compatibility", () => {
         dispatched = true;
         expect(replyOptions).not.toHaveProperty("internalEventExecution");
         expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
+        expect(replyOptions).not.toHaveProperty("onTypingHandoff");
         expect(replyOptions).toMatchObject({
           isHeartbeat: true,
           onReplyStart: callback,

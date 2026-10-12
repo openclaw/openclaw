@@ -29,7 +29,7 @@ import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {

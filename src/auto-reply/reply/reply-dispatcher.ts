@@ -25,6 +25,7 @@ import {
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   normalizeReplyPayloadOutcome,
   type NormalizeReplyOutcome,
@@ -46,6 +47,7 @@ import {
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
+import { createTypingHandoff } from "./reply-dispatcher-typing-handoff.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -219,7 +221,8 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReturnType<typeof createReplyDispatcher>;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup"> &
+    Pick<InternalGetReplyOptions, "onTypingHandoff">;
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
@@ -684,26 +687,6 @@ export function createReplyDispatcher(
   return dispatcher;
 }
 
-export async function waitForReplyDispatcherIdle(
-  dispatcher: Pick<ReplyDispatcher, "waitForIdle">,
-  abortSignal?: AbortSignal,
-): Promise<ReplyDispatchReceipt | undefined> {
-  if (!abortSignal) {
-    return (await dispatcher.waitForIdle()) || undefined;
-  }
-  if (abortSignal.aborted) {
-    return undefined;
-  }
-  const aborted = createDeferredCore<undefined>();
-  const onAbort = () => aborted.resolve(undefined);
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return (await Promise.race([dispatcher.waitForIdle(), aborted.promise])) || undefined;
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
-  }
-}
-
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
@@ -720,13 +703,19 @@ export function createReplyDispatcherWithTyping(
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
+  const handoff = createTypingHandoff(
+    () => void invokeReplyDispatcherObserver(() => resolvedOnIdle?.()),
+    resolvedOnCleanup,
+  );
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
-      typingController?.markDispatchIdle();
-      const idle = resolvedOnIdle?.();
-      if (idle) {
-        await Promise.resolve(idle);
+      if (!handoff.deferIdle()) {
+        typingController?.markDispatchIdle();
+        const idle = resolvedOnIdle?.();
+        if (idle) {
+          await Promise.resolve(idle);
+        }
       }
       await onSettled?.();
     },
@@ -736,17 +725,25 @@ export function createReplyDispatcherWithTyping(
     dispatcher,
     replyOptions: {
       onReplyStart: resolvedOnReplyStart,
-      onTypingCleanup: resolvedOnCleanup,
+      onTypingCleanup: handoff.onCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },
+      // A channel's own onIdle can do more than stop typing (Feishu finalizes and
+      // closes its streaming card there), so only typing-only channels hand off.
+      onTypingHandoff: onIdle ? undefined : handoff.onHandoff,
     },
     markDispatchIdle: () => {
+      if (handoff.deferIdle()) {
+        return;
+      }
       typingController?.markDispatchIdle();
       resolvedOnIdle?.();
     },
     markRunComplete: () => {
-      typingController?.markRunComplete();
+      if (!handoff.isHandedOff()) {
+        typingController?.markRunComplete();
+      }
     },
   };
 }

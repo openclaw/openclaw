@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -237,6 +238,77 @@ describe("typing controller", () => {
     expect(onCleanup).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(243_000);
     expect(onReplyStart).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps typing on a queued follow-up after the dispatcher hands it off", async () => {
+    vi.useFakeTimers();
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const lifecycle = createReplyDispatcherWithTyping({
+      deliver: async () => undefined,
+      typingCallbacks: createTypingCallbacks({
+        start,
+        stop,
+        onStartError: () => undefined,
+        maxDurationMs: 0,
+      }),
+    });
+    const typing = createTypingController({
+      onReplyStart: lifecycle.replyOptions.onReplyStart,
+      onCleanup: lifecycle.replyOptions.onTypingCleanup,
+    });
+    lifecycle.replyOptions.onTypingController?.(typing);
+    await typing.startTypingLoop();
+    lifecycle.replyOptions.onTypingHandoff?.();
+    lifecycle.dispatcher.markComplete();
+    await lifecycle.dispatcher.waitForIdle();
+    lifecycle.markRunComplete();
+    lifecycle.markDispatchIdle();
+    start.mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(start).toHaveBeenCalledTimes(30);
+    expect(stop).not.toHaveBeenCalled();
+
+    typing.cleanup();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(30);
+  });
+
+  it("keeps the dispatcher lifecycle for a channel that owns its idle callback", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const onReplyStart = vi.fn();
+    const lifecycle = createReplyDispatcherWithTyping({
+      deliver: async () => undefined,
+      onReplyStart,
+      onIdle: () => {
+        events.push("idle");
+      },
+      onCleanup: () => {
+        events.push("cleanup");
+      },
+    });
+    const typing = createTypingController({
+      onReplyStart: lifecycle.replyOptions.onReplyStart,
+      onCleanup: lifecycle.replyOptions.onTypingCleanup,
+      typingIntervalSeconds: 1,
+    });
+    lifecycle.replyOptions.onTypingController?.(typing);
+    await typing.startTypingLoop();
+    lifecycle.replyOptions.onTypingHandoff?.();
+    lifecycle.markRunComplete();
+    lifecycle.dispatcher.markComplete();
+    await lifecycle.dispatcher.waitForIdle();
+    expect(events).toEqual(["cleanup", "idle"]);
+    onReplyStart.mockClear();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).not.toHaveBeenCalled();
+
+    typing.cleanup();
+    expect(events).toEqual(["cleanup", "idle"]);
   });
 
   it("sends the first typing signal without periodic keepalive refreshes", async () => {

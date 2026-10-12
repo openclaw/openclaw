@@ -98,6 +98,8 @@ type InternalReplySessionOptions = {
   replyOperation?: ReplyOperation;
   /** Return true only when the caller accepts settlement custody for this exact operation. */
   onReplyOperationOwned?: (operation: ReplyOperation) => boolean | void;
+  /** A queued follow-up now owns the typing controller; the dispatch must not close it. */
+  onTypingHandoff?: () => void;
   skillOverrides?: SessionToolOverrides["skills"];
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };

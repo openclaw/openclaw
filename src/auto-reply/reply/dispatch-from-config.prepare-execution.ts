@@ -21,7 +21,7 @@ import {
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 export async function prepareDispatchExecution(state: ChooseDispatchRouteReadyState) {
