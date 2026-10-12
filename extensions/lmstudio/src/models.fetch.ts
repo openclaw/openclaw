@@ -237,7 +237,7 @@ export async function prepareLmstudioModelForInference(
     throw new Error("LM Studio model key is required");
   }
 
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = params.timeoutMs ?? 120_000;
   const baseUrl = resolveLmstudioServerBase(params.baseUrl);
   const preflight = await fetchLmstudioModels({
     baseUrl,
