@@ -35,10 +35,11 @@ function userMessage(sendId: string) {
   };
 }
 function setup() {
+  const requestUpdate = vi.fn();
   const host: ReactiveControllerHost = {
     addController: () => undefined,
     removeController: () => undefined,
-    requestUpdate: vi.fn(),
+    requestUpdate,
     updateComplete: Promise.resolve(true),
   };
   const controller = new ChatStateController<ChatPageHost>(host);
@@ -75,7 +76,7 @@ function setup() {
   return {
     state,
     controller,
-    requestUpdate: vi.mocked(host.requestUpdate),
+    requestUpdate,
     scrollport,
     commitGrowth: () => {
       state.requestUpdate?.();
