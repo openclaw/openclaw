@@ -168,7 +168,7 @@ describe("cron failure alert account routing", () => {
     expect(resolveFailureAlert(state, job)).toMatchObject(expected);
   });
 
-  it("routes required delivery failure outside the failed topic", () => {
+  it("routes required delivery failure outside the failed topic", async () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -219,7 +219,7 @@ describe("cron failure alert account routing", () => {
 
     expect(deferredNotifications).toHaveLength(1);
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "telegram",
@@ -234,7 +234,7 @@ describe("cron failure alert account routing", () => {
     );
   });
 
-  it("carries run start time without using it for alert cooldown", () => {
+  it("carries run start time without using it for alert cooldown", async () => {
     const runAtMs = Date.parse("2026-07-30T00:00:00.000Z");
     const endedAt = runAtMs + 5 * 60_000;
     const sendCronFailureAlert = vi.fn(async () => undefined);
@@ -274,11 +274,11 @@ describe("cron failure alert account routing", () => {
 
     expect(job.state.lastFailureAlertAtMs).toBe(endedAt);
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledWith(expect.objectContaining({ runAtMs }));
   });
 
-  it("keeps the primary account and topic on provider-aliased failure alerts", () => {
+  it("keeps the primary account and topic on provider-aliased failure alerts", async () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -321,7 +321,7 @@ describe("cron failure alert account routing", () => {
     );
 
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(sendCronFailureAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",

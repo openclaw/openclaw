@@ -1,7 +1,7 @@
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
-  getConversationSession,
+  getConversationSessionAsync,
   resolveStorePath,
   type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -168,14 +168,15 @@ export async function resolveSlackSessionEventRoutingContext(
   const threadAddress = { ...address, threadId: threadTs };
   const liveAddress = { channelId: message.channel, threadTs, eventScope };
   let allowDirectParent = false;
-  const readOwner = ():
+  const readOwner = async (): Promise<
     | {
         route: SlackRoutingContext["route"];
         source: "recorded" | "live" | "parent";
         isActive?: () => boolean;
       }
-    | undefined => {
-    const recorded = getConversationSession(threadAddress);
+    | undefined
+  > => {
+    const recorded = await getConversationSessionAsync(threadAddress);
     if (recorded) {
       return {
         route: { ...routing.route, sessionKey: recorded.sessionKey },
@@ -187,16 +188,17 @@ export async function resolveSlackSessionEventRoutingContext(
     if (live) {
       return { route: live.route, source: "live", isActive: live.isActive };
     }
-    const parent = allowDirectParent ? getConversationSession(address) : undefined;
+    const parent = allowDirectParent ? await getConversationSessionAsync(address) : undefined;
     return parent
       ? { route: { ...routing.route, sessionKey: parent.sessionKey }, source: "parent" }
       : undefined;
   };
-  let owner = readOwner();
+  let owner = await readOwner();
   if (owner?.source === "live" && params.chatType === "direct") {
     // Keep a proven ordinary DM parent after its publisher finishes, without
     // borrowing a parent for a managed thread that never had that live owner.
-    allowDirectParent = getConversationSession(address)?.sessionKey === owner.route.sessionKey;
+    allowDirectParent =
+      (await getConversationSessionAsync(address))?.sessionKey === owner.route.sessionKey;
   }
   if (!owner && params.chatType === "direct" && threadTs) {
     const assistantContext = ctx.getSlackAssistantThreadContext(
@@ -219,7 +221,7 @@ export async function resolveSlackSessionEventRoutingContext(
             userId: message.user,
           }));
     allowDirectParent = !assistantThread && !managedThread;
-    owner = readOwner();
+    owner = await readOwner();
   }
   if (!owner) {
     throw new Error("No recorded session owns this Slack conversation");

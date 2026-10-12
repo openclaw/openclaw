@@ -327,6 +327,15 @@ synchronous and opaque transaction callback forms remain deprecated until the
 next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
+For ordinary session preparation, await `getSessionEntryAsync`,
+`readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
+`readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
+preparation uses `resolveStoredModelOverrideAsync` and
+`resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
+available from `native-command-registry`. Their synchronous compatibility APIs
+remain deprecated until the next Plugin SDK major. See
+[session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
+
 ## Stateful CLI commands
 
 `openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the

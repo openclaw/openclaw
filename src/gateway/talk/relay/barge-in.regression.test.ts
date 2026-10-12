@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
-import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
+import { resolveRealtimeVoiceProviderCapabilitiesAsync } from "../../../talk/provider-resolver.js";
 import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
@@ -17,10 +17,10 @@ import { relaySessions } from "./state.js";
 
 const cfg = { agents: { entries: { main: {} } } };
 
-function captureBridgeRequest(params: {
+async function captureBridgeRequest(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   forceAgentConsultOnFinalTranscript: boolean;
-}): { request: RealtimeVoiceBridgeCreateRequest | undefined; relaySessionId: string } {
+}): Promise<{ request: RealtimeVoiceBridgeCreateRequest | undefined; relaySessionId: string }> {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const provider: RealtimeVoiceProviderPlugin = {
     id: "relay-test",
@@ -31,7 +31,7 @@ function captureBridgeRequest(params: {
       return makeRelayTransport();
     },
   };
-  const capabilities = resolveRealtimeVoiceProviderCapabilities({
+  const capabilities = await resolveRealtimeVoiceProviderCapabilitiesAsync({
     provider,
     providerConfig: params.providerConfig,
     cfg,
@@ -74,8 +74,8 @@ describe("Talk relay barge-in under forced agent consults", () => {
     await state.cleanup();
   });
 
-  function capture(params: Parameters<typeof captureBridgeRequest>[0]) {
-    const captured = captureBridgeRequest(params);
+  async function capture(params: Parameters<typeof captureBridgeRequest>[0]) {
+    const captured = await captureBridgeRequest(params);
     opened.push(captured.relaySessionId);
     return captured.request;
   }
@@ -89,8 +89,8 @@ describe("Talk relay barge-in under forced agent consults", () => {
     { forced: true, interrupt: false, expectedInterrupt: false },
   ])(
     "resolves forced audio routing $forced independently of interruption $interrupt",
-    ({ forced, interrupt, expectedInterrupt }) => {
-      const request = capture({
+    async ({ forced, interrupt, expectedInterrupt }) => {
+      const request = await capture({
         providerConfig: interrupt === undefined ? {} : { interruptResponseOnInputAudio: interrupt },
         forceAgentConsultOnFinalTranscript: forced,
       });

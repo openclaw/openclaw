@@ -40,10 +40,10 @@ const codex = await loadBundledPluginFacade<{
     threadId: string;
     dynamicTools: [];
     appServer: unknown;
-  }) => {
+  }) => Promise<{
     threadStartParams: { config?: Record<string, unknown> };
     threadResumeParams: { config?: Record<string, unknown> };
-  };
+  }>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
 
 vi.mock("../../gateway/github-publication-availability.js", () => ({
@@ -60,7 +60,10 @@ vi.mock("../auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
-vi.mock("../model-auth.js", () => ({
+// mock-isolation: Dispatch keeps credential discovery outside this fixture.
+vi.mock("../model-auth.js", async () => ({
+  createRuntimeProviderAuthLookup: (await import("../model-auth-runtime.js"))
+    .createRuntimeProviderAuthLookup,
   applyAuthHeaderOverride: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
   // Catalog construction also probes media providers; this fixture has no credentials.
@@ -411,13 +414,14 @@ describe("embedded run retry dispatch", () => {
       const attempt = dispatchedAttempt.preparedAttempt;
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
       try {
-        const { threadStartParams, threadResumeParams } = codex.buildCodexHarnessPromptSnapshot({
-          attempt: { ...attempt, hostCapabilities: host.capabilities },
-          cwd: runParams.workspaceDir,
-          threadId: "persisted-thread",
-          dynamicTools: [],
-          appServer: codex.resolveCodexPromptSnapshotAppServerOptions(),
-        });
+        const { threadStartParams, threadResumeParams } =
+          await codex.buildCodexHarnessPromptSnapshot({
+            attempt: { ...attempt, hostCapabilities: host.capabilities },
+            cwd: runParams.workspaceDir,
+            threadId: "persisted-thread",
+            dynamicTools: [],
+            appServer: codex.resolveCodexPromptSnapshotAppServerOptions(),
+          });
 
         expect(attempt.contextTokenBudget).toBe(nativeModelOwned ? undefined : contextTokens);
         for (const request of [threadStartParams, threadResumeParams]) {

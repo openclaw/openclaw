@@ -94,7 +94,7 @@ import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
-export function runAgentAttempt(
+export async function runAgentAttempt(
   params: Pick<RunEntryCandidateOptions, "isFallbackRetry" | "modelRoutingProvenance"> &
     Partial<Omit<RunEntryCandidateOptions, "isFallbackRetry" | "modelRoutingProvenance">> & {
       preparedRunAdmission: PreparedAgentRunAdmission;
@@ -353,7 +353,7 @@ export function runAgentAttempt(
     providerAuthAliasesEnabled: params.pluginsEnabled,
     allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   };
-  const harnessAuthSelection = resolveHarnessAuthProfileSelection({
+  const harnessAuthSelection = await resolveHarnessAuthProfileSelection({
     ...harnessAuthContext,
     agentDir: params.agentDir,
     authProfileProvider: params.authProfileProvider,

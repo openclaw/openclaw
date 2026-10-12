@@ -586,6 +586,7 @@ src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
+src/config/runtime-config-publication.ts
 src/config/runtime-config-snapshot-match.ts
 src/config/runtime-overrides.ts
 src/config/runtime-session-changes.ts
@@ -674,7 +675,7 @@ src/config/sessions/store-entry.ts
 src/config/sessions/targets-collision.ts
 src/config/sessions/targets-configured-agents.ts
 src/config/sessions/targets-path-validation.ts
-src/config/sessions/targets-read-availability.ts
+src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
@@ -1285,6 +1286,8 @@ src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
+src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
+src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
