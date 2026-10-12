@@ -311,7 +311,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           return;
         }
         if (shimFailure) {
-          const activeRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+          const activeRoot = path.join(globalRoot, "hash-openclaw", "node_modules", "openclaw");
           expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
           expect(result.activePackageRoot).toBe(activeRoot);
           expect(result.afterVersion).toBe("2.0.0");
@@ -379,7 +379,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         await expect(fs.readFile(metadata, "utf8")).resolves.toBe("candidate metadata\n");
         await expect(fs.readFile(sibling, "utf8")).resolves.toBe("unrelated package\n");
         await expect(fs.realpath(launcher)).resolves.toBe(
-          path.join(result.activePackageRoot!, "dist", "index.js"),
+          await fs.realpath(path.join(result.activePackageRoot!, "dist", "index.js")),
         );
         if (!retained) {
           throw new Error("transaction missing");
