@@ -280,7 +280,8 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "active-accounting" &&
+          (value.kind !== "history-event-page" &&
+            value.kind !== "active-accounting" &&
             value.kind !== "bounded-tail" &&
             value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
