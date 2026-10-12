@@ -312,7 +312,10 @@ test.each([
 test.each(["lookup", "pending read", "token revocation"] as const)(
   "keeps unrelated node authority when a %s publishes a revision the cache missed",
   async (source) => {
-    const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+    const node = await getPairedDevice("node", baseDir);
+    if (!node) {
+      throw new Error("expected paired node");
+    }
     const other = {
       ...structuredClone(node),
       deviceId: "other",
