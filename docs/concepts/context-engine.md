@@ -253,8 +253,8 @@ For durable admitted turns, declare both transcript semantics:
 - `currentTurnFence: "before-current-turn-entry-v1"`
 - `turnAdvancementIdempotency: "atomic-idempotent-v1"`
 
-and implement `commitTurn(...)` as one atomic, idempotent write keyed by
-`advancementKey`. Return `{ status: "committed" }` for the first write and
+and implement `commitTurn(...)` as one atomic write keyed by
+`advancementKey` that has no additional effect when repeated. Return `{ status: "committed" }` for the first write and
 `{ status: "duplicate" }` when a host retry presents an already-committed key.
 The `messages` payload contains only the inclusive range from the admitted user
 entry through the accepted terminal entry. Engines that need the earlier
@@ -386,7 +386,7 @@ host parameters and accept `runtimeSettings` must include it in
 ### Host requirements
 
 Context engines can declare host capability requirements on `info.hostRequirements`.
-OpenClaw checks these requirements before starting the operation and fails closed
+OpenClaw checks these requirements before starting the operation and stops
 with a descriptive error when the selected runtime cannot satisfy them.
 
 For agent runs, declare `assemble-before-prompt` when the engine must control the
@@ -427,7 +427,7 @@ cleanup owns an independent async lifetime, so a closed caller scope does not
 prevent its factory from running.
 
 Host requirement failures are different: when an engine declares that a runtime
-lacks a required capability, OpenClaw fails closed before starting the run. That
+lacks a required capability, OpenClaw refuses to start the run. That
 protects engines that would corrupt state if they ran in an unsupported host.
 
 ### ownsCompaction

@@ -10,7 +10,7 @@ title: "Retry policy"
 
 - Retry per HTTP request, not per multi-step flow.
 - Preserve ordering by retrying only the current step.
-- Avoid duplicating non-idempotent operations.
+- Avoid repeating operations that could create duplicate effects.
 
 ## Defaults
 
@@ -37,7 +37,7 @@ Agent runs automatically recover from temporary rate limits, overloads, and prov
 
 Recovery continues the existing transcript with an instruction to preserve completed work and inspect interrupted actions before deciding whether to repeat them. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
 
-An empty error body does not make a deterministic HTTP client error retryable. Bodyless `400` and `422` responses surface without silent-error resubmission; client errors with recognized transient retry evidence still follow the existing recovery policy. Empty successful responses retain their separate response-repair retries.
+An empty error body does not make a permanent HTTP client error retryable. Bodyless `400` and `422` responses surface without silent-error resubmission; client errors with recognized transient retry evidence still follow the existing recovery policy. Empty successful responses retain their separate response-repair retries.
 
 In the embedded runtime, a model idle timeout after tool activity also uses this recovery when every tool in the latest batch has a recorded result and all tool execution has settled. The next attempt keeps tools available to finish the task, including handling a recorded tool failure. Pending approval, asynchronous tool activity, intentional tool termination, cancellation, and the run deadline still prevent this continuation. Completed actions are not resubmitted.
 
@@ -80,8 +80,8 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 ### Telegram
 
 - With the built-in transport, new text messages and rich-text messages use fresh HTTP connections, avoiding stale keep-alive sockets for initial previews, replies, and terminal errors. Polling, edits, and control requests retain connection pooling. This adds a connection handshake to each new text message.
-- These non-idempotent text sends retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
-- Idempotent operations, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
+- These text sends could create duplicates, so they retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
+- Operations safe to repeat, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
 - Uses `retry_after` when available, otherwise exponential backoff.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
 

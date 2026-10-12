@@ -90,7 +90,7 @@ those conversations stay isolated even under `main`. See
 
 <Tip>
 If the same person contacts you from multiple channels, use
-`session.identityLinks` to map their identities to one canonical peer id so
+`session.identityLinks` to map their identities to one shared peer id so
 they share a session.
 </Tip>
 

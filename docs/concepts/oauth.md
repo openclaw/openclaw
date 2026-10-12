@@ -20,7 +20,7 @@ For Anthropic, the practical split is:
   the safer recommended path.
 
 OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
-canonical provider id `openai`. Older `openai-codex:*` profile ids and
+standard provider id `openai`. Older `openai-codex:*` profile ids and
 `auth.order.openai-codex` entries are legacy state repaired by
 `openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
 new config.
@@ -56,14 +56,14 @@ via Claude Code / Codex CLI, and one of them randomly gets logged out later.
 To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 - the runtime reads credentials from one place per agent
-- multiple profiles can coexist and route deterministically
+- multiple profiles can coexist and route by fixed rules
 - external CLI reuse is provider-specific: once OpenClaw owns a local OAuth
-  profile for a provider, the local refresh token is canonical. If that local
+  profile for a provider, the local refresh token is the source of truth. If that local
   refresh token is rejected, OpenClaw reports the profile for
   re-authentication instead of falling back to external CLI token material.
   Codex CLI bootstrap is narrower still: it can only seed an empty
   `openai:default`-style profile before OpenClaw owns OAuth for that
-  provider; after that, OpenClaw-owned refreshes stay canonical
+  provider; after that, OpenClaw-owned refreshes stay the source of truth
 - status/startup paths scope external CLI discovery to the provider set
   already configured, so an unrelated CLI login store is not checked for a
   single-provider setup
@@ -182,7 +182,7 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
-The login command uses the canonical OpenAI provider id:
+The login command uses the standard OpenAI provider id:
 
 ```bash
 openclaw models auth login --provider openai
@@ -298,4 +298,4 @@ Related docs:
 - [Authentication](/gateway/authentication) - model provider auth overview
 - [Secrets](/gateway/secrets) - credential storage and SecretRef
 - [Configuration Reference](/gateway/config-secrets-env#auth-storage) - auth config keys
-- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution
+- [Auth credential semantics](/auth-credential-semantics) - the shared rules for auth profile ordering and runtime credential resolution

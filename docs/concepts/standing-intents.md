@@ -53,7 +53,7 @@ For a clock time, the agent should use the existing scheduled-task path instead 
 
 ## How matching works
 
-On an eligible user turn, OpenClaw performs a deterministic FTS keyword prefilter over armed intents. A candidate fires only when every term in at least one configured trigger entry appears in the turn. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped FTS candidates per turn so a noisy trigger set cannot stall the reply path.
+On an eligible user turn, OpenClaw performs a rule-based FTS keyword prefilter over armed intents. A candidate fires only when every term in at least one configured trigger entry appears in the turn. OpenClaw also rechecks channel scope, sender scope, expiry, cooldown, and fire budget against the authoritative SQLite rows in one synchronous transaction. Matching scans at most 256 scoped FTS candidates per turn so a noisy trigger set cannot stall the reply path.
 
 No model call occurs in the matching path. On a hit, the main reply receives a bounded hidden context block:
 

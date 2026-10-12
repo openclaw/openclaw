@@ -187,7 +187,7 @@ Client-side preflight timeouts are not cached. The next scheduled run checks the
 
 ### Command payloads
 
-Command payloads run deterministic scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
+Command payloads run scripts inside the Gateway scheduler without starting a model-backed turn. They execute on the Gateway host, capture stdout/stderr, record the run in the job's run history, and reuse the same `announce`, `webhook`, and `none` delivery modes as agent-turn jobs.
 
 <Note>
 When an agent-turn automation's exec needs approval, the card is delivered to connected approval surfaces and the run waits for the decision; answering **Always allow** mints a scoped standing grant so later occurrences run without prompting. See [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations) for lifetime, listing, and revocation.
@@ -285,7 +285,7 @@ Codex-created automations can retain the app IDs and permission ceiling
 available to the authenticated creator thread. At execution, OpenClaw requires
 the same prepared Codex profile and account, then narrows the stored cap against
 current app policy. Revoked apps, account/runtime changes, and interactive
-approval requirements fail closed with a recovery message; they never fall
+approval requirements stop execution with a recovery message; they never fall
 back to broader or different credentials. Older jobs without a captured app
 envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
@@ -331,7 +331,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
   <Accordion title="Subagent and Discord delivery">
     When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
 
-    For text-only Discord announce targets, OpenClaw sends the canonical final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
+    For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 
   </Accordion>
 </AccordionGroup>

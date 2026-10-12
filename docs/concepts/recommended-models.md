@@ -35,7 +35,7 @@ Some providers publish the models they want to feature. NVIDIA is currently the
 only one; its feed is
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json`.
 At publication, each featured id is matched to that provider's served rows by
-canonical id, so `z-ai/glm-5-3` matches `z-ai/glm-5.3`. That provider's
+normalized id, so `z-ai/glm-5-3` matches `z-ai/glm-5.3`. That provider's
 `recommendedModels` lists its featured models first, in feed order and under
 its own ids, then the global list's matches that are not already included.
 
@@ -48,10 +48,10 @@ the global list alone.
 
 ## Entry format
 
-The file is a JSON array of canonical model ids, best first. It holds ids only:
+The file is a JSON array of normalized model ids, best first. It holds ids only:
 no scores, providers, or comments.
 
-A canonical id is the vendor-neutral name of a model:
+A normalized id is the vendor-neutral name of a model:
 
 - lowercase, without a vendor or route prefix (`claude-opus-5.5`, not `anthropic/claude-opus-5.5`)
 - dotted versions (`claude-opus-4.5`, not `claude-opus-4-5`; `glm-5.3`, not `glm-5p3`)

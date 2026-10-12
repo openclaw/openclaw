@@ -25,7 +25,7 @@ reported with repair guidance. If an agent database is still absent after prepar
 cleanup completes without creating it; concurrent first creation is not a cleanup failure.
 Existing databases remain protected against replacement during cleanup.
 Explicitly disabling dreaming removes jobs carrying
-its canonical declaration key in the active cron store.
+its stable declaration key in the active cron store.
 
 ## What dreaming writes
 
@@ -97,7 +97,7 @@ Two operator controls exclude sessions from automatic ingestion, each with a rec
 
 ## Consolidation safety
 
-The deterministic score, recall-count, and query-diversity thresholds remain
+The fixed score, recall-count, and query-diversity thresholds remain
 the candidate gate. Consolidation runs only after those gates pass.
 
 Before building the consolidation prompt, `memory-core` removes candidates
@@ -150,13 +150,13 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `openclaw memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
     - `openclaw memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
     - `openclaw memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
-    - `openclaw memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
+    - `openclaw memory session-backfill --agent <id> --rem` writes a rule-based grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
     - `openclaw memory session-backfill --agent <id> --rollback` clears the shared grounded backfill candidates and diary blocks, including artifacts created by `rem-backfill`.
 
   </Accordion>
 </AccordionGroup>
 
-Session backfill uses canonical retained transcript identities, including
+Session backfill uses retained transcript identities, including
 sessions preserved across rotation. Messages are bucketed in the configured
 dreaming timezone and share live ingestion's tracked message hashes and signal
 caps. Apply drains bounded batches to completion in one command. Rollback
@@ -166,7 +166,7 @@ Foreign files supplied with `--archive-files` are treated conservatively. Their
 embedded ownership fields are caller-controlled and therefore remain untrusted;
 without an authenticated provenance contract, they cannot enter short-term
 staging. Tool output, web content, and non-owner turns are excluded from the
-canonical session path as well.
+stored session path as well.
 
 The Control UI exposes the same diary backfill/reset flow on the agent's Memory tab (Agents page) so you can inspect results in the dream scene before deciding whether grounded candidates deserve promotion. A distinct grounded Scene lane shows which staged short-term entries came from historical replay, which promoted items were grounded-led, and lets you clear only grounded-only staged entries without touching live short-term state.
 
@@ -330,7 +330,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
   Cron cadence for the full dreaming sweep.
 </ParamField>
 <ParamField path="model" type="string">
-  Optional Dream Diary completion model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+  Optional Dream Diary completion model override. Use a normalized `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
 <ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
   Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
