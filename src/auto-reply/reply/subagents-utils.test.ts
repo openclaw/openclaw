@@ -148,6 +148,34 @@ describe("subagents utils", () => {
     expect(resolveTarget(runs, undefined).error).toBe("⚠️ Missing subagent id.");
   });
 
+  it("returns ambiguous exact label error before prefix/run id matching", () => {
+    const runs = [
+      makeRun({ runId: "run-a", label: "dup" }),
+      makeRun({ runId: "run-b", label: "dup" }),
+    ];
+    expect(resolveTarget(runs, "dup").error).toBe("⚠️ Ambiguous subagent label: dup");
+  });
+
+  it("resolves stable taskName aliases before labels and run ids", () => {
+    const runs = [
+      makeRun({ runId: "run-review-1", label: "Review", taskName: "code_review" }),
+      makeRun({ runId: "run-review-2", label: "Review copy", taskName: "copy_review" }),
+    ];
+
+    expectResolvedRunId(runs, "code_review", "run-review-1");
+    expectResolvedRunId(runs, "copy_", "run-review-2");
+  });
+
+  it("preserves exact label targets before taskName prefix aliases", () => {
+    const runs = [
+      makeRun({ runId: "run-review-label", label: "review" }),
+      makeRun({ runId: "run-review-docs", label: "docs", taskName: "review_docs" }),
+    ];
+
+    expectResolvedRunId(runs, "review", "run-review-label");
+    expectResolvedRunId(runs, "review_", "run-review-docs");
+  });
+
   it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
     const runs = [
       makeRun({

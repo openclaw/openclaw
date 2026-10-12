@@ -50,17 +50,51 @@ describe("Code Mode JSON normalization", () => {
     },
   );
 
-  it.each([{ limit: 72, prefix: 'a"\\\n\r\t\b\f\u0000\u0001é中🌍�za"\\\n\r\t' }])(
-    "fits escaped diagnostics at $limit bytes",
-    ({ limit, prefix }) => {
-      const error = 'a"\\\n\r\t\b\f\u0000\u0001é中🌍\ud800z'.repeat(8);
-      expect(boundCodeModeError(error, limit)).toBe(`${prefix} [error truncated]`);
-    },
-  );
+  it.each([
+    { limit: 20, prefix: "" },
+    { limit: 24, prefix: 'a"' },
+    { limit: 35, prefix: 'a"\\\n\r\t\b\f' },
+    { limit: 50, prefix: 'a"\\\n\r\t\b\f\u0000\u0001é' },
+    { limit: 72, prefix: 'a"\\\n\r\t\b\f\u0000\u0001é中🌍�za"\\\n\r\t' },
+  ])("fits escaped diagnostics at $limit bytes", ({ limit, prefix }) => {
+    const error = 'a"\\\n\r\t\b\f\u0000\u0001é中🌍\ud800z'.repeat(8);
+    expect(boundCodeModeError(error, limit)).toBe(`${prefix} [error truncated]`);
+  });
+
+  it("preserves whole lone surrogates and decodes only partial diagnostics", () => {
+    expect(boundCodeModeError("\ud800x", 20)).toBe("\ud800x");
+    expect(boundCodeModeError("\ud800".repeat(6), 30)).toBe("��� [error truncated]");
+  });
+
+  it.each([
+    { limit: 107, prefix: "", omittedBytes: 1000 },
+    { limit: 108, prefix: '"', omittedBytes: 999 },
+    { limit: 109, prefix: '"a', omittedBytes: 998 },
+  ])("fits marker digit-width transitions at $limit bytes", ({ limit, prefix, omittedBytes }) => {
+    expect(
+      new CodeModeOutputState(limit).take({ value: captureCodeModeValue("a".repeat(998), limit) })
+        .value,
+    ).toEqual({
+      truncated: true,
+      omittedBytes,
+      guidance: "Output truncated; rerun with narrower args.",
+      prefix,
+    });
+  });
 
   it.each([
     { name: "undefined", value: undefined, expected: null },
+    { name: "null", value: null, expected: null },
+    { name: "true", value: true, expected: true },
+    { name: "false", value: false, expected: false },
+    { name: "empty text", value: "", expected: "" },
+    { name: "Unicode and escapes", value: '\ud800"\\\n🌍漢字', expected: '\ud800"\\\n🌍漢字' },
+    { name: "negative zero", value: -0, expected: 0 },
+    { name: "NaN", value: Number.NaN, expected: null },
+    { name: "infinity", value: Infinity, expected: null },
     { name: "bigint", value: 12n, expected: "12" },
+    { name: "symbol", value: Symbol("synthetic"), expected: null },
+    { name: "ordinary Error", value: new Error("synthetic"), expected: {} },
   ])("preserves $name through normalization and capture", ({ value, expected }) => {
     expect(toCodeModeJsonSafe(value)).toEqual(expected);
     expect(captureCodeModeValue(value, 1_024)).toEqual({

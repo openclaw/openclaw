@@ -7,6 +7,24 @@ function cfgWith(channelId: string, entry: Record<string, unknown>): OpenClawCon
   return { channels: { [channelId]: entry } } as never;
 }
 
+describe("defineChannelAliasMigration message generation", () => {
+  it("generates preview-chunk channel messages with an absent-object default", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "preview",
+      streaming: { defaultMode: "off", absentObjectDefault: "progress", includePreviewChunk: true },
+    });
+
+    expect(migration.legacyConfigRules.map((rule) => rule.message)).toEqual([
+      'channels.preview.streamMode, channels.preview.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+      'channels.preview.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.preview.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+    ]);
+    expect(migration.legacyConfigRules.map((rule) => rule.path)).toEqual([
+      ["channels", "preview"],
+      ["channels", "preview", "accounts"],
+    ]);
+  });
+});
+
 describe("defineChannelAliasMigration rule matching", () => {
   it("matches root and account entries per spec options", () => {
     const migration = defineChannelAliasMigration({
@@ -32,6 +50,18 @@ describe("defineChannelAliasMigration rule matching", () => {
 
     expect(migration.hasLegacyAliases({ nativeStreaming: false })).toBe(true);
     expect(migration.hasLegacyAliases({ draftChunk: {} })).toBe(false);
+  });
+
+  it("excludes mode sources for delivery-only channels", () => {
+    const migration = defineChannelAliasMigration({
+      channelId: "imessage",
+      streaming: { defaultMode: "partial", deliveryOnly: true },
+    });
+
+    expect(migration.hasLegacyAliases({ chunkMode: "newline" })).toBe(true);
+    expect(migration.hasLegacyAliases({ streamMode: "block" })).toBe(false);
+    expect(migration.hasLegacyAliases({ streaming: "partial" })).toBe(false);
+    expect(migration.hasLegacyAliases({ streaming: false })).toBe(false);
   });
 
   it("matches nested DM aliases at root and account scope", () => {

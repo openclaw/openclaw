@@ -231,6 +231,110 @@ describe("createChannelNativeApprovalRuntime", () => {
     expect(finalizeExpired).toHaveBeenCalledOnce();
   });
 
+  it("passes the resolved approval kind and pending content through native delivery hooks", async () => {
+    const describeDeliveryCapabilities = vi.fn().mockReturnValue({
+      enabled: true,
+      preferredSurface: "approver-dm",
+      supportsOriginSurface: false,
+      supportsApproverDmSurface: true,
+    });
+    const resolveApproverDmTargets = vi
+      .fn()
+      .mockImplementation(({ approvalKind, accountId }) => [
+        { to: `${approvalKind}:${accountId}` },
+      ]);
+    const buildPendingContent = vi.fn().mockResolvedValue("pending plugin");
+    const prepareTarget = vi.fn().mockReturnValue({
+      dedupeKey: "dm:plugin:secondary",
+      target: { chatId: "plugin:secondary" },
+    });
+    const deliverTarget = vi
+      .fn()
+      .mockResolvedValue({ chatId: "plugin:secondary", messageId: "m1" });
+    const finalizeResolved = vi.fn().mockResolvedValue(undefined);
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime",
+      clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      accountId: "secondary",
+      eventKinds: ["exec", "plugin"] as const,
+      nativeAdapter: {
+        describeDeliveryCapabilities,
+        resolveApproverDmTargets,
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent,
+      prepareTarget,
+      deliverTarget,
+      finalizeResolved,
+    });
+
+    await runtime.handleRequested({
+      id: "opaque-request-1",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    });
+    await runtime.handleResolved({
+      id: "opaque-request-1",
+      decision: "allow-once",
+      ts: 1,
+    });
+
+    const pendingCall = mockCallArg(buildPendingContent);
+    expect(requireRecord(pendingCall.request).id).toBe("opaque-request-1");
+    expect(pendingCall.approvalKind).toBe("plugin");
+    expect(typeof pendingCall.nowMs).toBe("number");
+
+    const prepareCall = mockCallArg(prepareTarget);
+    expect(prepareCall.plannedTarget).toEqual({
+      surface: "approver-dm",
+      target: { to: "plugin:secondary" },
+      reason: "preferred",
+    });
+    expect(requireRecord(prepareCall.request).id).toBe("opaque-request-1");
+    expect(prepareCall.approvalKind).toBe("plugin");
+    expect(prepareCall.pendingContent).toBe("pending plugin");
+
+    const deliverCall = mockCallArg(deliverTarget);
+    expect(deliverCall.plannedTarget).toEqual({
+      surface: "approver-dm",
+      target: { to: "plugin:secondary" },
+      reason: "preferred",
+    });
+    expect(deliverCall.preparedTarget).toEqual({ chatId: "plugin:secondary" });
+    expect(requireRecord(deliverCall.request).id).toBe("opaque-request-1");
+    expect(deliverCall.approvalKind).toBe("plugin");
+    expect(deliverCall.pendingContent).toBe("pending plugin");
+
+    const capabilitiesCall = mockCallArg(describeDeliveryCapabilities);
+    expect(capabilitiesCall.cfg).toEqual({});
+    expect(capabilitiesCall.accountId).toBe("secondary");
+    expect(capabilitiesCall.approvalKind).toBe("plugin");
+    expect(requireRecord(capabilitiesCall.request).id).toBe("opaque-request-1");
+
+    const dmTargetsCall = mockCallArg(resolveApproverDmTargets);
+    expect(dmTargetsCall.cfg).toEqual({});
+    expect(dmTargetsCall.accountId).toBe("secondary");
+    expect(dmTargetsCall.approvalKind).toBe("plugin");
+    expect(requireRecord(dmTargetsCall.request).id).toBe("opaque-request-1");
+
+    const resolvedCall = mockCallArg(finalizeResolved);
+    expect(requireRecord(resolvedCall.request).id).toBe("opaque-request-1");
+    expect(requireRecord(resolvedCall.resolved)).toEqual({
+      id: "opaque-request-1",
+      decision: "allow-once",
+      ts: 1,
+    });
+    expect(resolvedCall.entries).toEqual([{ chatId: "plugin:secondary", messageId: "m1" }]);
+  });
+
   it("honors the deprecated approval kind compatibility override", async () => {
     const resolveApprovalKind = vi.fn().mockReturnValue("exec");
     const buildPendingContent = vi.fn().mockResolvedValue("pending");

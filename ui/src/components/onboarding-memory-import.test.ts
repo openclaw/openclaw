@@ -171,6 +171,7 @@ afterEach(() => {
 
 describe("OnboardingMemoryImport", () => {
   it.each([
+    { name: "onboarding is inactive", active: false, connected: true, admin: true },
     { name: "gateway is disconnected", active: true, connected: false, admin: true },
     { name: "operator lacks admin access", active: true, connected: true, admin: false },
   ])("stays hidden when $name", async ({ active, connected, admin }) => {
@@ -267,6 +268,45 @@ describe("OnboardingMemoryImport", () => {
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(sessionStorage.getItem(guardKey)).toBeNull();
+  });
+
+  it("sends frozen provider plans with fresh idempotency keys", async () => {
+    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(["codex", "claude"]);
+      }
+      return createApplyResult(params?.providerId ?? "unknown");
+    });
+    const randomUuid = vi
+      .spyOn(globalThis.crypto, "randomUUID")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+
+    await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
+    const applyCalls = request.mock.calls.filter(
+      ([method]) => method === "migrations.memory.apply",
+    );
+    expect(applyCalls.map(([, params]) => params)).toEqual([
+      {
+        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+        agentId: "research",
+        providerId: "codex",
+        planFingerprint: "a".repeat(64),
+        itemIds: ["memory:codex:MEMORY.md"],
+        overwrite: false,
+      },
+      {
+        idempotencyKey: "00000000-0000-4000-8000-000000000002",
+        agentId: "research",
+        providerId: "claude",
+        planFingerprint: "b".repeat(64),
+        itemIds: ["memory:claude:MEMORY.md"],
+        overwrite: false,
+      },
+    ]);
+    expect(randomUuid).toHaveBeenCalledTimes(2);
   });
 
   it("drops a displayed plan when the gateway context changes", async () => {

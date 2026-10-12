@@ -102,6 +102,21 @@ describe("plugin configuration discovery", () => {
 });
 
 describe("setupPluginConfig", () => {
+  it("allows skipping plugin setup without prompting for fields", async () => {
+    manifest({ enabled: { label: "Enable pairing" } });
+    const config = pluginConfig();
+    const prompts = prompter({
+      multiselect: async ({ options }) =>
+        options.filter((option) => option.value === "__skip__").map((option) => option.value),
+    });
+    const result = await setupPluginConfig({ config, prompter: prompts });
+    expect(result).toBe(config);
+    expect(prompts.note).not.toHaveBeenCalled();
+    expect(prompts.select).not.toHaveBeenCalled();
+    expect(prompts.text).not.toHaveBeenCalled();
+    expect(prompts.confirm).not.toHaveBeenCalled();
+  });
+
   it("preserves typed enum values when writing a nested uiHint path", async () => {
     manifest(
       { "webSearch.mode": { label: "Mode" } },
@@ -135,6 +150,12 @@ describe("setupPluginConfig", () => {
 
   it.each([
     {
+      name: "an existing array through a dotted index",
+      field: "accounts.0.token",
+      existing: { accounts: [{}] },
+      expected: { accounts: [{ token: "configured" }] },
+    },
+    {
       name: "a missing schema-declared array through a dotted index",
       field: "accounts.0.token",
       schema: {
@@ -148,10 +169,29 @@ describe("setupPluginConfig", () => {
       },
       expected: { accounts: [{ token: "configured" }] },
     },
-  ])("writes $name", async ({ field, schema, expected }) => {
+    {
+      name: "a numeric record key through a dotted path",
+      field: "accounts.0.token",
+      schema: {
+        type: "object",
+        properties: {
+          accounts: {
+            type: "object",
+            properties: { "0": { type: "object", properties: { token: { type: "string" } } } },
+          },
+        },
+      },
+      expected: { accounts: { "0": { token: "configured" } } },
+    },
+    {
+      name: "an explicit bracketed array index without a schema",
+      field: "accounts[0].token",
+      expected: { accounts: [{ token: "configured" }] },
+    },
+  ])("writes $name", async ({ field, existing, schema, expected }) => {
     manifest({ [field]: { label: "Token" } }, schema);
     const result = await setupPluginConfig({
-      config: pluginConfig(),
+      config: pluginConfig(existing),
       prompter: prompter(),
     });
     expect(result.plugins?.entries?.fixture?.config).toEqual(expected);

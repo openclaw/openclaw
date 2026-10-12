@@ -97,7 +97,9 @@ describe("resolveStrandedReplyRecovery", () => {
 
   it.each([
     { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
-
+    { label: "wildcard", toolsAllow: ["*"], expected: ["message"] },
+    { label: "messaging group", toolsAllow: ["group:messaging", "exec"], expected: ["message"] },
+    { label: "empty cap", toolsAllow: [], expected: [] },
     { label: "non-messaging cap", toolsAllow: ["exec"], expected: [] },
     {
       label: "intersected denial",
@@ -172,23 +174,26 @@ describe("resolveStrandedReplyRecovery", () => {
     expect(recovery).toMatchObject({ kind: "diagnostic", warn: false });
   });
 
-  it.each([{ label: "send-policy denial", sendPolicyDenied: true }])(
-    "does not recover $label",
-    (override) => {
-      const base = createMockFollowupRun({ prompt: "question" });
+  it.each([
+    { label: "room events", isRoomEvent: true },
+    { label: "heartbeats", isHeartbeat: true },
+    { label: "send-policy denial", sendPolicyDenied: true },
+    { label: "completed delivery", successfulSourceReplyDelivery: true },
+  ])("does not recover $label", (override) => {
+    const base = createMockFollowupRun({ prompt: "question" });
 
-      const recovery = resolveStrandedReplyRecovery({
-        base,
-        payloads: [],
-        finalText: substantiveFinal,
-        sourceReplyDeliveryMode: "message_tool_only",
-        successfulSourceReplyDelivery: false,
-        isHeartbeat: false,
-        isRoomEvent: false,
-        ...override,
-      });
+    const recovery = resolveStrandedReplyRecovery({
+      base,
+      payloads: [],
+      finalText: substantiveFinal,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
+      ...override,
+    });
 
-      expect(recovery).toEqual({ kind: "none" });
-    },
-  );
+    expect(recovery).toEqual({ kind: "none" });
+  });
 });

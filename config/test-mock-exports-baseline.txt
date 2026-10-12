@@ -9668,6 +9668,7 @@
 ["src/wizard/setup.gateway-config.test.ts","../infra/tailscale.js","0679119c382be9842f32e3593616e60d464386973a8468fb09c6ab1a3fe266f4",1]
 ["src/wizard/setup.inference-recovery.integration.test.ts","../system-agent/setup-inference-turn.js","5ad0fd45fa487fc2337275d5f1e0e4143854904c2a8cd990e1afd59fa98b4082",1]
 ["src/wizard/setup.inference-recovery.integration.test.ts","../system-agent/setup-inference.js","73beae11c254dbe5695f2fce36b46430657c47afccb462ecc54f93e931c450e3",1]
+["src/wizard/setup.inference-verification.test.ts","../agents/embedded-agent.js","db8f73fd865b45cd66cb055e2c5403da5cfa5698a9d5f25e2ffdd1fe9f3fa502",1]
 ["src/wizard/setup.inference-verification.test.ts","../system-agent/setup-inference.js","77ca7ba3d51150a5c552a60678aa164137e2916071fcbf129777b51c5dcff29d",1]
 ["src/wizard/setup.inference-verification.test.ts","./setup.model-auth.js","c04a1226509176308f5f2cc92b9f884e47a2b5a49bf6656da2138f34ea663a2f",1]
 ["src/wizard/setup.memory-import.test.ts","../commands/migrate/memory-import.js","8ef89da7de8b5fe63b4ea82cfe33c2956b08f4d3e9b477cfbbcf3a76335bf65c",1]

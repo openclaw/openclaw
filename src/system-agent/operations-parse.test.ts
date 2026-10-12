@@ -53,17 +53,18 @@ afterAll(() => {
 });
 
 describe("parseSystemAgentOperation", () => {
-  it.each(["agents.defaults.fastModeDefault"])(
-    "routes config unset %s as an approval-gated write",
-    (path) => {
-      const operation = parseSystemAgentOperation(`config unset ${path}`);
-      expect(operation).toEqual({ kind: "config-unset", path });
-      expect(isPersistentSystemAgentOperation(operation)).toBe(true);
-    },
-  );
+  it.each([
+    "agents.defaults.fastModeDefault",
+    'agents.defaults.models["openai/gpt-5.2"].params.fastMode',
+  ])("routes config unset %s as an approval-gated write", (path) => {
+    const operation = parseSystemAgentOperation(`config unset ${path}`);
+    expect(operation).toEqual({ kind: "config-unset", path });
+    expect(isPersistentSystemAgentOperation(operation)).toBe(true);
+  });
 
-  it.each(["gateway["])("rejects malformed unset path %s before model fallback", (path) =>
-    expectInvalidConfigPath(`config unset ${path}`),
+  it.each(["", "gateway..port", "gateway["])(
+    "rejects malformed unset path %s before model fallback",
+    (path) => expectInvalidConfigPath(`config unset ${path}`),
   );
 
   it("parses typed model writes", () => {

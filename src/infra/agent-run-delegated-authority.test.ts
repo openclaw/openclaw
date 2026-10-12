@@ -172,6 +172,19 @@ test.each(["release", "abort"])(
   },
 );
 
+test("stale projection sweeping cannot retire a live delegated authority claim", () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(100);
+  const authority = claimAgentRunDelegatedAuthority({
+    instanceId: "instance-live",
+    runId: "live-run",
+  });
+  clock.mockReturnValue(10_000);
+
+  expect(sweepStaleRunContexts(500)).toBe(0);
+  expect(getAgentRunContext(authority.operationalRunInstance.runId)).toBeDefined();
+  clock.mockRestore();
+});
+
 test("terminal clear preserves exact authority until its outer owner closes", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();

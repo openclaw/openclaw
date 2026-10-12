@@ -61,6 +61,55 @@ function approverDm(to: string) {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const first = coordinator.createReporter(reporterOptions());
+    const second = coordinator.createReporter(
+      reporterOptions({
+        accountId: "ops",
+      }),
+    );
+    first.start();
+    second.start();
+
+    expect(coordinator.hasActiveRuntime({ approvalKind: "exec", channel: "telegram" })).toBe(false);
+    expect(
+      coordinator.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "ops",
+      }),
+    ).toBe(true);
+    coordinator.close();
+  });
+
+  it("selects the sole eligible runtime after async account eligibility settles", async () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const createReporter = (accountId: string, eligible: boolean) =>
+      coordinator.createReporter(
+        reporterOptions({
+          accountId,
+          requestGateway,
+          shouldHandle: async () => eligible,
+          classifyRoute: () => "unbound",
+        }),
+      );
+    const defaultReporter = createReporter("default", true);
+    const opsReporter = createReporter("ops", false);
+    defaultReporter.start();
+    opsReporter.start();
+    const request = createRequest("approval-filtered", { turnSourceChannel: "telegram" });
+
+    expect(await defaultReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "selected",
+    });
+    expect(await opsReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "ineligible",
+    });
+    coordinator.close();
+  });
+
   it("drops an earlier eligible account that stops while another account is preparing", async () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const preparing = createDeferred();

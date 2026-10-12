@@ -23,6 +23,30 @@ function claudePartialSnapshot(id: string, content: unknown[]) {
 }
 
 describe("Claude CLI assistant snapshots", () => {
+  it("streams cumulative snapshots as incremental deltas", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: BACKEND,
+      providerId: "claude-cli",
+      onAssistantDelta: ({ text, delta }) => deltas.push({ text, delta }),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudePartialSnapshot("msg-1", [{ type: "text", text: "Hello" }]),
+        claudePartialSnapshot("msg-1", [{ type: "text", text: "Hello world" }]),
+        { type: "result", subtype: "success", result: "Hello world" },
+      ),
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "Hello", delta: "Hello" },
+      { text: "Hello world", delta: " world" },
+    ]);
+    expect(parser.getOutput()?.text).toBe("Hello world");
+  });
+
   it("deduplicates stream-event text repeated by a snapshot", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
@@ -164,11 +188,31 @@ describe("Claude CLI assistant snapshots", () => {
 
   it.each([
     {
+      name: "missing stop reason",
+      record: {
+        type: "assistant",
+        message: { id: "msg-1", content: [{ type: "text", text: "x" }] },
+      },
+    },
+    {
+      name: "terminal stop reason",
+      record: {
+        type: "assistant",
+        message: { id: "msg-1", content: [{ type: "text", text: "x" }], stop_reason: "end_turn" },
+      },
+    },
+    {
       name: "subagent parent",
       record: {
         ...claudePartialSnapshot("msg-1", [{ type: "text", text: "x" }]),
         parent_tool_use_id: "tool-parent",
       },
+    },
+    {
+      name: "tool-only snapshot",
+      record: claudePartialSnapshot("msg-1", [
+        { type: "tool_use", id: "tool-1", name: "Read", input: {} },
+      ]),
     },
   ])("does not stream a snapshot with $name", ({ record }) => {
     const deltas: string[] = [];

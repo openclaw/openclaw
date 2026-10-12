@@ -61,6 +61,32 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     }
   });
 
+  it.each([
+    { label: "foreign-owned input", uid: 2000, mode: 0o100600, allowRootOwner: true },
+    { label: "root-owned group-writable input", uid: 0, mode: 0o100660, allowRootOwner: true },
+    { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
+  ])("rejects $label", async ({ uid, mode, allowRootOwner }) => {
+    const target = "/opt/openclaw/unsafe";
+    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
+      isDirectory: () => false,
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      mode,
+      uid,
+    } as Awaited<ReturnType<typeof fs.lstat>>);
+    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
+    try {
+      await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
+        uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
+      );
+    } finally {
+      realpathSpy.mockRestore();
+      lstatSpy.mockRestore();
+      getuidSpy.mockRestore();
+    }
+  });
+
   it("installs from a package-shaped root-owned tree into user-owned state", async () => {
     const value = await fixture();
     const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
@@ -105,6 +131,27 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
 });
 
 describe("stable extension copy", () => {
+  it("atomically replaces only its owned runtime copy with private modes", async () => {
+    const value = await fixture();
+    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
+    await fs.writeFile(
+      path.join(value.bundledDir, "background.js"),
+      "export const updated = true;\n",
+    );
+    await installStableChromeExtension(value.bundledDir, value.deps);
+
+    expect(await fs.readFile(path.join(installed, "background.js"), "utf8")).toContain("updated");
+    expect(await fs.readFile(path.join(installed, ".openclaw-owned.json"), "utf8")).toContain(
+      '"owner":"openclaw"',
+    );
+    expect(await fs.readdir(path.join(installed, "modules"))).toEqual(["runtime.js"]);
+    expect(await fs.readdir(installed)).not.toContain("sidepanel.html");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(installed)).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(path.join(installed, "background.js"))).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it("refuses a foreign target and symlinked source content", async () => {
     const value = await fixture();
     const target = stableChromeExtensionDir(value.deps);
@@ -137,6 +184,15 @@ describe("stable extension copy", () => {
 });
 
 describe("deterministic unpacked extension ID", () => {
+  it("matches Chromium's published POSIX and Windows path vectors", () => {
+    expect(generateChromeExtensionIdForPath("/path/to/file.ext", "linux")).toBe(
+      "lnkgfdknojmdambfcanadbhmfjfljobb",
+    );
+    expect(generateChromeExtensionIdForPath("/path/to/file.ext", "win32")).toBe(
+      "jjlkojfgbeklddcpckipekckcmgcbfjn",
+    );
+  });
+
   it("normalizes only a lowercase Windows drive letter", () => {
     expect(generateChromeExtensionIdForPath("c:\\OpenClaw\\extension", "win32")).toBe(
       generateChromeExtensionIdForPath("C:\\OpenClaw\\extension", "win32"),
@@ -146,7 +202,7 @@ describe("deterministic unpacked extension ID", () => {
 
 describe("Chrome preferences discovery", () => {
   const filename = "Preferences";
-  it.each(["Secure Preferences"] as const)(
+  it.each(["Preferences", "Secure Preferences"] as const)(
     "discovers exact unpacked IDs in %s and ignores name, location, and path lookalikes",
     async (preferenceFile) => {
       const value = await fixture();
@@ -196,7 +252,7 @@ describe("Chrome preferences discovery", () => {
         path.join(chrome.userDataDir, "Default"),
         path.join(chrome.userDataDir, "Profile 2"),
       );
-      const otherFilename = "Preferences";
+      const otherFilename = preferenceFile === "Preferences" ? "Secure Preferences" : "Preferences";
       for (const profile of ["Default", "Profile 1"]) {
         const profileDir = path.join(chrome.userDataDir, profile);
         await fs.copyFile(
@@ -263,7 +319,9 @@ describe("Chrome preferences discovery", () => {
   });
 
   it.for([
+    { failure: "malformed", issue: "JSON" },
     { failure: "oversized", issue: "32 MiB inspection limit" },
+    { failure: "locked", issue: "EACCES" },
     { failure: "symlink", issue: "Unsafe file" },
     { failure: "directory", issue: "Unsafe file" },
     { failure: "unsafe-mode", issue: "group/world-writable" },
@@ -271,7 +329,11 @@ describe("Chrome preferences discovery", () => {
   ])(
     "rejects $failure metadata even when the other store contains a valid identity",
     async ({ failure, issue }, { skip }) => {
-      if (process.platform === "win32" && ["unsafe-mode", "foreign-owner"].includes(failure)) {
+      if (
+        (process.platform === "win32" &&
+          ["locked", "unsafe-mode", "foreign-owner"].includes(failure)) ||
+        (failure === "locked" && process.getuid?.() === 0)
+      ) {
         skip();
       }
       const value = await fixture();
@@ -293,10 +355,12 @@ describe("Chrome preferences discovery", () => {
         profile: "Default",
         entries,
       });
-      if (failure === "oversized") {
+      if (failure === "malformed") {
+        await fs.writeFile(unsafe, "{partial");
+      } else if (failure === "oversized") {
         await fs.truncate(unsafe, 32 * 1024 * 1024 + 1);
-      } else if (failure === "unsafe-mode") {
-        await fs.chmod(unsafe, 0o662);
+      } else if (failure === "locked" || failure === "unsafe-mode") {
+        await fs.chmod(unsafe, failure === "locked" ? 0o000 : 0o662);
       } else if (failure === "foreign-owner") {
         const realLstat = fs.lstat.bind(fs);
         vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
@@ -351,5 +415,29 @@ describe("Chrome preferences discovery", () => {
     expect(status.discovered).toEqual([]);
     expect(status.manualSetupRequired).toBe(true);
     expect(status.issues.join("\n")).toContain("not OpenClaw-owned");
+  });
+});
+
+describe("platform roots", () => {
+  it("maps Chrome, Chrome for Testing, and Chromium profile roots on every supported OS", async () => {
+    const linux = await fixture("linux");
+    expect(chromeProductRoots(linux.deps).map((entry) => entry.product)).toEqual([
+      "chrome",
+      "chrome-for-testing",
+      "chromium",
+    ]);
+    const mac = await fixture("darwin");
+    expect(chromeProductRoots(mac.deps).map((entry) => entry.product)).toEqual([
+      "chrome",
+      "chrome-for-testing",
+      "chrome-for-testing",
+      "chromium",
+    ]);
+    const windows = await fixture("win32");
+    expect(chromeProductRoots(windows.deps).map((entry) => entry.userDataDir)).toEqual([
+      path.join(windows.deps.env.LOCALAPPDATA, "Google", "Chrome", "User Data"),
+      path.join(windows.deps.env.LOCALAPPDATA, "Google", "Chrome for Testing", "User Data"),
+      path.join(windows.deps.env.LOCALAPPDATA, "Chromium", "User Data"),
+    ]);
   });
 });

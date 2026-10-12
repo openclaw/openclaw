@@ -25,6 +25,47 @@ describe("typing persistence bug fix", () => {
     vi.useRealTimers();
   });
 
+  it("keeps typing alive while keepalive ticks continue during long runs", async () => {
+    const longRunCleanupSpy = vi.fn();
+    const longRunController = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: longRunCleanupSpy,
+      typingIntervalSeconds: 6,
+      log: vi.fn(),
+    });
+
+    await longRunController.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(115_000);
+    expect(longRunCleanupSpy).not.toHaveBeenCalled();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(21);
+
+    longRunController.cleanup();
+    expect(longRunCleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("should stop typing when both runComplete and dispatchIdle are true", async () => {
+    // Start typing
+    await controller.startTypingLoop();
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    // Mark run complete
+    controller.markRunComplete();
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+
+    // Mark dispatch idle - should trigger cleanup
+    controller.markDispatchIdle();
+    expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+
+    // After cleanup, typing interval should not restart typing
+    vi.advanceTimersByTime(6000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1); // Still only the initial call
+  });
+
   it.each(["cleanup", "run-first", "idle-first"] as const)(
     "disposes typing when %s closes the controller before start settles",
     async (completion) => {

@@ -257,7 +257,7 @@ describe("filtered sidebar session event refresh", () => {
     }
   });
 
-  it.each(["archived"] as const)(
+  it.each(["archived", "all"] as const)(
     "automatically rebinds the restored %s filter across controller reconnect",
     async (statusFilter) => {
       vi.useFakeTimers();
@@ -285,7 +285,7 @@ describe("filtered sidebar session event refresh", () => {
     },
   );
 
-  it.each(["active", "all"] as const)(
+  it.each(["active", "archived", "all"] as const)(
     "keeps membership in the displayed %s query across refresh, pagination, and agent changes",
     async (statusFilter) => {
       vi.useFakeTimers();
@@ -373,7 +373,7 @@ describe("filtered sidebar session event refresh", () => {
       }
     },
   );
-  it.each(["archived"] as const)(
+  it.each(["archived", "all"] as const)(
     "clears a recovered %s list failure without erasing a same-text action failure",
     async (statusFilter) => {
       const { controller, list, selectStatusFilter } =
@@ -409,6 +409,24 @@ describe("filtered sidebar session event refresh", () => {
 
       controller.hostDisconnected();
       expect(controller.sessionMutationError).toBeNull();
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires the %s list failure when its selected filter changes",
+    async (statusFilter) => {
+      const { controller, list, selectStatusFilter } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      list.mockRejectedValueOnce(new Error("Retired session list failed"));
+
+      await controller.refreshSidebarSessions();
+      expect(controller.sessionMutationError).toBe("Retired session list failed");
+
+      selectStatusFilter(statusFilter === "archived" ? "all" : "archived");
+
+      expect(controller.sessionMutationError).toBeNull();
+      controller.hostDisconnected();
     },
   );
 
@@ -471,7 +489,49 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostDisconnected();
   });
 
-  it.each(["archived"] as const)(
+  it("retains the current canonical result outside the per-agent cache", () => {
+    const { controller, publishAgentRoster, resultForKeys } =
+      createFilteredSessionController("all");
+    controller.hostConnected();
+    controller.sessionsResult = resultForKeys(["agent:main:current"]);
+    controller.sessionsAgentId = "main";
+
+    publishAgentRoster(["main"]);
+
+    expect(controller.sessionsAgentId).toBe("main");
+    expect(controller.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+      "agent:main:current",
+    ]);
+    controller.hostDisconnected();
+  });
+
+  it.each(["archived", "all"] as const)(
+    "refreshes the %s list once for duplicate remote session events",
+    async (statusFilter) => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const { controller, list, publishSessionChanged } =
+        createFilteredSessionController(statusFilter);
+      controller.hostConnected();
+      await controller.refreshSidebarSessions();
+      list.mockClear();
+
+      publishSessionChanged();
+      publishSessionChanged();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(list).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
+      );
+      expect(controller.sessionsResult?.sessions[0]?.key).toBe("agent:main:remote-change");
+      controller.hostDisconnected();
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
     "preserves every loaded %s page when a remote event replaces the list",
     async (statusFilter) => {
       vi.useFakeTimers();
@@ -534,6 +594,30 @@ describe("filtered sidebar session event refresh", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(list).not.toHaveBeenCalled();
+    controller.hostDisconnected();
+  });
+
+  it("does not carry another filtered list's page depth across a filter change", async () => {
+    // The archived list grows to two pages; switching filters must start over
+    // at one page rather than inheriting that depth.
+    const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
+    const { controller, list, selectStatusFilter } = createFilteredSessionController(
+      "archived",
+      pageSize * 2,
+    );
+    controller.hostConnected();
+    await controller.refreshSidebarSessions();
+    await controller.loadMoreSidebarSessions();
+    expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
+    list.mockClear();
+
+    selectStatusFilter("all");
+    await controller.refreshSidebarSessions();
+
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", archivedFilter: "all", limit: pageSize }),
+    );
+    expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
     controller.hostDisconnected();
   });
 

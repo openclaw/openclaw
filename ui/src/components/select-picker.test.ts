@@ -1,3 +1,4 @@
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -113,6 +114,12 @@ describe("renderPicker", () => {
     },
   );
 
+  it("anchors its popup to the mounted trigger before the first open", async () => {
+    const p = await mount();
+    const popup = p.picker.querySelector<WaPopup>("wa-popup");
+    expect(popup?.anchor).toBe(p.trigger);
+  });
+
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();
     const pageKey = vi.fn();
@@ -128,6 +135,29 @@ describe("renderPicker", () => {
     p.trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(pageKey).toHaveBeenCalledOnce();
     expect(p.params.onChange).not.toHaveBeenCalled();
+  });
+
+  it("names the field and current selection when the closed trigger receives focus", async () => {
+    const p = await mount();
+    p.trigger.focus();
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
+    await p.update({ value: "fixture/aurora-large" });
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
+    expect(p.params.onChange).not.toHaveBeenCalled();
+  });
+
+  it("retains the current short-menu choice when typeahead has no match", async () => {
+    const p = await mount({
+      options: [
+        { value: "alpha", label: "Alpha" },
+        { value: "beta", label: "Beta" },
+      ],
+      value: "beta",
+    });
+    await p.open();
+    await p.key("z");
+    await p.key("Enter");
+    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta");
   });
 
   it("opens a compact menu with a printable key without committing it", async () => {
@@ -160,6 +190,31 @@ describe("renderPicker", () => {
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.key("Enter");
     expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("dog");
+  });
+
+  it("filters label and exact reference substrings without changing the selected value", async () => {
+    const p = await mount();
+    await p.open();
+    const filteredOut = p.rows()[0]!;
+    await p.search("AURORA");
+    filteredOut.click();
+    expect(p.rows().map((row) => row.dataset.value)).toEqual([
+      "fixture/aurora-large",
+      "other/aurora-small",
+    ]);
+    await p.search("TURE/AURORA-L");
+    expect(p.rows().map((row) => row.dataset.value)).toEqual(["fixture/aurora-large"]);
+    expect(p.trigger.textContent).toContain("Anchor");
+    expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.search("");
+    expect(p.rows()).toHaveLength(9);
+    expect(p.rows()[0]?.textContent).toContain("Fixture provider");
+    await p.key("Escape");
+    expect(document.activeElement).toBe(p.trigger);
+    expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.open();
+    expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
+    expect(p.rows()).toHaveLength(9);
   });
 
   it("commits an enabled visible choice once and skips disabled keyboard rows", async () => {

@@ -108,22 +108,29 @@ describe("chat content context copy", () => {
     await copy("Copy file name", "report.pdf");
   });
 
-  it.each(['<div contenteditable="true"><span>editable</span></div>'])(
-    "preserves native copy and editing actions for %s",
-    (markup) => {
-      owner.innerHTML = `<div class="chat-group user"><div class="chat-bubble">${markup}</div></div>`;
-      const bubble = owner.querySelector(".chat-bubble")!;
-      Object.assign(bubble, {
-        messageActions: {
-          copyMarkdown: "source",
-          replyTarget: { messageId: "message-1", text: "source" },
-        },
-      });
-      const target = bubble.querySelector("span, img, video, audio, textarea, input, iframe")!;
-      expect(open(target).defaultPrevented).toBe(false);
-      expect(document.querySelector('[role="menu"]')).toBeNull();
-    },
-  );
+  it.each([
+    '<a href="https://example.test"><span>link</span></a>',
+    '<button><img src="/image.png"></button>',
+    '<video controls src="/video.mp4"></video>',
+    '<audio controls src="/audio.mp3"></audio>',
+    "<textarea>editable</textarea>",
+    '<input value="editable">',
+    '<div contenteditable="true"><span>editable</span></div>',
+    '<div contenteditable="plaintext-only"><span>editable</span></div>',
+    '<iframe src="about:blank"></iframe>',
+  ])("preserves native copy and editing actions for %s", (markup) => {
+    owner.innerHTML = `<div class="chat-group user"><div class="chat-bubble">${markup}</div></div>`;
+    const bubble = owner.querySelector(".chat-bubble")!;
+    Object.assign(bubble, {
+      messageActions: {
+        copyMarkdown: "source",
+        replyTarget: { messageId: "message-1", text: "source" },
+      },
+    });
+    const target = bubble.querySelector("span, img, video, audio, textarea, input, iframe")!;
+    expect(open(target).defaultPrevented).toBe(false);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
 
   it("keeps failed copy visible and allows another attempt", async () => {
     writeText.mockRejectedValueOnce(new Error("clipboard denied"));

@@ -88,6 +88,20 @@ afterEach(() => {
 });
 
 describe("ChatAudioPlayer", () => {
+  it("keeps the download action for normalized base64 audio", async () => {
+    const player = await createPlayer("inline", {
+      src: "data:audio/wav;base64,UklGRg==",
+      sourceIdentity: "inline-audio",
+      label: "inline.wav",
+    });
+
+    expect(
+      player
+        .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
+        ?.getAttribute("href"),
+    ).toBe("data:audio/wav;base64,UklGRg==");
+  });
+
   it("keeps voice notes player-only and never opens the attachment sidebar", async () => {
     const player = await createPlayer("voice-note");
     player.voiceNote = true;
@@ -111,6 +125,27 @@ describe("ChatAudioPlayer", () => {
       rel: "noreferrer",
     });
     expect(player.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+  });
+
+  it("formats elapsed and total media time", async () => {
+    const player = await createPlayer("timing");
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["0:00 / 0:00"]);
+
+    const media = player.querySelector("audio")!;
+    setMediaNumber(media, "currentTime", 65.9);
+    setMediaNumber(media, "duration", 3_665);
+    media.dispatchEvent(new Event("loadedmetadata"));
+    await player.updateComplete;
+
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["1:05 / 61:05"]);
   });
 
   it("drives play, pause, seek, and keyboard state through the hidden audio element", async () => {
@@ -219,6 +254,42 @@ describe("ChatAudioPlayer", () => {
     const second = await createPlayer("working");
     second.querySelector("audio")!.dispatchEvent(new Event("play"));
     expect(pauseFirst).not.toHaveBeenCalled();
+  });
+
+  it("shows preparing, retries a 202 rendition, and then plays", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const player = await createPlayer("voice", {
+      src: "/__openclaw__/assistant-media?source=voice.caf&mediaTicket=ticket",
+      sourceIdentity: "/tmp/voice.caf",
+      label: "voice.caf",
+      playback: "transcode",
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    await player.updateComplete;
+
+    expect(player.textContent).toContain("Preparing playback…");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await player.updateComplete;
+
+    const media = player.querySelector("audio")!;
+    let paused = true;
+    Object.defineProperty(media, "paused", { configurable: true, get: () => paused });
+    const play = vi.spyOn(media, "play").mockImplementation(async () => {
+      paused = false;
+      media.dispatchEvent(new Event("play"));
+    });
+    expect(media.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
+    player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    await player.updateComplete;
+    expect(play).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to a normal attachment card after rendition retries are exhausted", async () => {
@@ -403,6 +474,77 @@ describe("ChatAudioPlayer", () => {
     expect(player.querySelector("audio")).not.toBe(media);
     expect(player.querySelector("audio")?.isConnected).toBe(true);
     expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+  });
+
+  it("skips waveform work without a server-probed duration", async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        decodeAudioData = decodeAudioData;
+        close = vi.fn(async () => undefined);
+      },
+    );
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const player = await createPlayer("unknown-duration");
+    const media = player.querySelector("audio")!;
+    Object.defineProperty(media, "paused", { configurable: true, value: true });
+    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
+
+    player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
+    await play.mock.results[0]!.value;
+    await Promise.resolve();
+    flush();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(decodeAudioData).not.toHaveBeenCalled();
+    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
+  });
+
+  it("discards waveform peaks when decoded duration exceeds the server gate by 20 percent", async () => {
+    const samples = new Float32Array([0, 0.5, -1, 0.25]);
+    const decodeAudioData = vi.fn(async () => ({
+      duration: 121,
+      length: samples.length,
+      numberOfChannels: 1,
+      getChannelData: () => samples,
+    }));
+    const AudioContextMock = vi.fn(function (options?: AudioContextOptions) {
+      expect(options?.sampleRate).toBe(16_000);
+      return { decodeAudioData, close: vi.fn(async () => undefined) };
+    });
+    vi.stubGlobal("AudioContext", AudioContextMock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(new Uint8Array([1, 2, 3, 4]), {
+            status: 200,
+            headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
+          }),
+      ),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:duration-mismatch");
+    const player = await createPlayer("duration-mismatch");
+    player.serverDurationMs = 100_000;
+    const media = player.querySelector("audio")!;
+    Object.defineProperty(media, "paused", { configurable: true, value: true });
+    setMediaNumber(media, "duration", 100);
+    media.dispatchEvent(new Event("loadedmetadata"));
+    await player.updateComplete;
+    vi.spyOn(media, "play").mockResolvedValue(undefined);
+
+    player.querySelector<HTMLButtonElement>(".chat-audio-player__toggle")!.click();
+    await waitForSolid(() => expect(media.getAttribute("src")).toBe("blob:duration-mismatch"));
+
+    expect(decodeAudioData).toHaveBeenCalledOnce();
+    expect(player.querySelector(".chat-audio-player__waveform")).toBeNull();
+    expect(
+      Array.from(player.querySelectorAll(".chat-audio-player__time span"), (item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["0:00 / 1:40"]);
   });
 
   it("does not buffer or cache a chunked waveform response above 8 MiB", async () => {

@@ -219,10 +219,38 @@ describe("browser tab card", () => {
 
   it.each([
     {
+      url: "https://mobile.twitter.com/openclaw/status/123/photo/1?s=20",
+      title: 'OpenClaw on Twitter: "A post from the page title" / Twitter',
+      author: "OpenClaw",
+      handle: "@openclaw",
+      text: "A post from the page title",
+    },
+    {
+      url: "https://x.com/openclaw/status/123",
+      title: "Log in to X / X",
+      author: "Post on X",
+      handle: "@openclaw",
+      text: undefined,
+    },
+    {
       url: "https://x.com/i/web/status/123",
       title: "X",
       author: "Post on X",
       handle: undefined,
+      text: undefined,
+    },
+    {
+      url: "https://x.com/i/status/123",
+      title: "OpenClaw (@openclaw) / X",
+      author: "OpenClaw",
+      handle: "@openclaw",
+      text: undefined,
+    },
+    {
+      url: "https://www.x.com/openclaw/status/123",
+      title: "Other (@another) on X",
+      author: "Post on X",
+      handle: "@openclaw",
       text: undefined,
     },
   ])("keeps an honest tweet fallback for $url", async ({ url, title, author, handle, text }) => {
@@ -236,17 +264,21 @@ describe("browser tab card", () => {
     expect(gateway.request).not.toHaveBeenCalled();
   });
 
-  it.each(["https://x.com/search?q=post"])(
-    "does not style a non-post URL as a tweet: %s",
-    async (url) => {
-      const gateway = gatewayContext([], ["operator.read"], false);
-      const element = await card(gateway.context, false);
-      element.preview = { ...element.preview!, url };
-      await element.updateComplete;
-      expect(element.querySelector(".tweet")).toBeNull();
-      expect(element.querySelector(".url")?.textContent).toBe(url);
-    },
-  );
+  it.each([
+    "https://x.com/openclaw",
+    "https://x.com/search?q=post",
+    "https://x.com.evil.example/openclaw/status/123",
+    "https://x.com@evil.example/openclaw/status/123",
+    "https://user:password@x.com/openclaw/status/123",
+    "https://x.com/openclaw/status/not-a-post",
+  ])("does not style a non-post URL as a tweet: %s", async (url) => {
+    const gateway = gatewayContext([], ["operator.read"], false);
+    const element = await card(gateway.context, false);
+    element.preview = { ...element.preview!, url };
+    await element.updateComplete;
+    expect(element.querySelector(".tweet")).toBeNull();
+    expect(element.querySelector(".url")?.textContent).toBe(url);
+  });
 
   it("renders untrusted post text literally and clears it when previews are disabled", async () => {
     vi.useFakeTimers();
@@ -492,29 +524,29 @@ describe("browser tab card", () => {
     });
   });
 
-  it.each([{ target: "node", node: "node-a", profile: "work", targetId: "t1" }] as const)(
-    "keeps $target/$profile on the thumbnail and open action",
-    async (tab) => {
-      const gateway = gatewayContext();
-      const element = await card(gateway.context, true, tab);
-      await vi.waitFor(() => expect(element.querySelector("img")).not.toBeNull());
-      expect(gateway.request).toHaveBeenCalledWith("browser.request", {
-        method: "POST",
-        path: "/screenshot",
-        target: tab.target,
-        ...("node" in tab ? { node: tab.node } : {}),
-        query: { profile: tab.profile },
-        body: { targetId: "t1", type: "png" },
-      });
-      const toggle = vi.fn<(event: Event) => void>();
-      element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
-      element.querySelector<HTMLButtonElement>(".shot")?.click();
-      expect(toggle).toHaveBeenCalledOnce();
-      expect(toggle.mock.calls[0]?.[0]).toMatchObject({
-        detail: { open: true, browserTab: tab },
-      });
-    },
-  );
+  it.each([
+    { target: "host", profile: "managed", targetId: "t1" },
+    { target: "node", node: "node-a", profile: "work", targetId: "t1" },
+  ] as const)("keeps $target/$profile on the thumbnail and open action", async (tab) => {
+    const gateway = gatewayContext();
+    const element = await card(gateway.context, true, tab);
+    await vi.waitFor(() => expect(element.querySelector("img")).not.toBeNull());
+    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
+      method: "POST",
+      path: "/screenshot",
+      target: tab.target,
+      ...("node" in tab ? { node: tab.node } : {}),
+      query: { profile: tab.profile },
+      body: { targetId: "t1", type: "png" },
+    });
+    const toggle = vi.fn<(event: Event) => void>();
+    element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
+    element.querySelector<HTMLButtonElement>(".shot")?.click();
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(toggle.mock.calls[0]?.[0]).toMatchObject({
+      detail: { open: true, browserTab: tab },
+    });
+  });
 
   it("shares one screenshot between latest cards and leaves older cards as chips", async () => {
     const gateway = gatewayContext();
@@ -536,7 +568,7 @@ describe("browser tab card", () => {
     expect(gateway.request).toHaveBeenCalledOnce();
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "collapses repeated page results and refreshes the newest completion (separate tabs: %s)",
     async (separateTabs) => {
       const gateway = gatewayContext();
@@ -575,7 +607,7 @@ describe("browser tab card", () => {
     },
   );
 
-  it.each([undefined])(
+  it.each(["about:blank", undefined])(
     "uses the latest successful result per tab before deciding to preview %s",
     async (latestUrl) => {
       const gateway = gatewayContext();
@@ -592,7 +624,51 @@ describe("browser tab card", () => {
     },
   );
 
-  it.each([{ length: 2_048, history: true }])(
+  it.each([
+    { name: "path", tab: {}, url: "https://example.com/other" },
+    { name: "query", tab: {}, url: "https://example.com/blog?theme=light" },
+    { name: "fragment", tab: {}, url: "https://example.com/blog#mobile" },
+    { name: "profile", tab: { profile: "work" }, url: "https://example.com/blog" },
+    { name: "host", tab: { target: "node", node: "node-a" }, url: "https://example.com/blog" },
+    { name: "node", tab: { node: "node-b" }, url: "https://example.com/blog" },
+    { name: "long URL", tab: {}, url: `https://example.com/blog?value=${"x".repeat(2_100)}b` },
+  ])("keeps different $name previews separate", async ({ name, tab, url }) => {
+    const route = name === "node" ? { target: "node", node: "node-a" } : { target: "host" };
+    const firstUrl =
+      name === "long URL"
+        ? `https://example.com/blog?value=${"x".repeat(2_100)}a`
+        : "https://example.com/blog";
+    const messages = [
+      { targetId: "first", ...route, url: firstUrl },
+      { targetId: "second", ...route, ...tab, url },
+    ].map((browserTab, index) => ({
+      role: "toolResult",
+      toolCallId: `call-${index}`,
+      toolName: "browser",
+      content: "ok",
+      details: { browserTab: { profile: "managed", ...browserTab } },
+    }));
+    const host = container();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "browser-results",
+      role: "tool",
+      visibleContent: "text",
+      isStreaming: false,
+      timestamp: 1,
+      messages: messageEntries(messages),
+    };
+    render(renderActivityGroup([group], { showReasoning: false }), host);
+    const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
+    expect(elements).toHaveLength(2);
+    expect(elements.map((element) => element.preview?.targetId)).toEqual(["first", "second"]);
+  });
+
+  it.each(
+    [2_046, 2_047, 2_048].flatMap((length) =>
+      [false, true].map((history) => ({ length, history })),
+    ),
+  )(
     "preserves ambiguous URL prefixes ($length units, history: $history)",
     ({ length, history }) => {
       const prefix = "https://example.com/blog?value=".padEnd(length, "x");

@@ -12,26 +12,69 @@ function assertStep(step: WizardStep | undefined): asserts step is WizardStep {
 }
 
 describe("WizardSession", () => {
-  test.each([true, "false"])("only literal true confirms a wire answer (%j)", async (answer) => {
-    let confirmed: boolean | undefined;
-    const session = new WizardSession(async (prompter) => {
-      confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
-    });
-    const step = (await session.next()).step;
-    assertStep(step);
-    await session.answer(step.id, answer);
-    await session.whenSettled();
-    expect(confirmed).toBe(answer === true);
-  });
+  test.each([true, false, "false"])(
+    "only literal true confirms a wire answer (%j)",
+    async (answer) => {
+      let confirmed: boolean | undefined;
+      const session = new WizardSession(async (prompter) => {
+        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+      });
+      const step = (await session.next()).step;
+      assertStep(step);
+      await session.answer(step.id, answer);
+      await session.whenSettled();
+      expect(confirmed).toBe(answer === true);
+    },
+  );
 
   test.each([
     ["select", undefined, true],
+    ["multiselect", undefined, true],
+    ["text", undefined, true],
+    ["confirm", undefined, true],
     ["action", "client", true],
     ["action", "gateway", false],
+    ["note", undefined, false],
+    ["progress", undefined, false],
   ] as const satisfies ReadonlyArray<
     readonly [WizardStep["type"], WizardStep["executor"], boolean]
   >)("classifies whether %s/%s awaits user input", (type, executor, expected) => {
     expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
+  });
+
+  test("steps progress in order", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.note("Welcome");
+      const name = await prompter.text({ message: "Name" });
+      await prompter.note(`Hello ${name}`);
+    });
+
+    const first = await session.next();
+    expect(first.done).toBe(false);
+    expect(first.step?.type).toBe("note");
+
+    const secondPeek = await session.next();
+    expect(secondPeek.step?.id).toBe(first.step?.id);
+
+    assertStep(first.step);
+    await session.answer(first.step.id, null);
+
+    const second = await session.next();
+    expect(second.done).toBe(false);
+    expect(second.step?.type).toBe("text");
+
+    assertStep(second.step);
+    await session.answer(second.step.id, "Peter");
+
+    const third = await session.next();
+    expect(third.step?.type).toBe("note");
+
+    assertStep(third.step);
+    await session.answer(third.step.id, null);
+
+    const done = await session.next();
+    expect(done.done).toBe(true);
+    expect(done.status).toBe("done");
   });
 
   test("plain output is a client note with plain format", async () => {
@@ -49,7 +92,7 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
-  test.each(["prepared", "utility"] as const)(
+  test.each(["prepared", "activated", "utility"] as const)(
     "returns the exact %s model only on the successful terminal result",
     async (kind) => {
       const modelRef = "ollama/qwen3:0.6b";
@@ -267,6 +310,22 @@ describe("WizardSession", () => {
     await session.answer(first.step.id, "token");
     expect((await session.next()).status).toBe("done");
     expect(resolved).toBe("token");
+  });
+
+  test("cancel marks session and unblocks", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({ message: "Name" });
+    });
+
+    const step = await session.next();
+    expect(step.step?.type).toBe("text");
+
+    session.cancel();
+
+    const done = await session.next();
+    expect(done.done).toBe(true);
+    expect(done.status).toBe("cancelled");
+    expect(session.signal.aborted).toBe(true);
   });
 
   test("returns cancellation when progress is retired before a waiting next resumes", async () => {

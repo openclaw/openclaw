@@ -42,6 +42,20 @@ describe("Sessions hub navigation", () => {
     document.body.innerHTML = "";
   });
 
+  it("renders the route hub with manual activation and a shared panel target", async () => {
+    const container = await mount({ active: "worktrees", onSelect: () => undefined });
+    const group = container.querySelector("wa-tab-group");
+    const tabs = [...container.querySelectorAll<HTMLElement>("wa-tab")];
+
+    expect(group?.getAttribute("activation")).toBe("manual");
+    expect(tabs.map((tab) => tab.id)).toEqual(["sessions-tab-sessions", "sessions-tab-worktrees"]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-controls"))).toEqual([
+      "sessions-hub-panel",
+      "sessions-hub-panel",
+    ]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+  });
+
   it("delegates cross-route selection", async () => {
     const onSelect = vi.fn();
     const container = await mount({ active: "sessions", onSelect });
@@ -51,6 +65,36 @@ describe("Sessions hub navigation", () => {
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
 
     expect(onSelect).toHaveBeenLastCalledWith("worktrees");
+  });
+
+  it("ignores setup-time tab-show events", async () => {
+    const onSelect = vi.fn();
+    const container = await mount({ active: "sessions", onSelect });
+    container.querySelector("wa-tab-group")?.dispatchEvent(
+      new CustomEvent("wa-tab-show", {
+        bubbles: true,
+        composed: true,
+        detail: { name: "worktrees" },
+      }),
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("hands focus to the destination strip after keyboard navigation", async () => {
+    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    source
+      .querySelector<HTMLElement>("#sessions-tab-worktrees")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+      );
+    source.remove();
+
+    const destination = await mount({ active: "worktrees", onSelect: () => undefined });
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        destination.querySelector<HTMLElement>("#sessions-tab-worktrees"),
+      );
+    });
   });
 
   it("does not steal deliberate focus established before a queued route handoff", async () => {

@@ -73,6 +73,11 @@ describe("formatBatchErrorDetail", () => {
 });
 
 describe("formatUnavailableBatchError", () => {
+  it("formats errors and non-error values", () => {
+    expect(formatUnavailableBatchError(new Error("boom"))).toBe("error file unavailable: boom");
+    expect(formatUnavailableBatchError("unreachable")).toBe("error file unavailable: unreachable");
+  });
+
   it("redacts exported tokens without malformed UTF-16", () => {
     const secret = `abcd😀${"x".repeat(18)}😀ab`;
     const serialized = JSON.stringify({

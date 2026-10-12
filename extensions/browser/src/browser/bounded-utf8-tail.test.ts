@@ -10,6 +10,13 @@ describe("bounded UTF-8 tail", () => {
     expect(tail.text()).toBe("r-newest");
   });
 
+  it("drops a partial leading code point after byte truncation", () => {
+    const tail = createBoundedUtf8Tail(5);
+    tail.append(Buffer.from(`old🦞new`));
+
+    expect(tail.text()).toBe("new");
+  });
+
   it("drops a partial trailing code point after byte truncation", () => {
     const tail = createBoundedUtf8Tail(1);
     tail.append(Buffer.from([0xf0, 0x9f, 0x98, 0x80]));
@@ -25,5 +32,26 @@ describe("bounded UTF-8 tail", () => {
     expect(tail.text()).toBe("3456");
     tail.clear();
     expect(tail.text()).toBe("");
+  });
+
+  it("copies bytes out of caller-owned buffers", () => {
+    const tail = createBoundedUtf8Tail(4);
+    const source = Buffer.from("test");
+    tail.append(source);
+    source.fill(0);
+
+    expect(tail.text()).toBe("test");
+  });
+
+  it("waits for split UTF-8 code points before decoding them", () => {
+    const tail = createBoundedUtf8Tail(4);
+    const encoded = Buffer.from([0xf0, 0x9f, 0x98, 0x80]);
+    tail.append(encoded.subarray(0, 1));
+
+    expect(tail.text()).toBe("");
+
+    tail.append(encoded.subarray(1));
+
+    expect(tail.text()).toBe("\u{1f600}");
   });
 });

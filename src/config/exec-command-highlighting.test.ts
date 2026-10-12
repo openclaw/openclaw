@@ -16,11 +16,42 @@ describe("resolveExecCommandHighlighting", () => {
     expect(resolveExecCommandHighlighting({})).toBe(false);
   });
 
-  it.each([{ globalValue: false, agentValue: true }])(
-    "agent-scoped $agentValue overrides global $globalValue",
-    ({ globalValue, agentValue }) => {
-      const config = configWithAgent(globalValue, agentValue);
-      expect(resolveExecCommandHighlighting({ config, agentId: "alpha" })).toBe(agentValue);
-    },
-  );
+  it("reads global exec commandHighlighting", () => {
+    const config = { tools: { exec: { commandHighlighting: true } } } satisfies OpenClawConfig;
+    expect(resolveExecCommandHighlighting({ config })).toBe(true);
+  });
+
+  it.each([
+    { globalValue: false, agentValue: true },
+    { globalValue: true, agentValue: false },
+  ])("agent-scoped $agentValue overrides global $globalValue", ({ globalValue, agentValue }) => {
+    const config = configWithAgent(globalValue, agentValue);
+    expect(resolveExecCommandHighlighting({ config, agentId: "alpha" })).toBe(agentValue);
+  });
+
+  it("agent without override falls back to global true", () => {
+    const config = {
+      tools: { exec: { commandHighlighting: true } },
+      agents: { entries: { alpha: {} } },
+    } satisfies OpenClawConfig;
+    expect(resolveExecCommandHighlighting({ config, agentId: "alpha" })).toBe(true);
+  });
+
+  it("agent ID normalization matches agent list entries", () => {
+    expect(
+      resolveExecCommandHighlighting({
+        config: configWithAgent(undefined, true),
+        agentId: "ALPHA",
+      }),
+    ).toBe(true);
+  });
+
+  it("unrelated agent ID does not affect the result", () => {
+    expect(
+      resolveExecCommandHighlighting({
+        config: configWithAgent(undefined, true),
+        agentId: "other",
+      }),
+    ).toBe(false);
+  });
 });

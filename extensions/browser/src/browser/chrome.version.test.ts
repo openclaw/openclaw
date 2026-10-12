@@ -60,6 +60,27 @@ describe("readBrowserVersion", () => {
     );
   });
 
+  it("falls back to a slower --version probe when macOS bundle metadata is unavailable", () => {
+    stubPlatform("darwin");
+    execFileSyncMock
+      .mockImplementationOnce(() => {
+        throw new Error("plist unavailable");
+      })
+      .mockReturnValueOnce("Google Chrome 148.0.7778.179\n");
+
+    const version = readBrowserVersion(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    );
+
+    expect(version).toBe("Google Chrome 148.0.7778.179");
+    expect(execFileSyncMock).toHaveBeenNthCalledWith(
+      2,
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      ["--version"],
+      expect.objectContaining({ timeout: 6000 }),
+    );
+  });
+
   it("uses the slower --version probe for non-bundle paths", () => {
     stubPlatform("darwin");
     execFileSyncMock.mockReturnValue("Chromium 148.0.7778.179\n");

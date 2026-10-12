@@ -28,7 +28,7 @@ const snapshot = {
 };
 
 describe("chrome MCP snapshot conversion", () => {
-  it.each(["description"])("does not retain truncated refs from %s text", (field) => {
+  it.each(["value", "description"])("does not retain truncated refs from %s text", (field) => {
     const built = buildAiSnapshotFromChromeMcpSnapshot({
       root: {
         id: "generic-root",

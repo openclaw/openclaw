@@ -1,6 +1,7 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
+import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-message-display.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -26,21 +27,27 @@ function displayed(message: unknown) {
   return resolveMessageDisplayMarkdown(message, normalizeMessage(message));
 }
 
-it("hides import framing in text content without mutating history", () => {
-  const body = "A **message**\n\n---\n\nSource: External\n\n~~~ts\nconst answer = 42;\n~~~";
-  const message = {
-    role: "user",
-    text: wrap(body),
-    __openclaw: { idempotencyKey: importKey },
-  };
-  const original = structuredClone(message);
-  expect(extractText(message)).toBe(body);
-  expect(extractTextCached(message)).toBe(body);
-  expect(displayed(message)).toBe(body);
-  expect(message).toEqual(original);
-});
-
 describe.each(["user", "assistant"])("imported %s history presentation", (role) => {
+  it.each(["string", "blocks", "text"])(
+    "hides import framing in %s content without mutating history",
+    (shape) => {
+      const body = "A **message**\n\n---\n\nSource: External\n\n~~~ts\nconst answer = 42;\n~~~";
+      const wrapped = wrap(body);
+      const message = {
+        role,
+        ...(shape === "text"
+          ? { text: wrapped }
+          : { content: shape === "blocks" ? [{ type: "text", text: wrapped }] : wrapped }),
+        __openclaw: { idempotencyKey: importKey },
+      };
+      const original = structuredClone(message);
+      expect(extractText(message)).toBe(body);
+      expect(extractTextCached(message)).toBe(body);
+      expect(displayed(message)).toBe(body);
+      expect(message).toEqual(original);
+    },
+  );
+
   it("unwraps text blocks independently and preserves other content", () => {
     const message = {
       role,
@@ -86,10 +93,66 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(body));
     }
   });
+
+  it("preserves CRLF body whitespace while removing only framing", () => {
+    const body = "  First\r\n\r\nSecond  ";
+    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
+    // Assistant media parsing already trims trailing whitespace; retain that display contract.
+    expect(normalizeMessage(message).content).toEqual(
+      normalizeMessage({ role, content: body }).content,
+    );
+    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
+  });
 });
 
 describe("imported history framing", () => {
   const role = "assistant";
+
+  it.each([
+    ["fenced example", (text: string) => "~~~text\n" + text + "\n~~~"],
+    ["inline example", (text: string) => "Example: " + text],
+    ["truncated wrapper", (text: string) => text.slice(0, -10)],
+    [
+      "mismatched id",
+      (text: string) =>
+        text.replace(
+          /END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]+"/,
+          'END_EXTERNAL_UNTRUSTED_CONTENT id="ffffffffffffffff"',
+        ),
+    ],
+    ["missing separator", (text: string) => text.replace("\n---\n", "\n")],
+    ["extra suffix", (text: string) => text + "\nKeep this suffix"],
+    ["different source", (text: string) => text.replace("Source: External", "Source: Web Fetch")],
+  ] as const)("preserves %s literally", (_name, transform) => {
+    const content = transform(wrap("Keep this body"));
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(extractText(message)).toBe(content);
+    expect(displayed(message)).toBe(content);
+  });
+
+  it.each(["\n", "\r\n", "Thinking\n\n\n"])(
+    "preserves extra leading separators %j instead of treating them as import framing",
+    (prefix) => {
+      const framed = wrap("Keep this body");
+      const content = prefix + framed;
+      const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+      expect(projectImportedMessageForDisplay(message)).toEqual(message);
+      // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
+      expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
+      expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    },
+  );
+
+  it.each(["\n", "\r\n"])("preserves extra trailing separators %j", (suffix) => {
+    const framed = wrap("Keep this body");
+    const content = framed + suffix;
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(projectImportedMessageForDisplay(message)).toEqual(message);
+    expect(displayed(message)).toBe(framed);
+    expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  });
 
   it("retains warning-bearing external content", () => {
     const content = wrapExternalContent("Evidence", { source: "unknown" }).trim();
@@ -106,6 +169,25 @@ describe("imported history framing", () => {
       expect(displayed(message)).toBe(content);
     }
   });
+
+  it("preserves marker examples inside the imported body without recursively stripping", () => {
+    const inner = wrap("Literal nested example");
+    const content = wrap("BODY").replace("BODY", "~~~text\n" + inner + "\n~~~");
+    const body = "~~~text\n" + inner + "\n~~~";
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(extractText(message)).toBe(body);
+    expect(displayed(message)).toBe(body);
+  });
+});
+
+it.each(["Thinking", "Tool call", "Tool result", "Other"])("keeps imported %s labels", (prefix) => {
+  const message = {
+    role: "assistant",
+    content: prefix + "\n\n" + wrap("Original text"),
+    __openclaw: { idempotencyKey: importKey },
+  };
+  expect(extractText(message)).toBe(prefix + "\n\nOriginal text");
+  expect(displayed(message)).toBe(prefix + "\n\nOriginal text");
 });
 
 it("does not hide security framing in tool output", () => {

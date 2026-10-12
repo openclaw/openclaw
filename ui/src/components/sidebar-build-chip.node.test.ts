@@ -30,6 +30,11 @@ describe("formatSidebarBuildSubtitle branch truncation", () => {
     expected: string | null;
   }> = [
     {
+      name: "long branch keeps an emoji that fits exactly at the boundary",
+      info: buildInfo({ branch: `${"a".repeat(12)}😀suffix` }),
+      expected: "aaaaaaaaaaaa😀…@e8cbc62",
+    },
+    {
       name: "long branch does not split an emoji across the boundary",
       info: buildInfo({ branch: `${"a".repeat(13)}😀suffix` }),
       expected: "aaaaaaaaaaaaa…@e8cbc62",
@@ -44,6 +49,10 @@ describe("formatSidebarBuildSubtitle branch truncation", () => {
 });
 
 describe("formatSettingsBuildLabel", () => {
+  it("keeps official release artifacts version-only", () => {
+    expect(formatSettingsBuildLabel(buildInfo({ release: true }), "2026.7.9")).toBe("2026.7.10");
+  });
+
   it("adds branch and dirty provenance for development builds", () => {
     expect(formatSettingsBuildLabel(buildInfo({ branch: "feat/x", dirty: true }), "2026.7.9")).toBe(
       "2026.7.10 · feat/x@e8cbc62*",
@@ -57,6 +66,12 @@ describe("formatSettingsBuildLabel", () => {
         "2026.7.9",
       ),
     ).toBe("2026.7.9");
+  });
+
+  it("keeps detached clean source builds distinguishable from releases", () => {
+    expect(formatSettingsBuildLabel(buildInfo({ branch: null, dirty: false }), "2026.7.9")).toBe(
+      "2026.7.10 · git@e8cbc62",
+    );
   });
 });
 
@@ -80,6 +95,10 @@ describe("formatSidebarBuildSubtitle", () => {
     expect(
       formatSidebarBuildSubtitle(buildInfo({ branch: "feat/x", dirty: true, commitAt: BUILT_AT })),
     ).toBe("feat/x@e8cbc62* · 4h ago");
+  });
+
+  it.each([null, "not-a-timestamp"])("keeps the Git identity when commitAt is %s", (commitAt) => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ commitAt }))).toBe("git@e8cbc62");
   });
 
   it("suppresses build identity when the commit is missing", () => {

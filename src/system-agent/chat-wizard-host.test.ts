@@ -100,6 +100,45 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(runs).toEqual(["pair", ["alerts", "logs"]]);
   });
 
+  it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.note("Before entering the token, open the provider console.");
+        await prompter.text({ message: "Bot token", sensitive: true });
+      },
+    });
+
+    const tokenStep = await engine.handle("connect telegram");
+
+    expect(tokenStep.text).toContain("Before entering the token");
+    expect(tokenStep.text).toContain("Bot token");
+    expect(tokenStep.sensitive).toBe(true);
+    expect(tokenStep.wizardInputPending).toBe(true);
+  });
+
+  it("marks a non-card hosted-wizard step as pending input", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot label" });
+      },
+    });
+
+    const textStep = await engine.handle("connect telegram");
+
+    expect(textStep.text).toContain("Bot label");
+    expect(textStep.question).toBeUndefined();
+    expect(textStep.sensitive).toBeUndefined();
+    expect(textStep.wizardInputPending).toBe(true);
+  });
+
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
@@ -238,6 +277,41 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(countCancelHints(done.text)).toBe(0);
   });
 
+  it("drops the cancel hint from the cancellation message", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect discord");
+    expect(countCancelHints(prompt.text)).toBe(1);
+
+    const cancelled = await engine.handle("cancel");
+    expect(cancelled.text).toContain("cancelled");
+    expect(countCancelHints(cancelled.text)).toBe(0);
+  });
+
+  it("cancels a hosted wizard mid-flight", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const tokenStep = await engine.handle("connect discord");
+    expect(tokenStep.text).toContain("Bot token");
+
+    const cancelled = await engine.handle("cancel");
+    expect(cancelled.text).toContain("cancelled");
+  });
+
   it("voids a stale host proposal before an exact wizard, including cancellation", async () => {
     const runConfigSet = vi.fn(async () => {});
     const runAgentTurn = vi.fn(async (params: { approvalArmed: boolean }) => ({
@@ -324,6 +398,28 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(plain.step?.initialValue).toBe("123456:REAL-SECRET");
   });
 
+  it("omits the wizard step outside an awaiting hosted wizard", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => ({ text: "*click* Everything looks healthy." }),
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const ordinary = await engine.handle("how is my setup looking?");
+    expect(ordinary.step).toBeUndefined();
+
+    const awaiting = await engine.handle("connect telegram");
+    expect(awaiting.step?.type).toBe("text");
+
+    const done = await engine.handle("123:abc");
+    expect(done.text).toContain("telegram is configured");
+    expect(done.step).toBeUndefined();
+  });
+
   it("submits a typed answer directly and records the server-owned option label", async () => {
     useTempStateDir();
     let selected: unknown;
@@ -348,6 +444,27 @@ describe("SystemAgentChatEngine wizard", () => {
 
     expect(selected).toBe("beta");
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
+  });
+
+  it("cancels the current hosted wizard through a typed direct action", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const stepId = expectDefined(prompt.step?.id, "expected an active wizard step");
+    const cancelled = await engine.cancelWizard({ stepId });
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+    expect(cancelled.wizardInputPending).toBeUndefined();
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
   });
 
   it("cancels the local hosted wizard after its inference binding drifts", async () => {
@@ -452,5 +569,29 @@ describe("SystemAgentChatEngine wizard", () => {
 
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "<redacted secret>" });
     expect(JSON.stringify(engine.historySince(0))).not.toContain("raw-secret-value");
+  });
+
+  it("keeps the numbered text grammar for text-only wizard clients", async () => {
+    useTempStateDir();
+    let selected: unknown;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        selected = await prompter.select({
+          message: "Choose one",
+          options: [
+            { value: "alpha", label: "Alpha" },
+            { value: "beta", label: "Beta" },
+          ],
+        });
+      },
+    });
+
+    await engine.handle("connect telegram");
+    await engine.handle("2");
+
+    expect(selected).toBe("beta");
   });
 });

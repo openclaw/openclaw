@@ -3,12 +3,24 @@ import { describe, expect, it } from "vitest";
 import { isApprovalNotFoundError, isApprovalStaleError } from "./approval-errors.js";
 
 describe("isApprovalNotFoundError", () => {
+  it("matches direct approval-not-found gateway codes", () => {
+    const err = Object.assign(new Error("approval not found"), {
+      gatewayCode: "APPROVAL_NOT_FOUND",
+    });
+    expect(isApprovalNotFoundError(err)).toBe(true);
+  });
+
   it("matches structured invalid-request approval-not-found details", () => {
     const err = Object.assign(new Error("approval not found"), {
       gatewayCode: "INVALID_REQUEST",
       details: { reason: "APPROVAL_NOT_FOUND" },
     });
     expect(isApprovalNotFoundError(err)).toBe(true);
+  });
+
+  it("matches legacy message-only not-found errors", () => {
+    expect(isApprovalNotFoundError(new Error("unknown or expired approval id"))).toBe(true);
+    expect(isApprovalNotFoundError(new Error("approval expired or not found"))).toBe(true);
   });
 
   it("ignores unrelated errors", () => {

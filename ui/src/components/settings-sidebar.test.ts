@@ -88,6 +88,63 @@ describe("settings sidebar search", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
+  it("keeps Models selected while its setup flow is open", () => {
+    render(
+      renderSettingsSidebar({
+        ...sidebarAgentProps(),
+        basePath: "",
+        activeRouteId: "model-setup",
+        connectionStatus: null,
+        lastError: null,
+        gatewayVersion: "",
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const active = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/settings/model-providers"]',
+    );
+    expect(active?.classList.contains("settings-sidebar__item--active")).toBe(true);
+    expect(active?.getAttribute("aria-current")).toBe("page");
+    expect(active?.textContent?.trim()).toBe("Models");
+  });
+
+  it("links Ask OpenClaw to the shared custodian route", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        ...sidebarAgentProps(),
+        basePath: "",
+        activeRouteId: "appearance",
+        connectionStatus: null,
+        lastError: null,
+        gatewayVersion: "",
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/custodian"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Ask OpenClaw");
+    link?.click();
+    expect(onNavigate).toHaveBeenCalledWith("custodian");
+  });
+
   it("does not match the middle of a word for a short query", () => {
     render(
       renderSettingsSidebar({
@@ -176,6 +233,79 @@ describe("settings sidebar search", () => {
       search: "?section=__appearance__",
       hash: "#settings-language",
     });
+  });
+
+  it("keeps a precise block result when its owning page also matches", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        ...sidebarAgentProps(),
+        basePath: "",
+        activeRouteId: "appearance",
+        connectionStatus: null,
+        lastError: null,
+        gatewayVersion: "",
+        searchQuery: "infrastructure",
+        searchBlockMatches: [
+          {
+            routeId: "infrastructure",
+            label: "Browser",
+            search: "?section=browser",
+            hash: "#config-section-browser",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const resultLabels = [
+      ...container.querySelectorAll(
+        ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+      ),
+    ].map((item) => item.textContent?.trim());
+    expect(resultLabels).toEqual(["Infrastructure", "Browser"]);
+
+    container
+      .querySelector<HTMLAnchorElement>(
+        '.settings-sidebar__subitem[href="/settings/infrastructure?section=browser#config-section-browser"]',
+      )
+      ?.click();
+    expect(onNavigate).toHaveBeenCalledWith("infrastructure", {
+      search: "?section=browser",
+      hash: "#config-section-browser",
+    });
+  });
+
+  it("finds Agent Defaults by page name after its sidebar demotion", () => {
+    render(
+      renderSettingsSidebar({
+        ...sidebarAgentProps(),
+        basePath: "",
+        activeRouteId: "agents",
+        connectionStatus: null,
+        lastError: null,
+        gatewayVersion: "",
+        searchQuery: "agent defaults",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const result = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__item[href="/settings/ai-agents"]',
+    );
+    expect(result?.textContent?.trim()).toBe("Agent Defaults");
   });
 
   it("excludes admin-only pages and config blocks from non-admin search", () => {
@@ -417,7 +547,7 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it.each(["sidebar", "embed-list"] as const)(
+  it.each(["sidebar", "embed-list", "embed-page"] as const)(
     "keeps connection recovery separate from delivery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
@@ -508,7 +638,7 @@ describe("Settings agent selector", () => {
     return props;
   };
 
-  it.each(["sidebar"] as const)(
+  it.each(["sidebar", "embed-list", "embed-page"] as const)(
     "uses the shared selection in the %s presentation",
     async (presentation) => {
       const props = renderSidebar({ presentation });
@@ -525,7 +655,7 @@ describe("Settings agent selector", () => {
     },
   );
 
-  it.each([0])(
+  it.each([0, 1])(
     "keeps a disabled shared selector visible with %i selectable agents",
     async (count) => {
       renderSidebar({

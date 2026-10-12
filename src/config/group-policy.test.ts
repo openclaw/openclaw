@@ -13,6 +13,28 @@ import {
 } from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
+  it("allows configured groups when groupPolicy=allowlist", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "123@g.us": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
   it("blocks all groups when groupPolicy=disabled", () => {
     const cfg = {
       channels: {
@@ -99,6 +121,34 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(false);
   });
 
+  it("can default explicitly configured groups to no mention for channels that opt in", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "123@g.us": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "whatsapp",
+        groupId: "123@g.us",
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "whatsapp",
+        groupId: "123@g.us",
+        configuredGroupDefaultsToNoMention: true,
+      }),
+    ).toBe(false);
+  });
+
   it("falls back to root channel groups when account.groups is an empty object (regression: #79427)", () => {
     const cfg = {
       channels: {
@@ -164,10 +214,17 @@ describe("resolveChannelGroupPolicy", () => {
 
 describe("resolveChannelGroupsConfigPath", () => {
   it.each([
+    { name: "inherited root", accountId: "work", accountKey: "Work", override: false },
     {
       name: "normalized account override",
       accountId: " WORK ",
       accountKey: "Work",
+      override: true,
+    },
+    {
+      name: "explicit default account",
+      accountId: "default",
+      accountKey: "default",
       override: true,
     },
   ])(
@@ -227,6 +284,7 @@ describe("resolveChannelGroupsConfigPath", () => {
   );
 
   it.each([
+    { name: "shared single-account inheritance", shallow: false, multiple: false, scope: "root" },
     { name: "shared multi-account override", shallow: false, multiple: true, scope: "account" },
     { name: "plugin-owned shallow override", shallow: true, multiple: false, scope: "account" },
   ])("honors $name for an empty map", ({ shallow, multiple, scope }) => {
@@ -247,7 +305,11 @@ describe("resolveChannelGroupsConfigPath", () => {
     ).toBe(scope === "root" ? "channels.line.groups" : 'channels.line.accounts["Work"].groups');
   });
 
-  it.each([{ accountId: "missing", expected: "channels.signal.groups" }])(
+  it.each([
+    { accountId: "work", expected: 'channels.signal.accounts["Work"].groups' },
+    { accountId: "default", expected: 'channels.signal.accounts["default"].groups' },
+    { accountId: "missing", expected: "channels.signal.groups" },
+  ])(
     "locates a new map for $accountId without inventing a fallback account",
     ({ accountId, expected }) => {
       const cfg = {
@@ -276,6 +338,32 @@ describe("resolveChannelGroupsConfigPath", () => {
 });
 
 describe("resolveToolsBySender", () => {
+  it("matches typed sender IDs", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "id:user:alice": { allow: ["exec"] },
+          "*": { deny: ["exec"] },
+        },
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+  });
+
+  it("matches channel-scoped sender IDs through canonical channel aliases", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "channel:msteams:user:alice": { allow: ["exec"] },
+          "id:user:alice": { deny: ["exec"] },
+          "*": { deny: ["write"] },
+        },
+        messageProvider: "teams",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+  });
+
   it("does not allow senderName collisions to match id keys", () => {
     const victimId = "f4ce8a7d-1111-2222-3333-444455556666";
     expect(
@@ -300,7 +388,7 @@ describe("resolveToolsBySender", () => {
     ).toThrow('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
   });
 
-  it.each(["channel:matrix:alice:example.invalid"])(
+  it.each(["id:alice:example.invalid", "channel:matrix:alice:example.invalid"])(
     "preserves incoming sender-ID alternatives for %s",
     (key) => {
       expect(

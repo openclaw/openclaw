@@ -245,7 +245,7 @@ it("keeps protected credentials through a fresh setup read and verified-route re
   expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).toBeNull();
 });
 
-it.each([" Fixture "])(
+it.each(["fixture", "Fixture", " Fixture "])(
   "keeps a staged replacement credential authoritative for %s",
   async (providerKey) => {
     const sourceConfig = (await readSnapshot()).sourceConfig;
@@ -311,6 +311,12 @@ it.each([" Fixture "])(
 );
 
 it.each([
+  {
+    label: "protected key",
+    entrypoint: "verify",
+    rotateBeforeBinding: false,
+    alternateProfile: false,
+  },
   {
     label: "key rotated during probe",
     entrypoint: "verify",
@@ -503,7 +509,9 @@ it.each([
 );
 
 it.each([
+  { field: "destination", saved: false },
   { field: "destination", saved: true },
+  { field: "reference", saved: false },
   { field: "reference", saved: true },
 ])(
   "does not lend the active key after changing $field (saved: $saved)",

@@ -104,25 +104,46 @@ describe("resolveApprovalOverGateway", () => {
       decision: "deny",
       reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
     });
+  });
+
+  it.each([
+    { channel: "telegram", accountId: "ops" },
+    { channel: "telegram", senderId: "owner" },
+    { accountId: "ops", senderId: "owner" },
+  ])("rejects partial reviewer identity: %j", async (reviewer) => {
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        ...reviewer,
+      }),
+    ).rejects.toThrow("channel approval resolution requires channel, account, and sender identity");
+    expect(hoisted.clientRequest).not.toHaveBeenCalled();
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
-  it.each([{ channel: "telegram", accountId: "ops" }])(
-    "rejects partial reviewer identity: %j",
-    async (reviewer) => {
-      await expect(
-        resolveApprovalOverGateway({
-          cfg: {} as never,
-          approvalId: "approval-1",
-          approvalKind: "exec",
-          decision: "deny",
-          ...reviewer,
-        }),
-      ).rejects.toThrow(
-        "channel approval resolution requires channel, account, and sender identity",
+  it.each([["googlechat", "Google Chat"]] as const)(
+    "derives the %s approval client label from channel metadata",
+    async (channel, label) => {
+      await resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        channel,
+        accountId: "default",
+        senderId: "owner",
+      });
+
+      const [gatewayClientOptions] = expectDefined(
+        hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+        "gateway client call",
       );
-      expect(hoisted.clientRequest).not.toHaveBeenCalled();
-      expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+      expect(gatewayClientOptions).toMatchObject({
+        clientDisplayName: `${label} approval (owner)`,
+      });
     },
   );
 
@@ -144,6 +165,73 @@ describe("resolveApprovalOverGateway", () => {
     expect(gatewayClientOptions).toMatchObject({
       clientDisplayName: "external-chat approval (owner)",
     });
+  });
+
+  it("uses explicit plugin kind without inspecting the approval id", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "opaque-approval-id",
+      approvalKind: "plugin",
+      decision: "deny",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("approval.resolve", {
+      id: "opaque-approval-id",
+      kind: "plugin",
+      decision: "deny",
+    });
+  });
+
+  it("uses the channel task's owning Gateway principal without opening a client", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    const result = await withGatewayNativeApprovalRuntime(
+      {
+        request: request as GatewayNativeApprovalRuntime["request"],
+        requestRoute: vi.fn(),
+        routeCoordinator: {} as never,
+        subscribe: vi.fn(),
+      },
+      async () =>
+        await resolveApprovalOverGateway({
+          cfg: {} as never,
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+        }),
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      {
+        id: "approval-1",
+        kind: "exec",
+        decision: "deny",
+      },
+      { clientDisplayName: "Approval (unknown)" },
+    );
+    expect(result).toEqual({ applied: true, approval: recordedApproval });
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+  });
+
+  it("uses an explicitly injected channel approval runtime", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        gatewayRuntime: { request },
+      }),
+    ).resolves.toEqual({ applied: true, approval: recordedApproval });
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      { id: "approval-1", kind: "exec", decision: "deny" },
+      { clientDisplayName: "Approval (unknown)" },
+    );
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
   it("sends channel custody to an injected canonical runtime", async () => {
@@ -187,6 +275,38 @@ describe("resolveApprovalOverGateway", () => {
     expect(scopedRequest).not.toHaveBeenCalled();
   });
 
+  it("preserves protocol-valid boundary whitespace in canonical approval ids", async () => {
+    const approvalId = "\uFEFF";
+
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId,
+      approvalKind: "exec",
+      decision: "deny",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("approval.resolve", {
+      id: approvalId,
+      kind: "exec",
+      decision: "deny",
+    });
+  });
+
+  it("returns the canonical winner when another surface resolved first", async () => {
+    hoisted.clientRequest.mockResolvedValueOnce({
+      applied: false,
+      approval: recordedApproval,
+    });
+
+    const result = await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    expect(result).toEqual({ applied: false, approval: recordedApproval });
+  });
+
   it("propagates canonical resolve failures without fallback routing", async () => {
     hoisted.clientRequest.mockRejectedValueOnce(new Error("permission denied"));
 
@@ -217,6 +337,21 @@ describe("resolveApprovalOverGateway", () => {
     expect(result).toBeUndefined();
   });
 
+  it("routes an explicit exec legacy method without fallback", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "plugin:opaque-id",
+      decision: "allow-always",
+      resolveMethod: "exec",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "plugin:opaque-id",
+      decision: "allow-always",
+    });
+  });
+
   it("preserves shipped no-kind exec routing and void output", async () => {
     const result = await resolveApprovalOverGateway({
       cfg: {} as never,
@@ -229,6 +364,19 @@ describe("resolveApprovalOverGateway", () => {
       decision: "deny",
     });
     expect(result).toBeUndefined();
+  });
+
+  it("preserves shipped plugin-prefix routing for no-kind callers", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "plugin:approval-1",
+      decision: "allow-once",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "plugin:approval-1",
+      decision: "allow-once",
+    });
   });
 
   it("preserves shipped not-found plugin fallback for no-kind callers", async () => {
@@ -265,11 +413,20 @@ describe("resolveApprovalOverGateway", () => {
   });
 
   it.each([
+    { approvalId: "approval-1", approvalKind: "bogus", decision: "deny" },
     { approvalId: "approval-1", resolveMethod: "bogus", decision: "deny" },
+    { approvalId: "approval-1", allowPluginFallback: "yes", decision: "deny" },
+    { approvalId: "approval-1", gatewayRuntime: { request: vi.fn() }, decision: "deny" },
     {
       approvalId: "approval-1",
       approvalKind: "exec",
       resolveMethod: "plugin",
+      decision: "deny",
+    },
+    {
+      approvalId: "approval-1",
+      approvalKind: "exec",
+      allowPluginFallback: false,
       decision: "deny",
     },
   ])("rejects malformed routing before opening a gateway client", async (input) => {
@@ -280,6 +437,10 @@ describe("resolveApprovalOverGateway", () => {
   });
 
   it.each([
+    { approvalId: "", approvalKind: "exec", decision: "deny" },
+    { approvalId: ".", approvalKind: "exec", decision: "deny" },
+    { approvalId: "..", approvalKind: "exec", decision: "deny" },
+    { approvalId: "approval-\uD800", approvalKind: "exec", decision: "deny" },
     { approvalId: "approval-\uDC00", approvalKind: "exec", decision: "deny" },
     { approvalId: "approval-1", approvalKind: "exec", decision: "accept" },
   ])("rejects malformed approval input before opening a gateway client", async (input) => {

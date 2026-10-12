@@ -338,6 +338,15 @@ describe("runSetupModelAuthStep", () => {
     );
   });
 
+  it("still fails loudly when the auth choice came from a flag", async () => {
+    applyAuthChoice.mockRejectedValueOnce(
+      new Error("Claude CLI is not authenticated on this host."),
+    );
+    await expect(runStep({ opts: { authChoice: "anthropic-cli" } })).rejects.toThrow(
+      "Claude CLI is not authenticated",
+    );
+  });
+
   it("propagates wizard cancellation from provider setup", async () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
     applyAuthChoice.mockRejectedValueOnce(new WizardCancelledError());

@@ -161,7 +161,7 @@ describe("Chrome CDP diagnostic transport", () => {
     }
   });
 
-  it.each<ProbePhase>(["http", "handshake"])(
+  it.each<ProbePhase>(["http", "handshake", "command"])(
     "cancels an in-flight %s probe without fallback or leftover sockets",
     async (phase) => {
       const fixture = await startCdpFixture({ hold: phase });

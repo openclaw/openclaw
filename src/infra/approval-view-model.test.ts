@@ -119,6 +119,13 @@ describe("buildPendingApprovalView", () => {
 
   it.each([
     { request: { ...approvalRequestBase, request: { command: "echo safe" } }, metadata: [] },
+    {
+      request: {
+        ...approvalRequestBase,
+        request: { title: "Use protected tool", description: "The plugin needs consent." },
+      },
+      metadata: [{ label: "Severity", value: "Warning" }],
+    },
   ])("preserves existing metadata when no approval scope is declared", ({ request, metadata }) => {
     const view = buildPendingApprovalView(request);
 
@@ -171,10 +178,10 @@ describe("buildPendingApprovalView", () => {
     ]);
   });
 
-  it.each([{ request: { command: "echo hi", title: "Ambiguous", description: "Ambiguous" } }])(
-    "rejects a request payload without exactly one owner: %j",
-    (request) => {
-      expect(() => resolveApprovalRequestKind(request)).toThrow("exactly one owner");
-    },
-  );
+  it.each([
+    { request: {} },
+    { request: { command: "echo hi", title: "Ambiguous", description: "Ambiguous" } },
+  ])("rejects a request payload without exactly one owner: %j", (request) => {
+    expect(() => resolveApprovalRequestKind(request)).toThrow("exactly one owner");
+  });
 });

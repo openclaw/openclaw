@@ -54,6 +54,15 @@ describe("createSystemAgentTool.execute config writes", () => {
 describe("executeSystemAgentOperation approved config writes", () => {
   it.each([
     {
+      configKey: "agents.defaults.models.fixture/primary.agentRuntime.id",
+      value: "openclaw",
+      saved: {
+        agents: {
+          defaults: { models: { "fixture/primary": { agentRuntime: { id: "openclaw" } } } },
+        },
+      },
+    },
+    {
       configKey: "tools.exec.notifyOnExit",
       value: "false",
       saved: { tools: { exec: { notifyOnExit: false } } },
@@ -81,6 +90,23 @@ describe("executeSystemAgentOperation approved config writes", () => {
       expect(lines).toContain("[openclaw] done: config.set");
     },
   );
+
+  it("captures the real schema error and leaves the file unchanged", async () => {
+    const raw = JSON.stringify({ gateway: { port: 18789 } });
+    const configPath = await prepareConfig(raw);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "config-set", path: "gateway.port", value: "banana" },
+        runtime,
+        { approved: true },
+      ),
+    ).rejects.toBeInstanceOf(SystemAgentOperationExitError);
+    expect(lines.join("\n")).toContain(
+      "gateway.port: Invalid input: expected number, received string",
+    );
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+  });
 
   it("keeps the writer's authority check after config validation", async () => {
     const configPath = await prepareConfig();
@@ -206,7 +232,7 @@ describe("chat secret config-write recovery", () => {
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
   });
 
-  it.each(["retained", "restored", "shared", "failed-read"] as const)(
+  it.each(["retained", "restored", "shared", "invalid-read", "failed-read"] as const)(
     "reconciles %s state after a real postcommit refresh fault",
     async (state) => {
       const configPath = await prepareSecretConfig();
@@ -224,7 +250,10 @@ describe("chat secret config-write recovery", () => {
               concurrent.gateway.remote = { token: concurrent.gateway.auth?.token };
               delete concurrent.gateway.auth?.token;
             }
-            await fs.writeFile(configPath, JSON.stringify(concurrent));
+            await fs.writeFile(
+              configPath,
+              state === "invalid-read" ? "{" : JSON.stringify(concurrent),
+            );
           }
           if (state === "failed-read") {
             vi.spyOn(configRuntime, "readConfigFileSnapshot").mockRejectedValueOnce(
@@ -240,7 +269,7 @@ describe("chat secret config-write recovery", () => {
       expect(failure.cause).toMatchObject({
         rollbackStatus: state === "restored" ? "restored" : "not-restored",
       });
-      if (state === "failed-read") {
+      if (state === "invalid-read" || state === "failed-read") {
         expect(failure.message).toContain("Could not establish whether");
         expect(failure.message).not.toContain("did not reference");
       } else if (state === "retained") {
@@ -250,15 +279,17 @@ describe("chat secret config-write recovery", () => {
         expect(failure.message).toContain("gateway.auth.token did not reference the saved entry");
       }
       expect(failure.message).toContain("other config keys or auth profiles may use it");
-      const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      const ref = { source: "store", provider: "default", id: name };
-      if (state === "shared") {
-        expect(saved.gateway?.remote?.token).toEqual(ref);
-        expect(saved.gateway?.auth?.token).toBeUndefined();
-      } else if (state === "restored") {
-        expect(saved.gateway?.auth?.token).toBeUndefined();
-      } else {
-        expect(saved.gateway?.auth?.token).toEqual(ref);
+      if (state !== "invalid-read") {
+        const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        const ref = { source: "store", provider: "default", id: name };
+        if (state === "shared") {
+          expect(saved.gateway?.remote?.token).toEqual(ref);
+          expect(saved.gateway?.auth?.token).toBeUndefined();
+        } else if (state === "restored") {
+          expect(saved.gateway?.auth?.token).toBeUndefined();
+        } else {
+          expect(saved.gateway?.auth?.token).toEqual(ref);
+        }
       }
     },
   );

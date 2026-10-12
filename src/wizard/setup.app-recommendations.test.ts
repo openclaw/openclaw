@@ -299,20 +299,20 @@ describe("setupAppRecommendations", () => {
     });
   });
 
-  it.each([[{ wizard: { appRecommendations: false } }, "darwin" as const]])(
-    "skips when gated",
-    async (config, platform) => {
-      const recommend = vi.fn(async () => recommendationResult());
-      const store = storeDeps();
-      await setupAppRecommendations({
-        config,
-        platform,
-        deps: { recommend, ...store },
-      });
-      expect(recommend).not.toHaveBeenCalled();
-      expect(store.readStored).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    [{ wizard: { appRecommendations: false } }, "darwin" as const],
+    [{}, "linux" as const],
+  ])("skips when gated", async (config, platform) => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const store = storeDeps();
+    await setupAppRecommendations({
+      config,
+      platform,
+      deps: { recommend, ...store },
+    });
+    expect(recommend).not.toHaveBeenCalled();
+    expect(store.readStored).not.toHaveBeenCalled();
+  });
 
   it("short-circuits before scanning when the offer was already answered", async () => {
     const recommend = vi.fn(async () => recommendationResult());

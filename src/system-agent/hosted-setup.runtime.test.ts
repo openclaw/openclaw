@@ -916,4 +916,48 @@ describe("hosted channel post-write hooks", () => {
       resolveMetadata.mockRestore();
     }
   });
+
+  it("runs collected channel hooks after writing config", async () => {
+    const hook = { channel: "matrix", accountId: "default", run: vi.fn() };
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "hook-base-hash",
+      config: {},
+      sourceConfig: {},
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        _config: OpenClawConfig,
+        _runtime: unknown,
+        _prompter: WizardPrompter,
+        options: { onPostWriteHook?: (value: typeof hook) => void },
+      ) => {
+        options.onPostWriteHook?.(hook);
+        return { channels: { matrix: { enabled: true } } };
+      },
+    );
+    const committed = { channels: { matrix: { enabled: true, committed: true } } };
+    mocks.writeWizardConfigFile.mockResolvedValue(hostedConfigFiles.write(committed));
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("connect matrix");
+
+    expect(reply.text).toContain("matrix is configured");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      { channels: { matrix: { enabled: true } } },
+      { allowConfigSizeDrop: false, baseHash: "hook-base-hash" },
+    );
+    expect(hook.run).toHaveBeenCalledWith({
+      cfg: committed,
+      runtime: expect.any(Object),
+    });
+    expect(mocks.writeWizardConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      hook.run.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
 });

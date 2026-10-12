@@ -60,6 +60,18 @@ function present(messages: unknown[], state = presentationState()) {
   });
 }
 
+it("retires old reminders after a later run completes and reconstructs that outcome after reload", () => {
+  const old = question("old", "run-1");
+  const latest = question("latest", "run-2");
+  expect(present([old, terminal("run-1")]).pending.map((entry) => entry.itemId)).toEqual(["old"]);
+  const messages = [old, terminal("run-1"), latest, terminal("run-2")];
+  for (const state of [presentationState(), presentationState()]) {
+    const presentation = present(messages, state);
+    expect(presentation.pending.map((entry) => entry.itemId)).toEqual(["latest"]);
+    expect([...presentation.archived.keys()]).toEqual(["old"]);
+  }
+});
+
 it("retires a recovered run's older reminder without treating restart input as a human answer", () => {
   const recovery = {
     role: "user",
@@ -101,14 +113,30 @@ it("waits for recorded origin settlement before treating another run as a succes
 });
 
 it.each([
+  { stopReason: "error" },
+  { stopReason: "toolUse" },
+  { phase: "commentary" },
   { openclawAbort: { aborted: true } },
   { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
+  {
+    openclawStreamFallback: { source: "segment", itemId: "streaming", replacementText: "Working" },
+  },
   { __openclaw: { mirrorOrigin: "codex-app-server" } },
 ])("does not retire reminders on an unsuccessful or nonterminal reply: %j", (overrides) => {
   expect(
     present([question("old", "run-1"), terminal("run-1"), { ...terminal("run-2"), ...overrides }])
       .pending,
   ).toHaveLength(1);
+});
+
+it("does not mistake an async final-answer item for a later run completion", () => {
+  expect(
+    present([
+      question("old", "run-1"),
+      terminal("run-1"),
+      { ...question("new", "run-2"), __openclaw: { runTerminal: true } },
+    ]).pending,
+  ).toHaveLength(2);
 });
 
 it("requires a completed later human turn when old questions lack run identity", () => {
@@ -321,6 +349,12 @@ it.each(["answered", "failed"] as const)(
   },
 );
 
+it("does not retire reminders on an aborted live terminal projection", () => {
+  const aborted = terminal("run-2");
+  rememberLiveTerminalRun(aborted, "run-2", "aborted");
+  expect(present([question("old", "run-1"), terminal("run-1"), aborted]).pending).toHaveLength(1);
+});
+
 it("reconsiders reminders when a message-less terminal settles a published partial", () => {
   const partial = { role: "assistant", runId: "run-1", content: "Partial work" };
   const messages = [question("old", "run-1"), partial, terminal("run-2")];
@@ -353,12 +387,42 @@ function historyPresentation(messages: unknown[], connectionEpoch = 1) {
   );
 }
 
+it("keeps a persisted answer resolved across remount and reconnect and displays the answer", () => {
+  for (const epoch of [1, 2]) {
+    const presentation = historyPresentation([historicalQuestion(), historicalAnswer], epoch);
+    expect(presentation.pending).toEqual([]);
+    render(
+      renderAsyncQuestionSummary(historicalQuestion().openclawAsyncDelivery, presentation),
+      container,
+    );
+    expect(container.textContent).toContain("Everyone");
+  }
+});
+
 it.each([
   { role: "user", content: historicalAnswer.content },
+  { ...historicalAnswer, content: "Everyone" },
   { ...historicalAnswer, provenance: { kind: "internal_system" } },
   { ...historicalAnswer, content: "> Which audience?\n\n" },
 ])("does not treat an unsaved or unrelated reply as an answer: %j", (reply) => {
   expect(historyPresentation([historicalQuestion(), reply]).pending).toHaveLength(1);
+});
+
+it("keeps a new same-title question pending after an earlier question was answered", () => {
+  expect(
+    historyPresentation([
+      historicalQuestion(),
+      historicalAnswer,
+      historicalQuestion("new-question"),
+    ]).pending.map((entry) => entry.itemId),
+  ).toEqual(["new-question"]);
+});
+
+it("does not guess which duplicate question an ambiguous answer belongs to", () => {
+  expect(
+    historyPresentation([historicalQuestion(), historicalQuestion("duplicate"), historicalAnswer])
+      .pending,
+  ).toHaveLength(2);
 });
 
 it("does not retain derived completion after authoritative history replaces the answer", () => {
@@ -414,6 +478,7 @@ it("restores every answer in a multi-question submission with UTF-8-bounded quot
 
 it.each([
   { replyToId: undefined, edited: false, confirmed: false },
+  { replyToId: "question-source", edited: false, confirmed: true },
   { replyToId: "question-source", edited: true, confirmed: true },
 ])(
   "confirms unparsed saved answers only by their canonical reply: %j",
@@ -523,6 +588,50 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   expect(container.textContent).toContain("Answer sent");
   expect(container.textContent).toContain("Everyone");
   expect(container.textContent).not.toContain("A newer draft");
+});
+
+it.each(["old", "new"])(
+  "uses canonical reply identity for the %s repeated-title question",
+  (target) => {
+    const old = {
+      ...historicalQuestion("old"),
+      runId: "old-run",
+      __openclaw: { id: "old-source", seq: 1 },
+    };
+    const newest = {
+      ...historicalQuestion("new"),
+      runId: "new-run",
+      __openclaw: { id: "new-source", seq: 3 },
+    };
+    const answer = {
+      ...historicalAnswer,
+      __openclaw: { id: "saved-answer", seq: 5, replyToId: `${target}-source` },
+    };
+    const presentation = historyPresentation([
+      old,
+      terminal("old-run"),
+      newest,
+      terminal("new-run"),
+      answer,
+    ]);
+    expect([...presentation.resolved.keys()]).toEqual([target]);
+    expect(presentation.resolved.get(target)?.answers.get("0")?.selected).toEqual(
+      new Set(["Everyone"]),
+    );
+    // An archived older question remains a valid reply target; never prefer the newest title.
+    if (target === "old") {
+      expect(presentation.pending.map((entry) => entry.itemId)).toEqual(["new"]);
+    }
+  },
+);
+
+it("does not use quoted text to override a canonical reply to an unrelated message", () => {
+  const promptMessage = { ...historicalQuestion(), __openclaw: { id: "question-source", seq: 1 } };
+  const answer = {
+    ...historicalAnswer,
+    __openclaw: { id: "answer", seq: 2, replyToId: "unrelated-source" },
+  };
+  expect(historyPresentation([promptMessage, answer]).pending).toHaveLength(1);
 });
 
 it.each([

@@ -84,6 +84,14 @@ describe("isSystemAgentSensitiveConfigValue", () => {
       isSystemAgentSensitiveConfigValue('channels["modelByChannel.evil"].opaque', "channel-secret"),
     ).toBe(true);
   });
+
+  it.each([
+    ["channels.defaults.groupPolicy", '"open"'],
+    ["channels.modelByChannel.telegram.chat", '"openai/gpt-5.5"'],
+    ['channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"'],
+  ])("keeps kernel-owned channel config %s visible", (path, value) => {
+    expect(isSystemAgentSensitiveConfigValue(path, value)).toBe(false);
+  });
 });
 
 describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
@@ -95,16 +103,24 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     ).toBe(true);
   });
 
-  it.each(['hooks.entries.work["token=prod"]', 'talk.providers.openai["token=prod"]'])(
-    "preserves schema-valid dynamic path %s",
-    (path) => {
-      expect(isSystemAgentSensitiveConfigPathEmbedding(path)).toBe(false);
-    },
-  );
+  it.each([
+    "plugins.entries.codex.config.appServer.headers.Authorization",
+    'session.identityLinks["token=prod"]',
+    'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
+    'channels.buzz.groups["00000000-0000-4000-8000-000000000000"].enabled',
+    'hooks.entries.work["token=prod"]',
+    String.raw`hooks.entries.work.token\=prod`,
+    'talk.providers.openai["token=prod"]',
+    "hooks.mappings[0].agentId",
+  ])("preserves schema-valid dynamic path %s", (path) => {
+    expect(isSystemAgentSensitiveConfigPathEmbedding(path)).toBe(false);
+  });
 
   it.each([
     "channels.missing.opaque.abcDEF123",
     "plugins.entries.missing.config.opaque.abcDEF123",
+    "plugins.entries.codex.config.opaque=abcDEF123",
+    'channels.synology-chat["webhookUrl=abcDEF123"]',
     'plugins.entries.codex.config.appServer.headers["Authorization=Bearer-abc"]',
     'hooks.mappings["token=abcDEF123"].agentId',
     'channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled',
@@ -112,60 +128,73 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     expect(redactSystemAgentConfigPath(path)).toBe("<redacted path>");
   });
 
-  it("preserves a schema-valid modelByChannel path", () => {
-    const path = 'channels.modelByChannel["token=prod"].chat';
+  it.each([
+    'channels.synology-chat.accounts["prod=us"].enabled',
+    "plugins.entries.codex.config.appServer.headers.AuthorizationabcDEF123",
+    'plugins.entries.codex.config.appServer.headers["X-Test"]',
+    'channels.synology-chat.accounts["token=prod"].enabled',
+    'broadcast["token=prod"]',
+    'session.identityLinks["token=prod"]',
+    'channels.modelByChannel["token=prod"].chat',
+    'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
+  ])("preserves schema-valid path %s", (path) => {
     expect(redactSystemAgentConfigPath(path)).toBe(path);
   });
 });
 
 describe("redactSystemAgentConfig", () => {
-  it("redacts retained owner credentials across owner changes", () => {
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: ["core", "plus"].map((id) => ({
-        id,
-        origin: "config",
-        channels: ["proofchat"],
-        channelConfigs: {
-          proofchat: {
-            ...(id === "plus" ? { preferOver: ["core"] } : {}),
-            schema: {
-              type: "object",
-              properties: { core: { type: "string" }, plus: { type: "string" } },
+  it.each(["plus", "core"])(
+    "redacts retained owner credentials with %s selected first",
+    (first) => {
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: ["core", "plus"].map((id) => ({
+          id,
+          origin: "config",
+          channels: ["proofchat"],
+          channelConfigs: {
+            proofchat: {
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { core: { type: "string" }, plus: { type: "string" } },
+              },
+              uiHints: { [id]: { sensitive: true } },
             },
-            uiHints: { [id]: { sensitive: true } },
           },
-        },
-      })),
-    });
-    const preferred: OpenClawConfig = {
-      plugins: { entries: { plus: { enabled: true } } },
-      channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
-    };
-    const fallback: OpenClawConfig = {
-      plugins: { entries: { plus: { enabled: false }, core: { enabled: true } } },
-      channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
-    };
-    withPluginMetadataSnapshotScope(
-      snapshot,
-      () => {
-        for (const config of [preferred, fallback, preferred]) {
-          setRuntimeConfigSnapshot(config, config);
-          expect(redactSystemAgentConfigImpl(config, { config })).toMatchObject({
-            channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
-          });
-          for (const owner of ["core", "plus"]) {
-            expect(
-              isSystemAgentSensitiveConfigValueImpl(`channels.proofchat.${owner}`, "synthetic"),
-            ).toBe(true);
-            expect(redactSystemAgentConfigPathImpl(`channels.proofchat.${owner}.synthetic`)).toBe(
-              "<redacted path>",
-            );
+        })),
+      });
+      const preferred: OpenClawConfig = {
+        plugins: { entries: { plus: { enabled: true } } },
+        channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
+      };
+      const fallback: OpenClawConfig = {
+        plugins: { entries: { plus: { enabled: false }, core: { enabled: true } } },
+        channels: { proofchat: { plus: "synthetic-plus", core: "synthetic-core" } },
+      };
+      withPluginMetadataSnapshotScope(
+        snapshot,
+        () => {
+          const configs =
+            first === "plus" ? ([preferred, fallback] as const) : ([fallback, preferred] as const);
+          for (const config of [...configs, configs[0]]) {
+            setRuntimeConfigSnapshot(config, config);
+            expect(redactSystemAgentConfigImpl(config, { config })).toMatchObject({
+              channels: { proofchat: { plus: "<redacted>", core: "<redacted>" } },
+            });
+            for (const owner of ["core", "plus"]) {
+              expect(
+                isSystemAgentSensitiveConfigValueImpl(`channels.proofchat.${owner}`, "synthetic"),
+              ).toBe(true);
+              expect(redactSystemAgentConfigPathImpl(`channels.proofchat.${owner}.synthetic`)).toBe(
+                "<redacted path>",
+              );
+            }
           }
-        }
-      },
-      { config: preferred, compatibleConfigs: [preferred, fallback] },
-    );
-  });
+        },
+        { config: preferred, compatibleConfigs: [preferred, fallback] },
+      );
+    },
+  );
 
   it("fails closed for dynamic owner secrets when the exact config is invalid", () => {
     expect(

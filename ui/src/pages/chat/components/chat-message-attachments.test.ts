@@ -118,33 +118,38 @@ describe("attachment sidebar source ownership", () => {
     expect(onOpenSidebar).toHaveBeenCalledOnce();
   });
 
-  it.each([["photo.png", "application/octet-stream", `${window.location.origin}/download/opaque`]])(
-    "renders document-shaped %s attachments as expandable images",
-    (label, mimeType, source) => {
-      const container = document.body.appendChild(document.createElement("div"));
-      const onOpenImage = vi.fn();
-      render(
-        renderAssistantAttachments(
-          [
-            {
-              type: "attachment",
-              attachment: { kind: "document", label, mimeType, url: source },
-            },
-          ],
-          { onOpenImage },
-        ),
-        container,
-      );
+  it.each([
+    ["sample-image.png", "image/png", "https://example.com/sample-image.png"],
+    ["photo.png", "application/octet-stream", `${window.location.origin}/download/opaque`],
+    [
+      "photo",
+      "application/octet-stream; charset=binary",
+      `${window.location.origin}/download/photo.png`,
+    ],
+  ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenImage = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: { kind: "document", label, mimeType, url: source },
+          },
+        ],
+        { onOpenImage },
+      ),
+      container,
+    );
 
-      expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-      expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
-      container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-      expect(onOpenImage).toHaveBeenCalledWith(
-        expect.objectContaining({ src: source, title: label }),
-      );
-      container.remove();
-    },
-  );
+    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({ src: source, title: label }),
+    );
+    container.remove();
+  });
 
   it.each([
     { kind: "image", outcome: "offline" },
@@ -225,6 +230,56 @@ describe("attachment sidebar source ownership", () => {
       }
     },
   );
+
+  it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "vector.svg",
+              mimeType: "application/octet-stream",
+              url: "https://files.example/download/opaque",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-svg-attachment")).not.toBeNull();
+    expect(container.querySelector("img.chat-message-image")).toBeNull();
+    container.remove();
+  });
+
+  it("does not let an SVG-shaped label override a document MIME type", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "vector.svg",
+              mimeType: "application/pdf",
+              url: "https://files.example/document.pdf",
+            },
+          },
+        ],
+        {},
+      ),
+      container,
+    );
+
+    expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+    container.remove();
+  });
 
   it("loads SVG attachments through an image object URL", async () => {
     const intersectAttachment = stubAttachmentIntersection();
@@ -556,6 +611,39 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
+  it("keeps static attachment URLs as static sidebar sources", async () => {
+    const source = "https://example.com/clip.mp4";
+    const container = document.body.appendChild(document.createElement("div"));
+    let sidebarContent: AttachmentSidebarContent | undefined;
+    render(
+      renderAssistantAttachments([managedAttachment(source)], {}, (content) => {
+        if (content.kind === "attachment") {
+          sidebarContent = content;
+        }
+      }),
+      container,
+    );
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+
+    expect(sidebarContent?.src).toBe(source);
+    expect(sidebarContent?.resolveSource).toBeUndefined();
+    container.remove();
+  });
+
+  it("does not expose a Files action without a sidebar owner", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments([managedAttachment("https://example.com/asset.bin")], {}),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+    expect(
+      container.querySelector(".chat-assistant-attachment-card")?.hasAttribute("data-openable"),
+    ).toBe(false);
+    container.remove();
+  });
+
   it("prefixes managed attachment tickets with the Control UI resource base path", async () => {
     const attachmentId = crypto.randomUUID();
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
@@ -649,6 +737,7 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it.each([
+    ["audio", "recording.ogg", "audio/ogg", "openclaw-chat-audio-player", "transcode"],
     ["video", "demo.webm", "video/webm", "openclaw-chat-video-player", "transcode"],
   ] as const)(
     "renders %s attachment %s with inline playback",
@@ -677,27 +766,27 @@ describe("attachment sidebar source ownership", () => {
     },
   );
 
-  it.each([["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="]] as const)(
-    "blocks unsafe %s player source %s",
-    (kind, label, mimeType, url) => {
-      const container = document.body.appendChild(document.createElement("div"));
-      render(
-        renderAssistantAttachments(
-          [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
-          {},
-        ),
-        container,
-      );
+  it.each([
+    ["audio", "unsafe.mp3", "audio/mpeg", "javascript:alert(1)"],
+    ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
+  ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [{ type: "attachment", attachment: { kind, label, mimeType, url } }],
+        {},
+      ),
+      container,
+    );
 
-      expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
-      expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
-      expect(container.querySelector("audio, video")).toBeNull();
-      expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
-      expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
-      expect(container.textContent).toContain(label);
-      container.remove();
-    },
-  );
+    expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
+    expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
+    expect(container.querySelector("audio, video")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+    expect(container.textContent).toContain(label);
+    container.remove();
+  });
 
   it.each([
     {
@@ -756,6 +845,47 @@ describe("attachment sidebar source ownership", () => {
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
       ),
     ).toBeNull();
+    container.remove();
+  });
+
+  it("renders normalized base64 audio with inline playback and Files actions", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "audio",
+              label: "inline.wav",
+              mimeType: "audio/wav",
+              url: "data:audio/wav;base64,UklGRg==",
+            },
+          },
+        ],
+        {},
+        onOpenSidebar,
+      ),
+      container,
+    );
+
+    const player = container.querySelector("openclaw-chat-audio-player");
+    expect(player).toMatchObject({
+      label: "inline.wav",
+      mimeType: "audio/wav",
+      onExpand: expect.any(Function),
+      sourceIdentity: "data:audio/wav;base64,UklGRg==",
+      src: "data:audio/wav;base64,UklGRg==",
+    });
+    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
+    (player as HTMLElement & { onExpand: () => void }).onExpand();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachmentKind: "audio",
+        src: "data:audio/wav;base64,UklGRg==",
+      }),
+    );
     container.remove();
   });
 
