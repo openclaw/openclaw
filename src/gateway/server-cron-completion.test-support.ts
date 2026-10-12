@@ -21,18 +21,20 @@ export function registerGatewayCronCompletionTests<T extends { cron: GatewayCron
   cronScriptExecutorMock: Mock;
 }) {
   it.each(["command", "script"] as const)(
-    "preserves %s diagnostics when cross-agent delivery warns and the one-shot completes",
+    "preserves %s diagnostics when destination history warns and the one-shot completes",
     async (kind) => {
       const cfg = createCronConfig(`server-cron-${kind}-announcement-complete`);
-      cfg.agents = { entries: { main: {}, other: {} } };
       cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-      cfg.bindings = [
-        {
-          agentId: "other",
-          match: { channel: "telegram", peer: { kind: "direct", id: "123" } },
-        },
-      ];
       loadConfigMock.mockReturnValue(cfg);
+      const transcriptWarning =
+        "Conversation context skipped: the destination belongs to a different agent.";
+      sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
+        params.onTranscriptDiagnostic?.(transcriptWarning);
+        return {
+          status: "sent",
+          payloads: Array.isArray(params.payload) ? params.payload : [params.payload],
+        };
+      });
       if (kind === "script") {
         cronScriptExecutorMock.mockResolvedValueOnce({
           kind: "completed",
@@ -86,8 +88,7 @@ export function registerGatewayCronCompletionTests<T extends { cron: GatewayCron
               expect.objectContaining({
                 source: "delivery",
                 severity: "warn",
-                message:
-                  "Conversation context skipped: the destination belongs to a different agent.",
+                message: transcriptWarning,
               }),
             ]),
           },

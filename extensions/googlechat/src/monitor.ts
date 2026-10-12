@@ -41,6 +41,7 @@ import type {
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { rememberGoogleChatSpace, startGoogleChatSpaceCache } from "./space-cache.js";
 import { isGoogleChatGroupSpace } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 
@@ -75,6 +76,9 @@ async function processGoogleChatEvent(
   config: OpenClawConfig = target.config,
 ): Promise<void> {
   const eventType = event.type ?? event.eventType;
+  if (event.space) {
+    rememberGoogleChatSpace(target.account, event.space);
+  }
   if (eventType === "CARD_CLICKED") {
     await maybeHandleGoogleChatApprovalCardClick({ event, target });
     return;
@@ -441,6 +445,7 @@ export async function startGoogleChatMonitor(
   });
 
   const readConfig = createRuntimeConfigReader(options.config);
+  const stopSpaceCache = startGoogleChatSpaceCache(options.account);
   const ingress = createGoogleChatIngressMonitor({
     accountId: options.account.accountId,
     runtime: options.runtime,
@@ -467,13 +472,21 @@ export async function startGoogleChatMonitor(
     unregisterTarget = registerGoogleChatWebhookTarget(target);
     options.statusSink?.(channelReadyPatch());
   } catch (error) {
-    await ingress.stop();
+    try {
+      await ingress.stop();
+    } finally {
+      stopSpaceCache();
+    }
     throw error;
   }
 
   return async () => {
     unregisterTarget?.();
-    await ingress.stop();
+    try {
+      await ingress.stop();
+    } finally {
+      stopSpaceCache();
+    }
   };
 }
 

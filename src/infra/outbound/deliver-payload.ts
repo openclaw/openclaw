@@ -162,7 +162,7 @@ export function resolveOutboundMediaAccessForSend(
   }
   return resolveAgentScopedOutboundMediaAccess({
     cfg: params.cfg,
-    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    agentId: params.session?.agentId,
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,

@@ -12,6 +12,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
+import { rememberGoogleChatSpace } from "./space-cache.js";
 import type { GoogleChatCardV2, GoogleChatSpace } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
@@ -217,7 +218,11 @@ export async function sendGoogleChatMessage(
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(
+  const result = await fetchJson<{
+    name?: string;
+    thread?: { name?: string };
+    space?: GoogleChatSpace;
+  }>(
     account,
     url,
     {
@@ -233,6 +238,9 @@ export async function sendGoogleChatMessage(
       onPlatformSendDispatch: params.onPlatformSendDispatch,
     },
   );
+  if (result?.space) {
+    rememberGoogleChatSpace(account, { ...result.space, name: result.space.name ?? space });
+  }
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
@@ -292,10 +300,14 @@ export async function findGoogleChatDirectMessage(params: {
 export async function getGoogleChatSpace(params: {
   account: ResolvedGoogleChatAccount;
   spaceName: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<GoogleChatSpace> {
-  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.spaceName}`, {
-    method: "GET",
-  });
+  return await fetchJson<GoogleChatSpace>(
+    params.account,
+    `${CHAT_API_BASE}/${params.spaceName}`,
+    { method: "GET" },
+    { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+  );
 }
 
 export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promise<{

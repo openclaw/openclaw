@@ -30,7 +30,7 @@ import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
 import type { MessageSentEvent } from "./message-sent-hook.js";
-import type { DeliveryMirror } from "./mirror.js";
+import type { OutboundSessionRoute } from "./outbound-session.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
@@ -225,7 +225,12 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   requireUnknownSendReconciliation?: boolean;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
-  mirror?: DeliveryMirror;
+  transcriptRoute?: OutboundSessionRoute;
+  /** @internal Stable queue identity, independent of provider reconciliation markers. */
+  transcriptDeliveryId?: string;
+  transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
+  onTranscriptDiagnostic?: (message: string) => void;
+  assertTranscriptCurrent?: () => void;
 };
 
 /**

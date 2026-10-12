@@ -252,6 +252,16 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
+      title: "routes scheduled delivery lifetime to its host broker owner",
+      target: "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes recovery notice transport to its host broker owner",
+      target: "test/telegram-recovery-notice-send.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes process targets to the process config",
       target: "src/process/exec.test.ts",
       config: "test/vitest/vitest.process.config.ts",

@@ -4,6 +4,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -16,6 +17,12 @@ import {
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
+
+// This suite fences dispatch against producer resets; destination storage is tested separately.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 let deliver: typeof import("./deliver.js").deliverOutboundPayloadsInternal;
 beforeAll(async () => {

@@ -363,7 +363,6 @@ describe("runGatewayConversationTurn", () => {
         gatewayOwnedDelivery: true,
         forceCoreDelivery: true,
         requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
       });
       await persistIntent(input);
       capture = claimPendingConversationTurnReply({

@@ -9,6 +9,7 @@ import type {
 } from "../../channels/message/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
@@ -33,6 +34,12 @@ import {
   acceptedPreparedOutboundEntries,
   createUnmodifiedPreparedOutboundBatch,
 } from "./prepared-batch.js";
+
+// Enqueue publication and custody are independent of destination transcript storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").deliverStructuredOutboundPayloadsInternal;

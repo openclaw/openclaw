@@ -16,13 +16,24 @@ import { resolveConversationRouteFingerprint } from "../../config/sessions/conve
 import {
   loadExactSessionEntry,
   loadSessionEntryReadOnly,
+  loadTranscriptEvents,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
@@ -49,6 +60,84 @@ describe("outbound session persistence", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    "producer",
+    "existing",
+    "carried",
+    "known-unavailable",
+    "first-contact",
+    "ambiguous",
+  ] as const)("resolves the %s owner without repeated plugin discovery", async (source) => {
+    const config = { session: { store: storePath } };
+    const route: OutboundSessionRoute = {
+      sessionKey: "agent:main:googlechat:group:known",
+      baseSessionKey: "agent:main:googlechat:group:known",
+      recipientSessionExact: true,
+      peer: { kind: "group", id: "spaces/known" },
+      chatType: "group",
+      from: "googlechat:group:spaces/known",
+      to: "spaces/known",
+    };
+    if (source !== "first-contact") {
+      await bindOutboundSessionEntry({ cfg: config, channel: "googlechat", route });
+    }
+    if (source === "ambiguous") {
+      await bindOutboundSessionEntry({
+        cfg: config,
+        channel: "googlechat",
+        route: { ...route, sessionKey: "agent:main:googlechat:group:other-owner" },
+      });
+    }
+    const resolveRoute = vi.fn(() => {
+      if (source === "first-contact") {
+        return route;
+      }
+      throw new Error("Known destination must not cause network-backed resolution");
+    });
+    const registry = captureActivePluginRegistrySnapshot();
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "googlechat" }),
+      messaging: { resolveOutboundSessionRoute: resolveRoute },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "googlechat", source: "test", plugin }]),
+    );
+    try {
+      const params = {
+        config,
+        channel: "googlechat" as const,
+        to: route.to,
+        producer: source === "producer" ? { key: route.sessionKey, agentId: "main" } : undefined,
+        route: source === "carried" ? route : source === "known-unavailable" ? null : undefined,
+        payload: { text: "Confirmed once" },
+        deliveryId: "known-delivery",
+        payloadIndex: 0,
+      };
+      expect(await commitConfirmedVisibleMessage(params)).toMatchObject(
+        source === "ambiguous"
+          ? {
+              ok: true,
+              skipped: true,
+              diagnostics: "Conversation context skipped: multiple current destinations match.",
+            }
+          : { ok: true },
+      );
+      expect(await commitConfirmedVisibleMessage(params)).toMatchObject({ ok: true });
+      expect(resolveRoute).toHaveBeenCalledTimes(source === "first-contact" ? 1 : 0);
+      const entry = loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath })!;
+      const events = await loadTranscriptEvents({
+        sessionKey: route.sessionKey,
+        sessionId: entry.sessionId,
+        storePath,
+      });
+      expect(events.map(readTranscriptEventMessage).filter(Boolean)).toHaveLength(
+        source === "producer" || source === "ambiguous" ? 0 : 1,
+      );
+    } finally {
+      restoreActivePluginRegistrySnapshot(registry);
+    }
   });
 
   it.each([" External ", "internal"])(

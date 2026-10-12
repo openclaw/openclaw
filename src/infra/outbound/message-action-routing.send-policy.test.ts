@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -13,6 +14,12 @@ const ttsMocks = vi.hoisted(() => ({
 
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
+}));
+
+// Keep send-policy tests independent of destination session storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
 }));
 
 function firstMockArg(

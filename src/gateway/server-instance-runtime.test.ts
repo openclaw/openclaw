@@ -262,7 +262,7 @@ describe("createGatewayInstanceRuntime", () => {
         );
 
         expect(visibleSend).toHaveBeenCalledOnce();
-        expect(queuedResumption).toBeNull();
+        expect(queuedResumption).toMatchObject({ namespace: "preparing", retired: true });
         expect(sendText).toHaveBeenCalledWith(
           expect.objectContaining({
             to: "+15551234567",

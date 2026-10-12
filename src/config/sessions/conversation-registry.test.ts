@@ -21,6 +21,7 @@ import {
   listConversations,
   registerConversationAddresses,
   readConversation,
+  resolveCurrentConversationByDelivery,
   resolveCurrentSessionPrimaryConversation,
   withConversationAuthority,
 } from "./conversation-registry.js";
@@ -230,6 +231,68 @@ describe("conversation registry", () => {
         readConversation({ agentId: "main", storePath }, conversationRef),
       ).rejects.toThrow(/Invalid conversationRef/);
     }
+  });
+
+  it("finds only the live owner matching every delivery coordinate", async () => {
+    const scope = { agentId: "main", storePath };
+    const sessionKey = "agent:main:googlechat:group:space-a";
+    const address = {
+      channel: "googlechat",
+      accountId: "work",
+      target: "spaces/space-a",
+      threadId: "thread-a",
+    };
+    await upsertSessionEntry(
+      { ...scope, sessionKey },
+      {
+        sessionId: "space-session",
+        updatedAt: 100,
+        chatType: "group",
+        deliveryContext: {
+          channel: address.channel,
+          accountId: address.accountId,
+          to: address.target,
+          threadId: address.threadId,
+        },
+      },
+    );
+    expect(await resolveCurrentConversationByDelivery(scope, address)).toMatchObject({
+      conversation: { sessionKey, sessionId: "space-session", kind: "group" },
+    });
+    for (const changed of [
+      { channel: "slack" },
+      { accountId: "personal" },
+      { target: "spaces/space-b" },
+      { threadId: "thread-b" },
+      { threadId: undefined },
+    ]) {
+      expect(await resolveCurrentConversationByDelivery(scope, { ...address, ...changed })).toEqual(
+        {
+          conversation: undefined,
+        },
+      );
+    }
+  });
+
+  it("reports ambiguous live owners instead of selecting the newest session", async () => {
+    const scope = { agentId: "main", storePath };
+    const address = { channel: "googlechat", accountId: "default", target: "spaces/shared" };
+    for (const index of [1, 2]) {
+      await upsertSessionEntry(
+        { ...scope, sessionKey: `agent:main:shared-${index}` },
+        {
+          sessionId: `shared-session-${index}`,
+          updatedAt: index * 100,
+          chatType: "group",
+          deliveryContext: {
+            channel: address.channel,
+            accountId: address.accountId,
+            to: address.target,
+          },
+        },
+      );
+    }
+    expect(await resolveCurrentConversationByDelivery(scope, address)).toEqual({ ambiguous: true });
   });
 
   it("round-trips authoritative route context on its conversation association", async () => {

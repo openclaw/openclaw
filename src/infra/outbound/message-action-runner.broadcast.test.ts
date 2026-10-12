@@ -12,6 +12,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -28,6 +29,12 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.test-support.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
+
+// Broadcast cancellation owns delivery outcomes, not destination transcript storage.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 const channel = "broadcast-test";
 const gateway = {

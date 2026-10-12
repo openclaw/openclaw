@@ -5,6 +5,7 @@ import {
   listConversations,
   readConversation,
   registerConversationAddresses,
+  resolveCurrentConversationByDelivery,
   resolveCurrentConversationSession,
   resolveCurrentSessionPrimaryConversation,
   withConversationAuthority,
@@ -80,6 +81,49 @@ async function fixture() {
 }
 
 describe("memory conversation registry", () => {
+  it("filters exact delivery coordinates without hiding ambiguous owners or changing catalogue deduplication", async () => {
+    const { owner, binding } = await fixture();
+    await runWithSessionActorStorage(binding, async () => {
+      const address = { channel: "discord", accountId: "default", target: "channel:ops" };
+      expect(await resolveCurrentConversationByDelivery(scope, address)).toMatchObject({
+        conversation: { sessionKey, sessionId: "first", target: address.target },
+      });
+      for (const changed of [
+        { channel: "slack" },
+        { accountId: "other" },
+        { target: "channel:other" },
+        { threadId: "thread-a" },
+      ]) {
+        expect(
+          await resolveCurrentConversationByDelivery(scope, { ...address, ...changed }),
+        ).toEqual({
+          conversation: undefined,
+        });
+      }
+      const secondKey = `${sessionKey}-second`;
+      const second = await owner.acquire(
+        { database: owner.identity, sessionKey: secondKey },
+        lifetime,
+      );
+      await second.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { ...entry(address.target, 2), sessionId: "second" },
+            routeContext: { peerId: "canonical-ops", guildId: "guild-a" },
+          },
+        },
+        authority,
+      );
+      expect(await resolveCurrentConversationByDelivery(scope, address)).toEqual({
+        ambiguous: true,
+      });
+      expect(await listConversations(scope)).toMatchObject([
+        { target: address.target, sessionKey: secondKey, sessionId: "second" },
+      ]);
+    });
+  });
+
   it("retains observed identity through generic writes and changes current bindings at rebind/reset", async () => {
     const { actor, acquire, created, binding } = await fixture();
     await runWithSessionActorStorage(binding, async () => {

@@ -15,10 +15,7 @@ import {
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
-import {
-  isConversationExecCompletion,
-  isHeartbeatDeliveryAwarenessEvent,
-} from "./heartbeat-events-filter.js";
+import { isConversationExecCompletion } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
@@ -226,7 +223,7 @@ export function startHeartbeatRunner(opts: {
       const pendingEvents = execEventWake
         ? peekDeliverableSystemEventEntries(
             resolveSystemEventQueueKey(requestedSessionKey ?? "global", agentId),
-          ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event))
+          )
         : [];
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,

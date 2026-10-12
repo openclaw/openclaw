@@ -9,6 +9,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -27,6 +28,11 @@ import {
   runCurrentConversationPollAction,
   runReplyAction,
 } from "./message-action-runner.test-support.js";
+
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 const channel = "accepted-results";
 const acceptedToolContext = {
@@ -124,7 +130,6 @@ describe("accepted results through registered message actions", () => {
         assertDirectAdapterHandoff: assertCurrent,
         onPlatformSendDispatch,
         skipQueue: true,
-        suppressTranscriptMirror: true,
       });
 
       expect(result).toMatchObject({ kind: "send", handledBy: mode, dryRun: false });
@@ -174,7 +179,6 @@ describe("accepted results through registered message actions", () => {
         sessionKey,
         defaultAccountId: "default",
         skipQueue: true,
-        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: () => {
           if (!active) {
             throw closed;
@@ -239,7 +243,6 @@ describe("accepted results through registered message actions", () => {
         messageActionAuthorization: authorization,
         sessionKey,
         defaultAccountId: "default",
-        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: () => {
           if (!active) {
             throw closed;

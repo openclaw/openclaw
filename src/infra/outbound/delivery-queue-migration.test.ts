@@ -5,6 +5,7 @@ import { createMessageReceiptFromOutboundResults } from "../../channels/message/
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -66,6 +67,12 @@ vi.mock("./delivery-completion.js", async (importOriginal) => {
         : original.settleDurableDelivery(...args),
   };
 });
+
+// These migration fixtures exercise delivery custody, not destination transcripts.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",

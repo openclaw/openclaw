@@ -7,6 +7,7 @@ import type { ChannelMessageSendTextContext } from "../../channels/message/types
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
@@ -23,6 +24,12 @@ import {
   readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
+
+// Lease ownership is independent of destination transcript persistence.
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: vi.fn(async () => ({ ok: true })),
+}));
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 

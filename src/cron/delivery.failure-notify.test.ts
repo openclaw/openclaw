@@ -169,11 +169,6 @@ describe("sendCronAnnouncePayloadStrict", () => {
       await delivery;
     }
     expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
-    expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      sessionKey: "cron:job-1:failure",
-    });
   });
 
   it.each([

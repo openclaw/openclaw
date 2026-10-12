@@ -5,6 +5,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 
 const transport = vi.hoisted(() => ({
   baseUrl: "",
@@ -239,24 +240,31 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
     );
   });
 
-  it("settles an accepted durable message after authority expires while reading its body", async () => {
+  it("settles an accepted unseen-space send without reading metadata after authority expires", async () => {
     await withOpenClawTestState(
       { label: "googlechat-authority-settlement", layout: "state-only" },
-      async () => {
+      async (state) => {
         const [
           { sendDurableMessageBatch },
           { createTestRegistry, withPluginRuntimeRegistryScope },
           { googlechatPlugin },
+          { listSessionEntriesAsync },
         ] = await Promise.all([
           import("openclaw/plugin-sdk/channel-outbound"),
           import("openclaw/plugin-sdk/channel-test-helpers"),
           import("../api.js"),
+          import("openclaw/plugin-sdk/session-store-runtime"),
         ]);
         const authority = createAuthority();
         const accepted = createDeferred<ServerResponse>();
         const dispatch = vi.fn(async () => {});
+        const onTranscriptDiagnostic = vi.fn();
         await withChatServer(
-          (_request, response) => {
+          (request, response) => {
+            if (request.method === "GET") {
+              respondWithMessage(request, response);
+              return;
+            }
             response.writeHead(200, { "Content-Type": "application/json" });
             response.flushHeaders();
             accepted.resolve(response);
@@ -271,25 +279,61 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
                   cfg,
                   channel: "googlechat",
                   accountId: "default",
-                  to: "spaces/AAA",
+                  to: "spaces/UNCLASSIFIED",
                   payloads: [{ text: "hello" }],
                   assertDirectAdapterHandoff: authority.assert,
                   onPlatformSendDispatch: dispatch,
+                  onTranscriptDiagnostic,
                 }),
             );
             const response = await accepted.promise;
             authority.revoke();
-            response.end(JSON.stringify({ name: "spaces/AAA/messages/accepted" }));
+            response.end(
+              JSON.stringify({
+                name: "spaces/UNCLASSIFIED/messages/accepted",
+              }),
+            );
             expect(await sending).toMatchObject({
               status: "sent",
-              receipt: { platformMessageIds: ["spaces/AAA/messages/accepted"] },
+              receipt: { platformMessageIds: ["spaces/UNCLASSIFIED/messages/accepted"] },
             });
-            expect(requests).toHaveLength(1);
+            expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+              { method: "POST", path: "/v1/spaces/UNCLASSIFIED/messages" },
+            ]);
+            expect(transport.token).toHaveBeenCalledOnce();
             expect(dispatch).toHaveBeenCalled();
+            expect(onTranscriptDiagnostic).toHaveBeenCalledExactlyOnceWith(
+              "Conversation context skipped: destination conversation could not be resolved without a network lookup.",
+            );
+            expect(await listSessionEntriesAsync({ agentId: "main", env: state.env })).toEqual([]);
           },
         );
       },
     );
+  });
+
+  it("blocks first-contact metadata HTTP when authority expires during token acquisition", async () => {
+    const authority = createAuthority();
+    const tokenStarted = createDeferred<void>();
+    const token = createDeferred<string>();
+    transport.token.mockImplementationOnce(() => {
+      tokenStarted.resolve();
+      return token.promise;
+    });
+    await withChatServer(respondWithMessage, async (requests) => {
+      const resolving = resolveGoogleChatOutboundSessionRoute({
+        cfg,
+        agentId: "main",
+        target: "spaces/METADATA_TOKEN_WAIT",
+        assertDirectAdapterHandoff: authority.assert,
+      });
+      await tokenStarted.promise;
+      authority.revoke();
+      token.resolve("test-default");
+      expect(await resolving).toBeNull();
+      expect(requests).toEqual([]);
+      expect(transport.token).toHaveBeenCalledOnce();
+    });
   });
 
   it("keeps overlapping accounts' tokens, recipients and callbacks independent", async () => {

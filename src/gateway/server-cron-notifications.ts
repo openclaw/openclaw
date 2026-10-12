@@ -469,9 +469,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           cfg: runtimeConfig,
           agentId,
           jobId: params.job.id,
-          target: {
-            ...resolved,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+          target: resolved,
+          transcriptRoute: resolved.sessionRoute,
+          onTranscriptDiagnostic: (message) => {
+            params.logger.warn({ jobId: params.job.id }, message);
           },
           payload: {
             ...params.payload,

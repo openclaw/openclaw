@@ -1,10 +1,11 @@
 // Covers outbound send service plugin/core routing, media access scoping,
-// transcript mirroring, and poll fallback.
+// confirmed transcript commits, and poll fallback.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type * as ConfirmedVisibleMessage from "../../sessions/background-session-result.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -63,12 +64,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       }),
   })),
 );
-const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    ok: true,
-    target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
-  })),
-);
+const commitConfirmedVisibleMessageMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 const mocks = {
   getDefaultMediaLocalRoots: getDefaultMediaLocalRootsMock,
@@ -78,7 +74,7 @@ const mocks = {
   getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
   createAgentScopedHostMediaReadFile: createAgentScopedHostMediaReadFileMock,
   resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
-  appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+  commitConfirmedVisibleMessage: commitConfirmedVisibleMessageMock,
 };
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
@@ -106,8 +102,9 @@ vi.mock("../../media/local-roots.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
-  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+vi.mock("../../sessions/background-session-result.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ConfirmedVisibleMessage>()),
+  commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
@@ -185,45 +182,6 @@ describe("executeSendAction", () => {
     };
   }
 
-  function expectMirrorWrite(
-    expected: Partial<{
-      agentId: string;
-      sessionKey: string;
-      text: string;
-      idempotencyKey: string;
-      mediaUrls: string[];
-    }>,
-  ) {
-    expectSingleCallFields(mocks.appendAssistantMessageToSessionTranscript, {
-      ...expected,
-      config: {},
-    });
-  }
-
-  async function executePluginMirroredSend(params: {
-    mirror?: Partial<{
-      sessionKey: string;
-      agentId?: string;
-      idempotencyKey?: string;
-    }>;
-    mediaUrls?: string[];
-  }) {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: createContext({
-        params: { to: "channel:123", message: "hello" },
-        mirror: {
-          sessionKey: "agent:main:demo-outbound:channel:123",
-          ...params.mirror,
-        },
-      }),
-      to: "channel:123",
-      message: "hello",
-      mediaUrls: params.mediaUrls,
-    });
-  }
-
   function createPluginMediaSendContext(overrides: ContextOverrides): ExecuteSendContext {
     return createContext({
       params: { media: "/tmp/host.png" },
@@ -264,7 +222,7 @@ describe("executeSendAction", () => {
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
     mocks.createAgentScopedHostMediaReadFile.mockClear();
     mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
-    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.commitConfirmedVisibleMessage.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -513,10 +471,6 @@ describe("executeSendAction", () => {
         channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", presentation },
-        mirror: {
-          sessionKey: "agent:main:discord:channel:123",
-          agentId: "main",
-        },
         input: {
           runId: "run-presentation-delivery",
         },
@@ -531,10 +485,6 @@ describe("executeSendAction", () => {
     const sendArgs = expectSingleCallFields(mocks.sendMessage, {
       content: "",
       runId: "run-presentation-delivery",
-      mirror: {
-        sessionKey: "agent:main:discord:channel:123",
-        agentId: "main",
-      },
     });
     expect(sendArgs.payloads).toEqual([{ text: "", presentation }]);
   });
@@ -609,11 +559,6 @@ describe("executeSendAction", () => {
         channelPlugin: plugin,
         channel: "discord",
         params: { to: "channel:123", components: nativeComponents, presentation },
-        mirror: {
-          sessionKey: "agent:main:discord:channel:123",
-          agentId: "main",
-          text: "Summary",
-        },
       }),
       to: "channel:123",
       message: "Summary",
@@ -630,11 +575,13 @@ describe("executeSendAction", () => {
       message: "Summary\n\nPortable fallback",
       presentation,
     });
-    expectMirrorWrite({
-      sessionKey: "agent:main:discord:channel:123",
-      agentId: "main",
-      text: "Summary\n\nPortable fallback",
-    });
+    expect(mocks.commitConfirmedVisibleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:123",
+        payload: { text: "Summary\n\nPortable fallback", presentation },
+      }),
+    );
   });
 
   it("materializes chart data for legacy gateway delivery", async () => {
@@ -934,34 +881,18 @@ describe("executeSendAction", () => {
     });
   });
 
-  it("passes mirror idempotency keys through plugin-handled sends", async () => {
-    await executePluginMirroredSend({
-      mirror: {
-        idempotencyKey: "idem-plugin-send-1",
-      },
-    });
-
-    expectMirrorWrite({
-      sessionKey: "agent:main:demo-outbound:channel:123",
-      text: "hello",
-      idempotencyKey: "idem-plugin-send-1",
-    });
-  });
-
-  it("falls back to message and media params for plugin-handled mirror writes", async () => {
-    await executePluginMirroredSend({
-      mirror: {
-        agentId: "agent-9",
-      },
-      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-    });
-
-    expectMirrorWrite({
-      agentId: "agent-9",
-      sessionKey: "agent:main:demo-outbound:channel:123",
-      text: "hello",
-      mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-    });
+  it("preserves a confirmed native send when transcript publication fails", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    mocks.commitConfirmedVisibleMessage.mockRejectedValueOnce(new Error("transcript unavailable"));
+    await expect(
+      executeSendAction({
+        ctx: createContext({}),
+        to: "channel:123",
+        message: "already delivered",
+      }),
+    ).resolves.toMatchObject({ handledBy: "plugin" });
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {

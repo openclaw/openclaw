@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/sessions/confirmed-visible-message.integration.test.ts",
   "src/acp/event-ledger.prepared.test.ts",
   "src/acp/event-ledger.test.ts",
   "src/acp/translator.cancel-scoping.test.ts",
@@ -19,6 +20,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
   "src/agents/tools/sessions-send-tool.incognito.test.ts",
   "src/agents/tools/message-tool.current-prompt-reaction.test.ts",
+  "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
   "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
@@ -803,6 +805,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/transcripts/store.test.ts",
   "test/transcripts-tool.discord-lifecycle.integration.test.ts",
   "test/transcripts-tool.discord-provider.integration.test.ts",
+  "test/telegram-recovery-notice-send.test.ts",
   "test/twitch-message-tool-delivery.test.ts",
   "test/helpers/gateway-status-acquisition.test.ts",
   "src/agents/harness/acp-native-approval-effect.process.test.ts",

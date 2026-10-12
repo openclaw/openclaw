@@ -310,7 +310,7 @@ describe("startHeartbeatRunner", () => {
     fromConversationTurn: boolean;
     commandMs: number;
     runs: number;
-    beside?: { text: string; contextKey?: string };
+    beside?: string;
   }>([
     { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
     {
@@ -318,23 +318,19 @@ describe("startHeartbeatRunner", () => {
       fromConversationTurn: true,
       commandMs: 40_000,
       runs: 1,
-      beside: { text: "Reminder: water the plants" },
+      beside: "Reminder: water the plants",
     },
     {
-      owner: "conversation after a heartbeat delivery",
+      owner: "conversation",
       fromConversationTurn: true,
       commandMs: 40_000,
       runs: 14,
-      beside: {
-        text: "A heartbeat delivered this message to this channel:\nAll clear",
-        contextKey: "heartbeat-delivery:0:agent:main:main:heartbeat",
-      },
     },
   ])(
     "spaces a $owner command taking $commandMs ms started in every completion turn",
     async ({ fromConversationTurn, commandMs, runs, beside }) => {
       if (beside) {
-        enqueueSystemEvent(beside.text, { sessionKey, contextKey: beside.contextKey });
+        enqueueSystemEvent(beside, { sessionKey });
       }
       const startCommand = () =>
         setTimeout(() => {
