@@ -129,6 +129,8 @@ fn seed_at(
                 .open(staging.join("manifest.json"))?;
             output.write_all(manifest_bytes.as_bytes())?;
             output.sync_all()?;
+            // Windows cannot rename the runtime directory while its manifest is open.
+            drop(output);
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
             probe(&staging.join(BUN_PATH), &manifest)?;
             // Windows flushes each file above; Rust cannot open directory handles for
