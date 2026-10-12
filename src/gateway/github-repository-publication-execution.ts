@@ -89,7 +89,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
     const { loaded } = assertReceiptOwner(row, preparedOwner);
     const bound =
       action && row.connection_generation
-        ? bindPersonalGitHubPublicationSelection(action, {
+        ? await bindPersonalGitHubPublicationSelection(action, {
             generation: row.connection_generation,
             account: { accountId: row.identity_account_id, login: row.identity_login },
           })

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type {
-  PersonalGitHubStatus,
   UsersGitHubAuthorizePollResult,
   UsersGitHubAuthorizeStartResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
@@ -13,7 +12,6 @@ import { clearNativeGitHubTokenCache } from "../agents/github-read-identity.js";
 import {
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
-  preparePersonalGitHubPublicationIdentity,
   refreshManagedGitHubProfile,
   removeManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
@@ -29,9 +27,9 @@ import {
   listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection as mutateConnection,
   observeUserGitHubProfileRetirement,
-  readUserGitHubConnection,
+  prepareUserGitHubConnection,
+  resolvePersonalGitHubOwnerAsync,
   readUserGitHubConnectionAsync,
-  resolvePersonalGitHubOwner,
   updateUserGitHubRefreshAsync as updateRefresh,
   type UserGitHubConnection,
   type UserGitHubConnected,
@@ -39,8 +37,15 @@ import {
 } from "../state/user-github-connections.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
-
-export type PersonalGitHubAction = { owner: string; assertCurrent: () => void };
+import {
+  personalGitHubStatusAsync,
+  projectPending,
+  revalidatePersonalGitHubStatus,
+  resolvePersonalGitHubStatus,
+  type PersonalGitHubAction,
+} from "./github-personal-status.js";
+export { personalGitHubStatus, personalGitHubStatusAsync } from "./github-personal-status.js";
+export type { PersonalGitHubAction } from "./github-personal-status.js";
 export type PersonalGitHubActionV2 = PersonalGitHubAction & { signal: AbortSignal };
 const profileDir = (profileId: string) =>
   resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId });
@@ -55,124 +60,6 @@ const withProfileLease = <T>(profileId: string, run: (assertOwned: () => void) =
     },
     async (lease) => await run(() => lease.assertOwned()),
   );
-
-function projectPending(pending: UserGitHubDevice): UsersGitHubAuthorizeStartResult {
-  return {
-    requestId: pending.requestId,
-    userCode: pending.userCode,
-    verificationUri: pending.verificationUri,
-    expiresInMs: Math.max(0, pending.expiresAtMs - Date.now()),
-    pollAfterMs: Math.max(1, Math.min(60000, pending.nextPollAtMs - Date.now())),
-  };
-}
-
-export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitHubStatus {
-  action.assertCurrent();
-  let record: UserGitHubConnection | undefined;
-  try {
-    record = readUserGitHubConnection(action.owner);
-  } catch {
-    action.assertCurrent();
-    return {
-      state: "unavailable",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "failed",
-      pending: null,
-    };
-  }
-  return projectPersonalGitHubStatus(record);
-}
-
-function projectPersonalGitHubStatus(
-  record: UserGitHubConnection | undefined,
-): PersonalGitHubStatus {
-  const selection = record?.selection;
-  const connected = selection?.kind === "connected" ? selection : undefined;
-  return {
-    state: connected ? "connected" : "disconnected",
-    generation: record?.generation ?? null,
-    account: connected ? { accountId: connected.accountId, login: connected.login } : null,
-    accessExpiresAtMs: connected?.accessExpiresAtMs ?? null,
-    refreshState: !connected
-      ? "not_applicable"
-      : connected.refresh
-        ? "refreshing"
-        : (connected.refreshFailure ??
-          (connected.refreshExpiresAtMs <= Date.now() ? "expired" : "available")),
-    pending:
-      record?.pending?.kind === "device" && record.pending.expiresAtMs > Date.now()
-        ? projectPending(record.pending)
-        : null,
-  };
-}
-
-function revalidatePersonalGitHubStatus(
-  action: PersonalGitHubAction,
-  prepared: PersonalGitHubStatus,
-): PersonalGitHubStatus {
-  const current = personalGitHubStatus(action);
-  if (
-    current.generation !== prepared.generation ||
-    current.account?.accountId !== prepared.account?.accountId ||
-    current.account?.login.toLowerCase() !== prepared.account?.login.toLowerCase()
-  ) {
-    throw new Error("My GitHub connection changed; reload its status.");
-  }
-  // Revalidating selection does not refresh the prepared account facts.
-  if (prepared.stale) {
-    current.stale = true;
-  }
-  return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
-}
-
-async function resolvePersonalGitHubStatus(
-  action: PersonalGitHubAction,
-): Promise<PersonalGitHubStatus> {
-  action.assertCurrent();
-  let record: UserGitHubConnection | undefined;
-  try {
-    record = await readUserGitHubConnectionAsync(action.owner);
-  } catch {
-    action.assertCurrent();
-    return {
-      state: "unavailable",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "failed",
-      pending: null,
-    };
-  }
-  action.assertCurrent();
-  const status = projectPersonalGitHubStatus(record);
-  if (status.state !== "connected") {
-    return status;
-  }
-  if (record?.selection.kind !== "connected") {
-    return { ...status, state: "unavailable" };
-  }
-  const assertCurrent = () => {
-    revalidatePersonalGitHubStatus(action, status);
-  };
-  try {
-    // Receipts use the durable selection above; live status must additionally
-    // prove the selected profile can authenticate without borrowing native auth.
-    const identity = await preparePersonalGitHubPublicationIdentity({
-      profileId: record.selection.profileId,
-      accountId: record.selection.accountId,
-      assertCurrent,
-      forDisplay: true,
-    });
-    return {
-      ...revalidatePersonalGitHubStatus(action, status),
-      ...(identity.stale ? { stale: true } : {}),
-    };
-  } catch {
-    return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
-  }
-}
 
 function requirePending(
   record: UserGitHubConnection | undefined,
@@ -285,21 +172,19 @@ export function createPersonalGitHubOAuthLifecycle() {
     if (!candidate) {
       throw new Error("My GitHub authorization has no candidate.");
     }
-    const assertCurrent = () => {
-      guard(action);
-      const record = requirePending(
-        readUserGitHubConnection(action.owner),
-        generation,
-        pending.requestId,
-      );
-      if (
-        record.pending.kind !== "device" ||
-        record.pending.candidate?.profileId !== candidate.profileId
-      ) {
-        throw new Error("My GitHub authorization changed.");
-      }
-    };
     try {
+      const prepared = await prepareUserGitHubConnection(action.owner);
+      const assertCurrent = () => {
+        guard(action);
+        prepared.assertCurrent();
+        const record = requirePending(prepared.connection, generation, pending.requestId);
+        if (
+          record.pending.kind !== "device" ||
+          record.pending.candidate?.profileId !== candidate.profileId
+        ) {
+          throw new Error("My GitHub authorization changed.");
+        }
+      };
       await withProfileLease(candidate.profileId, async (assertOwned) => {
         const assertInstall = () => {
           assertOwned();
@@ -333,7 +218,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         });
       });
       guard(action);
-      return { status: "success", personal: personalGitHubStatus(action) };
+      return { status: "success", personal: await personalGitHubStatusAsync(action) };
     } catch {
       guard(action);
       return { status: "failed", reason: "setup_failed" };
@@ -421,10 +306,15 @@ export function createPersonalGitHubOAuthLifecycle() {
     operationId: string,
     assertOwned: () => void,
   ): Promise<void> => {
+    const canonical = await resolvePersonalGitHubOwnerAsync(owner);
+    if (!canonical) {
+      throw new Error("My GitHub refresh ownership changed.");
+    }
+    const prepared = await prepareUserGitHubConnection(canonical);
     const readExact = () => {
       assertOwned();
-      const canonical = resolvePersonalGitHubOwner(owner);
-      const selection = canonical ? readUserGitHubConnection(canonical)?.selection : undefined;
+      prepared.assertCurrent();
+      const selection = prepared.connection?.selection;
       if (
         selection?.kind !== "connected" ||
         selection.profileId !== id ||

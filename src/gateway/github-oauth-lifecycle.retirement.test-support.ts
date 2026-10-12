@@ -39,7 +39,7 @@ export function registerGitHubOAuthRetirementTests(params: {
 
       await rejected;
       expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
-      expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+      expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
     },
   );
 

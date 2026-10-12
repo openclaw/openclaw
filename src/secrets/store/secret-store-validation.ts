@@ -2,7 +2,7 @@
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
-import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
+import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
 import {
   SECRET_STORE_ALLOWED_HOSTS_MAX,
   SecretStoreValidationError,

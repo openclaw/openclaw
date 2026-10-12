@@ -285,7 +285,9 @@ synchronous prompt adapter remains deprecated with a runtime warning.
 
 Plugin metadata reads, including retained artifact snapshots, use the shared read
 worker. Opening a database no longer reloads Claw provenance: explicit config
-preparation publishes those facts. Plugin-state consume deletes and returns its
+preparation publishes those facts. Setup credential activation and compensation
+use the auth worker, changing only the selected credential so neighboring profile
+and usage updates survive rollback. Plugin-state consume deletes and returns its
 live row in one statement, with decoding inside the transaction.
 
 Subagent descendant selection runs in the registry worker. Deletion consumes the
@@ -630,9 +632,13 @@ even if the old connection is restored. Profile-retirement notifications carry
 only the affected profile IDs. OAuth and refresh semantics and the existing stored
 representation remain unchanged.
 
-Cancellation without a matching pending request returns after a read in the same
-worker FIFO, without a write transaction or publication. Matching requests are
-still reread inside the mutation transaction. GitHub role checks prepare only the
+Cancellation checks the pending request once inside its mutation transaction;
+a stale request cannot cancel its successor. Personal credential and publication
+guards prepare their connection through the shared-state worker, then consume
+SQL-free authority revoked by the connection owner's write receipts. Restoring
+the same connection does not revive an earlier guard. Publication status RPCs
+use `personalStatusAsync`; the synchronous SDK method remains deprecated.
+GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
 authority fence. The Gateway reuses its retained profile catalog without another
 worker request. Standalone authority preparation without a retained catalog uses

@@ -78,6 +78,10 @@ import type {
 
 const activePublicationExecutions = new Map<string, Promise<SessionGitHubPublicationResult>>();
 
+function warnDeprecated(method: string, replacement: string) {
+  warnPluginSdkDeprecation({ family: "github-publication", method, replacement });
+}
+
 function sameClaim(row: PublicationRow, claim: WorkerSessionTurnClaim): boolean {
   return (
     row.claim_id === claim.claimId &&
@@ -516,11 +520,7 @@ export function createGitHubPublicationCoordinator(params: {
     ...personal,
     /** @deprecated Use requestForClaimV2; removed in the next Plugin SDK major. */
     requestForClaim: async (request: GitHubPublicationClaimRequest) => {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestForClaim",
-        replacement: "requestForClaimV2",
-      });
+      warnDeprecated("requestForClaim", "requestForClaimV2");
       return (
         await prepareGitHubPublicationWorkspaceOwner({
           sessionId: request.claim.sessionId,
@@ -555,11 +555,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use deferClaimPreparationAsync; removed in the next Plugin SDK major. */
     deferClaimPreparation(claim: WorkerSessionTurnClaim) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "deferClaimPreparation",
-        replacement: "deferClaimPreparationAsync",
-      });
+      warnDeprecated("deferClaimPreparation", "deferClaimPreparationAsync");
       deferGitHubPublicationClaimPreparation(claim);
       repository.deferClaimPreparation(claim);
     },
@@ -568,11 +564,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use requestForSessionV2; removed in the next Plugin SDK major. */
     requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestForSession",
-        replacement: "requestForSessionV2",
-      });
+      warnDeprecated("requestForSession", "requestForSessionV2");
       const loaded = readGitHubPublicationSession(input.sessionKey!, { agentId: input.agentId });
       return loaded.entry?.repositoryWorkspaceId
         ? repository.requestForSession(input)
@@ -600,11 +592,7 @@ export function createGitHubPublicationCoordinator(params: {
     async requestPersonalForSession(
       ...args: Parameters<typeof personal.requestPersonalForSession>
     ) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "requestPersonalForSession",
-        replacement: "requestPersonalForSessionV2",
-      });
+      warnDeprecated("requestPersonalForSession", "requestPersonalForSessionV2");
       return (await prepareGitHubPublicationWorkspaceOwner(args[1])).initial.kind === "repository"
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
@@ -623,21 +611,25 @@ export function createGitHubPublicationCoordinator(params: {
       return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
     },
     preparePersonalStatus: repository.preparePersonalStatus,
+    /** @deprecated Use personalStatusAsync; removed in the next Plugin SDK major. */
     personalStatus(...args: Parameters<typeof repository.personalStatus>) {
+      warnDeprecated("personalStatus", "personalStatusAsync");
       return repository.hasRequest(args[2])
         ? repository.personalStatus(...args)!
         : personal.personalStatus(args[0], args[1], args[2]);
+    },
+    async personalStatusAsync(...args: Parameters<typeof repository.personalStatusAsync>) {
+      return (
+        (await repository.personalStatusAsync(...args)) ??
+        (await personal.personalStatusAsync(args[0], args[1], args[2]))
+      );
     },
     async personalPending(...args: Parameters<typeof personal.personalPending>) {
       return (await repository.personalPending(...args)) ?? personal.personalPending(...args);
     },
     /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     confirmPersonal(...args: Parameters<typeof personal.confirmPersonal>) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "confirmPersonal",
-        replacement: "confirmPersonalV2",
-      });
+      warnDeprecated("confirmPersonal", "confirmPersonalV2");
       return repository.hasRequest(args[0].requestId)
         ? repository.confirmPersonal(...args)
         : personal.confirmPersonal(...args);
@@ -670,11 +662,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use deferOrphanedRequestsAsync; removed in the next Plugin SDK major. */
     deferOrphanedRequests(): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "deferOrphanedRequests",
-        replacement: "deferOrphanedRequestsAsync",
-      });
+      warnDeprecated("deferOrphanedRequests", "deferOrphanedRequestsAsync");
       methods.deferOrphanedRequests();
       repository.deferOrphanedRequests();
     },
@@ -684,11 +672,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use listUnreportedResultsAsync; removed in the next Plugin SDK major. */
     listUnreportedResults() {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "listUnreportedResults",
-        replacement: "listUnreportedResultsAsync",
-      });
+      warnDeprecated("listUnreportedResults", "listUnreportedResultsAsync");
       return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];
     },
     async listUnreportedResultsAsync() {
@@ -702,11 +686,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     /** @deprecated Use markReportedAsync; removed in the next Plugin SDK major. */
     markReported(requestId: string) {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "markReported",
-        replacement: "markReportedAsync",
-      });
+      warnDeprecated("markReported", "markReportedAsync");
       methods.markReported(requestId);
       repository.markReported(requestId);
     },

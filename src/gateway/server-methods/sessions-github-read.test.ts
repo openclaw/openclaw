@@ -17,7 +17,7 @@ import { updateUserGitHubConnection } from "../../state/user-github-connections.
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
-import { personalGitHubStatus } from "../github-personal-oauth.js";
+import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-oauth.js";
 import * as publicationAvailability from "../github-publication-availability.js";
 import * as relevance from "../github-publication-relevance.js";
 import {
@@ -482,7 +482,7 @@ describe("publication receipt reads", () => {
         }
         if (change === "github-unavailable") {
           fixture.personalConnectionStatus.mockImplementationOnce(async (action) => ({
-            ...personalGitHubStatus(action),
+            ...(await personalGitHubStatus(action)),
             state: "unavailable",
           }));
         }
