@@ -123,17 +123,13 @@ function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow
   expect(provider.childIsRunning()).toBe(true);
 }
 async function clocks(parent: Locator) {
-  return parent
-    .locator(
-      ".agent-chat__composer-run-status--waiting openclaw-elapsed-time, .chat-working-indicator__elapsed",
-    )
-    .evaluateAll((elements) =>
-      elements.map((element) => ({
-        startMs: (element as HTMLElementTagNameMap["openclaw-elapsed-time"]).startMs,
-        text: element.textContent?.trim() ?? "",
-        source: element.closest(".agent-chat__composer-run-status") ? "composer" : "transcript",
-      })),
-    );
+  return parent.locator(".chat-working-indicator__elapsed").evaluateAll((elements) =>
+    elements.map((element) => ({
+      startMs: (element as HTMLElementTagNameMap["openclaw-elapsed-time"]).startMs,
+      text: element.textContent?.trim() ?? "",
+      source: "transcript",
+    })),
+  );
 }
 function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: number) {
   expect(measured.length).toBeGreaterThan(0);
@@ -218,12 +214,14 @@ suite.define(() => {
             const rpc = await wire.waitFor((entry) => entry.request.method === "chat.send", before);
             expect(rpc.response.ok, JSON.stringify(rpc.response.error)).toBe(true);
           };
-          const waiting = parent.locator(".agent-chat__composer-run-status--waiting");
+          const waiting = parent.locator(".chat-working-indicator");
           proof.stage = "actual visible child launch and initial parent yield";
           await send(fixture.initialPrompt);
           await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
           await provider.waitForChild(signal);
+          await expect.poll(async () => (await rows()).parent.endedAt ?? 0).toBeGreaterThan(0);
           await waiting.waitFor();
+          expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
           assertWaitLifecycle(initial.parent, initial.child);
           const initialHistory: ChatHistoryResult = await call("chat.history", {
@@ -239,7 +237,10 @@ suite.define(() => {
 
           proof.stage = "parent update while original child continues";
           await send(fixture.updatePrompt);
-          await parent.getByText(fixture.updateReply, { exact: true }).waitFor();
+          await parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }).waitFor();
+          await expect
+            .poll(async () => (await rows()).parent.endedAt ?? 0)
+            .toBeGreaterThan(initial.parent.endedAt!);
           await waiting.waitFor();
           await provider.check();
           const updated = await rows();
@@ -259,7 +260,7 @@ suite.define(() => {
           proof.toolReceipts = provider.receipts;
           await capture(page, parent, "after-parent-update", [
             waiting,
-            parent.getByText(fixture.updateReply, { exact: true }),
+            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
           ]);
 
           proof.stage = "reload persisted parent wait";
@@ -288,7 +289,7 @@ suite.define(() => {
           };
           await capture(page, parent, "after-reload", [
             waiting,
-            parent.getByText(fixture.updateReply, { exact: true }),
+            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
           ]);
           assertClocks(updatedClocks, updated.parent.endedAt!);
           assertClocks(reloadedClocks, updated.parent.endedAt!);
@@ -298,7 +299,7 @@ suite.define(() => {
 
           proof.stage = "actual child completion and parent resume";
           provider.releaseChild();
-          await parent.getByText(fixture.resumedReply, { exact: true }).waitFor();
+          await parent.getByRole("paragraph").filter({ hasText: fixture.resumedReply }).waitFor();
           await waiting.waitFor({ state: "hidden" });
           const completed = await rows();
           expect(completed.parent.hasActiveSubagentRun ?? false).toBe(false);
