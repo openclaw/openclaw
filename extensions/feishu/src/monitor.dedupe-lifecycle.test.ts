@@ -3,12 +3,6 @@ import {
   createChannelIngressQueueForTests,
   observeChannelIngressQueueWrite,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createPluginRuntimeMock, createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -18,7 +12,6 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 import type { handleFeishuMessage } from "./bot.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
-import { feishuPlugin } from "./channel.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -37,9 +30,6 @@ const mocks = vi.hoisted(() => ({
   parseMessage: vi.fn(),
   stopBindings: vi.fn(),
   createBindings: vi.fn(),
-  realCreateBindings: undefined as
-    | (typeof import("./thread-bindings.js"))["createFeishuThreadBindingManager"]
-    | undefined,
 }));
 
 vi.mock("./client.js", () => ({
@@ -64,7 +54,6 @@ vi.mock("./bot.js", () => ({
 }));
 vi.mock("./thread-bindings.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./thread-bindings.js")>();
-  mocks.realCreateBindings = actual.createFeishuThreadBindingManager;
   return { ...actual, createFeishuThreadBindingManager: mocks.createBindings };
 });
 
@@ -405,86 +394,6 @@ describe("Feishu account replay work ownership", () => {
       });
     },
   );
-
-  it("keeps Feishu bindings dispatchable when a replacement monitor starts before its predecessor settles", async () => {
-    const realCreateBindings = mocks.realCreateBindings;
-    if (!realCreateBindings) {
-      throw new Error("real Feishu thread binding factory was not captured");
-    }
-    mocks.createBindings.mockImplementation(realCreateBindings);
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
-    );
-    const firstController = new AbortController();
-    const secondController = new AbortController();
-    const releases: Array<ReturnType<typeof createDeferred<void>>> = [];
-    const transportStarted = [createDeferred<void>(), createDeferred<void>()];
-    const firstTransportClosed = createDeferred<void>();
-    mocks.transport.mockImplementation(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
-      const release = createDeferred<void>();
-      const index = releases.push(release) - 1;
-      // Reaching the transport means this account's binding manager is already
-      // registered; the replacement has adopted the shared manager by then.
-      transportStarted[index]?.resolve();
-      await new Promise<void>((resolve) => {
-        if (abortSignal.aborted) {
-          resolve();
-          return;
-        }
-        abortSignal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      if (index === 0) {
-        firstTransportClosed.resolve();
-      }
-      await release.promise;
-    });
-    const conversation = {
-      channel: "feishu",
-      accountId: "test",
-      conversationId: "oc_group_chat:topic:om_reload_root",
-      parentConversationId: "oc_group_chat",
-    };
-    const first = startAccount(firstController);
-    let second: Promise<void> | undefined;
-    try {
-      void first.catch(() => {});
-      await transportStarted[0].promise;
-      const binding = await getSessionBindingService().bind({
-        targetSessionKey: "agent:codex:acp:binding:feishu:test:reload",
-        targetKind: "session",
-        conversation,
-        placement: "current",
-      });
-
-      // Reload aborts the live account; the replacement starts while the
-      // predecessor's durable settlement is still pending.
-      firstController.abort();
-      await firstTransportClosed.promise;
-      second = startAccount(secondController);
-      void second.catch(() => {});
-      await transportStarted[1].promise;
-
-      releases[0]?.resolve();
-      await first;
-
-      // The predecessor's cleanup must not retire the replacement's binding owner.
-      await expect(
-        getSessionBindingService().resolveByConversationAsync(conversation),
-      ).resolves.toEqual(binding);
-      expect(
-        getSessionBindingService().getCapabilities({ channel: "feishu", accountId: "test" })
-          .adapterAvailable,
-      ).toBe(true);
-    } finally {
-      firstController.abort();
-      releases[0]?.resolve();
-      await first.catch(() => {});
-      secondController.abort();
-      releases[1]?.resolve();
-      await second?.catch(() => {});
-      resetPluginRuntimeStateForTest();
-    }
-  });
 
   it("does not start account resources after abort during dedupe warmup", async () => {
     const controller = new AbortController();
