@@ -524,12 +524,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       .buildSessionContext()
       .messages.map((message) => (message.role === "user" ? { ...message, content } : message));
     await expect(
-      boundary(
-        f.session.agent.streamFn,
-        model,
-        { messages },
-        {},
-      ),
+      boundary(f.session.agent.streamFn, model, { messages }, {}),
     ).resolves.toMatchObject({ providerReplay: { compactedWindow: { outputTokens: 5 } } });
     expect(requests).toHaveLength(1);
     expect(requests.map(realUserText)).toEqual([[content]]);
