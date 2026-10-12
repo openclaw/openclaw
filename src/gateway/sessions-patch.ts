@@ -561,10 +561,21 @@ function* projectSessionPatchSteps(
       }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
+      // Use the execution decision: a turn runs an unavailable implicit harness on OpenClaw.
       const harnessSelection = {
         provider: selection.provider,
         modelId: selection.model,
-        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        runtime:
+          params.preparedAgentRuntime ??
+          resolveEffectiveAgentRuntime({
+            cfg,
+            provider: selection.provider,
+            modelId: selection.model,
+            agentId: sessionAgentId,
+            sessionKey: storeKey,
+            sessionEntry: next,
+            mode: "execution",
+          }),
         agentId: sessionAgentId,
       };
       if (
