@@ -19,9 +19,11 @@ import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
 } from "../config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -115,6 +117,15 @@ if (!isMainThread) {
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = Reflect.apply(prepare, this, [sql]);
+    if (/^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql)) {
+      for (const method of ["all", "get", "iterate"]) {
+        const original = statement[method];
+        statement[method] = function(...args) {
+          record({ kind: "transcript-stats" });
+          return Reflect.apply(original, this, args);
+        };
+      }
+    }
     if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
@@ -163,6 +174,7 @@ if (!isMainThread) {
         .map(
           (line) =>
             JSON.parse(line) as
+              | { kind: "transcript-stats" }
               | { kind: "cache" }
               | { kind: "cache-row"; key: string; valueBytes: number }
               | { kind: "transcript"; method: string; start: number },
@@ -171,6 +183,33 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
+  it("returns uncached SQLite sessions as pending without reading transcript statistics", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "not-yet-projected",
+        storePath: database.path,
+      });
+      const probe = await observeUsageWorkerReads(state.stateDir, []);
+      await probe.run(async () => {
+        expect(
+          await loadSessionCostSummariesFromCache({
+            agentId: "main",
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          }),
+        ).toMatchObject({
+          summaries: [null],
+          cacheStatus: { status: "stale", cachedFiles: 0, pendingFiles: 1, staleFiles: 1 },
+        });
+        expect((await probe.read()).filter((entry) => entry.kind === "transcript-stats")).toEqual(
+          [],
+        );
+      });
+    });
+  });
+
   it.each(["zstd", "plain"] as const)(
     "inventories %s archives without reading payloads and materializes only for a summary",
     async (encoding) => {

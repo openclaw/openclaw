@@ -8,14 +8,9 @@ import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
-  isSessionHistoryReadOperation,
-  prepareSessionHistoryReadOperation,
-} from "./session-history-read-operation.worker.js";
-import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
@@ -91,6 +86,13 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
+    const [
+      { isSessionHistoryReadOperation, prepareSessionHistoryReadOperation },
+      { runWithSessionTranscriptReadFence },
+    ] = await Promise.all([
+      import("./session-history-read-operation.worker.js"),
+      import("./session-transcript-read-fence.js"),
+    ]);
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {

@@ -11,7 +11,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "./session-transcript-projection-error.js";
-import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionTranscriptWorkerError,
