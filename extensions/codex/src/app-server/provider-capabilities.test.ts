@@ -1,8 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClient } from "./client.js";
+import { once } from "node:events";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
-import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  createIsolatedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
+import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const appServer = {
   start: {},
@@ -13,7 +20,7 @@ function createClientFactory(webSearch: boolean | boolean[]) {
   const values = Array.isArray(webSearch) ? [...webSearch] : [webSearch];
   const request = vi.fn(async () => ({ webSearch: values.shift() ?? false }));
   const client = { request } as unknown as CodexAppServerClient;
-  const clientFactory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
+  const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
   return { clientFactory, request };
 }
 
@@ -33,6 +40,64 @@ function resolveSupport(
 }
 
 describe("resolveCodexProviderWebSearchSupport", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([false, true])(
+    "awaits isolated capability probe exit (RPC failure: %s)",
+    async (fails) => {
+      const agentDir = tempDirs.make("codex-capability-probe-");
+      let capabilityRead = false;
+      const harness = createClientHarness({
+        autoEmitExit: false,
+        onWrite: (line, send) => {
+          const { id, method } = JSON.parse(line);
+          if (id === undefined) {
+            return;
+          }
+          capabilityRead ||= method === "modelProvider/capabilities/read";
+          send(
+            method === "initialize"
+              ? { id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` } }
+              : fails
+                ? { id, error: { code: -32603, message: "capability probe failed" } }
+                : { id, result: { webSearch: true } },
+          );
+        },
+      });
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const stdinClosed = once(harness.process.stdin, "close");
+      const pending = resolveCodexProviderWebSearchSupport({
+        clientFactory: createIsolatedCodexAppServerClient,
+        appServer: {
+          ...appServer,
+          start: { transport: "stdio", command: process.execPath, args: [], headers: {} },
+        },
+        authProfileId: null,
+        agentDir,
+        config: undefined,
+        modelProviderOverride: undefined,
+        signal: new AbortController().signal,
+      });
+      let settled = false;
+      const outcome = pending.finally(() => {
+        settled = true;
+      });
+      try {
+        await awaitGateBeforeSettlement(stdinClosed, outcome, "probe returned without closing");
+        expect(capabilityRead).toBe(true);
+        expect(settled).toBe(false);
+        expect(harness.process.exitCode).toBeNull();
+        harness.emitExit();
+        await expect(outcome).resolves.toBe(fails ? "unknown" : "supported");
+      } finally {
+        harness.emitExit();
+        await harness.client.closeAndWait();
+      }
+    },
+  );
+
   it("reads the latest configured provider capability for each attempt", async () => {
     const { clientFactory, request } = createClientFactory([true, false]);
 
@@ -62,7 +127,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
           : { webSearch: true },
       );
       const client = { request } as unknown as CodexAppServerClient;
-      const clientFactory = vi.fn(async () => client);
+      const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
       const result = await resolveCodexProviderWebSearchSupport({
         clientFactory,
         appServer,
@@ -101,12 +166,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     ).resolves.toBe("supported");
 
     expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ preparedAuth }));
-    const factoryCalls = (
-      clientFactory as unknown as {
-        mock: { calls: Array<[{ preparedAuth?: unknown }]> };
-      }
-    ).mock.calls;
-    expect(factoryCalls[0]?.[0].preparedAuth).toBe(preparedAuth);
+    expect(clientFactory.mock.calls[0]?.[0]?.preparedAuth).toBe(preparedAuth);
     expect(clientFactory).not.toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: expect.anything() }),
     );
@@ -118,17 +178,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     }) as unknown as CodexAppServerClientFactory;
 
     await expect(resolveSupport(clientFactory)).resolves.toBe("unknown");
-  });
-
-  it("reports unknown support when the capability read fails", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("transient rpc failure");
-    });
-    const client = { request } as unknown as CodexAppServerClient;
-    const clientFactory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
-
-    await expect(resolveSupport(clientFactory)).resolves.toBe("unknown");
-    expect(request).toHaveBeenCalledOnce();
   });
 
   it("uses hosted search for the built-in OpenAI provider override", async () => {

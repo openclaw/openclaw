@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  createIsolatedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
@@ -90,7 +91,11 @@ export async function resolveCodexProviderWebSearchSupport(params: {
     return "unknown";
   } finally {
     if (client) {
-      releaseLeasedSharedCodexAppServerClient(client);
+      if (params.clientFactory === createIsolatedCodexAppServerClient) {
+        await client.closeAndWait();
+      } else {
+        releaseLeasedSharedCodexAppServerClient(client);
+      }
     }
   }
 }
