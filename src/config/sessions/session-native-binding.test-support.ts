@@ -132,8 +132,8 @@ async function createFixture(
   registry.plugins.push(createPluginRecord({ id: kind }));
   registry.agentHarnesses.push({ pluginId: kind, source: "runtime", harness: native.harness });
   if (mode === "native") {
-    // A released opaque sibling requires native atomicity before either participant
-    // executes. The official harness keeps its V2 store and typed native participant.
+    // Exercise a released opaque sibling's post-commit cleanup alongside the
+    // official harness's V2 store and typed worker participant.
     registry.agentHarnesses.push({
       pluginId: "core",
       source: "runtime",

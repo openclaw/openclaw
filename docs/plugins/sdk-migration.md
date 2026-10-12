@@ -105,9 +105,9 @@ keeping durable reads off the Gateway thread.
 
 Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
 accepted input through its session owner. The deprecated `completeProcessing`
-method returns an already settled result but refuses a new synchronous write
-with a warning and migration guidance. Recorders without an accepted input keep
-their existing no-op behavior.
+method preserves synchronous completion and returns after the terminal outcome
+commits, with a migration warning, until the next Plugin SDK major. Recorders
+without an accepted input keep their existing no-op behavior.
 
 Use `readSessionTranscriptCatalogTitleAsync` from
 `openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The

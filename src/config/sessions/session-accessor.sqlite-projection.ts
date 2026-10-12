@@ -401,7 +401,8 @@ export async function applySessionEntryLifecycleMutation(
     const afterCount =
       isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)
         ? await readSessionEntryLifecycleCountInWorker({
-            database: reclamationOptions ?? resolveSessionReclamationDatabaseOptions(databaseOptions),
+            database:
+              reclamationOptions ?? resolveSessionReclamationDatabaseOptions(databaseOptions),
             execution,
           })
         : readSessionEntryCount(openOpenClawAgentDatabase(databaseOptions));

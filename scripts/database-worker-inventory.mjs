@@ -167,7 +167,7 @@ const reviewed = new Map([
     {
       priority: 2,
       evidence:
-        "Window postimages serve worker writes and native writeSessionEntry callbacks; retained initialization and deletion participants require their original transaction.",
+        "Window postimages serve worker writes and native writeSessionEntry callbacks. Cross-store membership/conversation authority and deprecated synchronous SDK mutation contracts retain native access; initializer deletion now uses the worker.",
     },
   ],
   [
@@ -175,7 +175,7 @@ const reviewed = new Map([
     {
       priority: 2,
       evidence:
-        "Reclamation normally uses the mutation worker; preparedSessionDeletionRequiresNativeTransaction retains opaque harness rollback and initialization participants on their original transaction.",
+        "Durable reclamation uses the mutation worker, including initializer rollback and postcommit harness cleanup. The shared kernel retains its explicitly excluded process-local incognito caller in runSqliteSessionReclamation.",
     },
   ],
   [

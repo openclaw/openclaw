@@ -11,6 +11,7 @@ import { readTranscriptContextVersionInTransaction } from "../../config/sessions
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
@@ -169,4 +170,22 @@ export function readSessionManagerReload(
       },
     },
   };
+}
+
+/** A committed append may need rows after the current model-context admission. */
+export function readCommittedSessionManagerReload(
+  target: SessionTranscriptRuntimeTarget,
+  limits: SessionManagerBoundedContextLimits | undefined,
+): Promise<PreparedSessionTranscriptReload> {
+  return withSessionTranscriptReadSource(
+    target,
+    () => readSessionManagerReload(target, limits, true),
+    ({ scope, resolved, owner, expectedIdentity }) =>
+      owner.readTranscript({
+        target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
+        resolvedScope: resolved,
+        limits,
+        expectedIdentity,
+      }),
+  );
 }

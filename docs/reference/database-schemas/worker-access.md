@@ -33,13 +33,20 @@ patch into the current child, preserving in-process updates made during backend
 preparation. A parent reset to an unrestored cold transcript may require a retry;
 it does not overwrite a newer child row.
 
-Accepted-input completion writes use the async pending-input owner. Public receipt
+Bundled accepted-input completion writes use the async pending-input owner. The
+deprecated synchronous recorder SDK retains native completion until the next
+Plugin SDK major. Public receipt
 reads, catalog pages and titles, terminal fallback-model reads, and durable
 post-lifecycle counts use the existing read workers. Catalog pages retain raw
-event identity and payload byte bounds. Released synchronous SDK readers remain
-deprecated compatibility paths; native incognito access and lifecycle rollback
-participants remain explicitly counted until their owning cutovers. These changes
-add no schema, retention, durability, or update migration.
+event identity and payload byte bounds. Durable lifecycle deletion also uses the
+worker when initializer rollback or harness cleanup is present; initializer
+rollback is consumed only after the committed receipt. Opaque harness cleanup is
+deprecated and runs after commit, with failures reported as warnings.
+
+Released synchronous SDK readers, native incognito access, and cross-store
+authorization checks remain explicitly counted. Cross-store checks protect
+visibility, membership, and conversation authority that the destination worker
+cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
 and parent lookups. Personal default selection reads profile links and its selected

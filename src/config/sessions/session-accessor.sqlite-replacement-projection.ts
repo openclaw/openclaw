@@ -16,7 +16,7 @@ import type {
   SessionEntryReplacementUpdate,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  hasPreparedNativeSessionDeletion,
+  preparedSessionDeletionRequiresNativeTransaction,
   runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
@@ -375,9 +375,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       return {
         deletedEntries: deletedOwners,
         commit: async (assertSourceCurrent) => {
-          // Native companions and process-held stores retain their synchronous transaction view.
           const workerCommit =
-            Boolean(incognito) || (useWorker && !hasPreparedNativeSessionDeletion());
+            Boolean(incognito) ||
+            (useWorker && !preparedSessionDeletionRequiresNativeTransaction());
           const preparedPreservation =
             params.skipMaintenance === false
               ? await prepareSessionMaintenancePreservation(params.storePath, {

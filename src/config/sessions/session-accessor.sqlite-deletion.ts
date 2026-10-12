@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { getNativeSessionDeletionParticipant } from "../../agents/harness/native-session/deletion-participant.js";
+import {
+  createNativeSessionCommitFinalizer,
+  getNativeSessionDeletionParticipant,
+} from "../../agents/harness/native-session/deletion-participant.js";
 import {
   captureAgentHarnessSessionDeletions,
   captureAgentHarnessSessionContextResets,
@@ -9,7 +12,9 @@ import {
 import type { AgentHarnessSessionDeletionMutation } from "../../agents/harness/types.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getChildLogger } from "../../logging/logger.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   commitSessionInitializationRollback,
   getSessionInitializationRollback,
@@ -88,7 +93,7 @@ const transactionMutations = new AsyncLocalStorage<{
   initializations: Set<SessionInitialization>;
 }>();
 
-/** Worker commits cannot carry parent-thread native-owner rollback closures. */
+/** Includes worker-owned participants and host-only post-commit finalizers. */
 export function hasPreparedNativeSessionDeletion(): boolean {
   const prepared = deletions.getStore();
   return (
@@ -99,16 +104,14 @@ export function hasPreparedNativeSessionDeletion(): boolean {
   );
 }
 
-/** Initialization and opaque SDK callbacks retain their synchronous agent-row authority. */
+/** Incognito's process-local owner retains its native transaction until its cutover. */
 export function preparedSessionDeletionRequiresNativeTransaction(): boolean {
-  return [...(deletions.getStore()?.values() ?? [])].some(
-    ({ target, mutations }) =>
-      target.initialization !== undefined ||
-      mutations.some((mutation) => !getNativeSessionDeletionParticipant(mutation)),
+  return [...(deletions.getStore()?.values() ?? [])].some(({ target }) =>
+    isIncognitoSessionKey(target.sessionKey),
   );
 }
 
-/** Opaque SDK mutations keep their native transaction; only owner-minted participants qualify. */
+/** Capture native participants and host-only finalizers for the same worker commit. */
 export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEntry[]) {
   if (preparedSessionDeletionRequiresNativeTransaction()) {
     return undefined;
@@ -118,21 +121,53 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
     entry,
     prepared: deletions.getStore()?.get(sessionKey),
   }));
-  if (!captured.some(({ prepared }) => prepared?.mutations.length)) {
-    return undefined;
-  }
   const participants = [];
   for (const { sessionKey, entry, prepared } of captured) {
     if (!prepared) {
-      return undefined;
+      continue;
     }
     for (const mutation of prepared.mutations) {
-      const participant = getNativeSessionDeletionParticipant(mutation);
+      let participant = getNativeSessionDeletionParticipant(mutation);
       if (!participant) {
-        return undefined;
+        warnPluginSdkDeprecation({
+          family: "session-deletion-transaction-callback",
+          method: "opaque AgentHarnessSessionDeletionMutation",
+          replacement: "createNativeSessionCommitFinalizer or a native binding participant",
+          compatibility:
+            "The callback runs only after a successful session commit; its rollback callback is not used.",
+        });
+        const finalizer = createNativeSessionCommitFinalizer({
+          commit() {
+            try {
+              mutation.commit();
+            } catch (error) {
+              getChildLogger({ subsystem: "session-sqlite" }).warn(
+                "Session deletion committed, but legacy harness cleanup failed",
+                { sessionKey, error },
+              );
+            }
+          },
+          rollback() {},
+        });
+        participant = getNativeSessionDeletionParticipant(finalizer)!;
       }
       participants.push({ sessionKey, entry, participant });
     }
+    if (prepared.target.initialization) {
+      const initialization = prepared.target.initialization;
+      const finalizer = createNativeSessionCommitFinalizer({
+        commit: () => commitSessionInitializationRollback(initialization),
+        rollback() {},
+      });
+      participants.push({
+        sessionKey,
+        entry,
+        participant: getNativeSessionDeletionParticipant(finalizer)!,
+      });
+    }
+  }
+  if (participants.length === 0) {
+    return undefined;
   }
   return {
     participants,
@@ -197,7 +232,7 @@ export async function runPreparedSqliteSessionWrite<T>(
         assertHeld();
         return await write.commit(assertHeld);
       };
-      // Opaque native mutations stay on their original writer and ALS owner.
+      // Incognito stays with its process-local owner; durable companions settle in the worker.
       return scheduling === "worker" &&
         (!hasPreparedNativeSessionDeletion() ||
           captureNativeSessionWorkerDeletion(write.deletedEntries))

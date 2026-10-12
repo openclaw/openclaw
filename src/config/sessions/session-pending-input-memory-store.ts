@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
@@ -83,6 +84,9 @@ export function prepareMemoryPendingInputStore(
     },
     read(input: PendingInputRead) {
       return track(storage.read({ type: "session.pendingInput.read", input }, authority));
+    },
+    nativeMutation(): never {
+      throw new IncognitoSessionSyncAccessError("complete", "completeAsync");
     },
     mutate(
       input: PendingInputMutation,

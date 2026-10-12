@@ -216,7 +216,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "retains rollback authority without a same-database grant reread (binding: %s)",
+  "consumes initializer rollback only after acknowledged worker deletion (binding: %s)",
   async (withBinding) => {
     await withNativeBindingFixture("agentsapi", async (fixture) => {
       if (!withBinding) {
@@ -224,72 +224,41 @@ it.each([false, true])(
       }
       const entry = fixture.readEntry();
       assert(entry);
-      let grantDatabasePath: string | undefined;
-      let agentGrants = 0;
-      let authorityReads = 0;
-      let otherOwnerAuthorityReads = 0;
-      let revoked = true;
-      const refusal = new Error("synthetic rollback authority revoked");
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) => {
-          let databasePath: string | undefined;
-          const owned = create((request, grant) => {
-            const previous = grantDatabasePath;
-            const identity = isRecord(request.facts) ? request.facts.identity : undefined;
-            grantDatabasePath =
-              isRecord(identity) && typeof identity.nativeLocation === "string"
-                ? identity.nativeLocation
-                : databasePath;
-            if (grantDatabasePath === fixture.database.path) {
-              agentGrants++;
-            }
-            try {
-              callback(request, grant);
-            } finally {
-              grantDatabasePath = previous;
-            }
-          }, attachment);
-          const bind = owned.bindDatabaseAuthority.bind(owned);
-          owned.bindDatabaseAuthority = (authority) => {
-            databasePath = authority.databasePath;
-            bind(authority);
-          };
-          return owned;
-        },
+      fixture.database.db.exec(
+        "CREATE TRIGGER reject_initializer_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected initializer delete failure'); END",
       );
       const initializer = createSessionInitialization(
         { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
-        () => {
-          expect(grantDatabasePath).not.toBe(fixture.database.path);
-          fixture.readEntry();
-          authorityReads++;
-          if (grantDatabasePath === fixture.shared.path) {
-            otherOwnerAuthorityReads++;
-          }
-          if (revoked) {
-            throw refusal;
-          }
-        },
+        () => {},
         { config: {}, agentId: fixture.scope.agentId, entry },
       );
       try {
-        await expect(initializer.rollback(() => fixture.remove())).rejects.toBe(refusal);
+        await expect(initializer.rollback(() => fixture.remove())).rejects.toThrow(
+          "injected initializer delete failure",
+        );
+        expect(() => initializer.handle.assertCurrent()).not.toThrow();
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toBeDefined();
-        revoked = false;
-        await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
-          deleted: true,
-        });
-        expect(authorityReads).toBeGreaterThan(0);
-        expect(agentGrants).toBeGreaterThan(0);
+        fixture.database.db.exec("DROP TRIGGER reject_initializer_delete");
+        const sql = observeHostDataSql();
+        try {
+          await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
+            deleted: true,
+          });
+          expect(
+            sql.queries.filter((query) =>
+              /\b(?:session_nodes|session_windows|transcript_events)\b/i.test(query),
+            ),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         expect(fixture.readEntry()).toBeUndefined();
         expect(() => initializer.handle.assertCurrent()).toThrow(
           "Session initialization is rolling back",
         );
         if (withBinding) {
           expect(fixture.readBinding()).toBeUndefined();
-          expect(otherOwnerAuthorityReads).toBeGreaterThan(0);
         } else {
           expect(fixture.readBinding()).toBeDefined();
         }

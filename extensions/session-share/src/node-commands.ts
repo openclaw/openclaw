@@ -161,7 +161,12 @@ export function createSessionShareNodeCommands(
           assertSourceCurrent,
         } of await readSharedEntries()) {
           const name = search
-            ? await readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })
+            ? await readSessionTranscriptCatalogTitleAsync({
+                agentId,
+                sessionKey,
+                storePath,
+                entry,
+              })
             : undefined;
           if (
             search &&

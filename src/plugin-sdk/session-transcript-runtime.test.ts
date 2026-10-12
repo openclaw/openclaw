@@ -457,7 +457,9 @@ describe("native transcript catalog SDK", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed([]);
       const entry = { sessionId: scope.sessionId, updatedAt: 1 };
-      await expect(readSessionTranscriptCatalogTitleAsync({ ...scope, entry })).resolves.toBeUndefined();
+      await expect(
+        readSessionTranscriptCatalogTitleAsync({ ...scope, entry }),
+      ).resolves.toBeUndefined();
       await appendTranscriptMessage(scope, {
         eventId: "first-title",
         message: { role: "user", content: "Fresh title after append" },

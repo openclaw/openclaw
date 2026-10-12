@@ -42,13 +42,13 @@ import {
   readSessionUpdatedAtInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
-import { loadTranscriptEvents as loadAccessorTranscriptEvents } from "../config/sessions/session-transcript-events.js";
-import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import {
   captureExternalSessionCommitGuard,
   sessionEntryCommitGuardOptions,
 } from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { loadTranscriptEvents as loadAccessorTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
@@ -276,9 +276,11 @@ export function loadTranscriptEvents(
 }
 
 /** @deprecated Use readTranscriptStatsAsync; removed in the next Plugin SDK major. */
-export function readTranscriptStatsSync(
-  params: SessionStoreTranscriptReadParams,
-): { eventCount: number; maxSeq: number; sizeBytes: number } {
+export function readTranscriptStatsSync(params: SessionStoreTranscriptReadParams): {
+  eventCount: number;
+  maxSeq: number;
+  sizeBytes: number;
+} {
   warnPluginSdkDeprecation({
     family: "session-store",
     method: "readTranscriptStatsSync",

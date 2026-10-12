@@ -15,10 +15,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
@@ -75,12 +72,12 @@ export async function runSessionDeletionPlanning(
   diagnostics?: SqliteSessionReclamationDiagnostics,
 ): Promise<SessionDeletionPlanningResult> {
   const databaseOptions = toDatabaseOptions(resolved);
-  // Cross-store handoffs retain their original connection identity comparison.
+  // Boot migration handoffs and the remaining incognito owner retain native planning.
   if (
     preparedSessionDeletionRequiresNativeTransaction() ||
     params.expectedDatabaseIdentity !== undefined ||
     !isMainThread ||
-    !supportsOpenClawAgentDatabaseExecution(databaseOptions)
+    isIncognitoOpenClawAgentSqlitePath(resolved.path, databaseOptions)
   ) {
     return await runExclusiveSqliteSessionWrite(
       resolved,
@@ -124,7 +121,8 @@ export async function runSqliteSessionReclamation(params: {
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,
   ) => void;
-  forceInProcess: boolean;
+  /** @deprecated Only process-local incognito stores can use a native transaction. */
+  forceInProcess?: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
@@ -135,14 +133,16 @@ export async function runSqliteSessionReclamation(params: {
   if (params.diagnostics) {
     params.diagnostics.kind = params.plan.kind;
   }
-  const nativeAuthority = preparedSessionDeletionRequiresNativeTransaction();
+  const incognito = isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
+    agentId: params.plan.databaseOptions.agentId,
+    env: params.plan.databaseOptions.env,
+  });
   if (
-    !nativeAuthority &&
+    !incognito &&
     (params.plan.kind === "entry" ||
       params.plan.kind === "lifecycle-artifacts" ||
       params.plan.kind === "maintenance-finalize" ||
-      params.plan.kind === "lifecycle-projection-commit") &&
-    supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)
+      params.plan.kind === "lifecycle-projection-commit")
   ) {
     const participants = captureNativeSessionWorkerDeletion(
       collectReclamationDeletionEntries(params.plan),
@@ -158,18 +158,7 @@ export async function runSqliteSessionReclamation(params: {
       );
     }
   }
-  if (
-    nativeAuthority ||
-    params.forceInProcess ||
-    ((params.plan.kind === "maintenance-plan" ||
-      params.plan.kind === "maintenance-statistics" ||
-      params.plan.kind === "maintenance-age") &&
-      !supportsOpenClawAgentDatabaseExecution(params.plan.databaseOptions)) ||
-    isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
-      agentId: params.plan.databaseOptions.agentId,
-      env: params.plan.databaseOptions.env,
-    })
-  ) {
+  if (incognito) {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {

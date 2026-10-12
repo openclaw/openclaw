@@ -40,24 +40,32 @@ export function createUserTurnProcessingCompletion(
     },
     getProcessingCompletion: () =>
       processingCompletion?.ok ? processingCompletion.value : readPendingInput()?.completion,
-    completeProcessing: () => {
-      if (!readPendingInput()?.completeAsync) {
+    completeProcessing: (outcome: AgentRunTerminalOutcome) => {
+      const pendingInput = readPendingInput();
+      if (!pendingInput?.complete) {
         return undefined;
       }
       warnPluginSdkDeprecation({
         family: "session-input-completion",
         method: "UserTurnTranscriptRecorder.completeProcessing",
         replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
-        compatibility: "Completion writes require the asynchronous session owner.",
+        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
         code: "DEP_SESSION_INPUT_COMPLETION",
       });
-      if (processingCompletion?.ok) {
-        return processingCompletion.value;
+      if (!processingCompletion) {
+        if (processingCompletionPromise) {
+          throw new Error("Input completion is pending; await completeProcessingAsync");
+        }
+        try {
+          processingCompletion = { ok: true, value: pendingInput.complete(outcome) };
+        } catch (error) {
+          processingCompletion = { ok: false, error };
+        }
       }
-      if (processingCompletion && !processingCompletion.ok) {
+      if (!processingCompletion.ok) {
         throw processingCompletion.error;
       }
-      throw new Error("Input completion requires await completeProcessingAsync(outcome)");
+      return processingCompletion.value;
     },
     completeProcessingAsync: (outcome: AgentRunTerminalOutcome) => {
       const pendingInput = readPendingInput();
