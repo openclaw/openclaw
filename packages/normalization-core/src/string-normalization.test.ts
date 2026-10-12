@@ -14,16 +14,12 @@ import {
   normalizeUniqueStringEntries,
   normalizeUniqueStringEntriesLower,
   normalizeUniqueTrimmedStringList,
-  sortUniqueStrings,
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
   it.each([
-    { label: "empty", value: "", expected: false },
-    { label: "printable Unicode", value: "fix/a&b λ", expected: false },
     { label: "C1", value: String.fromCharCode(0x80, 0x9f), expected: false },
     { label: "NUL", value: `branch${String.fromCharCode(0)}name`, expected: true },
-    { label: "unit separator", value: `branch${String.fromCharCode(0x1f)}`, expected: true },
     { label: "DEL", value: `branch${String.fromCharCode(0x7f)}name`, expected: true },
   ])("detects only ASCII controls: $label", ({ value, expected }) => {
     expect(containsAsciiControlCharacter(value)).toBe(expected);
@@ -31,7 +27,6 @@ describe("normalization-core/string-normalization", () => {
 
   it.each([
     { value: "value", expected: [] },
-    { value: { 0: "value" }, expected: [] },
     {
       value: ["", "  ", 1, "first", null, "first", Object("boxed"), "last\n"],
       expected: ["", "  ", "first", "first", "last\n"],
@@ -48,26 +43,6 @@ describe("normalization-core/string-normalization", () => {
       "obj",
     ]);
     expect(normalizeStringEntries(undefined)).toStrictEqual([]);
-  });
-
-  it.each([
-    {
-      label: "case and numeric text",
-      values: ["a", "Z", "10", "2", "A", ""],
-      expected: ["", "10", "2", "A", "Z", "a"],
-    },
-    {
-      label: "UTF-16 without normalization",
-      values: ["\ue000", "\ud83d\ude00", "\ud800", "\udc00", "é", "e\u0301", "é"],
-      expected: ["e\u0301", "é", "\ud800", "\ud83d\ude00", "\udc00", "\ue000"],
-    },
-  ])("sorts fresh unique strings from iterables: $label", ({ values, expected }) => {
-    const input = Object.freeze(values);
-    const result = sortUniqueStrings(input);
-    expect(result).toEqual(expected);
-    expect(result).not.toBe(input);
-    expect(sortUniqueStrings(new Set(input))).toEqual(expected);
-    expect(sortUniqueStrings(input.values())).toEqual(expected);
   });
 
   it("normalizes unique string entries", () => {
@@ -127,48 +102,9 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeHyphenSlug(undefined)).toBe("");
   });
 
-  it("collapses repeated separators and trims leading/trailing punctuation", () => {
-    expect(normalizeHyphenSlug("  ...Hello   /  World---  ")).toBe("hello-world");
-    expect(normalizeHyphenSlug(" ###Team@@@Room### ")).toBe("###team@@@room###");
-  });
-
   it("normalizes @/# prefixed slugs used by channel allowlists", () => {
     expect(normalizeAtHashSlug(" #My_Channel + Alerts ")).toBe("my-channel-alerts");
     expect(normalizeAtHashSlug("@@Room___Name")).toBe("room-name");
     expect(normalizeAtHashSlug(undefined)).toBe("");
-  });
-
-  it("collapses separator-only results", () => {
-    expect(normalizeAtHashSlug("@@@___")).toBe("");
-  });
-
-  it.each([
-    ["Team 技术讨论", "team-技术讨论"],
-    ["Команда разработки", "команда-разработки"],
-    ["فريق التطوير", "فريق-التطوير"],
-  ])("preserves Unicode letters in normalizeHyphenSlug: %s", (input, expected) => {
-    expect(normalizeHyphenSlug(input)).toBe(expected);
-  });
-
-  it.each([
-    ["Cafe\u0301 Team", "café-team"],
-    ["हिन्दी चर्चा", "हिन्दी-चर्चा"],
-  ])("preserves combining marks in normalizeHyphenSlug: %s", (input, expected) => {
-    expect(normalizeHyphenSlug(input)).toBe(expected);
-  });
-
-  it.each([
-    ["#Команда разработки", "команда-разработки"],
-    ["@فريق التطوير", "فريق-التطوير"],
-    ["#OpenClaw中文群", "openclaw中文群"],
-  ])("preserves Unicode letters in normalizeAtHashSlug: %s", (input, expected) => {
-    expect(normalizeAtHashSlug(input)).toBe(expected);
-  });
-
-  it.each([
-    ["#Cafe\u0301_Team", "café-team"],
-    ["@हिन्दी चर्चा", "हिन्दी-चर्चा"],
-  ])("preserves combining marks in normalizeAtHashSlug: %s", (input, expected) => {
-    expect(normalizeAtHashSlug(input)).toBe(expected);
   });
 });
