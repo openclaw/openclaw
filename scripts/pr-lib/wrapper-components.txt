@@ -894,6 +894,7 @@ src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
+src/infra/error-diagnostics.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
@@ -1084,6 +1085,7 @@ src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
+src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
@@ -1996,6 +1998,7 @@ src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
+src/shared/model-fallback-notice.ts
 src/shared/transcript-only-openclaw-assistant.ts
 src/state/openclaw-agent-execution-work.ts
 packages/gateway-protocol/src/schema/session-participant.ts

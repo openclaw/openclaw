@@ -10,6 +10,7 @@ import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
@@ -244,8 +245,14 @@ describe("session sharing policy", () => {
         ["wake", { sessionKey }],
       ] as const) {
         expect(
-          resolveSessionMutationAuthorization({ client: writer, method, requestParams, context })
-            .error,
+          (
+            await resolveSessionMutationAuthorizationAsync({
+              client: writer,
+              method,
+              requestParams,
+              context,
+            })
+          ).error,
           method,
         ).toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("main") });
       }
@@ -312,12 +319,14 @@ describe("session sharing policy", () => {
           "wake",
         ]) {
           expect(
-            resolveSessionMutationAuthorization({
-              client: viewer,
-              method,
-              requestParams: { sessionKey },
-              context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-            }).error,
+            (
+              await resolveSessionMutationAuthorizationAsync({
+                client: viewer,
+                method,
+                requestParams: { sessionKey },
+                context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+              })
+            ).error,
             `${roleName}: ${method}`,
           ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
         }
@@ -337,12 +346,14 @@ describe("session sharing policy", () => {
           "sessions.companion.state",
         ]) {
           expect(
-            resolveSessionMutationAuthorization({
-              client: viewer,
-              method,
-              requestParams: { sessionKey },
-              context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-            }).error,
+            (
+              await resolveSessionMutationAuthorizationAsync({
+                client: viewer,
+                method,
+                requestParams: { sessionKey },
+                context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+              })
+            ).error,
             `${roleName}: ${method}`,
           ).toBeNull();
         }
@@ -534,12 +545,14 @@ describe("session sharing policy", () => {
         ["wake", { sessionKey: foreignKey }],
       ] as const) {
         expect(
-          resolveSessionMutationAuthorization({
-            client: restricted,
-            method,
-            requestParams,
-            context,
-          }).error,
+          (
+            await resolveSessionMutationAuthorizationAsync({
+              client: restricted,
+              method,
+              requestParams,
+              context,
+            })
+          ).error,
           method,
         ).toMatchObject({
           code: "INVALID_REQUEST",

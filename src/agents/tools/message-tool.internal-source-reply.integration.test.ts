@@ -3,10 +3,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -50,7 +54,7 @@ const INTERNAL_SOURCE_CATALOG = {
 function createCurrentSourceMessageTool(
   params: NonNullable<Parameters<typeof createMessageTool>[0]> = {},
 ) {
-  return createMessageTool({
+  const options: NonNullable<Parameters<typeof createMessageTool>[0]> = {
     config: { agents: { entries: { main: {} } } },
     preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
     currentChannelProvider: "webchat",
@@ -66,28 +70,37 @@ function createCurrentSourceMessageTool(
       hadUnresolvedTargets: false,
     }),
     ...params,
-  });
+  };
+  setRuntimeConfigSnapshot(options.config ?? {});
+  return createMessageTool(options);
 }
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("WebChat message tool internal source reply", () => {
   it("refuses an internal-source transcript commit after its real cron admission closes", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-commit-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-commit";
         const sessionId = "cron-source-commit-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const cfg = {
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+          tools: { allow: ["message"] },
+        };
+        setRuntimeConfigSnapshot(cfg);
         await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
         await withCronMessageRun(
           {
-            cfg: {
-              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
-              tools: { allow: ["message"] },
-            },
+            cfg,
             storePath: state.statePath("cron", "internal-source.json"),
             sessionKey,
             sessionId,
@@ -146,18 +159,21 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-media";
         const sessionId = "cron-source-media-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const cfg = {
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+          tools: { allow: ["message"] },
+        };
+        setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(state.workspaceDir, { recursive: true });
         await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
         await withCronMessageRun(
           {
-            cfg: {
-              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
-              tools: { allow: ["message"] },
-            },
+            cfg,
             storePath: state.statePath("cron", "internal-source-media.json"),
             sessionKey,
             sessionId,
@@ -320,6 +336,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-buffer-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
         const attachment = Buffer.from("<!doctype html><h1>Proof</h1>");
@@ -353,6 +370,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-error-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const media = path.join(state.workspaceDir, "missing.txt");
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
@@ -377,6 +395,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const remoteWorkspaceDir = state.path("remote-workspace");
         await fs.mkdir(remoteWorkspaceDir, { recursive: true });
@@ -440,6 +459,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const { stateDir, workspaceDir } = state;
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:webchat:dm:restart-proof";
@@ -624,6 +644,7 @@ describe("WebChat message tool internal source reply", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "source-reply-append-outcome-" },
         async (state) => {
+          setRuntimeConfigSnapshot({});
           const sessionKey = "agent:main:webchat:dm:append-outcome";
           const sessionId = "append-outcome-session";
           const storePath = path.join(
@@ -634,6 +655,10 @@ describe("WebChat message tool internal source reply", () => {
             "sessions.json",
           );
           const scope = { agentId: "main", sessionKey, sessionId, storePath };
+          const cfg = {
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
+          };
+          setRuntimeConfigSnapshot(cfg);
           const imagePath = path.join(state.workspaceDir, "proof.png");
           await fs.mkdir(state.workspaceDir, { recursive: true });
           await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -670,9 +695,7 @@ describe("WebChat message tool internal source reply", () => {
           try {
             const persist = () =>
               persistInternalSourceReply({
-                cfg: {
-                  agents: { entries: { main: { workspace: state.workspaceDir } } },
-                },
+                cfg,
                 sessionKey,
                 expectedSessionId: sessionId,
                 agentId: "main",

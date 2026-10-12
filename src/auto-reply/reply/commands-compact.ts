@@ -232,21 +232,25 @@ export async function handleCompactCommand(
       assertOwnerCurrent?.();
     }
   };
-  const resolveCurrentEntry = () =>
-    runtime.resolveCurrentSessionEntry({
+  let currentRead: Awaited<ReturnType<typeof runtime.prepareCurrentSessionEntry>>;
+  using _ = { [Symbol.dispose]: () => currentRead?.release() };
+  const prepareCurrentEntry = async () => {
+    const prepared = await runtime.prepareCurrentSessionEntry({
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       storePath: compactionStorePath,
       expected: expectedSession,
     });
+    currentRead?.release();
+    currentRead = prepared;
+    return prepared;
+  };
   let interruptionNotice = "";
   const authorityFailure = () => {
     const reason =
       params.commandInvocationSignal?.aborted || params.opts?.abortSignal?.aborted
         ? "command invocation closed"
-        : !resolveCurrentEntry()
-          ? "command session changed"
-          : undefined;
+        : undefined;
     return reason ? compactionUnavailable(reason, interruptionNotice) : undefined;
   };
   let failure = authorityFailure();
@@ -263,9 +267,20 @@ export async function handleCompactCommand(
     }
     assertOwnerBeforeAcceptance();
     if (!settled) {
+      if (!(await prepareCurrentEntry())) {
+        return compactionUnavailable("command session changed", interruptionNotice);
+      }
+      failure = authorityFailure();
+      if (failure) {
+        return failure;
+      }
+      assertOwnerBeforeAcceptance();
+      currentRead?.assertCurrent();
       interruptionNotice = runtime.abortEmbeddedAgentRun(sessionId)
         ? "\n⚠️ Your in-flight request was aborted by compaction — please resend it."
         : "";
+      currentRead?.release();
+      currentRead = undefined;
       const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
       failure = authorityFailure();
       if (failure) {
@@ -283,19 +298,18 @@ export async function handleCompactCommand(
     return failure;
   }
   assertOwnerBeforeAcceptance();
-  // Draining a run does not clear its durable writer fence. Capture the current
-  // row after the drain instead of accounting against the command's older snapshot.
-  const refreshedEntry = resolveCurrentEntry();
-  if (!refreshedEntry) {
+  // Prepare one current row at compaction dispatch; write receipts keep its guard live.
+  const prepared = await prepareCurrentEntry();
+  if (!prepared) {
     return compactionUnavailable("command session changed", interruptionNotice);
   }
-  expectedSession = refreshedEntry;
+  expectedSession = prepared.entry;
   if (params.sessionStore) {
-    params.sessionStore[params.sessionKey] = refreshedEntry;
+    params.sessionStore[params.sessionKey] = prepared.entry;
   }
   const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: params.provider,
-    entry: refreshedEntry,
+    entry: prepared.entry,
     cfg: params.cfg,
   });
   const replyOperation = params.opts?.replyOperation;
@@ -304,10 +318,7 @@ export async function handleCompactCommand(
     assertOwnerBeforeAcceptance();
     params.opts?.abortSignal?.throwIfAborted();
     params.commandInvocationSignal?.throwIfAborted();
-    const current = resolveCurrentEntry();
-    if (!current || current.activeWriterRunId !== expectedSession.activeWriterRunId) {
-      throw new Error("command session changed");
-    }
+    currentRead?.assertCurrent();
   };
   const compaction = runtime.compactEmbeddedAgentSession(
     {
@@ -375,6 +386,8 @@ export async function handleCompactCommand(
       sourceAuthority: { assertActive, operatorAuthority },
       onCommitted: (accepted) => {
         compactionAccepted = true;
+        currentRead?.release();
+        currentRead = undefined;
         // Update the expectation before identity observers run, not from public result metadata.
         expectedSession = accepted.entry;
         if (params.sessionStore) {
@@ -383,10 +396,14 @@ export async function handleCompactCommand(
       },
       onHostCompactionCommitted: () => {
         compactionAccepted = true;
+        currentRead?.release();
+        currentRead = undefined;
       },
     },
   );
   const result = await compaction.finally(() => replyOperation?.setPhase("running"));
+  currentRead?.release();
+  currentRead = undefined;
 
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;
@@ -411,9 +428,7 @@ export async function handleCompactCommand(
       transcriptByteCompactionLatch: result.compactionKind === "native-harness" ? undefined : null,
     });
     if (compactionCount === undefined) {
-      return (
-        authorityFailure() ?? compactionUnavailable("session accounting failed", interruptionNotice)
-      );
+      return compactionUnavailable("session accounting failed", interruptionNotice);
     }
   }
   failure = authorityFailure();

@@ -1,10 +1,14 @@
 // User turn transcript tests cover transcript extraction for user turns.
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -32,7 +36,15 @@ import {
 } from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-user-turn-persist-");
+  const sessionDirs = useSessionStoreTempDirs(
+    (cleanup) =>
+      afterAll(async () => {
+        await cleanup();
+        clearRuntimeConfigSnapshot();
+      }),
+    "openclaw-user-turn-persist-",
+  );
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const unusedRecorderTarget = {
     agentId: "main",
     sessionEntry: undefined,

@@ -31,7 +31,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { createChatAbortContext } from "./chat.abort.test-helpers.js";
@@ -151,7 +151,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (!database) {
         throw new Error("Missing sibling database");
       }
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       await writeFile(database.path, "not a SQLite database");
     }
     const context = createChatAbortContext({

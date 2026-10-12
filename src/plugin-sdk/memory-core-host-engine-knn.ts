@@ -10,6 +10,7 @@ export {
 } from "../infra/node-sqlite.js";
 
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+export { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export {
   decodeMemoryEmbedding,
   parseEmbedding,

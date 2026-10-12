@@ -225,7 +225,6 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       entry: child,
       activeModel: null,
       lightweightListRow: true,
-      skipTranscriptUsageFallback: true,
     });
     expect(projectGatewaySessionActiveRun(active, row.status)).toEqual({
       status: "interrupted",

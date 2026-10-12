@@ -2,7 +2,6 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -19,10 +18,6 @@ const second: SolidPanelTabStripTab = {
   domId: "tab-second",
   label: "Second",
   closeLabel: "Close second",
-};
-type Group = HTMLElement & {
-  updateComplete: Promise<unknown>;
-  getUpdateComplete(): Promise<unknown>;
 };
 
 function mountStrip(
@@ -47,12 +42,11 @@ function mountStrip(
       newLabel="New tab"
     />
   ));
-  const group = () => view.container.querySelector<Group>("wa-tab-group");
+  const group = () => view.container.querySelector<HTMLElement>(".tabstrip");
   return { ...view, group, setTabs, setActiveId };
 }
 
 afterEach(() => {
-  Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
   document.documentElement.removeAttribute("dir");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -63,17 +57,15 @@ it("keeps keyed tab nodes while publishing controlled selection and new labels",
   const view = mountStrip(undefined, { onSelect });
   const firstNode = view.container.querySelector("#tab-first");
   const secondNode = view.container.querySelector("#tab-second");
-  await view.group()!.updateComplete;
-  view.group()!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: "first" } }));
+  view.container.querySelector<HTMLButtonElement>("#tab-first")!.click();
   expect(onSelect).not.toHaveBeenCalled();
-  view.group()!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: "second" } }));
+  view.container.querySelector<HTMLButtonElement>("#tab-second")!.click();
   expect(onSelect).toHaveBeenCalledExactlyOnceWith("second");
 
   view.setTabs([{ ...second, label: "Renamed second" }, first]);
   view.setActiveId("second");
   flush();
-  await view.group()!.updateComplete;
-  expect([...view.container.querySelectorAll("wa-tab")]).toEqual([secondNode, firstNode]);
+  expect([...view.container.querySelectorAll('[role="tab"]')]).toEqual([secondNode, firstNode]);
   expect(secondNode?.textContent).toContain("Renamed second");
   expect(secondNode?.getAttribute("aria-selected")).toBe("true");
   expect(view.container.querySelector<HTMLButtonElement>("#tab-second-close")?.tabIndex).toBe(0);
@@ -98,7 +90,7 @@ it("keeps activation, keyboard repeat, and middle-click close separate", () => {
   const onActivate = vi.fn();
   const onClose = vi.fn();
   const view = mountStrip([{ ...first, onActivate }], { onClose });
-  const tab = view.container.querySelector<HTMLElement>("wa-tab")!;
+  const tab = view.container.querySelector<HTMLElement>('[role="tab"]')!;
   tab.click();
   tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", repeat: true, bubbles: true }));
@@ -111,7 +103,7 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
   document.documentElement.dir = direction;
   const onReorder = vi.fn();
   const view = mountStrip(undefined, { onReorder });
-  const tabs = [...view.container.querySelectorAll<HTMLElement>("wa-tab")];
+  const tabs = [...view.container.querySelectorAll<HTMLElement>('[role="tab"]')];
   const source = tabs[0]!;
   const target = tabs[1]!;
   vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ left: 100, width: 80 } as DOMRect);
@@ -135,13 +127,9 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
   expect(view.group()?.hasAttribute("data-dragged-panel-tab")).toBe(false);
 });
 
-it("does not install late measurement observers after disposal", async () => {
-  const gate = createDeferred<boolean>();
-  Object.defineProperty(customElements.get("wa-tab-group")!.prototype, "updateComplete", {
-    configurable: true,
-    get: () => gate.promise,
-  });
+it("releases measurement observers on disposal", () => {
   const observer = vi.fn();
+  const disconnected = vi.fn();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -150,16 +138,15 @@ it("does not install late measurement observers after disposal", async () => {
       }
       observe() {}
       unobserve() {}
-      disconnect() {}
+      disconnect() {
+        disconnected();
+      }
     },
   );
   const view = mountStrip();
-  // Let Web Awesome create its shadow scroller while holding the public layout
-  // promise that the Solid measurement owner awaits.
-  await view.group()!.getUpdateComplete();
   const initialObservers = observer.mock.calls.length;
+  expect(initialObservers).toBeGreaterThan(0);
   view.unmount();
-  gate.resolve(true);
-  await gate.promise;
   expect(observer).toHaveBeenCalledTimes(initialObservers);
+  expect(disconnected).toHaveBeenCalledTimes(initialObservers);
 });

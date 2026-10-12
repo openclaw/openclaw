@@ -53,6 +53,7 @@ Before streaming, an admitted run records its durable `activeWriterRunId` claim.
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
+- Embedded global, plugin, and project settings are prepared once per session and reused across turns. Config or plugin changes, workspace or agent-directory changes, and session reset refresh that snapshot. Direct edits to `settings.json` take effect in a new or reset session. Authentication and model runtimes remain outside this settings cache; model-specific compaction limits and attempt-local settings remain fresh for each turn.
 - Bootstrap/context files are resolved and injected into the system prompt.
 - The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 

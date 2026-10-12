@@ -1000,7 +1000,6 @@ const testing = {
   createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
   resolveGatewayLockErrorExitCode,
-  resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 

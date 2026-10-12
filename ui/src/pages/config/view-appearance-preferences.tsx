@@ -220,6 +220,9 @@ export function ChatPreferencesSection(props: ConfigProps) {
         })
       : undefined,
   );
+  // The value binding rewrites the DOM whenever it reruns. Track only the stored
+  // width so unrelated settings refreshes keep an uncommitted draft.
+  const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
   const messageWidthDefaultDescription = (
     <SettingsDefaultDescription
       value={UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth}
@@ -273,7 +276,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                     type="text"
                     spellcheck="false"
                     placeholder="48rem"
-                    value={props.chatMessageMaxWidth ?? ""}
+                    value={messageWidth()}
                     onChange={(event: Event) => {
                       // SAFETY: The listener is bound directly to this input.
                       const input = event.currentTarget as HTMLInputElement;

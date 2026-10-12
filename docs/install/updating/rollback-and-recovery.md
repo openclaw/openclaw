@@ -264,7 +264,9 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation. When the Gateway answers with the
 update's target version, that observation supersedes a saved runtime-verification
 restart warning; the original failed run and any migration rollback restrictions
-remain recorded. A restored Gateway must pass its own verification checks
+remain recorded. An unsafe Doctor process settlement keeps its recovery guidance
+until the recovery owner verifies settlement; a responding Gateway alone cannot
+clear that refusal. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 
 In the Control UI, open **Settings → Updates** and choose **Diagnose update** to

@@ -1767,7 +1767,6 @@ src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
 src/commands/doctor/shared/stale-auth-order.ts	4
-src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
@@ -2292,7 +2291,6 @@ src/plugin-sdk/allowlist-config-edit.ts	6
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
-src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
 src/plugin-sdk/channel-config-helpers.ts	15
 src/plugin-sdk/channel-config-ui-hints.ts	1

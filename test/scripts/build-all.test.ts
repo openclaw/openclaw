@@ -556,6 +556,106 @@ describe("resolveBuildAllSteps", () => {
       }
     },
   );
+  it.each([
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: false },
+    { runtimeExit: 0, uiExit: 7, expectedExit: 7, throws: false },
+    { runtimeExit: 8, uiExit: 0, expectedExit: 8, throws: false },
+    { runtimeExit: 0, uiExit: 0, expectedExit: 0, throws: true },
+  ])(
+    "joins independent UI and runtime writers before final metadata ($runtimeExit/$uiExit/$throws)",
+    async ({ runtimeExit, uiExit, expectedExit, throws }) => {
+      const ui = Promise.withResolvers<{ status: number }>();
+      const runtimeReached = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      let settled = false;
+      const build = runBuildAllSteps("runtime", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+          "write-build-info",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === "ui:build") {
+            return ui.promise;
+          }
+          if (label === "check-cli-bootstrap-imports") {
+            runtimeReached.resolve();
+            if (throws) {
+              throw new Error("runtime writer failed");
+            }
+            return { status: runtimeExit };
+          }
+          return { status: 0 };
+        },
+      });
+      void build.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      try {
+        await runtimeReached.promise;
+        expect(calls).toEqual([
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ]);
+        expect(settled).toBe(false);
+      } finally {
+        ui.resolve({ status: uiExit });
+      }
+      if (throws) {
+        await expect(build).rejects.toThrow("runtime writer failed");
+      } else {
+        expect((await build).exitCode).toBe(expectedExit);
+      }
+      expect(calls.includes("write-build-info")).toBe(!throws && expectedExit === 0);
+    },
+  );
+  it.each(["write-unified-entry-dts", "write-plugin-sdk-entry-dts"])(
+    "finishes late %s compiler work before starting the independent UI build",
+    async (compiler) => {
+      const started = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<{ status: number }>();
+      const calls: string[] = [];
+      const build = runBuildAllSteps("full", {
+        ...buildRunner(),
+        steps: [
+          "tsdown",
+          "external-plugins:local-dist",
+          compiler,
+          "check-cli-bootstrap-imports",
+          "ui:build",
+        ].map((label) => ({ label, args: [label] })),
+        runStep({ args: [label] }) {
+          calls.push(label!);
+          if (label === compiler) {
+            started.resolve();
+            return finished.promise;
+          }
+          return { status: 0 };
+        },
+      });
+      try {
+        await started.promise;
+        expect(calls).toEqual(["tsdown", "external-plugins:local-dist", compiler]);
+      } finally {
+        finished.resolve({ status: 0 });
+      }
+      expect((await build).exitCode).toBe(0);
+      expect(calls).toEqual([
+        "tsdown",
+        "external-plugins:local-dist",
+        compiler,
+        "check-cli-bootstrap-imports",
+        "ui:build",
+      ]);
+    },
+  );
   it.each([undefined, "0"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {

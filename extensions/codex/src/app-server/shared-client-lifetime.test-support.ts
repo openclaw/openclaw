@@ -378,6 +378,49 @@ export function registerSharedClientLifetimeTests(
     }
   });
 
+  it("settles session cancellation when its native owner closes during the callback without exiting", async () => {
+    const harness = createClientHarness({ autoEmitExit: false });
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+    await sendInitializeResult(harness, `codex-cli/${CODEX_APP_SERVER_VERSION}`);
+    const client = await acquire;
+    const bindingStore = createCodexTestBindingStore();
+    const session = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:cancellation",
+      sessionId: "cancellation-session",
+    };
+    await bindingStore.mutate(session, {
+      kind: "set",
+      binding: { threadId: "closing-thread", clientId: client.getInstanceId(), cwd: "/repo" },
+    });
+    const signalParent = vi.fn(async () => {
+      client.close();
+      return "stopped";
+    });
+    let settled = false;
+    const cancellation = withCodexSessionDescendantCancellation(
+      bindingStore,
+      { ...session, assertCurrent: () => {}, acceptsRequest: () => true },
+      signalParent,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await setImmediate();
+      expect(signalParent).toHaveBeenCalledOnce();
+      expect(settled).toBe(true);
+      await expect(cancellation).resolves.toBe("stopped");
+      expect(bindingStore.read(session)?.threadId).toBe("closing-thread");
+    } finally {
+      harness.emitExit();
+      await cancellation;
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  });
+
   it("lets cancellation end a writer handoff to a retired owner that other leases keep alive", async () => {
     const harness = createClientHarness({ autoEmitExit: false });
     const successor = createClientHarness();

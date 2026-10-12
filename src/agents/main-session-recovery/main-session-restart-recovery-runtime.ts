@@ -28,7 +28,7 @@ import {
 } from "./main-session-restart-recovery-diagnostics.js";
 import {
   loadExpectedRestartRecoveryTarget,
-  captureExpectedRestartRecoveryCurrent,
+  prepareExpectedRestartRecoveryCurrent,
 } from "./main-session-restart-recovery-exact-target.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
@@ -196,18 +196,17 @@ async function recoverExpectedRestartRecovery(
     ...params.expectedTarget,
     claim: params.expectedTarget.claim && { ...params.expectedTarget.claim },
   };
-  const isCurrent = captureExpectedRestartRecoveryCurrent({
+  const current = await prepareExpectedRestartRecoveryCurrent({
     expected,
     storePath: params.storePath,
   });
+  using _ = { [Symbol.dispose]: current.release };
+  const { isCurrent } = current;
   const preparation = prepareRestartRecovery(params.gatewayRuntime, params.signal);
   if (preparation && (await preparation) !== undefined) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  if (
-    !(await loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath })) ||
-    !isCurrent()
-  ) {
+  if (!isCurrent()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
   return (

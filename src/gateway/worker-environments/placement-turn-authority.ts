@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -202,6 +203,10 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
     sessionId === undefined
       ? "Worker placement inventory changed"
       : `Session ${sessionId} placement authority changed`;
+  const changed = () => {
+    const error = new Error(changedMessage);
+    return attachErrorDiagnostic(error, error.stack ?? changedMessage);
+  };
   const assertUsable = () => {
     context.admission.assertCurrent();
     if (
@@ -210,7 +215,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
       !owner.active ||
       owners.get(owner.identity.key) !== owner
     ) {
-      throw new Error(changedMessage);
+      throw changed();
     }
   };
   const authority = {
@@ -227,7 +232,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
             ]),
           );
         }
-        throw new Error(changedMessage);
+        throw changed();
       }
     },
     release(this: void) {
@@ -298,11 +303,15 @@ export async function prepareSessionPlacementRead(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementRecord | undefined>,
 ) {
-  return await preparePlacementRead(
-    capturePlacementObservation(pathname, sessionId),
-    read,
-    (placement, captured) => retainSessionPlacementRead(sessionId, placement, captured),
-  );
+  const captured = capturePlacementObservation(pathname, sessionId);
+  try {
+    const placement = await read();
+    captured.assertUsable();
+    return retainSessionPlacementRead(sessionId, placement, captured);
+  } catch (error) {
+    captured.authority.release();
+    throw error;
+  }
 }
 
 function stageChange(db: DatabaseSync, change: ClaimChange): void {

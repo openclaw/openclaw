@@ -21,6 +21,7 @@ export {
   publishSqliteDatabaseAdmission,
   readSqliteDatabasePendingWriteToken,
   readSqliteDatabaseWriteTokenForPath,
+  withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";

@@ -101,6 +101,8 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
 
 type GatewayKernelOptions = {
   deferEarlyRuntime?: boolean;
+  /** HTTP startup binds its listener before awaiting session projection readiness. */
+  deferRequestRuntime?: boolean;
   sdkResourceHost?: LegacyPluginSdkResourceHost;
 };
 
@@ -231,7 +233,7 @@ async function createGatewayKernelWithSdkHost(
       await coreRuntime.startEarlyRuntime();
     }
     await pluginMetadata.waitForRetirement();
-    return await runtime.startupTrace.measure("gateway.request-runtime", () =>
+    const requestRuntime = await runtime.startupTrace.measure("gateway.request-runtime", () =>
       prepareGatewayKernelRequestRuntime({
         coreRuntime,
         log,
@@ -239,6 +241,10 @@ async function createGatewayKernelWithSdkHost(
         hostLifecycle: opts.hostLifecycle,
       }),
     );
+    if (!options.deferRequestRuntime) {
+      await requestRuntime.ensureRequestRuntimeReady();
+    }
+    return requestRuntime;
   } catch (error) {
     startupError = error;
   }

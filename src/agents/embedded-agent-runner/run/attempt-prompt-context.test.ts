@@ -1,5 +1,9 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
@@ -102,9 +106,11 @@ function createInput(options?: {
 }) {
   const replaceSessionMessages = vi.fn();
   const report = options?.report ?? ({} as SessionSystemPromptReport);
+  const attempt = options?.attempt ?? createAttempt({ trigger: "user" });
+  setRuntimeConfigSnapshot(attempt.config ?? {});
   return {
     input: {
-      attempt: options?.attempt ?? createAttempt({ trigger: "user" }),
+      attempt,
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
@@ -145,6 +151,7 @@ afterEach(async () => {
   deleteSession("exec-a");
   deleteSession("exec-z");
   await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {

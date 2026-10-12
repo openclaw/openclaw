@@ -12,7 +12,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("installs WebKit only for the shard owning the selected workboard suite", () => {
+it.each([
+  "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts",
+  "ui/src/e2e/tooltip-first-activation.e2e.test.ts",
+])("installs WebKit only for the shard owning %s", (suite) => {
   const step = readCiWorkflow().jobs["checks-ui-e2e"].steps.find(
     (candidate: WorkflowStep) => candidate.name === "Test Control UI end-to-end",
   );
@@ -21,7 +24,6 @@ it("installs WebKit only for the shard owning the selected workboard suite", () 
   const installs = path.join(root, "installs");
   const args = path.join(root, "args");
   const include = path.join(root, "include.json");
-  const suite = "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts";
   const sibling = "ui/src/e2e/sibling.e2e.test.ts";
   const fixture = (file: string, content: string) => {
     const target = path.join(root, file);

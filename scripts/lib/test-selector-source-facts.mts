@@ -15,7 +15,7 @@ const SCAN_WORKER_MARKER = "openclawTestSelectorSourceScan";
 const MAX_SCAN_WORKERS = 8;
 // Worker startup costs tens of milliseconds; small scans stay on one thread.
 const MIN_FILES_PER_SCAN_WORKER = 256;
-type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean };
+type SourceToken = { value: string; literal?: boolean; statementEnd?: boolean; end?: number };
 const CONSERVATIVE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"`]*?\s+from\s+)?["'`]([^"'`]+)["'`]|\b(?:import(?:\.meta\.resolve)?|require(?:\.resolve)?)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\bnew\s+URL\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*import\.meta\.url\s*,?\s*\)/gu;
 
@@ -114,7 +114,7 @@ function sourceTokens(source: string): {
         continue;
       }
       if (char === '"' || char === "'") {
-        tokens.push({ value: quoted(char), literal: true });
+        tokens.push({ value: quoted(char), literal: true, end: offset });
         continue;
       }
       if (char === "`") {
@@ -836,6 +836,48 @@ function mockSpecifiers(tokens: SourceToken[]): string[] {
   return [...specifiers];
 }
 
+function leadingTypeOnlyImports(source: string, tokens: SourceToken[]): string[] {
+  let end = 0;
+  for (let index = 0; !tokens[index]?.literal && tokens[index]?.value === "import";) {
+    let cursor = index + 1;
+    if ([".", "("].includes(tokens[cursor]?.value ?? "")) {
+      break;
+    }
+    if (!tokens[cursor]?.literal) {
+      while (
+        tokens[cursor] &&
+        tokens[cursor]?.value !== ";" &&
+        !(tokens[cursor]?.value === "from" && tokens[cursor + 1]?.literal)
+      ) {
+        cursor++;
+      }
+      cursor++;
+    }
+    const specifier = tokens[cursor];
+    if (!specifier?.literal || specifier.end === undefined) {
+      break;
+    }
+    end = specifier.end;
+    index = cursor + 1 + Number(tokens[cursor + 1]?.value === ";");
+  }
+  if (
+    !end ||
+    tokens.some((token) => !token.literal && token.value === "\\") ||
+    /\b(?:import|require|from|URL|sourceWorkerName)\b/u.test(source.slice(end))
+  ) {
+    return [];
+  }
+  try {
+    const prefix = source.slice(0, end);
+    const runtime = new Set(
+      importFacts(nodeModule.stripTypeScriptTypes(prefix, { mode: "strip" }), false).imports,
+    );
+    return importFacts(prefix, false).imports.filter((specifier) => !runtime.has(specifier));
+  } catch {
+    return [];
+  }
+}
+
 function importFacts(
   source: string,
   classifyTypes = true,
@@ -954,7 +996,10 @@ function importFacts(
         imports.add(specifier);
       }
     }
-    return { imports: [...imports], typeOnlyImports: [], mocks, workerExports: [] };
+    // JSX cannot invalidate erased header imports; later runtime uses still retain the edge.
+    const typeOnlyImports =
+      classifyTypes && possibleJsx ? leadingTypeOnlyImports(source, tokens) : [];
+    return { imports: [...imports], typeOnlyImports, mocks, workerExports: [] };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
     return {

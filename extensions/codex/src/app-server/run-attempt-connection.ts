@@ -117,6 +117,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
+  const ownedSandbox = params.sandbox === undefined ? sandbox : undefined;
+  let sandboxTransferred = false;
+  using _ = {
+    [Symbol.dispose]: () => {
+      if (!sandboxTransferred) {
+        ownedSandbox?.[Symbol.dispose]?.();
+      }
+    },
+  };
   // Upstream cannot remove registered environments, so node leases own one disposable client.
   const attemptClientFactory =
     options.clientFactory ??
@@ -537,6 +546,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       );
     assertCurrent();
     // Host capabilities are identity-keyed; carry generation proof separately.
+    sandboxTransferred = true;
     return {
       params,
       prepareInputAttachments: async (
@@ -613,6 +623,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       sandboxSessionKey,
       contextSessionKey,
       sandbox,
+      releaseSandboxContext: () => ownedSandbox?.[Symbol.dispose]?.(),
       agentDir,
       shellEnvironment,
       shellPathPrepend,

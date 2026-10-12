@@ -253,12 +253,18 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           runtime.runtimeToolAllowlist,
         );
         const surface = runtime.compactTools(allowedTools);
-        const callableNames = surface.promptToolPolicy.apply().callableToolNames;
+        const projection = surface.promptToolPolicy.apply();
+        const callableNames = projection.callableToolNames;
         expect(callableNames).toContain("web_search");
         expect(callableNames).not.toContain("web_fetch");
         expect(callableNames).not.toContain("memory_search");
         expect(runtime.codeModeControlsEnabled).toBe(mode === "code");
         expect(runtime.toolSearchControlsEnabled).toBe(mode === "search");
+        if (mode === "code") {
+          expect(projection.toolSchemaDirectoryPrompt).toContain("- web_search ");
+          expect(projection.toolSchemaDirectoryPrompt).not.toContain("- web_fetch ");
+          expect(projection.toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
+        }
       } finally {
         runtime.cleanup();
       }

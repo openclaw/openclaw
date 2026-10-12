@@ -267,8 +267,6 @@ export async function enqueuePreparedDeliveryOnce(
   return { id: normalizedId, created: true };
 }
 
-export { hasActiveDeliveryOwner } from "./delivery-queue-types.js";
-
 /** Update retry evidence on the queue worker's exact namespace and claim. */
 function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after-send") {
   return async (

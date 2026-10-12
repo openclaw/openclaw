@@ -240,13 +240,15 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
+  // Health cannot readmit Doctor custody; report steps omit the settlement's authority fields.
   const runtimeVerificationRecovered =
     run.status === "failed" &&
     currentHealth?.kind === "responding" &&
     Boolean(run.after.version) &&
     currentHealth.version === run.after.version &&
     run.verification.recovery?.serviceRestartSafe === false &&
-    run.verification.recovery.reason === "runtime-verification-failed";
+    run.verification.recovery.reason === "runtime-verification-failed" &&
+    !run.steps.some((step) => step.step === "doctor process settlement");
   // Keep the version visible and distinguish Git updates within the same version.
   const before = formatUpdateVersion(run.before);
   const after = formatUpdateVersion(run.after);

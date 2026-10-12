@@ -16,7 +16,8 @@ import {
 const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
 const listNodes = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/tools/gateway.js", () => ({
+vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/tools/gateway.js")>()),
   callGatewayTool: async (
     method: string,
     _opts: unknown,

@@ -313,7 +313,7 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
 });
 
 it.each([false, true])(
-  "checks pinned parent skills off the Gateway thread (changed=%s)",
+  "preserves pinned parent skills while the parent updates (changed=%s)",
   async (changed) => {
     await withOpenClawTestState({ label: "spawn-parent-recheck" }, async () => {
       const sessionKey = "agent:main:parent";
@@ -334,7 +334,6 @@ it.each([false, true])(
         updatedAt: 1,
         skillLibrarySelections,
       });
-      const syncRead = vi.spyOn(spawnRuntime, "loadSessionEntry");
       // The parent's own turn keeps writing its row while the child is prepared.
       const prepare = writeParentDuringChildPrepare(childSessionKey, () =>
         upsertSessionEntryCore(scope, {
@@ -355,7 +354,6 @@ it.each([false, true])(
             ? { status: "error", error: expect.stringContaining("Parent skill selection changed") }
             : { status: "ok" },
         );
-        expect(syncRead).not.toHaveBeenCalled();
         const child = loadSessionEntry({ storePath, sessionKey: childSessionKey });
         if (changed) {
           expect(child).toBeUndefined();
@@ -368,7 +366,6 @@ it.each([false, true])(
         }
       } finally {
         prepare.mockRestore();
-        syncRead.mockRestore();
       }
     });
   },

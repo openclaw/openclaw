@@ -181,14 +181,25 @@ export function registerUserModelAuthProfileSecrets(credential: AuthProfileCrede
   }
 }
 
+export function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
+  return JSON.stringify(profileSchema.parse({ version: 1, ...profile }));
+}
+
+export function normalizeUserModelAuthProfile(profile: UserModelAuthProfile): UserModelAuthProfile {
+  const { credential, usageStats } = parseRecord(
+    encodeUserModelAuthProfile(profile),
+    profileSchema,
+  );
+  return { credential, usageStats };
+}
+
 function writeProfile(
   db: DatabaseSync,
   owner: string,
   authProfileId: string,
   profile: UserModelAuthProfile,
 ): void {
-  const record = profileSchema.parse({ version: 1, ...profile });
-  writeRecord(db, owner, `model-account:${authProfileId}`, JSON.stringify(record));
+  writeRecord(db, owner, `model-account:${authProfileId}`, encodeUserModelAuthProfile(profile));
 }
 
 function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {

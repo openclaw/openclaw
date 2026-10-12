@@ -68,6 +68,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
+  settleSelectedSession,
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
@@ -1169,9 +1170,8 @@ export class SessionsPageController implements ReactiveControllerHost {
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      const selected = new Map(this.state.selectedSessions);
-      selected.delete(key);
-      this.state.selectedSessions = selected;
+      const selected = this.state.selectedSessions;
+      this.state.selectedSessions = settleSelectedSession(selected, key, patched.entry.sessionId);
       return "completed";
     } catch (error) {
       return this.publishRequestError(scope, error);

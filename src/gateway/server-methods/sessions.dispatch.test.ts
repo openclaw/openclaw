@@ -13,7 +13,7 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "../worker-environments/placement-record.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -547,7 +547,14 @@ describe("sessions.dispatch", () => {
       workerSessionPlacementService: { getMany: () => new Map([[sessionId, provisioning]]) },
     });
     const changes = vi.fn();
-    onTestFinished(sessionChanges.subscribe(changes));
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        // Capture placement broadcasts, excluding writes that prepare the fixture store.
+        if ("sessionKey" in change && change.agentId === undefined) {
+          changes(change);
+        }
+      }),
+    );
     const respond = await invoke(context, { profileId: "test", machineClass: "large", os: "os-a" });
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 
@@ -602,7 +609,7 @@ describe("sessions.dispatch", () => {
           worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
         },
       );
-      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetWithStore);
+      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetInWorker);
       mocks.findLiveByOwner.mockReturnValue({
         id: "worktree-1",
         ownerKind: "session",
@@ -788,7 +795,14 @@ describe("sessions.dispatch", () => {
       const reclaim = vi.fn().mockResolvedValue(reclaimed);
       const context = reclaimContext(() => reclaimed, reclaim);
       const changes = vi.fn();
-      onTestFinished(sessionChanges.subscribe(changes));
+      onTestFinished(
+        sessionChanges.subscribe((change) => {
+          // Capture placement broadcasts, excluding writes that prepare the fixture store.
+          if ("sessionKey" in change && change.agentId === undefined) {
+            changes(change);
+          }
+        }),
+      );
       const respond = await invokeSessionReclaim(context);
 
       expect(reclaim).toHaveBeenCalledWith(
@@ -855,7 +869,14 @@ describe("sessions.dispatch", () => {
       );
 
       const changes = vi.fn();
-      onTestFinished(sessionChanges.subscribe(changes));
+      onTestFinished(
+        sessionChanges.subscribe((change) => {
+          // Capture placement broadcasts, excluding writes that prepare the fixture store.
+          if ("sessionKey" in change && change.agentId === undefined) {
+            changes(change);
+          }
+        }),
+      );
       const respond = await invokeSessionReclaim(context);
 
       expectReclaimed(respond);
@@ -890,7 +911,14 @@ describe("sessions.dispatch", () => {
 
           try {
             const changes = vi.fn();
-            onTestFinished(sessionChanges.subscribe(changes));
+            onTestFinished(
+              sessionChanges.subscribe((change) => {
+                // Capture placement broadcasts, excluding writes that prepare the fixture store.
+                if ("sessionKey" in change && change.agentId === undefined) {
+                  changes(change);
+                }
+              }),
+            );
             const respond = await invokeSessionReclaim(context);
 
             expect(respond).toHaveBeenCalledWith(

@@ -203,7 +203,9 @@ suite.define(() => {
         await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
         expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
         await selectChatLayoutAction(activePane, "Expand Subagents");
-        const activeSubagentsTab = activePane.locator('[data-region-header="side"] wa-tab[active]');
+        const activeSubagentsTab = activePane.locator(
+          '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
+        );
         await activeSubagentsTab.focus();
         await page.keyboard.press("Enter");
         await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
@@ -216,7 +218,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             activePane
-              .locator('[data-region-header="side"] wa-tab[active]')
+              .locator('[data-region-header="side"] .tabstrip-tab[aria-selected="true"]')
               .evaluate((element) => element.matches(":focus")),
           )
           .toBe(true);
@@ -267,7 +269,7 @@ suite.define(() => {
           ancestorSessions: [],
         });
         await activePane.locator(".chat-working-indicator").waitFor();
-        await activePane.locator(".agent-chat__composer-run-status--working").waitFor();
+        expect(await activePane.locator(".agent-chat__composer-run-status").count()).toBe(0);
         expect(await waitLine.count()).toBe(0);
         expect(await panel.isVisible()).toBe(true);
         await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();

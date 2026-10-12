@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { settleTooltip } from "../../../components/tooltip.test-support.ts";
+import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
 import {
   installChatComposerPickerDismissal,
   handleChatComposerDetailsToggle,
@@ -40,9 +40,8 @@ describe("chat picker overlay", () => {
       picker.open = true;
       field.focus();
       await settleTooltip(tooltip);
-      const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-      await popup.updateComplete;
-      expect(popup.open).toBe(true);
+      const popup = tooltipSurface(tooltip)!;
+      expect(popup.matches(":popover-open")).toBe(true);
       if (opening === 0) {
         onTestFinished(installChatComposerPickerDismissal(document));
       }
@@ -55,7 +54,7 @@ describe("chat picker overlay", () => {
       });
       claimedEscape.preventDefault();
       field.dispatchEvent(claimedEscape);
-      expect(popup.open).toBe(true);
+      expect(popup.matches(":popover-open")).toBe(true);
       expect(picker.open).toBe(true);
       expect(dismissInvocations).not.toHaveBeenCalled();
 
@@ -65,8 +64,8 @@ describe("chat picker overlay", () => {
         cancelable: true,
       });
       field.dispatchEvent(escape);
-      await popup.updateComplete;
-      expect(popup.open).toBe(false);
+      await settleTooltip(tooltip);
+      expect(popup.matches(":popover-open")).toBe(false);
       expect(escape.defaultPrevented).toBe(true);
       expect(picker.open).toBe(true);
       expect(dismissInvocations).not.toHaveBeenCalled();
