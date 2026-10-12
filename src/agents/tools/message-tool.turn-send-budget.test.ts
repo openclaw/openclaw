@@ -181,6 +181,8 @@ describe("per-turn send budget", () => {
     runId?: string;
     maxPerTurn?: number;
     turnSendNudge?: boolean;
+    /** Per-agent `tools.message` override for the session's agent ("test"). */
+    agentMessage?: Record<string, unknown>;
   }) {
     registerImessageSendPlugin();
     const sessionKey =
@@ -193,9 +195,14 @@ describe("per-turn send budget", () => {
       messageConfig.turnSendNudge = params.turnSendNudge;
     }
     const config =
-      Object.keys(messageConfig).length === 0
+      Object.keys(messageConfig).length === 0 && !params?.agentMessage
         ? undefined
-        : ({ tools: { message: messageConfig } } as never);
+        : ({
+            tools: { message: messageConfig },
+            ...(params?.agentMessage
+              ? { agents: { entries: { test: { tools: { message: params.agentMessage } } } } }
+              : {}),
+          } as never);
     return createMessageTool({
       currentChannelProvider: "imessage",
       currentChannelId: currentChat,
@@ -887,5 +894,34 @@ describe("per-turn send budget", () => {
       reason: "turn_send_budget_exhausted",
     });
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a per-agent cap over the global cap", async () => {
+    stubSend();
+    const tool = createBudgetTool({
+      maxPerTurn: 5,
+      agentMessage: { maxMessagesPerTurnPerTarget: 1 },
+    });
+    await send(tool, "first");
+    const blocked = await send(tool, "second");
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a per-agent nudge opt-out and inherits the unset cap from the global config", async () => {
+    stubSend();
+    const tool = createBudgetTool({ maxPerTurn: 2, agentMessage: { turnSendNudge: false } });
+    await send(tool, "first");
+    const second = await send(tool, "second variant");
+    expect(softNotice(second)).toBeUndefined();
+    const blocked = await send(tool, "third variant");
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
   });
 });

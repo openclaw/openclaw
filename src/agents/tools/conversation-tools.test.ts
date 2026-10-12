@@ -453,6 +453,25 @@ describe("conversations_send per-turn send budget", () => {
     expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
+  it("applies a per-agent cap over the global cap", async () => {
+    const deps = createDeps();
+    const tool = createConversationsSendTool(
+      {
+        ...budgetOptions,
+        config: {
+          tools: { message: { maxMessagesPerTurnPerTarget: 5 } },
+          agents: { entries: { main: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } } },
+        } as never,
+      },
+      deps,
+    );
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    const blocked = await tool.execute("c2", args);
+    expectSchemaValidCappedResult(blocked);
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the Code Mode output-schema check on the capped path", async () => {
     // In Code Mode the runtime validates the returned details against the tool's
     // declared outputSchema (assertCatalogOutputMatchesSchema). A capped result with
