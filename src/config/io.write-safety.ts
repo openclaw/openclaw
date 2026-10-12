@@ -580,6 +580,7 @@ export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
   json5: { parse: (value: string) => unknown };
   lastTouchedVersionOverride?: string;
+  env?: NodeJS.ProcessEnv;
 }): number | null {
   if (params.raw === null) {
     return null;
@@ -594,6 +595,8 @@ export function resolveConfigSizeBaselineBytes(params: {
       parsed.parsed as OpenClawConfig,
       undefined,
       params.lastTouchedVersionOverride,
+      undefined,
+      params.env,
     ),
     null,
     2,

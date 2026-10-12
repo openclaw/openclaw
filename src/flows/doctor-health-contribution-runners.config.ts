@@ -11,6 +11,7 @@ import {
   recordUpdateDoctorConfigWriteRefusal,
   runUpdateDoctorIncludeWrite,
 } from "../infra/update-doctor-result.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -92,7 +93,10 @@ export async function runWriteConfigHealth(
     if (rosterCandidate) {
       ctx.configResult.skipWizardMetadataForIncludeWrite = true;
     }
-    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+    if (
+      ctx.configResult.skipWizardMetadataForIncludeWrite !== true &&
+      !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
+    ) {
       ctx.cfg = applyWizardMetadata(ctx.cfg, {
         command: "doctor",
         mode: resolveDoctorMode(ctx.cfg),
