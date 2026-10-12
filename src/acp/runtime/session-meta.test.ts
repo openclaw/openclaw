@@ -26,7 +26,6 @@ import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
-  readAcpSessionMetaBatch,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -342,9 +341,6 @@ describe("ACP session metadata SQLite store", () => {
           },
         });
         expect(readAcpSessionMetaForEntry({ databasePath, sessionKey, entry })).toBeUndefined();
-        expect(
-          readAcpSessionMetaBatch({ databasePath, entries: [{ sessionKey, entry }] }).get(entry),
-        ).toBeUndefined();
       });
     },
   );
@@ -445,13 +441,6 @@ describe("ACP raw alias lifecycle", () => {
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
-      expect(
-        readAcpSessionMetaBatch({
-          cfg: fixture.scope.cfg,
-          env: state.env,
-          entries: [{ sessionKey: SESSION_KEY, agentId: "main", entry: fixture.entry }],
-        }).get(fixture.entry),
-      ).toBeUndefined();
     });
   });
 

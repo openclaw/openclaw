@@ -9,7 +9,7 @@ import type {
 } from "./session-memory-targets.types.js";
 
 /** Replaced as a unit; readers retain the immutable envelope and body together. */
-export type SessionActorMemoryUsageRollup = {
+type SessionActorMemoryUsageRollup = {
   valueJson: string;
   blob: Uint8Array;
   updatedAt: number;
@@ -49,16 +49,3 @@ export type SessionActorMemoryUsageWrites = {
     output: boolean;
   };
 };
-
-export type SessionActorMemoryUsageQuery = {
-  [Key in keyof SessionActorMemoryUsageReads]: {
-    type: Key;
-    input: SessionActorMemoryUsageReads[Key]["input"];
-  };
-}[keyof SessionActorMemoryUsageReads];
-export type SessionActorMemoryUsageCommand = {
-  [Key in keyof SessionActorMemoryUsageWrites]: {
-    type: Key;
-    input: SessionActorMemoryUsageWrites[Key]["input"];
-  };
-}[keyof SessionActorMemoryUsageWrites];

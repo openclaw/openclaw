@@ -2146,6 +2146,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["usage"],
     ["ui/src/pages/usage/types.ts"],
   ),
+  pageWatch("ui/src/e2e/usage-overview.e2e.test.ts", ["usage"], ["ui/src/lib/sessions/usage.ts"]),
   pageWatch(
     "ui/src/e2e/usage-query-recovery.e2e.test.ts",
     ["usage"],

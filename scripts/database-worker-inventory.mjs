@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
+import { inspectDatabaseWorkerCompatibility } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
@@ -45,7 +46,7 @@ const reviewed = new Map([
     {
       priority: 1,
       evidence:
-        "Final synchronous pre-spawn/2026.9.8 SDK policy reads; native opaque approval guards retain MCP grant kernels until the next SDK major",
+        "Bundled execution guards consume committed policy receipts; deprecated synchronous SDK readers and native approval compatibility retain shared row kernels",
     },
   ],
   [
@@ -229,6 +230,28 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/config/io.health-state.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["patchConfigHealthEntryInDatabase"],
+        evidence:
+          "Only openclaw-state-worker-runtime.ts calls this conditional patch through the shared-state worker. Native config compatibility reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-acp-provenance.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSources", "writeSources"],
+        evidence:
+          "Legacy provenance import/repair only: recordLegacyAcpMigrationSources is called by sqlite-import.ts, and copyLegacyAcpMigrationSourcesForRepair by sqlite-node-artifacts.ts. Runtime entry writes and clearing persist provenance with their existing node upsert; the mixed native ACP context reader remains T1.",
+      },
+    ],
+  ],
   [
     "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
     [
@@ -676,27 +699,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/push-web-store.kernel.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "findBoundWebPushSubscriptionByEndpointInDatabase",
-          "listWebPushSubscriptionsInDatabase",
-          "hasBoundWebPushSubscriptionsInDatabase",
-          "listBoundWebPushSubscriptionsInDatabase",
-          "prepareWebPushApprovalDeliveriesInDatabase",
-          "listWebPushApprovalDeliveryTargetsInDatabase",
-          "deleteWebPushApprovalDeliveryTargetsInDatabase",
-          "listTerminalWebPushApprovalDeliveryIdsInDatabase",
-          "deleteWebPushSubscriptionIfCurrentInDatabase",
-        ],
-        evidence:
-          "Only push-web-store.worker.ts:14,20,22,24,28,32,36,40,62 calls these operations; native preferences/upsert/delete-bound and their shared schema helper stay T1",
-      },
-    ],
-  ],
-  [
     "src/node-host/node-worker-prepared-workspace-store.kernel.ts",
     [
       {
@@ -861,9 +863,10 @@ const reviewedOperations = new Map([
           "upsertCronJobRow",
           "deleteCronJobRowInDatabase",
           "revokeCronJobStandingGrants",
+          "readMaximumRetainedGrantDefinitionGeneration",
         ],
         evidence:
-          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308; the native current-job reader was deleted; standing-generation reads stay T1",
+          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308. Retained grant generations are read by worker upsert or resolveCronJobGrantDefinitionGenerationFloor for commands/doctor/cron/store-repair.ts only.",
       },
       {
         tier: "W",
@@ -1074,9 +1077,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["setCanonicalSqliteSessionMainKey"],
+        operations: ["setCanonicalSqliteSessionMainKey", "markCanonicalSessionValidationPending"],
         evidence:
-          "Only startup-migration.ts:291 boot admission and commands/doctor-session-canonical-keys.ts:438,518 repair call this setter; other canonical-key runtime operations stay T1.",
+          "The setter serves startup-migration.ts boot admission and commands/doctor-session-canonical-keys.ts repair. Pending validation is written only by that setter or explicit allowStoredAlias(s)/allowCanonicalRepair imports and repairs: legacy-main-session-migration-operations.ts, session-accessor.sqlite-import.ts, and Doctor projection/rewrite. Import's retained recovery path is Doctor-only via doctor-session-sqlite-retained.ts -> rebuildDeferredPluginSessionSourceIndex. The in-memory runtime validation SELECT remains T1.",
       },
     ],
   ],
@@ -1294,9 +1297,10 @@ const reviewedOperations = new Map([
           "readSubagentRunRow",
           "readSubagentSessionListRows",
           "readSubagentRegistryRows",
+          "loadSubagentRunsForSessionsInDatabase",
         ],
         evidence:
-          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts; maintenance no longer opens a host reader. Descendant-basis comparisons retain their native deletion boundary and T1 classification.",
+          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts. Descendant selection is called only by store.worker.ts; the native digest comparison has been removed.",
       },
     ],
   ],
@@ -2257,9 +2261,8 @@ const reviewedOperations = new Map([
       {
         tier: "T3",
         operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
-        binding: "countRow",
         evidence:
-          "Only CLI export supplies maxEventCount: src/cli/program/register.status-health-sessions.ts:431 → commands/export-trajectory.ts:158 → trajectory/command-export.ts:80 → trajectory/export.ts:415,420. Keep polling/payload expressions T1.",
+          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow and trajectory export. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. The runtime-testing SDK exports the async loader, not this native row reader. Native append and retention remain T1.",
       },
     ],
   ],
@@ -2280,6 +2283,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
@@ -2404,6 +2408,7 @@ const exceptionModules = new Set([
   "src/state/openclaw-state-lease-storage.ts",
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
+  "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
   [
@@ -2618,28 +2623,19 @@ function findCalls(source) {
 export function inventory(root = defaultRoot, ref = "", staged = false) {
   using parser = createNativeTypeScriptParser({ cwd: root });
   const roots = ["src", "extensions", "packages", "scripts"];
-  const pattern = [...primitives.keys()].join("|");
+  const pattern = new RegExp([...primitives.keys()].join("|"));
   const snapshot = ref !== "" || staged;
   const result = spawnSync(
     snapshot ? "git" : "rg",
     snapshot
-      ? [
-          "grep",
-          "-l",
-          "-z",
-          "-E",
-          ...(ref ? [] : ["--cached"]),
-          pattern,
-          ...(ref ? [ref] : []),
-          "--",
-          ...roots,
-        ]
+      ? ref
+        ? ["ls-tree", "-r", "--name-only", "-z", ref, "--", ...roots]
+        : ["ls-files", "-z", "--", ...roots]
       : [
-          "-l",
+          "--files",
           "--null",
           "-g",
           "*.{ts,tsx,js,mjs,mts,cts,cjs}",
-          pattern,
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -2647,16 +2643,26 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
   }
-  const files = result.stdout
+  const sourceFiles = result.stdout
     .split("\0")
-    .map((file) => (ref ? file.slice(ref.length + 1) : file))
     .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
-  const texts = snapshot ? loadRatchetSources(root, files, ref) : null;
+  const texts = snapshot
+    ? loadRatchetSources(root, sourceFiles, ref)
+    : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
+  const compatibility = inspectDatabaseWorkerCompatibility(
+    root,
+    texts,
+    (file, operation) => classify(file, operation).tier !== "T1",
+  );
+  if (!ref && compatibility.violations.length > 0) {
+    throw new Error(
+      "Deprecated synchronous SQLite compatibility guard failed:\n" +
+        compatibility.violations.join("\n"),
+    );
+  }
+  const files = sourceFiles.filter((file) => pattern.test(texts.get(file)));
   const sources = parser.parseSourceFiles(
-    files.map((fileName) => ({
-      fileName,
-      text: texts ? texts.get(fileName) : fs.readFileSync(path.join(root, fileName), "utf8"),
-    })),
+    files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
   if (invalidSource) {
@@ -2678,6 +2684,15 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
       const groups = new Map();
       for (const call of calls) {
         const classification = classify(file, call.operation, call.binding, call.guards);
+        if (
+          classification.tier === "T1" &&
+          compatibility.operations.get(file)?.has(call.operation) &&
+          compatibility.callLocations.get(file)?.has(`${call.line}:${call.column}`)
+        ) {
+          classification.tier = "T1-compat";
+          classification.evidence =
+            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+        }
         const group = groups.get(classification.tier) ?? {
           file,
           owner: ownerOf(file),
@@ -2729,15 +2744,15 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, compatibility reference graph, and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
-    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
+    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Worker/maintenance callers retain their existing classification; escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",
@@ -2747,7 +2762,7 @@ function render(rows) {
     "",
     "| Tier | Files | Call expressions |",
     "| --- | ---: | ---: |",
-    ...["T1", "T2", "T3", "W"].map((tier) => {
+    ...["T1", "T1-compat", "T2", "T3", "W"].map((tier) => {
       const count = totals(rows.filter((row) => row.tier === tier));
       return `| ${tier} | ${count.files} | ${count.calls} |`;
     }),
@@ -2790,20 +2805,38 @@ function render(rows) {
     "",
     "Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`; the first call line below is a navigation hint. Owner labels are source directory boundaries, not CODEOWNERS assignments. Generic runtime candidates require caller evidence before claiming a main-thread defect or a completed migration.",
   ];
-  for (const tier of ["T1", "T2", "T3", "W"]) {
+  const liveOwners = new Map();
+  for (const row of rows.filter((entry) => entry.tier === "T1")) {
+    liveOwners.set(row.owner, (liveOwners.get(row.owner) ?? 0) + row.calls.length);
+  }
+  lines.push(
+    "",
+    "### Largest live T1 owners",
+    "",
+    "These are live or unproven call expressions, not measured statements per turn. The T1 table below groups the remaining work by file and lexical API/operation.",
+    "",
+    "| Owner | Live / unproven calls |",
+    "| --- | ---: |",
+    ...[...liveOwners]
+      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "en"))
+      .slice(0, 15)
+      .map(([owner, count]) => `| \`${owner}\` | ${count} |`),
+  );
+  for (const tier of ["T1", "T1-compat", "T2", "T3", "W"]) {
+    const showOperations = tier === "T1" || tier === "T1-compat";
     lines.push(
       "",
       `### ${tier}`,
       "",
-      "| Owner / file | Calls (Q/F/S/A/R) | First line | Exposure evidence |",
-      "| --- | ---: | ---: | --- |",
+      `| Owner / file | Calls (Q/F/S/A/R) | First line | ${showOperations ? "API / operation | " : ""}Exposure evidence |`,
+      `| --- | ---: | ---: | ${showOperations ? "--- | " : ""}--- |`,
     );
     for (const row of rows.filter((entry) => entry.tier === tier)) {
       const counts = [...primitives.keys()]
         .map((primitive) => row.calls.filter((call) => call.primitive === primitive).length)
         .join("/");
       lines.push(
-        `| **${row.owner}** · \`${row.file}\` | ${counts} | ${row.calls[0].line} | ${row.evidence} |`,
+        `| **${row.owner}** · \`${row.file}\` | ${counts} | ${row.calls[0].line} | ${showOperations ? [...new Set(row.calls.map((call) => call.operation || "(module)"))].map((name) => `\`${name}\``).join(", ") + " | " : ""}${row.evidence} |`,
       );
     }
   }
@@ -2818,7 +2851,22 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   } else {
     const rows = inventory();
     if (args[0] === "--json") {
-      console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            totals: totals(rows),
+            tiers: Object.fromEntries(
+              ["T1", "T1-compat", "T2", "T3", "W"].map((tier) => [
+                tier,
+                totals(rows.filter((row) => row.tier === tier)),
+              ]),
+            ),
+            files: rows,
+          },
+          null,
+          2,
+        ),
+      );
     } else {
       const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
       if (formatted.errors.length > 0) {

@@ -130,7 +130,7 @@ export type WorkshopFilter = "active" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
 export type WorkshopTab = "instructions" | "files" | "history";
 
-export type SkillWorkshopViewProps = {
+type SkillWorkshopViewProps = {
   context: ApplicationContext;
   agentId: string | null;
   access: SkillWorkshopAccess;

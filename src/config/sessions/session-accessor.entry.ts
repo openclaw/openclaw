@@ -77,7 +77,6 @@ export {
 } from "./session-accessor.sqlite-canonical-repair.js";
 export {
   ensureSessionEntrySync,
-  listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
@@ -98,6 +97,7 @@ export {
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
+export { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 
 export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 
@@ -131,14 +131,13 @@ function findCanonicalSessionEntryMatch(
   scope: Omit<SessionAccessScope, "sessionKey">,
   canonicalKey: string,
   candidateKeys: readonly string[],
-  options: { readOnly?: boolean; projection?: "worktree" } = {},
+  options: { readOnly?: boolean } = {},
 ): (SessionEntrySummary & { readSource?: CapturedSessionEntryReadSource }) | undefined {
   let readSource: CapturedSessionEntryReadSource | undefined;
   const entries = loadExactSessionEntryCandidates({
     ...scope,
     sessionKeys: candidateKeys,
     readOnly: options.readOnly !== false,
-    projection: options.projection,
     onReadSource: (source) => {
       readSource = source;
     },
@@ -310,13 +309,12 @@ export function resolveSessionEntryAccessTarget(
 ): QualifiedSessionEntryAccessTarget;
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
-  options?: { projection?: "worktree" },
 ): ResolvedSessionEntryAccessTarget;
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
-  options?: { keyFormat?: "agent-qualified"; projection?: "worktree" },
+  options?: { keyFormat?: "agent-qualified" },
 ): ResolvedSessionEntryAccessTarget | QualifiedSessionEntryAccessTarget {
-  const target = resolveSessionEntryStoreTarget(scope, options?.projection);
+  const target = resolveSessionEntryStoreTarget(scope);
   if (options?.keyFormat === "agent-qualified") {
     return projectQualifiedSessionEntryTarget(scope, target);
   }
@@ -447,7 +445,6 @@ export async function resolveSessionEntryCandidateTargetForRuntime(
 
 function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
-  projection?: "worktree",
 ): ResolvedSessionEntryStoreTarget & { readSource?: CapturedSessionEntryReadSource } {
   const requestedKey = scope.sessionKey.trim();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -489,7 +486,7 @@ function resolveSessionEntryStoreTarget(
       },
       canonicalKey,
       scanTargets,
-      { readOnly: !incognito, projection },
+      { readOnly: !incognito },
     );
     if (match && selectedMatch) {
       throw canonicalSessionKeyMigrationRequiredError(

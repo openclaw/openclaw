@@ -1,9 +1,9 @@
 import { For } from "solid-js";
+import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { extractQueryTerms } from "./helpers.ts";
 import { applySuggestionToQuery, removeQueryToken } from "./query.ts";
-import type { buildQuerySuggestions, buildUsageFilterOptions } from "./query.ts";
+import type { buildQuerySuggestions, UsageFilterOptions } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 
@@ -16,7 +16,7 @@ export function UsageQuerySection(props: {
   hasOverviewData: boolean;
   matchingSessions: number;
   totalSessions: number;
-  filterOptions: ReturnType<typeof buildUsageFilterOptions>;
+  filterOptions: UsageFilterOptions;
   queryTerms: ReturnType<typeof extractQueryTerms>;
   querySuggestions: ReturnType<typeof buildQuerySuggestions>;
   queryWarnings: string[];
@@ -64,34 +64,17 @@ export function UsageQuerySection(props: {
         </div>
       </div>
       <div class="usage-filter-row">
-        <UsageQueryFilter
-          filterKey="channel"
-          label={t("usage.filters.channel")}
-          options={props.filterOptions.channel}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="provider"
-          label={t("usage.filters.provider")}
-          options={props.filterOptions.provider}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="model"
-          label={t("usage.filters.model")}
-          options={props.filterOptions.model}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
-        <UsageQueryFilter
-          filterKey="tool"
-          label={t("usage.filters.tool")}
-          options={props.filterOptions.tool}
-          queryDraft={props.filters.queryDraft}
-          onQueryDraftChange={props.actions.onQueryDraftChange}
-        />
+        <For each={["channel", "provider", "model", "tool"] as const}>
+          {(filterKey) => (
+            <UsageQueryFilter
+              filterKey={filterKey}
+              label={t(`usage.filters.${filterKey}`)}
+              options={props.filterOptions[filterKey]}
+              queryDraft={props.filters.queryDraft}
+              onQueryDraftChange={props.actions.onQueryDraftChange}
+            />
+          )}
+        </For>
         <span class="usage-query-hint">{t("usage.query.tip")}</span>
       </div>
       {props.queryTerms.length > 0 ? (

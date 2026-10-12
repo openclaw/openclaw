@@ -5,8 +5,8 @@ import "../../../components/mcp-app-catalog.tsx";
 import "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../components/mcp-app-resources.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../i18n/index.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
@@ -28,7 +28,6 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
-import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
@@ -41,10 +40,11 @@ import {
   ComposerProgress,
   ComposerGoal,
 } from "./chat-composer-regions.tsx";
+import { ComposerRunStatus } from "./chat-composer-run-status.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
-import { commitComposerDraft } from "./chat-composer-state.ts";
+import { commitComposerDraft, isChatRunWorking } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -282,9 +282,17 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ) : undefined;
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
+  const runStatus = () => (
+    <ComposerRunStatus
+      waitingSubagents={props.waitingSubagents ?? null}
+      working={isChatRunWorking(props) && !props.waitingApproval}
+      onOpenSubagents={props.onOpenSubagents}
+    />
+  );
   return (
     <>
       <div class="agent-chat__composer-shell">
+        {props.waitingSubagents || !showComposerInput() ? runStatus() : undefined}
         <div class="chat-footer__context">
           <LitContent value={props.footerContent ?? undefined} />
           <div class="agent-chat__composer-notices">
@@ -295,7 +303,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner() : undefined}
           <ComposerProgress composer={props} shown={context.showComposer} />{" "}
           <ComposerQueue composer={props} showAbortableUi={context.showAbortableUi} />
-          {renderChatGoalRecoverySolid(props.goalRecovery, props.connected)}{" "}
           <ComposerGoal
             composer={props}
             state={context.state}
@@ -530,6 +537,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
+                    {!props.waitingSubagents ? runStatus() : undefined}
                     <ContextNotice
                       session={activeSession()}
                       messages={props.messages}

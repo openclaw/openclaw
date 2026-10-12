@@ -69,6 +69,8 @@ Person hovercards keep their **Recent sessions** selection and order stable whil
 
 Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
 
+Switching agents refreshes the sidebar's filtered session list immediately, even while the selected chat is still loading. Automatic startup and reconnect refreshes continue to wait for that chat to become ready.
+
 The sidebar’s **Unsent draft** pencil covers saved text, attachments, replies, and goals, including drafts saved in another tab or before a reload, without reopening the conversation. A newer edit or clear always replaces an older saved draft. Incognito conversations never show a saved-draft pencil. Outbox attention badges also count queued messages with attachments that need review once the connection finishes restoring.
 
 If this browser has saved drafts or messages that could not be restored to a chat, a **saved drafts** or **saved messages to review** notice shows their content and attachment names. Empty records are not counted. The original chat is named only when it can be identified from your available conversations. Choose **Review in this chat** in a non-Incognito chat with an empty message box and no pending messages; confirmation restores the saved copy without sending it. Messages with unconfirmed delivery stay paused—check the original chat before retrying. **Delete saved copy** asks for confirmation and removes only the saved draft, messages, and attachments shown together, not messages already sent to a chat.
@@ -142,19 +144,29 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Open the parent conversation's side panel and select **Subagents** from its **+**
-menu to inspect child runs, including swarm workers. The panel loads all child
-pages automatically and groups running and finished work,
-keeping children waiting on their own descendants under **Running**. It shows
-elapsed time and available tool activity, and opens each child's existing
-view-only transcript beside the parent. Avatar-free child transcripts do not reserve
+The chat header keeps **Share**, **Layout**, and the session menu together.
+**Layout** contains focus, split, swap, panel selection, and dock-position actions,
+with their keyboard shortcuts. Open **Subagents** there or from the side-panel
+**+** menu to inspect child runs, including swarm workers. An empty conversation
+starts with the panel closed. The first running batch adds it automatically,
+preserving another panel you selected; closing it keeps it closed for that batch.
+Finished results stay open until you close them. While the parent waits on
+subagents, a muted line above the composer shows the count, child name and elapsed
+time, with **View** to open the panel. The panel loads all child pages automatically
+and groups running and finished work, keeping children waiting on their own
+descendants under **Running**. It shows elapsed time and available tool activity,
+and opens each child's existing view-only transcript beside the parent. Running
+rows show public tool progress when available, otherwise the current tool step's
+purpose (such as an exec call's title) or the run's latest status summary, along
+with the call count. When only part of a long history is loaded, the count is a
+lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
-transcripts retain the reading-width limit. It does not add rows to the left sidebar.
-The parallel-tasks view also shows aggregate swarm progress. A directly opened child page
-offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
-and `/subagents log <id|#>` commands remain available.
+transcripts retain the reading-width limit. It does not add rows to the left
+sidebar. The parallel-tasks view also shows aggregate swarm progress. A directly
+opened child page offers **Open parent session**. The `/subagents list`,
+`/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 
-Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+Open **Processes** from the chat header's **Layout** menu or the side-panel **+**
 menu to inspect the conversation's background exec commands. It is separate from
 **Subagents**. Running and retained finished processes show status and elapsed
 time. **Finished** starts collapsed; click its heading to expand or collapse the

@@ -595,6 +595,9 @@ async function runPreparedUsageCostWorker(
                         valueJson: request.input.value,
                         blob: request.input.blob,
                         updatedAt: request.input.updatedAt,
+                        partitions: request.input.partitions,
+                        removedDates: request.input.removedDates,
+                        replacePartitions: request.input.replacePartitions,
                       },
                       context.signal,
                     );

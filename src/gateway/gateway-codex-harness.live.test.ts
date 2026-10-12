@@ -2053,7 +2053,20 @@ describeLive("gateway live (Codex harness)", () => {
             runId,
             timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           });
-          expect(finalText.trim()).toBe(marker);
+          // On mismatch, report the transcript answer to separate stream loss from model output.
+          const historyAnswer =
+            finalText.trim() === marker
+              ? undefined
+              : await firstClient
+                  .request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 })
+                  .then((history) =>
+                    history.messages
+                      .map(asOptionalRecord)
+                      .filter((message) => message?.role === "assistant")
+                      .map((message) => extractFirstTextBlock(message))
+                      .at(-1),
+                  );
+          expect(finalText.trim(), `transcript answer: ${historyAnswer}`).toBe(marker);
           const nativeStarts = gatewayEvents.filter((event) => {
             const payload = asOptionalRecord(event.payload);
             return (

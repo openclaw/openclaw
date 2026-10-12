@@ -98,29 +98,22 @@ serveOwnedWorkerTasks(
         if (!channel) {
           throw new Error("Transcript search requires its host status channel");
         }
-        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+        const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");
         const options = {
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
-          request.params,
-          options,
-        );
+        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
         let indexing = false;
         if (found) {
-          // Keep the connection in this task while the host checks its writer's status.
-          // A second pool request can run on another connection with an unrelated revision.
+          // Search hits describe their read snapshot; readiness comes from the projection owner.
           const status = await channel.request("transcript-index-status");
           try {
             if (typeof status.input !== "boolean") {
               throw new Error("Invalid transcript search index status");
             }
-            indexing =
-              status.input ||
-              revision === undefined ||
-              !isSessionTranscriptSearchCurrentSync(revision, options);
+            indexing = status.input;
           } finally {
             status.consumed();
           }
@@ -215,6 +208,36 @@ serveOwnedWorkerTasks(
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
+        };
+      }
+      if (request.kind === "transcript-stats-batch") {
+        const { readTranscriptStatsBatchReadOnlySync } =
+          await import("./session-accessor.sqlite-read.js");
+        return {
+          kind: request.kind,
+          stats: readTranscriptStatsBatchReadOnlySync(
+            request.sessionIds.map((sessionId) => ({
+              ...request.database,
+              storePath: request.database.path,
+              sessionId,
+              env: request.env,
+            })),
+          ),
+        };
+      }
+      if (request.kind === "session-transcript-instances") {
+        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        return {
+          kind: request.kind,
+          instances: listSessionTranscriptInstances(
+            {
+              ...request.scope,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            request.options,
+            request.continuation,
+          ),
         };
       }
       if (request.kind === "memory-session-targets") {
@@ -472,6 +495,16 @@ serveOwnedWorkerTasks(
           ...(result.found ? result.value : { entry: undefined, members: [] }),
         };
       }
+      if (request.kind === "session-reactions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => listSessionReactionsInDatabase(database, request.sessionKey, request),
+          { ...request.database, env: request.env },
+        );
+        return { kind: "session-reactions" as const, reactions: result.found ? result.value : {} };
+      }
       if (request.kind === "session-suggestions") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -598,6 +631,11 @@ serveOwnedWorkerTasks(
             const { readSessionResetRecallCutoffInProcess } =
               await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
             return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
+          }
+          if (request.mode === "snapshot") {
+            const { readSessionEntrySnapshotRequest } =
+              await import("./session-transcript-hydration-read.worker.js");
+            return readSessionEntrySnapshotRequest(request);
           }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");

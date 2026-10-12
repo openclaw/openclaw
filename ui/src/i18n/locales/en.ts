@@ -630,6 +630,8 @@ export const en: TranslationMap & {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      checking: "Checking for updates…",
+      checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
       availableSummary: "A newer revision is ready.",
@@ -2818,6 +2820,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
+    waitingOnSubagentCount: "Waiting on {count} subagent",
     waitingOnSubagentsCount: "Waiting on {count} subagents",
     waitingOnSubagent: "Waiting on {name}",
     waitingOnSession: "Waiting on 1 session",
@@ -2847,6 +2850,7 @@ export const en: TranslationMap & {
       finished: "Finished ({count})",
       callsOne: "{count} call",
       callsMany: "{count} calls",
+      callsAtLeast: "{count}+ calls",
       empty: "No subagents in this conversation.",
       noRunning: "No running subagents",
       refresh: "Refresh subagents",
@@ -2975,6 +2979,7 @@ export const en: TranslationMap & {
     },
     sessionSharing: {
       menu: "Session sharing",
+      share: "Share",
       current: "Session visibility: {visibility}",
       visibility: "Visibility",
       shared: "Shared",
@@ -2997,7 +3002,7 @@ export const en: TranslationMap & {
       copyPublicLink: "Copy public link",
       publicConfirmTitle: "Make this session world-readable?",
       publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text without signing in. Tools, reasoning, files, and widgets are excluded. Review the conversation for private information before sharing. Disabling access cannot recall copies already downloaded.",
+        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
       publicConfirmEnable: "Make public",
       publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
       publicDisabled: "Public access disabled.",
@@ -3044,6 +3049,7 @@ export const en: TranslationMap & {
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
       openParent: "Open parent session {title}",
+      subagentsRunning: "Subagents · {count} running",
       panels: "Panels",
       layout: "Layout",
       continueInTerminal: {
@@ -3715,6 +3721,8 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      running: "running",
+      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
@@ -3803,6 +3811,7 @@ export const en: TranslationMap & {
         clear: "Clear session overrides",
       },
       contextUsage: {
+        label: "Context",
         title: "Context usage details",
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",

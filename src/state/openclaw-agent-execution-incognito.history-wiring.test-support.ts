@@ -20,6 +20,7 @@ import {
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
+import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import * as cronJobNames from "../cron/store/job-name.js";
 import { readChatHistoryDelta } from "../gateway/server-methods/chat-history-delta.js";
 import {
@@ -304,6 +305,9 @@ export function registerIncognitoHistoryWiringTests(
       expect(await hasSessionTranscriptMessage(scope)).toBe(true);
       const message = events.find((event) => isRecord(event) && event.type === "message");
       assert(isRecord(message) && typeof message.id === "string");
+      expect(
+        await readRecentUserAssistantTextForSession({ ...scope, role: "assistant", limit: 2 }),
+      ).toMatchObject([{ id: message.id, role: "assistant", text: "wired history proof" }]);
       expect(await findTranscriptEvent(scope, { kind: "latest" })).toMatchObject({
         event: { id: message.id },
       });
@@ -553,6 +557,11 @@ export function registerIncognitoHistoryWiringTests(
     expect(visited).toEqual([
       { message: { role: "user", content: "after marker", timestamp: 2 }, seq: 2 },
     ]);
+    expect(
+      await withIncognitoSessionActor(actor, () =>
+        readRecentUserAssistantTextForSession({ ...target, role: "user", limit: 2 }),
+      ),
+    ).toMatchObject([{ role: "user", text: "after marker", timestamp: 2 }]);
   });
 
   it("rejects async preview transaction grants while commit grants remain synchronous", async () => {

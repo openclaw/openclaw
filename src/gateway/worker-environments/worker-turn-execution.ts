@@ -11,6 +11,7 @@ import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
@@ -25,10 +26,9 @@ import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js"
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
-import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
+import { readGitHubPublicationFact } from "../github-publication-discovery.js";
 import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
 import { workerInferencePlacement } from "./inference-placement.js";
-import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import {
@@ -38,7 +38,6 @@ import {
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
@@ -74,6 +73,7 @@ export async function executeWorkerTurn(
     environments: WorkerTurnEnvironmentService;
     assertRunCurrent: () => void;
     onTerminal: () => void;
+    onReply: (result: EmbeddedAgentRunResult) => void;
   },
 ) {
   const { placement, turn: input } = params;
@@ -127,24 +127,7 @@ export async function executeWorkerTurn(
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
-  // Shared account refresh and repository lookup own their own lifetime. A
-  // cancelled turn may stop waiting, but cannot consume a late binding.
-  const githubContext = {
-    ...placement,
-    assertCurrent: () => {
-      params.assertRunCurrent();
-      return !turn.abortSignal?.aborted;
-    },
-  };
-  const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
-    Promise.all([
-      prepareWorkerGitHubBinding(githubContext),
-      prepareGitHubPublicationAvailability({ ...githubContext, sessionTarget: turn.sessionTarget }),
-    ]),
-    turn.abortSignal,
-  );
-  params.assertRunCurrent();
-  turn.abortSignal?.throwIfAborted();
+  const { available: githubPublicationAvailable } = readGitHubPublicationFact(placement);
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
@@ -544,6 +527,7 @@ export async function executeWorkerTurn(
     }
     // Project the wire handshake; the receipt also carries storage-only provenance.
     const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+    const { github } = readGitHubPublicationFact(placement);
     const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
       runtimeIdentity,
       measure: (plan) => tunnel.measureLaunchTurn(plan, params.turnClaim),
@@ -653,6 +637,9 @@ export async function executeWorkerTurn(
         }
       })();
     };
+    if (github && readGitHubPublicationFact(placement).github?.token !== github.token) {
+      throw new Error("GitHub identity changed before worker launch; retry the turn.");
+    }
     let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
     try {
       processResult = await tunnel.launchTurn({

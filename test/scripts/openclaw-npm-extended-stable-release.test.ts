@@ -1,17 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  capturePriorExtendedStableSelector,
-  extendedStableSelectorRepairCommand,
   parseExtendedStableGuardBypass,
-  parsePriorExtendedStableSelector,
   resolveNpmPreflightSdkSelectors,
   validateFullReleaseValidationManifest,
   validateNpmPreflightDistTag,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
-  verifyExtendedStableRegistryReadback,
 } from "../../scripts/openclaw-npm-extended-stable-release.mjs";
 
 const sha = "a".repeat(40);
@@ -493,85 +489,6 @@ describe("Full Validation manifest identity", () => {
       expect(validateFullReleaseValidationManifest(request)).toBe(manifest);
     } else {
       expect(() => validateFullReleaseValidationManifest(request)).toThrow();
-    }
-  });
-});
-
-describe("extended-stable selector capture", () => {
-  it.each<[string, string?]>([
-    ['{"latest":"2026.7.1"}', "absent"],
-    ['{"extended-stable":"2026.6.33"}', "2026.6.33"],
-    ["not json"],
-    ["null"],
-    ["[]"],
-    ['"2026.6.33"'],
-  ])("validates selector result %s", (value, expected) => {
-    if (expected) {
-      expect(parsePriorExtendedStableSelector(value)).toBe(expected);
-    } else {
-      expect(() => parsePriorExtendedStableSelector(value)).toThrow();
-    }
-  });
-
-  it("rejects command failure rather than treating it as bootstrap", () => {
-    expect(() =>
-      capturePriorExtendedStableSelector({ query: () => ({ status: 1, stdout: "" }) }),
-    ).toThrow(/query failed/u);
-  });
-});
-
-describe("extended-stable registry readback", () => {
-  it.each([120])(
-    "accepts convergence on attempt %s within the propagation window",
-    async (visibleAt) => {
-      let attempt = 0;
-      const sleep = vi.fn(async (_delay: number) => {});
-      const result = await verifyExtendedStableRegistryReadback({
-        expectedVersion: "2026.6.33",
-        query: async (target: string) => {
-          if (target === "openclaw@2026.6.33") {
-            attempt += 1;
-          }
-          return { status: 0, stdout: attempt >= visibleAt ? "2026.6.33\n" : "2026.6.32\n" };
-        },
-        sleep,
-      });
-      expect(result).toEqual({
-        exactVersion: "2026.6.33",
-        extendedStableSelector: "2026.6.33",
-        attemptsUsed: visibleAt,
-      });
-      expect(sleep).toHaveBeenCalledTimes(visibleAt - 1);
-      expect(sleep).toHaveBeenCalledWith(10_000);
-    },
-  );
-
-  it("fails closed after the thirty-minute propagation window", async () => {
-    const query = vi.fn(async () => ({ status: 1, stdout: "" }));
-    const sleep = vi.fn(async (_delay: number) => {});
-    await expect(
-      verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
-    ).rejects.toThrow(/after 181 attempts/u);
-    expect(query).toHaveBeenCalledTimes(362);
-    expect(sleep).toHaveBeenCalledTimes(180);
-    expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
-  });
-});
-
-describe("extended-stable selector repair", () => {
-  it.each<[string | undefined, string?]>([
-    ["v2026.6.33", "npm dist-tag add openclaw@2026.6.33 extended-stable"],
-    [undefined],
-    ["absent"],
-    ["2026.6.33-beta.1"],
-    ["2026.6.33-1"],
-  ])("validates repair version %s", (expectedVersion, command) => {
-    if (command) {
-      expect(extendedStableSelectorRepairCommand(expectedVersion)).toBe(command);
-    } else {
-      expect(() => extendedStableSelectorRepairCommand(expectedVersion)).toThrow(
-        "Extended-stable selector repair requires an exact final YYYY.M.P version.",
-      );
     }
   });
 });

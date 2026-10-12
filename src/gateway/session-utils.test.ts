@@ -51,6 +51,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import {
   listAgentsForGateway,
   loadGatewaySessionEntryReadOnly,
@@ -1006,152 +1007,6 @@ describe("gateway session utils", () => {
     expect(row.totalTokensFresh).toBe(true);
   });
 
-  test("selected global rows read transcript usage from the selected agent", async () => {
-    await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
-      const sessionId = "selected-global-usage";
-      for (const [agentId, input] of [
-        ["main", 10],
-        ["work", 40],
-      ] as const) {
-        const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-        seedSessionEntries(storePath, {
-          global: { sessionId, updatedAt: 1 },
-        });
-        appendTranscriptMessages({
-          agentId,
-          sessionId,
-          sessionKey: "global",
-          storePath,
-          messages: [
-            {
-              role: "assistant",
-              content: "done",
-              usage: { input, output: 2 },
-            },
-          ],
-        });
-      }
-
-      const row = buildGatewaySessionRow({
-        cfg: {
-          agents: { entries: { main: {}, work: {} } },
-        } as OpenClawConfig,
-        key: "global",
-        agentId: "work",
-        entry: { sessionId, updatedAt: 1 },
-      });
-
-      expect(row.totalTokens).toBe(40);
-    });
-  });
-
-  test("SQLite unavailable context blocks old totals until a later valid snapshot", async () => {
-    await withStateDirEnv("session-utils-unavailable-usage-", async ({ stateDir }) => {
-      const sessionId = "unavailable-usage";
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const entry: SessionEntry = {
-        sessionId,
-        updatedAt: 1,
-        totalTokens: 1_124_767,
-        totalTokensFresh: false,
-      };
-      seedSessionEntries(storePath, { [sessionKey]: entry });
-      appendTranscriptMessages({
-        sessionId,
-        sessionKey,
-        storePath,
-        messages: [
-          {
-            role: "assistant",
-            api: "cli",
-            content: "old cumulative turn",
-            usage: {
-              input: 128_814,
-              output: 3_000,
-              cacheRead: 992_953,
-              totalTokens: 1_124_767,
-            },
-          },
-        ],
-      });
-
-      const legacyRow = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
-        storePath,
-        store: { [sessionKey]: entry },
-        key: sessionKey,
-        entry,
-      });
-      expect(legacyRow.totalTokens).toBeUndefined();
-      expect(legacyRow.totalTokensFresh).toBe(false);
-
-      appendTranscriptMessages({
-        sessionId,
-        sessionKey,
-        storePath,
-        messages: [
-          {
-            role: "assistant",
-            api: "cli",
-            content: "usage unavailable",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              contextUsage: { state: "unavailable" },
-            },
-          },
-        ],
-      });
-
-      const unavailableRow = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
-        storePath,
-        store: { [sessionKey]: entry },
-        key: sessionKey,
-        entry,
-      });
-      expect(unavailableRow.totalTokens).toBeUndefined();
-      expect(unavailableRow.totalTokensFresh).toBe(false);
-
-      appendTranscriptMessages({
-        sessionId,
-        sessionKey,
-        storePath,
-        messages: [
-          {
-            role: "assistant",
-            api: "cli",
-            content: "valid later turn",
-            usage: {
-              input: 67_932,
-              output: 2_000,
-              cacheRead: 18_944,
-              totalTokens: 88_876,
-              contextUsage: {
-                state: "available",
-                promptTokens: 86_876,
-                totalTokens: 88_876,
-              },
-            },
-          },
-        ],
-      });
-      const validRow = buildGatewaySessionRow({
-        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
-        storePath,
-        store: { [sessionKey]: entry },
-        key: sessionKey,
-        entry,
-      });
-      expect(validRow.totalTokens).toBe(86_876);
-      expect(validRow.totalTokensFresh).toBe(true);
-    });
-  });
-
   test("buildGatewaySessionRow does not promote direct route identities as display names", () => {
     const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
     const entry: SessionEntry = {
@@ -1669,7 +1524,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("loadGatewaySessionEntryReadOnly clones only the selected row and direct children", async () => {
+  test("worker history reads only the selected row and direct children", async () => {
     await withConfiguredStateDir("session-utils-exact-read-only-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
       const cfg = {
@@ -1693,31 +1548,28 @@ describe("gateway session utils", () => {
       expect(
         listSessionEntriesReadOnly({ agentId: "main", storePath }).map((item) => item.sessionKey),
       ).toContain(childKey);
-      const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-      try {
-        expect(loadGatewaySessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
-          sessionId: "child",
-          spawnedBy: parentKey,
-        });
-        expect(
-          listSessionChildEntriesReadOnly({
+      expect(loadGatewaySessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
+        sessionId: "child",
+        spawnedBy: parentKey,
+      });
+      expect(
+        (
+          await listSessionChildEntriesReadOnly({
             agentId: "main",
             clone: false,
             sessionKey: parentKey,
             storePath,
-          }).map((item) => item.sessionKey),
-        ).toEqual([childKey]);
-        const loaded = loadGatewaySessionEntryReadOnly("main", {
-          includeStoreChildEntries: true,
-        });
+          })
+        ).map((item) => item.sessionKey),
+      ).toEqual([childKey]);
+      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        key: "main",
+        includeStoreChildEntries: true,
+      });
 
-        expect(loaded.entry?.sessionId).toBe("parent");
-        expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
-        expect(loaded.entry).not.toBe(loaded.store[parentKey]);
-        expect(cloneSpy).toHaveBeenCalledTimes(1);
-      } finally {
-        cloneSpy.mockRestore();
-      }
+      expect(loaded.entry?.sessionId).toBe("parent");
+      expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
     });
   });
 

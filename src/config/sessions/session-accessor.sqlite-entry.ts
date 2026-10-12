@@ -11,7 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
-import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
@@ -108,8 +108,6 @@ export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionE
 }
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
-
-export { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 
 /** Resolves the persisted session key for a SQLite transcript session id. */
 export function resolveSessionKeyBySessionId(
@@ -461,7 +459,7 @@ async function patchSqliteSessionEntrySnapshot(
     return result.entry;
   }
   let wrote = false;
-  const workerPatch = (preparedSource?: PreparedSessionSourceAuthority) =>
+  const workerPatch = (source: PreparedSessionSourceAuthority, assertSource?: () => void) =>
     patchSessionEntryInWorker({
       database: { ...databaseOptions, path: databasePath },
       databaseIdentity:
@@ -470,7 +468,12 @@ async function patchSqliteSessionEntrySnapshot(
       selection: params.selection,
       assertCurrent: () => assertCurrent?.(),
       guard: options.workerGuard,
-      preparedSource,
+      assertCommitAllowed: () => {
+        options.assertCommitAllowed?.();
+        assertSource?.();
+      },
+      shouldCommit: options.shouldCommit,
+      preparedSource: source,
       retainedExecution: options.retainedExecution,
       reduction:
         typeof params.update === "function"
@@ -517,12 +520,11 @@ async function patchSqliteSessionEntrySnapshot(
           await source.release?.();
           throw new Error("Transaction-local entry authority differs from its writer");
         }
-        if (locality === "same-store") {
-          return workerPatch(source);
-        }
-        // Cross-store event-loop atomicity is required while the released synchronous
-        // transcript SDK bypasses async queues. Revisit at the next SDK major.
-        await source.release?.();
+        // Other stores and opaque SDK callbacks keep their live authority check at
+        // the existing commit grant; the target's write still belongs to its worker.
+        return locality === "same-store"
+          ? workerPatch(source)
+          : workerPatch({ ...source, checks: [] }, sourceAssertion);
       }
       return withDatabase(async () => {
         const database = openOpenClawAgentDatabase(databaseOptions);
@@ -649,22 +651,13 @@ export async function recordInboundSessionMeta(
 ): Promise<SessionEntry | null> {
   normalizeInternalTurnContext(params.ctx);
   const createIfMissing = params.createIfMissing ?? true;
-  return await patchSessionEntryCore(
+  return await applySessionEntryOperation(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) => {
-      const metadataPatch = deriveSessionMetaPatch({
-        ctx: params.ctx,
-        sessionKey: params.sessionKey,
-        existing: context.existingEntry,
-        groupResolution: params.groupResolution,
-      });
-      if (context.existingEntry) {
-        return metadataPatch;
-      }
-      return {
-        ...buildInboundSessionCreationStamp(params.ctx),
-        ...metadataPatch,
-      };
+    {
+      kind: "inbound-metadata",
+      sessionKey: params.sessionKey,
+      metadata: prepareSessionMetaPatch(params),
+      creation: buildInboundSessionCreationStamp(params.ctx),
     },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
@@ -709,26 +702,21 @@ export async function updateSessionLastRouteInScope(
   );
   return await patchSessionEntryInScope(
     scope,
-    (_entry, context) => {
-      const routePatch = deriveLastRoutePatch({
+    {
+      kind: "last-route",
+      route: {
         channel: params.channel,
         to: params.to,
         accountId: params.accountId,
         threadId: params.threadId,
         route: params.route,
         deliveryContext: params.deliveryContext,
-        ctx: params.ctx,
-        groupResolution: params.groupResolution,
-        existing: context.existingEntry,
         sessionKey: scope.sessionKey,
-      });
-      if (context.existingEntry) {
-        return routePatch;
-      }
-      return {
-        ...buildInboundSessionCreationStamp(params.ctx),
-        ...routePatch,
-      };
+        metadata: params.ctx
+          ? prepareSessionMetaPatch({ ctx: params.ctx, groupResolution: params.groupResolution })
+          : undefined,
+      },
+      creation: buildInboundSessionCreationStamp(params.ctx),
     },
     {
       // Route updates must not refresh activity timestamps (#49515).

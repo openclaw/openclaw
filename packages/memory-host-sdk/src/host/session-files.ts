@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
@@ -33,13 +34,16 @@ import {
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
+  readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
+  readTranscriptStatsAsync,
   readTranscriptStatsSync,
   readTranscriptExportSnapshotReadOnlySync,
   resolveSessionTranscriptsDirForAgent,
   SessionTranscriptColdError,
   stripInboundMetadata,
   stripInternalRuntimeContext,
+  warnPluginSdkDeprecation,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import {
@@ -53,7 +57,7 @@ import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
-  listSessionTranscriptCorpusEntriesForAgentSync,
+  listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
 import type {
@@ -68,7 +72,10 @@ export {
   type SessionTranscriptCorpusEntry,
   type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
-export { readTranscriptStatsBatchReadOnlySync } from "./openclaw-runtime-session.js";
+export {
+  readTranscriptStatsBatchReadOnlyAsync,
+  readTranscriptStatsBatchReadOnlySync,
+} from "./openclaw-runtime-session.js";
 
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
@@ -278,13 +285,13 @@ function isCanonicalSessionsDirForAgent(sessionsDir: string, agentId: string): b
   );
 }
 
-function loadSessionTranscriptClassificationForSessionsDir(
+async function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
-): SessionTranscriptClassification {
+): Promise<SessionTranscriptClassification> {
   const agentId = extractAgentIdFromSessionsDir(sessionsDir);
   if (agentId && isCanonicalSessionsDirForAgent(sessionsDir, agentId)) {
     return classifySessionTranscriptCorpusEntries(
-      listSessionTranscriptCorpusEntriesForAgentSync(agentId, { includeContentRevision: false }),
+      await listSessionTranscriptCorpusEntriesForAgent(agentId, { includeContentRevision: false }),
     );
   }
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -347,10 +354,10 @@ function classifySessionTranscriptCorpusEntries(
   };
 }
 
-function classifySessionTranscriptFromSessionStore(absPath: string): {
+async function classifySessionTranscriptFromSessionStore(absPath: string): Promise<{
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
-} {
+}> {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
   const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(absPath));
@@ -358,7 +365,7 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
     primarySessionId && isSessionArchiveArtifactName(path.basename(absPath))
       ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
       : null;
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  const classification = await loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
   const hasClassifiedPath = (paths: ReadonlySet<string>) =>
     paths.has(normalizedAbsPath) ||
     (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
@@ -482,6 +489,7 @@ function sqliteSessionFileState(
   };
 }
 
+/** @deprecated Await statSessionEntry. Removed at the next Plugin SDK major; prepared statistics do not read SQLite. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -490,10 +498,17 @@ export function statSessionEntrySync(
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   if (sqliteIdentity) {
     if (!transcriptStats) {
+      if (isMainThread) {
+        warnPluginSdkDeprecation({
+          family: "session-store",
+          method: "statSessionEntrySync",
+          replacement: "statSessionEntry",
+        });
+      }
       assertBoundIncognitoMemorySyncAccess(
         sqliteIdentity,
         "statSessionEntrySync",
-        "buildSessionEntry",
+        "statSessionEntry",
       );
     }
     const stats = transcriptStats ?? readTranscriptStatsSync(sqliteIdentity);
@@ -508,6 +523,20 @@ export function statSessionEntrySync(
         size: stat.size,
       }
     : null;
+}
+
+/** Read transcript metadata through its worker without loading transcript bodies. */
+export async function statSessionEntry(
+  absPath: string,
+  opts: BuildSessionEntryOptions = {},
+  transcriptStats?: ReturnType<typeof readTranscriptStatsSync>,
+): Promise<SessionFileState | null> {
+  const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  if (!identity) {
+    return statSessionEntrySync(absPath, opts);
+  }
+  const stats = transcriptStats ?? (await readTranscriptStatsAsync(identity));
+  return sqliteSessionFileState(absPath, identity, stats, opts.updatedAtMs);
 }
 
 async function yieldSessionEntryParseIfNeeded(
@@ -543,12 +572,25 @@ export async function buildSessionEntry(
     // Unbound private stores retain their native owner until the atomic cutover.
     if (
       identity &&
-      !opts.onTranscriptMessage &&
-      opts.parseYieldEveryLines === undefined &&
       !isIncognitoSessionKey(opts.sessionKey) &&
       !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
     ) {
-      const options = { ...opts, ...identity };
+      const { onTranscriptMessage, parseYieldEveryLines, ...options } = { ...opts, ...identity };
+      if (onTranscriptMessage || parseYieldEveryLines !== undefined) {
+        const snapshot = await readSessionEntrySnapshotInWorker(
+          absPath,
+          options,
+          Boolean(onTranscriptMessage),
+        );
+        return snapshot
+          ? buildSessionEntryFromSource(
+              absPath,
+              opts,
+              (text) => redactSensitiveText(text, { mode: "tools" }),
+              snapshot,
+            )
+          : null;
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         const redaction = captureSensitiveTextRedactionSnapshot();
         const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
@@ -695,7 +737,7 @@ async function buildSessionEntryFromSource(
     const sessionStoreClassification =
       !sqliteIdentity &&
       (opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined)
-        ? classifySessionTranscriptFromSessionStore(absPath)
+        ? await classifySessionTranscriptFromSessionStore(absPath)
         : null;
     let generatedByDreamingNarrative =
       opts.generatedByDreamingNarrative ??

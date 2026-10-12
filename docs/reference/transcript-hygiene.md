@@ -129,7 +129,10 @@ Implementation:
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
-- Blank text blocks are removed while this pass walks replay content.
+- Unsigned blank text blocks are removed while this pass walks replay content.
+  Blank assistant text with a provider replay signature is retained byte-for-byte,
+  including whitespace-only messages, so later reasoning keeps its
+  original request prefix and item order.
   Assistant turns that become empty are dropped unless they own opaque
   provider replay state; user and tool-result turns that become empty receive
   a non-empty omitted-content placeholder.
@@ -235,6 +238,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- SDK Responses replay uses the storage privacy shape and a fixed field order:
+  summaries are empty, cleartext reasoning content is omitted, and completed
+  ciphertext remains unchanged across live continuation and transcript reload.
+  Native ChatGPT Responses retains its upstream Codex payload semantics.
 - Node turns canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,

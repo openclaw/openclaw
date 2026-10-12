@@ -24,6 +24,7 @@ export function mountChatPaneHeader(
   containers.push(container);
   const props: ChatPaneHeaderProps = {
     paneId: "pane-1",
+    presented: true,
     narrow: false,
     mergedChrome: false,
     title: "Session title",
@@ -42,8 +43,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    panelActions: nothing,
-    panelLayoutActions: nothing,
     sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),

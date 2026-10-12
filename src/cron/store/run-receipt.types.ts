@@ -62,11 +62,6 @@ export type PreparedCronRunReceiptAdjudication = {
   observedStale: boolean;
 };
 
-export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
-  handle: CronRunReceiptHandle;
-  requestRunId?: string;
-};
-
 export class CronRunReceiptRevisionError extends Error {
   constructor(
     readonly receiptId: string,

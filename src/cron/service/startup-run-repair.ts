@@ -95,6 +95,7 @@ export function markInterruptedStartupRun(params: {
     result: {
       status: "error",
       error: STARTUP_INTERRUPTED_ERROR,
+      errorClassification: { kind: "aborted" },
       startedAt: runningAtMs,
     },
     completionStatus: "failed",

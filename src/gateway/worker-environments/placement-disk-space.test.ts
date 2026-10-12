@@ -57,6 +57,8 @@ function createHarness(
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
   let runnerStatus: "available" | "offline" = "available";
+  let runnerVersion = 0;
+  let nowMs = 1_000;
   const unexpected = async () => {
     throw new Error("unexpected workspace mutation during a disk probe");
   };
@@ -90,9 +92,10 @@ function createHarness(
     environments: { startTunnel },
     runnerAvailability: {
       read: () => ({ kind: "device", deviceId: "node-1", status: runnerStatus }),
+      version: () => runnerVersion,
     },
     warn,
-    now: () => 1_000,
+    now: () => nowMs,
   });
   return {
     monitor,
@@ -103,6 +106,10 @@ function createHarness(
     },
     setRunnerStatus(next: "available" | "offline") {
       runnerStatus = next;
+      runnerVersion += 1;
+    },
+    advanceTime(ms: number) {
+      nowMs += ms;
     },
     setPlacement(next: WorkerSessionPlacementRecord) {
       placement = next;
@@ -111,6 +118,30 @@ function createHarness(
 }
 
 describe("active worker placement disk-space monitoring", () => {
+  it("reuses an idle sample for fifteen minutes and refreshes after placement activity", async () => {
+    const runWorkspaceCommand = vi.fn(async () => result(6 * GIB, 10 * GIB));
+    const harness = createHarness(runWorkspaceCommand);
+
+    await harness.monitor.sweep();
+    for (let minute = 0; minute < 14; minute += 1) {
+      harness.advanceTime(60_000);
+      await harness.monitor.sweep();
+    }
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(1);
+
+    harness.advanceTime(60_000);
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(2);
+
+    harness.setPlacement(activePlacement({ updatedAtMs: 30 }));
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(3);
+
+    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
+    await harness.monitor.sweep();
+    expect(runWorkspaceCommand).toHaveBeenCalledTimes(4);
+  });
+
   it("samples an idle active placement and emits only projected status transitions", async () => {
     let availableBytes = 6 * GIB;
     const commands: WorkerWorkspaceCommand[] = [];
@@ -143,6 +174,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(events).toEqual([]);
 
       availableBytes = 400 * MIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.status).toBe("warning");
       expect(events).toEqual([
@@ -151,6 +183,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.monitor.version()).toBe(2);
 
       availableBytes = 300 * MIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.availableBytes).toBe(300 * MIB);
       expect(events).toHaveLength(1);
@@ -160,6 +193,7 @@ describe("active worker placement disk-space monitoring", () => {
       expect(harness.monitor.version()).toBe(3);
 
       availableBytes = 6 * GIB;
+      harness.advanceTime(15 * 60_000);
       await harness.monitor.sweep();
       expect(harness.monitor.read(harness.placement)?.status).toBe("ok");
       expect(events).toHaveLength(2);
@@ -280,6 +314,7 @@ describe("active worker placement disk-space monitoring", () => {
     );
     await harness.monitor.sweep();
     fail = true;
+    harness.advanceTime(15 * 60_000);
 
     await harness.monitor.sweep();
     await harness.monitor.sweep();

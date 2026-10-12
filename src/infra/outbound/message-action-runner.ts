@@ -55,6 +55,7 @@ import {
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
@@ -318,13 +319,19 @@ async function handleInternalSourceReplySendAction(
       params.message = recommendations.text;
     }
   }
+  const mediaSources = collectActionMediaSourceHints(params, [], { structuredAttachments: "all" });
+  await waitForLocalMessageMedia({
+    ...input,
+    sources: mediaSources,
+    assertCurrent: input.assertDirectAdapterHandoff,
+  });
   const mediaAccess =
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg: input.cfg,
       agentId,
       workspaceDir: input.workspaceDir,
-      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
+      mediaSources,
       ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
       accountId: input.sessionKey ? input.requesterAccountId : undefined,
@@ -567,15 +574,25 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           );
           (route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff)?.();
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
+          const mediaSources = collectActionMediaSourceHints(
+            params,
+            extraActionMediaSourceParamKeys,
+            {
+              structuredAttachments: structuredAttachmentMode,
+            },
+          );
+          await waitForLocalMessageMedia({
+            ...input,
+            sources: mediaSources,
+            assertCurrent: route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
+          });
 
           const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
               agentId: resolvedAgentId,
-              mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-                structuredAttachments: structuredAttachmentMode,
-              }),
+              mediaSources,
               ...messageActionRequesterMediaContext(input),
               messageProvider: input.sessionKey ? undefined : channel,
               accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,

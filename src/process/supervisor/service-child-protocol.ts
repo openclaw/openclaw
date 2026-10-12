@@ -84,17 +84,8 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
   sequence: number;
 };
 
-export type ServiceChildRelayRetirement = {
-  type: "retirement";
-  generation: string;
-  sequence: number;
-  anchorExited: boolean;
-  signalError?: string;
-};
-
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | ServiceChildRelayRetirement
   | { type: "relay-error"; generation: string; error: string };
 
 export function readServiceChildMessage(

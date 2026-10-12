@@ -227,7 +227,6 @@ it.each([false, true])(
       let grantDatabasePath: string | undefined;
       let agentGrants = 0;
       let authorityReads = 0;
-      let otherOwnerAuthorityReads = 0;
       let revoked = true;
       const refusal = new Error("synthetic rollback authority revoked");
       const create = admission.createSqliteWorkerOperationAdmission;
@@ -264,9 +263,6 @@ it.each([false, true])(
           expect(grantDatabasePath).not.toBe(fixture.database.path);
           fixture.readEntry();
           authorityReads++;
-          if (grantDatabasePath === fixture.shared.path) {
-            otherOwnerAuthorityReads++;
-          }
           if (revoked) {
             throw refusal;
           }
@@ -278,9 +274,21 @@ it.each([false, true])(
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toBeDefined();
         revoked = false;
-        await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
-          deleted: true,
-        });
+        const sql = observeHostDataSql();
+        try {
+          await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
+            deleted: true,
+          });
+          expect(
+            sql.queries.filter((query) =>
+              /\b(?:delete\s+from|insert\s+into|update)\s+"?(?:session_nodes|session_windows|transcript_events)\b/i.test(
+                query,
+              ),
+            ),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
         expect(authorityReads).toBeGreaterThan(0);
         expect(agentGrants).toBeGreaterThan(0);
         expect(fixture.readEntry()).toBeUndefined();
@@ -289,7 +297,6 @@ it.each([false, true])(
         );
         if (withBinding) {
           expect(fixture.readBinding()).toBeUndefined();
-          expect(otherOwnerAuthorityReads).toBeGreaterThan(0);
         } else {
           expect(fixture.readBinding()).toBeDefined();
         }

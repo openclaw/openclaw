@@ -1,5 +1,4 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WindowsJob, type WindowsJobChild } from "@openclaw/proc-safe/windows-job";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
@@ -8,9 +7,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   ServiceChildAnchorMessage,
   ServiceChildAnchorPayload,
+  ServiceChildControlMessage,
   ServiceChildStart,
 } from "./service-child-protocol.js";
-import { isWindowsJobServiceStart } from "./service-child-windows-job-start.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type ClosingReason = Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"];
@@ -405,21 +404,22 @@ export function runServiceChildWindowsJobAnchor(): void {
   });
   process.once("SIGTERM", () => void requestCleanup("parent-lost"));
   process.once("SIGINT", () => void requestCleanup("parent-lost"));
-  process.on("message", (raw: unknown) => {
-    if (isWindowsJobServiceStart(raw) && start === undefined && state === "starting") {
-      void startCommand(raw);
+  // The version-matched spawning host is the only writer on this private IPC channel.
+  process.on("message", (message: ServiceChildStart | ServiceChildControlMessage) => {
+    if (
+      (message.type === "start" || message.type === "prepare") &&
+      start === undefined &&
+      state === "starting"
+    ) {
+      void startCommand(message);
       return;
     }
-    const message = asOptionalRecord(raw);
     if (
       !start ||
       state === "closed" ||
-      !message ||
       (message.type !== "cancel" &&
         message.type !== "startup-error-ack" &&
         message.type !== "launch") ||
-      typeof message.generation !== "string" ||
-      typeof message.sequence !== "number" ||
       message.generation !== start.generation ||
       message.sequence <= lastHostSequence
     ) {

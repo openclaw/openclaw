@@ -17,6 +17,7 @@ import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
+import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalCleanupPath,
@@ -29,7 +30,10 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import {
   assertAgentDeletionJournalAvailable,
   ensureAgentDeletionJournalPhaseSchema,
@@ -417,6 +421,7 @@ export function beginAgentDeletionJournalInDatabase(
         })
         .where("agent_id", "=", normalized.agentId),
     );
+    publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
     return {
       previousEntry: previous,
       entry: {
@@ -446,6 +451,7 @@ export function beginAgentDeletionJournalInDatabase(
       delete_files: normalized.deleteFiles ? 1 : 0,
     }),
   );
+  publishAgentDeletionJournalStatus(database.db, normalized.agentId, "pending");
   return {
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
@@ -523,6 +529,7 @@ export function completeAgentDeletionJournalInDatabase(
   // The journal already fences authority. Keep creation history through refusals and
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
+    publishAgentDeletionJournalStatus(database.db, id, "complete");
     resolveAgentDeletionRecoveryHolds(
       database,
       id,
@@ -554,6 +561,7 @@ export function deleteAgentDeletionJournalInDatabase(
   );
   const removed = Number(result.numAffectedRows ?? 0) > 0;
   if (removed) {
+    publishAgentDeletionJournalStatus(database.db, id, "absent");
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return removed;
@@ -579,22 +587,22 @@ export async function readAgentDeletionJournalAsync(
   return result;
 }
 
-/** Resume pending deletion work through the captured physical shared-state worker. */
+/** Committed-state read; deletion owners recheck pending entries under write authority. */
 export async function listPendingAgentDeletionJournalsAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<ReturnType<typeof listPendingAgentDeletionJournalsInDatabase>> {
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "agentDeletion.listPending", input: undefined }),
-    { existingOnly: true },
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "agentRecovery.pendingDeletions", input: undefined },
+    { current: true },
   );
-  context.admission.assertCurrent();
-  return result ?? { entries: [], manualClawAgentIds: [] };
+  if (reply && (!reply.ok || reply.type !== "agentRecovery.pendingDeletions")) {
+    throw new Error("Unexpected pending agent deletion read result");
+  }
+  return {
+    entries: reply?.entries ?? [],
+    manualClawAgentIds: reply?.manualClawAgentIds ?? [],
+  };
 }
 
 /** Administrative safety check; the caller retains its own deletion/monitor authority. */

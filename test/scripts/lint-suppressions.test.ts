@@ -291,6 +291,7 @@ describe("production lint suppressions", () => {
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
+        "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
       ]),
     );

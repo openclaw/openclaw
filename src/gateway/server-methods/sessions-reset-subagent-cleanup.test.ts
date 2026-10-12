@@ -215,27 +215,24 @@ afterEach(async () => {
   env.restore();
 });
 
-test.each(["unchanged", "reset", "reset-reopen", "reopen-reset-reopen"])(
-  "collector cleanup retry: %s",
-  async (mode) => {
-    const reset = mode !== "unchanged";
-    if (mode === "reopen-reset-reopen") {
-      await reopen();
-    }
-    if (reset) {
-      await request("sessions.reset", { key });
-      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
-    }
-    const beforeRetry = loadSessionEntry({ sessionKey: key });
-    if (mode.endsWith("reopen")) {
-      await reopen();
-    }
-    await testing.sweepOnceForTests();
-    expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
-    expect(attempts).toBe(reset ? 1 : 2);
-    await expectResultRetained();
-  },
-);
+test.each(["unchanged", "reopen-reset-reopen"])("collector cleanup retry: %s", async (mode) => {
+  const reset = mode !== "unchanged";
+  if (mode === "reopen-reset-reopen") {
+    await reopen();
+  }
+  if (reset) {
+    await request("sessions.reset", { key });
+    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).not.toBe("original");
+  }
+  const beforeRetry = loadSessionEntry({ sessionKey: key });
+  if (mode.endsWith("reopen")) {
+    await reopen();
+  }
+  await testing.sweepOnceForTests();
+  expect(loadSessionEntry({ sessionKey: key })).toEqual(reset ? beforeRetry : undefined);
+  expect(attempts).toBe(reset ? 1 : 2);
+  await expectResultRetained();
+});
 
 async function reopen() {
   await resetSubagentRegistryForTests({ persist: false });

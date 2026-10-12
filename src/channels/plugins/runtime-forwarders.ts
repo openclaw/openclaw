@@ -39,11 +39,10 @@ async function resolveForwardedMethod<Runtime, Fn>(
 }
 
 function createRuntimeForwarder<Runtime, Context, Result>(
-  resolveParams: () => RuntimeForwarderParams<Runtime, (ctx: Context) => MaybePromise<Result>>,
+  params: RuntimeForwarderParams<Runtime, (ctx: Context) => MaybePromise<Result>>,
 ) {
-  // Read current callbacks on every call. Sender failures stay outside the
-  // resolution catch because dispatch may already have begun.
-  return async (ctx: Context) => await (await resolveForwardedMethod(resolveParams()))(ctx);
+  // Sender failures stay outside resolution: dispatch may already have begun.
+  return async (ctx: Context) => await (await resolveForwardedMethod(params))(ctx);
 }
 
 /**
@@ -58,24 +57,25 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(
 ): Pick<ChannelDirectoryAdapter, DirectoryMethod> {
   const adapter: Pick<ChannelDirectoryAdapter, DirectoryMethod> = {};
   if (params.self) {
-    adapter.self = createRuntimeForwarder(() => ({
+    adapter.self = createRuntimeForwarder({
       getRuntime: params.getRuntime,
-      resolve: params.self!,
-    }));
+      resolve: params.self,
+    });
   }
   for (const method of ["listPeersLive", "listGroupsLive"] as const) {
-    if (params[method]) {
-      adapter[method] = createRuntimeForwarder(() => ({
+    const resolve = params[method];
+    if (resolve) {
+      adapter[method] = createRuntimeForwarder({
         getRuntime: params.getRuntime,
-        resolve: params[method]!,
-      }));
+        resolve,
+      });
     }
   }
   if (params.listGroupMembers) {
-    adapter.listGroupMembers = createRuntimeForwarder(() => ({
+    adapter.listGroupMembers = createRuntimeForwarder({
       getRuntime: params.getRuntime,
-      resolve: params.listGroupMembers!,
-    }));
+      resolve: params.listGroupMembers,
+    });
   }
   return adapter;
 }
@@ -92,7 +92,7 @@ export function createRuntimeOutboundDelegates<Runtime>(
   },
 ): Pick<ChannelOutboundAdapter, OutboundMethod> {
   const forward = <Context, Result>(
-    read: () =>
+    method:
       | Omit<
           RuntimeForwarderParams<Runtime, (ctx: Context) => MaybePromise<Result>>,
           "getRuntime" | "notDispatched"
@@ -100,19 +100,18 @@ export function createRuntimeOutboundDelegates<Runtime>(
       | undefined,
     notDispatched = true,
   ) =>
-    read()
-      ? createRuntimeForwarder(() => ({
+    method
+      ? createRuntimeForwarder({
           getRuntime: params.getRuntime,
           notDispatched,
-          resolve: read()!.resolve,
-          unavailableMessage: read()!.unavailableMessage,
-        }))
+          ...method,
+        })
       : undefined;
   return {
-    renderPresentation: forward(() => params.renderPresentation, false),
-    sendPayload: forward(() => params.sendPayload),
-    sendText: forward(() => params.sendText),
-    sendMedia: forward(() => params.sendMedia),
-    sendPoll: forward(() => params.sendPoll),
+    renderPresentation: forward(params.renderPresentation, false),
+    sendPayload: forward(params.sendPayload),
+    sendText: forward(params.sendText),
+    sendMedia: forward(params.sendMedia),
+    sendPoll: forward(params.sendPoll),
   };
 }

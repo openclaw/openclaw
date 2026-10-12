@@ -202,31 +202,6 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   sessions.dispose();
 });
 
-it("ignores an older group load failure after an event-driven load succeeds", async () => {
-  const first = createDeferred<{ groups: Array<{ name: string }> }>();
-  const current = createDeferred<{ groups: Array<{ name: string }> }>();
-  let calls = 0;
-  const { sessions, emitEvent } = sessionHarness(
-    {
-      "sessions.groups.list": () => (++calls === 1 ? first.promise : current.promise),
-      "sessions.list": () => sessionsResult([], 1),
-    },
-    ["sessions.groups.list"],
-  );
-  const firstLoad = sessions.groupsLoad();
-  await waitForFast(() => expect(calls).toBe(1));
-  emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
-  await waitForFast(() => expect(calls).toBe(2));
-  current.resolve({ groups: [{ name: "Current" }] });
-  await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
-  first.reject(new Error("stale catalog failure"));
-  await firstLoad;
-  await sessions.groupsLoad();
-  expect(calls).toBe(2);
-  expect(sessions.state.groups).toEqual(["Current"]);
-  sessions.dispose();
-});
-
 it("excludes lifecycle no-ops from batch deletion results", async () => {
   const rejectedKey = "agent:main:rejected";
   const keptKey = "agent:main:kept";

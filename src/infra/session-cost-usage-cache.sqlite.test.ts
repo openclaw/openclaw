@@ -24,11 +24,19 @@ import {
 } from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import {
+  partitionUsageCostRollup,
+  decodeUsageCostPartition,
+  USAGE_COST_PARTITION_SCOPE,
+} from "./session-cost-usage-partitions.js";
+import {
   decodeUsageCostRollup,
   encodeUsageCostRollup,
   USAGE_COST_ROLLUP_VERSION,
 } from "./session-cost-usage-rollup-codec.js";
-import { createSessionUsageRollupData } from "./session-cost-usage-rollup.js";
+import {
+  appendSessionUsageRollupContribution,
+  createSessionUsageRollupData,
+} from "./session-cost-usage-rollup.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -70,13 +78,244 @@ afterEach(async () => {
 });
 
 describe("session cost usage SQLite cache", () => {
+  it("keeps a sparse year below 25 KB without discarding quarter-hour accounting", () => {
+    const rollup = createSessionUsageRollupData();
+    for (let index = 0; index < 500; index++) {
+      appendSessionUsageRollupContribution(rollup, {
+        timestamp:
+          Date.UTC(2025, 0, 1) +
+          Math.floor((index * 365) / 500) * 86_400_000 +
+          (index % 2) * 900_000,
+        role: "assistant",
+        model: "fixture",
+        provider: "test",
+        toolNames: [],
+        toolResultCounts: { total: 0, errors: 0 },
+        usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
+      });
+    }
+    const encoded = partitionUsageCostRollup({
+      version: USAGE_COST_ROLLUP_VERSION,
+      pricingFingerprint: "fixture",
+      scannedAt: 1,
+      parsedRecords: 500,
+      countedRecords: 500,
+      checkpoint: {
+        kind: "sqlite",
+        maxSeq: 500,
+        eventCount: 500,
+        size: 500,
+        mtimeMs: 1,
+        anchorHash: "fixture",
+      },
+      rollup,
+    });
+    const bytes =
+      Buffer.byteLength(encoded.valueJson) +
+      encoded.blob.byteLength +
+      encoded.partitions.reduce(
+        (sum, partition) =>
+          sum + Buffer.byteLength(partition.valueJson) + partition.blob.byteLength,
+        0,
+      );
+    expect(bytes).toBeLessThan(25_000);
+    const buckets = encoded.partitions.flatMap((partition) =>
+      Object.values(decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets),
+    );
+    expect(buckets.reduce((sum, bucket) => sum + bucket.totals.totalTokens, 0)).toBe(5_000);
+    expect(
+      buckets.map((bucket) => bucket.timestampMs).toSorted((left, right) => left - right),
+    ).toEqual(
+      Object.values(rollup.buckets)
+        .map((bucket) => bucket.timestampMs)
+        .toSorted((left, right) => left - right),
+    );
+  });
+
+  it("commits monthly quarter-hour partitions with their checkpoint and retires deleted months", async () => {
+    const stateDir = tempDirs.make("openclaw-usage-partitions-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "usage-partitions";
+      const sessionFile = "session.jsonl";
+      const { db } = openOpenClawAgentDatabase({ agentId });
+      const owner = prepareSessionCostUsageRefreshLock(agentId);
+      expect(await owner.acquire()).toBe(true);
+      const readPartitions = (startDate = "", endDate = "\uffff") =>
+        db
+          .prepare(
+            "SELECT key, value_json, blob FROM cache_entries WHERE scope = ? AND key >= ? AND key <= ? ORDER BY key",
+          )
+          .all(
+            USAGE_COST_PARTITION_SCOPE,
+            `${sessionFile}\0${startDate}`,
+            `${sessionFile}\0${endDate}`,
+          )
+          .map((row) => {
+            if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
+              throw new Error("Expected a persisted usage partition");
+            }
+            return {
+              date: String(row.key).slice(sessionFile.length + 1),
+              valueJson: row.value_json,
+              blob: row.blob,
+            };
+          });
+      try {
+        const rollup = createSessionUsageRollupData();
+        for (const timestamp of [
+          Date.UTC(2026, 8, 18),
+          Date.UTC(2026, 8, 18, 0, 1),
+          Date.UTC(2026, 8, 19),
+        ]) {
+          appendSessionUsageRollupContribution(rollup, {
+            timestamp,
+            role: "assistant",
+            model: "test",
+            provider: "test",
+            toolNames: [],
+            toolResultCounts: { total: 0, errors: 0 },
+            usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
+          });
+        }
+        const entry = {
+          version: USAGE_COST_ROLLUP_VERSION,
+          pricingFingerprint: "first",
+          scannedAt: 1,
+          parsedRecords: 3,
+          countedRecords: 3,
+          checkpoint: {
+            kind: "jsonl" as const,
+            parsedOffset: 3,
+            observedSize: 3,
+            observedMtimeMs: 1,
+            device: 1,
+            inode: 1,
+            anchorHash: "anchor",
+          },
+          rollup,
+        };
+        const first = partitionUsageCostRollup(entry);
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: null,
+            valueJson: utf8Json(first.valueJson),
+            blob: first.blob,
+            partitions: first.partitions,
+            updatedAt: 1,
+          }),
+        ).toBe(true);
+        const days = readPartitions();
+        expect(days.map((day) => day.date)).toEqual(["2026-09-01"]);
+        const selected = readPartitions("2026-09-01", "2026-09-01");
+        expect(selected).toHaveLength(1);
+        const day = decodeUsageCostPartition(selected[0]!.valueJson, selected[0]!.blob)!;
+        expect(Object.values(day.buckets)).toMatchObject([
+          { totals: { totalTokens: 20, totalCost: 2 } },
+          { totals: { totalTokens: 10, totalCost: 1 } },
+        ]);
+        expect(
+          Object.keys(decodeUsageCostRollup(first.valueJson, "first", first.blob)!.rollup.buckets),
+        ).toEqual([]);
+
+        const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
+        db.exec(`CREATE TRIGGER refuse_usage_partition BEFORE UPDATE ON cache_entries
+        WHEN NEW.scope = '${USAGE_COST_PARTITION_SCOPE}'
+        BEGIN SELECT RAISE(ABORT, 'partition refused'); END;`);
+        await expect(
+          owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(first.valueJson),
+            valueJson: utf8Json(first.valueJson),
+            blob: first.blob,
+            partitions: first.partitions,
+            updatedAt: 2,
+          }),
+        ).rejects.toThrow("partition refused");
+        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(before);
+        db.exec("DROP TRIGGER refuse_usage_partition");
+
+        const rewritten = partitionUsageCostRollup({
+          ...entry,
+          pricingFingerprint: "changed",
+          rollup: createSessionUsageRollupData(),
+        });
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(first.valueJson),
+            valueJson: utf8Json(rewritten.valueJson),
+            blob: rewritten.blob,
+            partitions: [],
+            removedDates: ["2026-09-01"],
+            updatedAt: 3,
+          }),
+        ).toBe(true);
+        expect(readPartitions()).toEqual([]);
+        expect(decodeUsageCostRollup(rewritten.valueJson, "first", rewritten.blob)).toBeUndefined();
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(rewritten.valueJson),
+            valueJson: utf8Json(first.valueJson),
+            blob: first.blob,
+            partitions: first.partitions,
+            updatedAt: 4,
+          }),
+        ).toBe(true);
+        // A downgraded owner ignores projection rows and replaces only the checkpoint.
+        const legacy = encodeUsageCostRollup({ ...entry, version: 6 });
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(first.valueJson),
+            valueJson: utf8Json(legacy.valueJson),
+            blob: legacy.blob,
+            updatedAt: 5,
+          }),
+        ).toBe(true);
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(legacy.valueJson),
+            valueJson: utf8Json(rewritten.valueJson),
+            blob: rewritten.blob,
+            partitions: [],
+            replacePartitions: true,
+            updatedAt: 6,
+          }),
+        ).toBe(true);
+        expect(readPartitions()).toEqual([]);
+        expect(
+          await owner.writeRollup({
+            rollupId: sessionFile,
+            previousValueJson: utf8Json(rewritten.valueJson),
+            valueJson: utf8Json(first.valueJson),
+            blob: first.blob,
+            partitions: first.partitions,
+            updatedAt: 7,
+          }),
+        ).toBe(true);
+        await deleteSessionCostUsageRollupsExcept({
+          agentId,
+          liveKeys: new Set(),
+          rows: readSessionCostUsageRollupRows(agentId),
+        });
+        expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
+        expect(readPartitions()).toEqual([]);
+      } finally {
+        await owner.release();
+      }
+    });
+  });
+
   it("migrates valid old reports once while preserving newer cache rows and unrelated scopes", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-migrate-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "usage-migration";
       const { db } = openOpenClawAgentDatabase({ agentId });
       const entry = {
-        version: USAGE_COST_ROLLUP_VERSION,
+        version: 6,
         pricingFingerprint: "synthetic",
         checkpoint: {
           kind: "jsonl" as const,

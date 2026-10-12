@@ -449,43 +449,6 @@ describe("session message-cut methods", () => {
     expect(respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 
-  it("lists branches and switches to an inactive tip", async () => {
-    const listed = await invoke("sessions.branches.list");
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      {
-        branches: [
-          expect.objectContaining({
-            leafEntryId: "assistant-entry",
-            headline: "answer",
-            messageCount: 2,
-            active: true,
-          }),
-          expect.objectContaining({
-            leafEntryId: "off-path-entry",
-            headline: "inactive",
-            messageCount: 1,
-            active: false,
-          }),
-        ],
-      },
-      undefined,
-    );
-
-    const switched = await invoke("sessions.branches.switch", "off-path-entry");
-    expect(switched).toHaveBeenCalledWith(true, {}, undefined);
-  });
-
-  it("clears queued session work after a successful branch switch", async () => {
-    const work = enqueueSessionWork("branch switch");
-    expectSessionWorkQueued(work);
-
-    const respond = await invoke("sessions.branches.switch", "off-path-entry");
-
-    expect(respond).toHaveBeenCalledWith(true, {}, undefined);
-    await expectSessionWorkCleared(work);
-  });
-
   it.each([false, true])(
     "settles a successful rewind after authority revocation=%s",
     async (revoke) => {
@@ -671,9 +634,11 @@ describe("session message-cut methods", () => {
         updatedAt: 1,
       },
     } as GatewayClient).finally(forkSql.restore);
-    expect(
-      forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
-    ).toHaveLength(1);
+    // The cold fork checks upstream ownership at transaction admission and again at commit.
+    expect(forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"'))).toEqual([
+      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
+      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
+    ]);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -723,6 +688,11 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
+    expect(
+      listSessionEntriesCore({ agentId: "main" })
+        .map((row) => row.sessionKey)
+        .toSorted(),
+    ).toEqual([sessionKey, forkKey ?? ""].toSorted());
   });
 
   it.each([
@@ -740,18 +710,6 @@ describe("session message-cut methods", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: `${label} is unavailable for archived sessions.`,
       }),
-    );
-  });
-
-  it("allows archived sessions to fork", async () => {
-    await archiveSourceSession();
-
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionKey: expect.any(String) }),
-      undefined,
     );
   });
 

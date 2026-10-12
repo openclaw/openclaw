@@ -20,6 +20,13 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
+a canonical window of retained messages followed by an encrypted checkpoint.
+OpenClaw preserves that entire window, including retained assistant messages,
+for the next request and after a restart. The provider chooses which messages
+remain; it does not have to retain every original user message. See
+[OpenAI server-side compaction](/providers/openai/advanced).
+
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
 <Note>

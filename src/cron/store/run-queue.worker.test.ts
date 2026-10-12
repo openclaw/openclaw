@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
@@ -13,6 +14,7 @@ import { saveCronStore } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { readCronRunRecords } from "./read-only.js";
 import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
 import { prepareCronStoreChanges } from "./save.kernel.js";
 
@@ -64,6 +66,22 @@ async function store(label: string, jobs: CronJob[]) {
   return {
     storeKey,
     read,
+    readReceipt: async (handle: CronRunReceiptHandle) => {
+      const result = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "cron.currentReceipt",
+          handle,
+          includeJob: false,
+          includeAvailability: false,
+        },
+        { context },
+      );
+      if (!result?.ok || result.type !== "cron.currentReceipt") {
+        throw new Error("Cron receipt read failed");
+      }
+      return result.facts.receipt;
+    },
     request: (requests: CronRunQueueOperations["cron.requestRuns"]["input"]["requests"]) =>
       executeOpenClawStateWorker(context, {
         type: "cron.requestRuns",
@@ -142,18 +160,31 @@ it("deduplicates committed slots and drains persisted job order within worker ca
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
 });
 
-it("uses edited payloads while queued and records a disabled request under its public acknowledgement ID", async () => {
+it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
   const original = job("edited");
   const queue = await store("edit", [original]);
   const request = scheduled(queue.storeKey, original);
-  await queue.request([request]);
+  const claimed = (await queue.request([request])).accepted[0]!;
+  expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
   await queue.edit((next) => {
     next.jobs[0]!.payload = { kind: "command", argv: ["echo", "new payload"] };
+    next.jobs[0]!.agentId = "edited-agent";
   });
-  expect((await queue.drain()).launches[0]?.job.payload).toEqual({
+  const activated = (await queue.drain()).launches[0]!;
+  expect(activated.job.payload).toEqual({
     kind: "command",
     argv: ["echo", "new payload"],
   });
+  expect(activated.runReceipt).toEqual({
+    ...claimed.runReceipt,
+    agentId: "edited-agent",
+    configRevision: resolveCronJobConfigRevision(activated.job),
+    startedAtMs: now + 1,
+  });
+  expect(await queue.readReceipt(activated.runReceipt)).toEqual(activated.runReceipt);
+  expect((await queue.request([request])).rejected).toEqual([
+    { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
 
   const cancelJob = job("disabled");
   const cancelled = await store("disable", [cancelJob]);

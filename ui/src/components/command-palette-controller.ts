@@ -286,7 +286,13 @@ export class PaletteController {
     this.publish();
   }
 
-  private readonly handleInputRef = (element: Element | undefined) => {
+  private readonly handleInputRef = (
+    element: Element | undefined,
+    previous?: HTMLTextAreaElement,
+  ) => {
+    if (previous && previous !== this.inputElement) {
+      return;
+    }
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
     this.inputElement?.addEventListener("focus", this.adoptInitialInput);

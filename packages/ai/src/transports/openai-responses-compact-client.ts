@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type { OpenAIResponsesCompactEndpointResult } from "./openai-responses-compact-request.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
-import { isOpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
+import {
+  getOpenAIResponsesCompactionOutputError,
+  isOpenAIResponsesCompactionOutput,
+} from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import {
@@ -45,44 +48,30 @@ export async function postOpenAIResponsesCompaction(params: {
     }),
     body,
   });
-  const output = isRecord(response) && Array.isArray(response.output) ? response.output : [];
-  const item = output.at(-1);
-  const retainedItems = output.slice(0, -1);
-  const retainedUserMessageCount = retainedItems.filter(
-    (candidate) =>
-      isRecord(candidate) &&
-      candidate.type === "message" &&
-      candidate.role === "user" &&
-      Array.isArray(candidate.content),
-  ).length;
-  const inputUserMessageCount = Array.isArray(params.request.input)
-    ? params.request.input.filter(
-        (candidate) =>
-          isRecord(candidate) && candidate.type === "message" && candidate.role === "user",
-      ).length
-    : 0;
-  const retainedMessagePrefixSupported = supportsNativeOpenAIResponsesEndpoint(params.model);
-  const usage = isRecord(response) && isRecord(response.usage) ? response.usage : undefined;
-  if (
-    !isRecord(response) ||
-    response.object !== "response.compaction" ||
-    !isOpenAIResponsesCompactionOutput(output, params.model) ||
-    (retainedItems.length > 0 &&
-      (!retainedMessagePrefixSupported || retainedUserMessageCount !== inputUserMessageCount)) ||
-    !isRecord(item) ||
-    item.type !== "compaction" ||
-    typeof item.encrypted_content !== "string" ||
-    item.encrypted_content.length === 0 ||
-    !usage ||
-    typeof usage.input_tokens !== "number" ||
-    typeof usage.output_tokens !== "number"
-  ) {
-    throw new Error("Responses compact endpoint did not return one trailing compaction item");
+  if (!isRecord(response) || response.object !== "response.compaction") {
+    throw new Error("Responses compact endpoint must return a response.compaction object");
+  }
+  const output = response.output;
+  if (!isOpenAIResponsesCompactionOutput(output, params.model)) {
+    throw new Error(
+      `Responses compact endpoint: ${getOpenAIResponsesCompactionOutputError(output, params.model)}`,
+    );
+  }
+  const window = output;
+  const item = window.at(-1);
+  if (window.length > 1 && !supportsNativeOpenAIResponsesEndpoint(params.model)) {
+    throw new Error("Responses compact endpoint: retained messages require native OpenAI");
+  }
+  const usage = isRecord(response.usage) ? response.usage : undefined;
+  if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
+    throw new Error(
+      "Responses compact endpoint: usage must include input_tokens and output_tokens",
+    );
   }
   return {
-    output,
+    output: window,
     item,
-    historyMode: retainedUserMessageCount > 0 ? "retained-users" : "compacted-prefix",
+    historyMode: window.length > 1 ? "retained-users" : "compacted-prefix",
     usage,
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {

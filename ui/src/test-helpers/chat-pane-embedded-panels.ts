@@ -18,7 +18,7 @@ import {
   createSessionWorkspaceProps,
   renderSessionWorkspaceRail,
 } from "../pages/chat/components/chat-session-workspace.ts";
-import "../pages/chat/components/chat-sidebar-region.runtime.ts";
+import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
 

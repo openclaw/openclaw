@@ -8,25 +8,20 @@ read_when:
 
 ## Quick start
 
-Most days:
+Select proof using the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Use the commands below for the suite you need:
 
-- Full gate (expected before push): `pnpm build && pnpm check && pnpm check:test-types && pnpm test`
-- Faster local full-suite run on a roomy machine: `pnpm test:max`
-- Direct Vitest watch loop: `pnpm test:watch`
-- Direct file targeting routes plugin/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
-- Prefer targeted runs first when iterating on a single failure.
-- Docker-backed QA site: `pnpm qa:lab:up`
-- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
+- Focused test: `pnpm test <file> --maxWorkers=1`
+- Watch loop: `pnpm test:watch`
+- Full suite: `pnpm test`; higher worker cap: `pnpm test:max`
+- Informational coverage: `pnpm test:coverage`
+- E2E: `pnpm test:e2e`
+- Docker QA site: `pnpm qa:lab:up`
+- Linux VM QA: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
-The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
-running Docker daemon and a source checkout, because the npm tarball omits QA
-Lab, and the `multipass` runner needs Multipass installed. See
-[QA-specific runners](/help/testing/qa-runners).
-
-When you touch tests or want extra confidence:
-
-- Informational V8 coverage report: `pnpm test:coverage`
-- E2E suite: `pnpm test:e2e`
+The QA site requires Docker and source (the npm tarball omits QA Lab); the VM
+runner requires Multipass. See [QA runners](/help/testing/qa-runners).
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
@@ -39,6 +34,13 @@ comparison bases and shrink-only maintenance.
 ## Test suites (what runs where)
 
 Think of the suites as "increasing realism" (and increasing flakiness/cost).
+
+The maintainer-tooling family uses `RELEASE_ONLY_TOOLING_SHARDS` and matching
+maintainer leaves in mixed fast configs: product-only PRs and main omit it,
+tooling-owner PRs select their affected files (with full-family fallback for unresolved owners), and manual CI and Full Release Validation
+retain it. Keep tests in their assigned configs, with their process and timer
+policies, so new files inherit the same owner routing. Dedicated product E2E
+and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
 ### Unit / integration (default)
 
@@ -89,6 +91,7 @@ Native dependency policy:
     - `pnpm test:changed` expands changed git paths into cheap scoped lanes by default: direct test edits, sibling `*.test.ts` files, explicit source mappings, and local import-graph dependents. Config/setup/package edits do not broad-run tests unless you explicitly use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
     - `pnpm check:changed` is the normal smart local check gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, live Docker tooling, and tooling, then runs the matching typecheck, lint, and guard commands. Selected paths also schedule targeted Vitest owner tests via `pnpm test:serial`; use `pnpm test:changed` or explicit `pnpm test <target>` for additional test proof matching the touched contract. Release metadata-only version bumps run targeted version/config/root-dependency checks, with a guard that rejects package changes outside the top-level version field.
     - In the default Git diff mode against `HEAD`, comment/whitespace-only TypeScript edits skip their typecheck lanes and core graph boundary check when tokens and line-break boundaries match the merge base. Files with TypeScript/JSX directives, triple-slash comments, parse errors, or path lifecycle changes retain typechecking, as do JavaScript files. Lint, formatting, ratchets, guards, and tests keep the full changed-path scope. Staged, explicit-path, and non-`HEAD` comparisons retain normal typecheck selection; `--dry-run` reports any skipped paths.
+    - Changed core test checks run the shards that own changed test roots before their other selected consumers. Both groups keep their canonical order, and CI stripe membership stays unchanged. Source-only changes keep the normal order. The boundary inventory is reused for selection and ordering.
     - Live Docker ACP harness edits run focused checks: shell syntax for the live Docker auth scripts and a live Docker scheduler dry-run. `package.json` changes are included only when the diff is limited to `scripts["test:docker:live-*"]`; dependency, export, version, and other package-surface edits still use the broader guards.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
@@ -509,11 +512,10 @@ frozen release targets may not support this advisory selector.
 
 ## Which suite should I run?
 
-Use this decision table:
-
-- Editing logic/tests: run `pnpm test` (and `pnpm test:coverage` if you changed a lot)
-- Touching gateway networking / WS protocol / pairing: add `pnpm test:e2e`
-- Debugging "my bot is down" / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
+Follow the [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Target the touched owner first. Gateway networking, WebSocket, and pairing
+contracts have E2E lanes; provider/tool-calling diagnosis may require a narrowed
+live lane. Suite descriptions above identify their scope and prerequisites.
 
 ## Live (network-touching) tests
 

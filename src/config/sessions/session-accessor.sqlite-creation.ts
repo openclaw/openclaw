@@ -14,7 +14,7 @@ import {
   assertSessionCreationLabelAvailable,
   type SessionCreationSnapshot,
 } from "./session-accessor.sqlite-creation-read.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { preparedSessionDeletionRequiresNativeTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
@@ -77,7 +77,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
   const useWorker =
     isMainThread &&
     supportsOpenClawAgentDatabaseExecution(databaseOptions) &&
-    !hasPreparedNativeSessionDeletion();
+    !preparedSessionDeletionRequiresNativeTransaction();
   const retained = useWorker ? retainSessionHistoryWorkerDatabase(databaseOptions) : undefined;
   try {
     let source: CreationSource;
@@ -284,6 +284,10 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             storePath: scope.path,
             env: scope.env,
             sessionKey: normalizedKey,
+            creationSnapshot: {
+              ...source.snapshot,
+              databaseIdentity: source.databaseIdentity,
+            },
             previousSessionKeys: legacyKeys,
             entry: created.entry,
             assertCommitAllowed: assertCurrent,

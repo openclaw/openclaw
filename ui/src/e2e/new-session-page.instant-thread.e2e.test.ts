@@ -174,8 +174,8 @@ suite.define(() => {
             const committed = await page.locator(selector).boundingBox();
             expect(pending).not.toBeNull();
             expect(committed).not.toBeNull();
-            expect(committed!.y).toBeCloseTo(pending!.y, 0);
-            expect(committed!.x).toBeCloseTo(pending!.x, 0);
+            expect(committed!.y, selector).toBeCloseTo(pending!.y, 0);
+            expect(committed!.x, selector).toBeCloseTo(pending!.x, 0);
           }
           await gateway.emitChatFinal({
             sessionKey: confirmedKey,

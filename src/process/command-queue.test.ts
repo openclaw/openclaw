@@ -737,7 +737,7 @@ describe("command queue", () => {
       return lanes as Map<string, unknown>;
     }
 
-    it("retires ten independently completed session lanes from the shared registry", async () => {
+    it.each(["session", "cli"])("retires parallel %s lanes after completion", async (prefix) => {
       const lanes = getCommandLaneRegistryForTest();
       const baselineSize = lanes.size;
       const allRunsStarted = createDeferred();
@@ -745,7 +745,7 @@ describe("command queue", () => {
       let peakActiveRuns = 0;
       const laneNames = Array.from(
         { length: 10 },
-        (_, index) => `session:agent:main:autoqa-${index}`,
+        (_, index) => `${prefix}:agent:main:autoqa-${index}`,
       );
 
       const results = await Promise.all(

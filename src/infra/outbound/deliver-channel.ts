@@ -192,6 +192,7 @@ function createPluginHandler(
   const baseCtx = {
     cfg: params.cfg,
     to: params.to,
+    sessionKey: params.sessionKey,
     accountId: params.accountId,
     replyToId: params.replyToId,
     replyToIdSource: undefined,

@@ -112,6 +112,25 @@ legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
 operations; final tool, disclosure, and mutation authority checks retain their
 current owner and timing.
 
+For a complete cross-session store view, await
+`loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
+and excludes incognito sessions while reading durable stores through the existing
+database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
+return value and emits a bounded deprecation warning; it remains supported until
+the next Plugin SDK major.
+
+### Exec approval reads
+
+Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
+`openclaw/plugin-sdk/exec-approvals-runtime`. Both use the existing shared-state
+read worker. The synchronous `loadExecApprovals` and `readExecApprovalsSnapshot`
+exports retain their signatures for the current Plugin SDK major, emit a bounded
+deprecation warning, and are scheduled for removal in the next major. Bundled
+runtime callers use the awaited reads. The execution owner still checks current
+approval policy immediately before command execution using committed in-process
+policy publications; that final check does not query SQLite.
+
 ### Session reset freshness
 
 Channel runtime consumers should await

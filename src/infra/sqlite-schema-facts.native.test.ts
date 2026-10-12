@@ -45,10 +45,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
       initial.exec("CREATE TABLE proof (value INTEGER NOT NULL)");
     }
     const writer = openDatabase("", false, filename);
-    const sibling = openDatabase("", true, filename);
-    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
-    expect(before).toBeTypeOf("string");
-
     expect(() =>
       withSqliteDatabaseAdmissionExchange(
         () => {
@@ -57,6 +53,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
         () => writer.exec("INSERT INTO proof VALUES (1)"),
       ),
     ).toThrow("synthetic writer discovery refusal");
+
+    // Admitting the sibling earlier would warm the writer discovery this case exercises.
+    const sibling = openDatabase("", true, filename);
+    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    expect(before).toBeTypeOf("string");
     expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([]);
 
     writer.exec("INSERT INTO proof VALUES (2)");
@@ -454,7 +455,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
         try {
           expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
-          expect(admission.queries).toHaveLength(3);
+          // One capture reads the schema cookie, user version, encoding, and catalog.
+          expect(admission.queries).toHaveLength(4);
         } finally {
           admission.restore();
         }

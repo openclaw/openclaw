@@ -106,6 +106,7 @@ class PendingSessionCreate extends OpenClawLightDomElement {
         <div class="sidebar-region__header">
           ${renderChatPaneHeader({
             paneId: this.composerId,
+            presented: false,
             narrow: this.narrow,
             mergedChrome: this.mergedChrome,
             navDrawerOpen: this.navDrawerOpen,
@@ -125,8 +126,6 @@ class PendingSessionCreate extends OpenClawLightDomElement {
             platform: null,
             canReveal: false,
             copiedAction: null,
-            panelActions: nothing,
-            panelLayoutActions: nothing,
             sessionMenuAction: nothing,
             onBeginRename: noAction,
             onRenameInput: noAction,

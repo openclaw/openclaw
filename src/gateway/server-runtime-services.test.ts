@@ -2,6 +2,8 @@
  * Gateway runtime service lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { notifyOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -261,6 +263,8 @@ describe("server-runtime-services", () => {
     );
     const log = createLog();
     const { services } = activateScheduledServicesForTest({ log });
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
@@ -470,7 +474,7 @@ describe("server-runtime-services", () => {
       new Error("database busy"),
     );
     const log = createLog();
-    activateScheduledServicesForTest({ log });
+    const { services } = activateScheduledServicesForTest({ log });
 
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
@@ -481,9 +485,10 @@ describe("server-runtime-services", () => {
         "Session delivery recovery failed: Error: database busy",
       ),
     );
+    services.heartbeatRunner.stop();
   });
 
-  it("diagnoses legacy state once while keeping current delivery recovery running", async () => {
+  it("diagnoses legacy state once and leaves an empty outbound queue idle until enqueue", async () => {
     vi.useFakeTimers();
     const log = createLog();
     const recoveryLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -496,8 +501,19 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(hoisted.countPendingDeliveryQueueEntries).toHaveBeenCalledOnce();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
-    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+    notifyOutboundDeliveryEnqueued(`${captureDeliveryQueueStateContext().stateDir}/other-state`);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     await services.stopDeliveryRecovery();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     services.heartbeatRunner.stop();
   });
 
@@ -557,6 +573,8 @@ describe("server-runtime-services", () => {
     });
 
     try {
+      await vi.dynamicImportSettled();
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledWith(
@@ -586,6 +604,8 @@ describe("server-runtime-services", () => {
         }),
     );
     const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
 
     await vi.advanceTimersByTimeAsync(1_250);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -593,6 +613,9 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(3_750);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
+    }
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
@@ -607,16 +630,23 @@ describe("server-runtime-services", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
+    await services.stopDeliveryRecovery();
     services.heartbeatRunner.stop();
   });
 
   it("coalesces late outbound recovery and stops retries with the gateway lifecycle", async () => {
     vi.useFakeTimers();
+    hoisted.drainPendingDeliveries.mockImplementation(async (options) => {
+      options.onPending?.();
+    });
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const { services } = activateScheduledServicesForTest({ scheduler });
     try {
       await vi.dynamicImportSettled();
+      notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
       await clock.advanceBy(5_000);
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
 
@@ -640,6 +670,8 @@ describe("server-runtime-services", () => {
   it("skips outbound retry ticks while gateway work admission is suspended", async () => {
     vi.useFakeTimers();
     const { services } = activateScheduledServicesForTest();
+    await vi.dynamicImportSettled();
+    notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
     await vi.advanceTimersByTimeAsync(1_250);
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});

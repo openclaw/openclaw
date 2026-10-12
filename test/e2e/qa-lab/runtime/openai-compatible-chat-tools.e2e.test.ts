@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveSlotSelection } from "../../../../src/plugins/slots.js";
 import { runNodeScript } from "../../../helpers/run-node-script.js";
 import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
 
@@ -273,6 +274,24 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
       expect(config.agents.defaults.timeoutSeconds).toBe(240);
     } finally {
       rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("disables background memory indexing while keeping the OpenAI provider enabled", () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-openai-chat-tools-");
+    try {
+      const result = runWriteConfig(root);
+      expect(result.status, result.stderr).toBe(0);
+      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+      // An allowlist alone does not disable the implicit memory slot. Its startup
+      // catch-up reads would restore the fixture before the chat recall boundary.
+      expect(resolveSlotSelection("memory", config.plugins.slots?.memory)).toEqual({ kind: "off" });
+      expect(config.plugins.enabled).toBe(true);
+      expect(config.plugins.entries.openai.enabled).toBe(true);
+      expect(config.session.maintenance.coldStorage.enabled).toBe(true);
+    } finally {
+      cleanupTempDirs(tempDirs);
     }
   });
 

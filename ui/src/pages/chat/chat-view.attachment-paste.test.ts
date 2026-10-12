@@ -24,7 +24,7 @@ import { createChatProps, createPasteEvent, requireElement } from "./chat-view.t
 import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 
 const payloads: ChatAttachment[] = [];
 
