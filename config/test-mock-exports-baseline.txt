@@ -7622,7 +7622,6 @@
 ["src/gateway/server-plugins.test.ts","../auto-reply/reply/dispatch-from-config.js","28baf2b35d960f69c570ec4007e7cc5dbcb7fb9ac2c8338a6f08c211a6cc7c2f",1]
 ["src/gateway/server-plugins.test.ts","../channels/registry.js","a31efb153fd5222c8a7da3599b6334cf8af9466d6be8dc85a1553b926b13cdbf",1]
 ["src/gateway/server-plugins.test.ts","../config/plugin-auto-enable.js","e77f7f4e41c804683d3ab25e8b5d55d545e053f63bc501d49a823436edde4fa2",1]
-["src/gateway/server-plugins.test.ts","../plugins/loader.js","a381e1452cd564ecd0e1acabfeb4677b2251adb6ff7ce99d095f3607779967ea",1]
 ["src/gateway/server-plugins.test.ts","../plugins/plugin-lookup-table.js","c25091b73f68720c6be52e80f4b75e8e6f0e5682ee51d1fee078e03b4aa38a96",1]
 ["src/gateway/server-plugins.test.ts","../plugins/runtime/load-context.js","514cd558906229d99bfeb062db46dfe187f10fea5c66760042022e108d930ae8",1]
 ["src/gateway/server-plugins.test.ts","./agent-turn/internal-facade.js","6bcb18602ea70f885f9b27b61104120370bf9f908286062c0da743055d6b0f2b",1]
