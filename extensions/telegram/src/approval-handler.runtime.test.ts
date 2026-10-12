@@ -169,7 +169,7 @@ describe("telegramApprovalNativeRuntime", () => {
       payload: {
         text: [
           "✅ Exec approval resolved",
-          "Canonical result: Denied",
+          "Recorded result: Denied",
           "Resolved by: telegram:9",
           "ID: req\\n1",
           "",
@@ -183,7 +183,7 @@ describe("telegramApprovalNativeRuntime", () => {
       payload: {
         text: [
           "⏱️ Exec approval expired",
-          "Canonical result: Expired",
+          "Recorded result: Expired",
           "ID: req\\n1",
           "",
           "Command:",

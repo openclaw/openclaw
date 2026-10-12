@@ -38,7 +38,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         );
         if (count > 0) {
           preview.push(
-            `- LINE pre-drain spool rows (account "${accountId}"): ${count} row(s) -> canonical ingress contract`,
+            `- LINE pre-drain spool rows (account "${accountId}"): ${count} row(s) -> current ingress format`,
           );
         }
       }
@@ -78,7 +78,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
               : "";
           const reconciled =
             result.reconciled > 0
-              ? `, ${result.reconciled} already settled under the canonical id`
+              ? `, ${result.reconciled} already settled under the current ID`
               : "";
           // "queued", not "delivered": the migration admits rows to the canonical
           // queue, and the drain dispatches them. For an account the operator has
@@ -89,7 +89,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             ? ""
             : ` (account not currently configured, so these stay queued until it is restored)`;
           changes.push(
-            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} queued under the canonical contract, ${result.deadLettered} dead-lettered at the identity fence${reconciled}${recovered}${dispatchNote}`,
+            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} queued under the current format, ${result.deadLettered} dead-lettered at the identity fence${reconciled}${recovered}${dispatchNote}`,
           );
         }
         for (const failure of result.failures) {

@@ -70,7 +70,7 @@ const FeishuWebhookPathSchema = z
   .string()
   .refine((value) => normalizeFeishuWebhookPath(value) === value, {
     message:
-      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+      'webhookPath must be a normalized HTTP request path; run "openclaw doctor --fix" to repair it',
   });
 const TtsOverrideSchema = z
   .object({

@@ -846,7 +846,7 @@ describe("sendMessageIMessage receipts", () => {
           await expect(
             sendMalformed(),
             JSON.stringify({ malformed, wrapper, route }),
-          ).rejects.toThrow("iMessage outbound runtime scaffolding is malformed");
+          ).rejects.toThrow("iMessage outbound runtime markup is malformed");
         }
         expect(readActions()).toHaveLength(previousActionCount);
         expect(readRequests()).toHaveLength(previousRequestCount);

@@ -251,7 +251,7 @@ export function createFaceTimeCallEventHandler(params: {
     const verifiedTransport = isVerifiedFaceTimeTransport(event);
     if (existingCall && !verifiedTransport && !isEndedCall(event)) {
       params.logger.warn(
-        "[facetime] managed call transport lost FaceTime verification; closing fail-closed",
+        "[facetime] managed call transport lost FaceTime verification; closing the call",
       );
       await params.callControl.attemptCarrierHangup(existingCall, "transport-verification-lost");
       return;
@@ -384,7 +384,7 @@ export function createFaceTimeCallEventHandler(params: {
     if (isUnknownCallStatus(event)) {
       const unknownCall = params.calls.get(callUUID);
       if (unknownCall) {
-        params.logger.warn("[facetime] unknown native call status; closing carrier fail-closed");
+        params.logger.warn("[facetime] unknown native call status; closing the carrier");
         await params.callControl.attemptCarrierHangup(unknownCall, "unknown-native-status");
       }
     }

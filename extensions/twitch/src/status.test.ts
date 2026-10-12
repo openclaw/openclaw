@@ -79,7 +79,7 @@ describe("status", () => {
           accountId: "default",
           kind: "runtime",
           message: "Last error: Connection timeout",
-          fix: "Check your token validity and network connection. Ensure the bot has the required OAuth scopes.",
+          fix: "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
         },
         neverConnectedIssue(),
       ]);

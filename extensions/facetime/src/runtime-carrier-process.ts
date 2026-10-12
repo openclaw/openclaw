@@ -8,9 +8,7 @@ export async function terminateExactCarrierProcesses(params: {
 }): Promise<void> {
   params.assertCurrent();
   if (params.peers.size === 0) {
-    throw new Error(
-      "no authenticated carrier process identity is available for fail-closed shutdown",
-    );
+    throw new Error("no authenticated carrier process identity is available for safe shutdown");
   }
   for (const peer of params.peers.values()) {
     const expected =
