@@ -542,10 +542,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hands the foreground prompt context to agent-end side effects", async () => {
-    const runAgentEndSideEffectsAsync = vi.spyOn(
-      agentHarnessRuntime,
-      "runAgentEndSideEffectsAsync",
-    );
+    const runAgentEnd = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync");
     const params = makeParams({
       memberRoleIds: ["maintainer-role"],
       messageChannel: "discord",
@@ -553,7 +550,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
 
-    const ctx = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.ctx;
+    const ctx = runAgentEnd.mock.calls.at(-1)?.[0]?.ctx;
     expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
     expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
   });

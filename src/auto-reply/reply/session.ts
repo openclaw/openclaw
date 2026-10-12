@@ -24,12 +24,10 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import {
-  evaluateSessionFreshness,
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
-  type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import {
   commitReplySessionInitialization,
@@ -145,7 +143,10 @@ import {
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
-import { resolveReplySessionRolloverState } from "./session-rollover-state.js";
+import {
+  resolveReplySessionFreshness,
+  resolveReplySessionRolloverState,
+} from "./session-rollover-state.js";
 import { withoutThreadDelivery } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
@@ -498,17 +499,13 @@ async function initSessionStateAttemptLocked(
       ...sessionTarget,
       signal: params.signal,
     }));
-  const entryFreshness = entry
-    ? skipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: entry.updatedAt,
-          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
-          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
-          now,
-          policy: resetPolicy,
-        })
-    : undefined;
+  const entryFreshness = resolveReplySessionFreshness({
+    entry,
+    skipImplicitExpiry,
+    lifecycleTimestamps,
+    now,
+    resetPolicy,
+  });
   const terminalMainTranscriptNewerThanRegistry =
     !isSystemEvent &&
     (await hasTerminalMainSessionTranscriptNewerThanRegistryAsync({
