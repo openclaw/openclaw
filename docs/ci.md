@@ -171,6 +171,8 @@ extension coverage hourly and in Full Release Validation; see
 
 Roomy serial Blacksmith Node jobs use [measured Vitest worker sizing](/ci/capacity#vitest-worker-sizing), with existing hosted, frozen-target, and overlapping-plan limits.
 
+The [32-to-16-class qualification](/ci/runners#blacksmith-runner-capacity) retained existing placements: sampled classes lost required admission capacity, exceeded the slowdown limit, or exceeded native row budgets.
+
 Source-only Linux Node shards can reuse content-validated compiled workers from the protected warmer; [fixed preparation costs](/ci/capacity#fixed-job-preparation) remain separate from test execution and runner capacity.
 
 Changed-target shards whose executed file routes use the E2E config prepare the
