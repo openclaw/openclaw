@@ -221,7 +221,8 @@ another message.
 
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
-previous response across tool rounds without dropping live context. A later user
+previous response across tool rounds without dropping live context, so OpenClaw
+sends it once per user turn rather than after every tool result. A later user
 turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context
