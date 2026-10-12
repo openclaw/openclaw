@@ -81,8 +81,10 @@ export function createWorkerSessionPlacementStore(
 
   const store = {
     ...createPlacementReadStore({ path, withWorkspaceResultConflict }),
-    ...createPlacementWorkspaceReservationOps(runtime, (sessionId) =>
-      store.readProjection([sessionId], { current: true }),
+    ...createPlacementWorkspaceReservationOps(
+      runtime,
+      (sessionId): Promise<WorkerSessionPlacementProjection> =>
+        store.readProjection([sessionId], { current: true }),
     ),
     /** @deprecated Await clearLocalTurnClaimsAfterRestartAsync; removed in the next Plugin SDK major. */
     clearLocalTurnClaimsAfterRestart(): number {
