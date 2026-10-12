@@ -29,6 +29,7 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
@@ -169,6 +170,64 @@ function readUnindexedLogicalParents(
     parents.set(entry.id, typeof parent?.id === "string" ? parent.id : null);
   }
   return parents;
+}
+
+function readIndexedLogicalParents(
+  projection: CurrentTranscriptProjection,
+  contextSequences: number[],
+): Map<string, string | null> {
+  const actor = readSessionActorTransactionState(projection.database, projection.resolved);
+  if (actor) {
+    const idsByPosition = new Map<number, string>();
+    for (const identity of actor.transcript.identities.values()) {
+      const active = actor.transcript.active.get(identity.seq);
+      if (active) {
+        idsByPosition.set(active.active_position, identity.event_id);
+      }
+    }
+    const parents = new Map<string, string | null>();
+    for (const seq of contextSequences) {
+      const active = actor.transcript.active.get(seq);
+      if (!active) {
+        continue;
+      }
+      const id = idsByPosition.get(active.active_position);
+      if (id !== undefined) {
+        parents.set(id, idsByPosition.get(active.active_position - 1) ?? null);
+      }
+    }
+    return parents;
+  }
+  return new Map(
+    (contextSequences.length === 0
+      ? []
+      : executeSqliteQuerySync(
+          projection.database.db,
+          getActiveTranscriptKysely(projection.database)
+            .selectFrom("session_transcript_active_events as active")
+            .innerJoin("transcript_event_identities as entry", (join) =>
+              join
+                .onRef("entry.session_id", "=", "active.session_id")
+                .onRef("entry.seq", "=", "active.event_seq"),
+            )
+            .leftJoin("session_transcript_active_events as previous", (join) =>
+              join
+                .onRef("previous.session_id", "=", "active.session_id")
+                .on((eb) =>
+                  eb("previous.active_position", "=", eb("active.active_position", "-", 1)),
+                ),
+            )
+            .leftJoin("transcript_event_identities as parent", (join) =>
+              join
+                .onRef("parent.session_id", "=", "previous.session_id")
+                .onRef("parent.seq", "=", "previous.event_seq"),
+            )
+            .select(["entry.event_id", "parent.event_id as parent_id"])
+            .where("active.session_id", "=", projection.resolved.sessionId)
+            .where("active.event_seq", "in", contextSequences),
+        ).rows
+    ).map((row) => [row.event_id, row.parent_id]),
+  );
 }
 
 /** Reads one byte-bounded active branch without materializing abandoned transcript history. */
@@ -354,36 +413,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // Raw parent_id can point into an abandoned branch after a leaf control.
     const parents = projection.hasUnindexedPrefix
       ? readUnindexedLogicalParents(projection, contextSequences, payloads)
-      : new Map(
-          (contextSequences.length === 0
-            ? []
-            : executeSqliteQuerySync(
-                projection.database.db,
-                db
-                  .selectFrom("session_transcript_active_events as active")
-                  .innerJoin("transcript_event_identities as entry", (join) =>
-                    join
-                      .onRef("entry.session_id", "=", "active.session_id")
-                      .onRef("entry.seq", "=", "active.event_seq"),
-                  )
-                  .leftJoin("session_transcript_active_events as previous", (join) =>
-                    join
-                      .onRef("previous.session_id", "=", "active.session_id")
-                      .on((eb) =>
-                        eb("previous.active_position", "=", eb("active.active_position", "-", 1)),
-                      ),
-                  )
-                  .leftJoin("transcript_event_identities as parent", (join) =>
-                    join
-                      .onRef("parent.session_id", "=", "previous.session_id")
-                      .onRef("parent.seq", "=", "previous.event_seq"),
-                  )
-                  .select(["entry.event_id", "parent.event_id as parent_id"])
-                  .where("active.session_id", "=", projection.resolved.sessionId)
-                  .where("active.event_seq", "in", contextSequences),
-              ).rows
-          ).map((row) => [row.event_id, row.parent_id]),
-        );
+      : readIndexedLogicalParents(projection, contextSequences);
     const events: TranscriptEvent[] = header ? [payloads.get(header.seq)!] : [];
     const rows = contextSequences.map((seq) => ({ event: payloads.get(seq)!, seq }));
     const opaqueParents = new Map<string, string | null>();

@@ -38,7 +38,7 @@ suite.define(() => {
           ({ key }) =>
             localStorage.setItem(
               key,
-              JSON.stringify({ sidebarEntries: ["session:agent:main:design"] }),
+              JSON.stringify({ railShortcuts: ["session:agent:main:design"] }),
             ),
           { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
         );
@@ -121,7 +121,7 @@ suite.define(() => {
           },
           "users.prefs.get": {
             status: "ok",
-            entries: { "ui.sidebarEntries": entries, "ui.themeMode": "dark" },
+            entries: { "ui.railShortcuts": entries, "ui.themeMode": "dark" },
           },
           "users.prefs.set": { status: "ok" },
           "sessions.describe": {
@@ -133,7 +133,7 @@ suite.define(() => {
         ({ key, entries: savedEntries }) =>
           localStorage.setItem(
             key,
-            JSON.stringify({ sidebarEntries: savedEntries, themeMode: "dark" }),
+            JSON.stringify({ railShortcuts: savedEntries, themeMode: "dark" }),
           ),
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
       );
@@ -344,6 +344,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBeGreaterThan(0);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
+          .toMatchObject({
+            entries: { "ui.railShortcuts": rows.map((row) => `session:${row.key}`) },
+          });
         await page.reload();
         await gateway.waitForRequest("connect");
         await installProfilePreferences();
