@@ -1,6 +1,5 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
-import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -53,6 +52,7 @@ import {
 } from "./board-widget-cell-options.ts";
 import {
   BoardDisabledPlugin,
+  BoardCoreWidget,
   BoardWidgetError,
   BoardWidgetMenu,
   BoardWidgetRejected,
@@ -156,29 +156,6 @@ function BoardWidgetCellContent(
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null;
-  const CoreElement = dynamic(() => contribution()?.tagName);
-  const CoreWidget = () => {
-    let element!: HTMLElement & {
-      widget?: BoardWidget;
-      session?: BoardGetParams;
-      active?: boolean;
-    };
-    createEffect(
-      () => ({ widget: props.widget, session: props.session, active: active() }),
-      (value) => {
-        element.widget = value.widget;
-        element.session = value.session ?? { sessionKey: "" };
-        element.active = value.active;
-      },
-    );
-    return (
-      <CoreElement
-        ref={(node: typeof element) => {
-          element = node;
-        }}
-      />
-    );
-  };
 
   async function runAction(action: () => Promise<void>, failureMessage?: string) {
     if (actionPending || props.busy) {
@@ -435,7 +412,12 @@ function BoardWidgetCellContent(
                 when={(revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
-                <CoreWidget />
+                <BoardCoreWidget
+                  tagName={contribution()?.tagName}
+                  widget={props.widget}
+                  session={props.session}
+                  active={active()}
+                />
               </Show>
             }
           >
