@@ -1,14 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { createSignal, Show } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { getTranscriptState } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
+import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -19,6 +21,25 @@ import {
   transcriptDomState,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
+
+function mountThread(container: HTMLElement, transcript: ChatTranscriptController) {
+  const [props, setProps] = createSignal<ChatThreadProps | null>(null);
+  const view = mountSolid(
+    () => (
+      <Show when={props()}>
+        {(current) => <ChatThread props={current()} transcript={transcript} />}
+      </Show>
+    ),
+    { container },
+  );
+  return {
+    unmount: view.unmount,
+    render(next: ChatThreadProps | null) {
+      setProps(next ? { ...next } : null);
+      flush();
+    },
+  };
+}
 
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
@@ -38,21 +59,26 @@ describe("conversation position rail", () => {
         role: "user" as const,
         message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
       }));
-      render(
-        transcript.renderSession("agent:main:rail-publication", (session) => {
-          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-          return html`<div class="chat-thread" tabindex="0">
-            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-            ${solidContent(ChatPositionRail, {
-              positions: {
-                markers,
-                markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
-              },
-              transcript: session,
-            })}
-          </div>`;
-        }),
-        container,
+      const view = mountSolid(
+        () =>
+          transcript.renderSession("agent:main:rail-publication", (session) => {
+            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+            return (
+              <div class="chat-thread" tabindex="0">
+                <div class="chat-bubble" data-entry-id="message-79">
+                  Latest message
+                </div>
+                <ChatPositionRail
+                  positions={{
+                    markers,
+                    markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
+                  }}
+                  transcript={session}
+                />
+              </div>
+            );
+          }),
+        { container },
       );
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
@@ -108,7 +134,7 @@ describe("conversation position rail", () => {
         root.focus();
         expect(tabStops()).toEqual([current()]);
       } finally {
-        render(nothing, container);
+        view.unmount();
         transcript.hostDisconnected();
       }
     },
@@ -130,21 +156,19 @@ describe("conversation position rail", () => {
       ],
       markerIdsByMessageId: new Map([["short", "short"]]),
     };
-    const update = () =>
-      render(
-        transcript.renderSession(
-          "agent:main:rail-overflow",
-          (session) => html`
-            <div class="chat-thread" tabindex="0">
-              <div class="chat-bubble" data-entry-id="short">A short question</div>
-              ${solidContent(ChatPositionRail, { positions, transcript: session })}
+    const view = mountSolid(
+      () =>
+        transcript.renderSession("agent:main:rail-overflow", (session) => (
+          <div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="short">
+              A short question
             </div>
-          `,
-        ),
-        container,
-      );
+            <ChatPositionRail positions={positions} transcript={session} />
+          </div>
+        )),
+      { container },
+    );
     try {
-      update();
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const rail = root.querySelector<HTMLElement>(".chat-position-rail")!;
       const marks = rail.querySelector<HTMLElement>(".chat-position-rail__marks")!;
@@ -181,7 +205,7 @@ describe("conversation position rail", () => {
       resize(0, 602);
       expect(rail.hasAttribute("data-overflow")).toBe(false);
     } finally {
-      render(nothing, container);
+      view.unmount();
       transcript.hostDisconnected();
     }
   });
@@ -222,18 +246,26 @@ describe("conversation position rail", () => {
           Array.from({ length: count }, (_, index) => [`message-${index}`, `message-${index}`]),
         ),
       };
-      const renderRail = () =>
-        render(
+      const [currentPositions, setPositions] = createSignal(positions);
+      const view = mountSolid(
+        () =>
           transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread" tabindex="0">
-              <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
-              ${solidContent(ChatPositionRail, { positions, transcript: session })}
-            </div>`;
+            return (
+              <div class="chat-thread" tabindex="0">
+                <div class="chat-bubble" data-entry-id="message-79">
+                  Latest message
+                </div>
+                <ChatPositionRail positions={currentPositions()} transcript={session} />
+              </div>
+            );
           }),
-          container,
-        );
-      renderRail();
+        { container },
+      );
+      const renderRail = () => {
+        setPositions({ ...positions });
+        flush();
+      };
       const root = container.querySelector<HTMLElement>(".chat-thread")!;
       const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       const marker = (index: number) =>
@@ -257,13 +289,13 @@ describe("conversation position rail", () => {
         },
       });
       root.scrollTop = startsAtTop ? 0 : 8315;
-      const flush = () => {
+      const flushRailFrames = () => {
         marks.dispatchEvent(new Event("scroll"));
         flushFrame();
         flushFrame();
       };
       try {
-        flush();
+        flushRailFrames();
         expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
         expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
         if (scenario === "hidden") {
@@ -292,18 +324,18 @@ describe("conversation position rail", () => {
         } else if (scenario === "boot-resize") {
           height = 554;
           marksHeight = 240;
-          flush();
+          flushRailFrames();
           // The initial observer result can arrive after the composer claims its space.
           publishVisibility(root.querySelector(".chat-bubble")!);
           height = 543;
           marksHeight = 229;
-          flush();
+          flushRailFrames();
           expect(marker(79).hasAttribute("data-visible")).toBe(true);
           const initialOffset = 731;
           expect(marks.scrollTop).toBe(initialOffset);
           height = 512;
           marksHeight = 198;
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBe(initialOffset);
         } else if (scenario === "resize-jump") {
           // Initial end navigation can share the frame that reveals the composer.
@@ -311,7 +343,7 @@ describe("conversation position rail", () => {
           marksHeight = 240;
           root.scrollTop = 8358;
           activeMessage.mockReturnValue("message-79");
-          flush();
+          flushRailFrames();
           expect(marker(79).getAttribute("aria-current")).toBe("true");
           expect(Number.parseFloat(marker(79).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
           expect(Number.parseFloat(marker(79).style.top) + 12).toBeLessThanOrEqual(
@@ -319,7 +351,7 @@ describe("conversation position rail", () => {
           );
         } else if (scenario.startsWith("composer-resize-reversal")) {
           publishVisibility(root.querySelector(".chat-bubble")!);
-          flush();
+          flushRailFrames();
           height = 512;
           marksHeight = 198;
           let readerOffset = 8400;
@@ -330,7 +362,7 @@ describe("conversation position rail", () => {
               readerOffset = Math.max(0, Math.min(value, scrollHeight - height));
             },
           });
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBe(677);
           container.classList.add("chat");
           const textarea = container.appendChild(document.createElement("textarea"));
@@ -360,31 +392,31 @@ describe("conversation position rail", () => {
             activeMessage.mockReturnValue("message-76");
           }
           publishVisibility(root.querySelector(".chat-bubble")!);
-          flush();
+          flushRailFrames();
           if (navigatesBeforeResize) {
             expect(marks.scrollTop).toBe(0);
             return;
           }
           expect(marks.scrollTop).toBe(677);
           root.scrollTop = scrollHeight - height;
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBe(677);
         } else if (scenario === "resize") {
           height = 554;
           marksHeight = 240;
           activeMessage.mockReturnValue("message-76");
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBe(677);
           root.scrollTop = 8319;
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBe(677);
           // A second resize retargets the same smooth compensation, including its last 6px.
           height = 512;
           marksHeight = 198;
-          flush();
+          flushRailFrames();
           for (const offset of [8323, 8394, 8400]) {
             root.scrollTop = offset;
-            flush();
+            flushRailFrames();
             expect(marks.scrollTop).toBe(677);
           }
           publishTranscriptScroll(root, {
@@ -394,7 +426,7 @@ describe("conversation position rail", () => {
           });
           root.scrollTop = 8000;
           activeMessage.mockReturnValue("message-40");
-          flush();
+          flushRailFrames();
           expect(marks.scrollTop).toBeLessThan(677);
         } else if (scenario === "focus-resize") {
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
@@ -402,7 +434,7 @@ describe("conversation position rail", () => {
           expect(marker(79).matches(":focus-visible")).toBe(true);
           height = 554;
           marksHeight = 240;
-          flush();
+          flushRailFrames();
           expect(document.activeElement).toBe(marker(79));
           expect(marks.scrollTop).toBe(720);
         } else if (scenario === "reader-offset") {
@@ -428,12 +460,12 @@ describe("conversation position rail", () => {
           expect(marker(60).matches(":focus-visible")).toBe(false);
           expect(marks.scrollTop).toBe(677);
           activeMessage.mockReturnValue("message-0");
-          flush();
+          flushRailFrames();
           expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(0);
         }
       } finally {
-        render(nothing, container);
+        view.unmount();
         transcript.hostDisconnected();
       }
     },
@@ -460,8 +492,9 @@ describe("conversation position rail", () => {
     };
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = mountThread(container, transcript);
     const rerender = () => {
-      render(renderChatThread(props, transcript), container);
+      view.render(props);
       transcript.hostUpdated();
     };
     const settleFrames = () =>
@@ -542,7 +575,7 @@ describe("conversation position rail", () => {
       expect(targetScans()).toBeGreaterThan(0);
       expect(observed.has(replacement)).toBe(false);
     } finally {
-      render(nothing, container);
+      view.unmount();
       transcript.hostDisconnected();
     }
   });
@@ -552,7 +585,7 @@ describe("conversation position rail", () => {
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,
-      content: html`<div>${index}</div>`,
+      content: Object.assign(document.createElement("div"), { textContent: String(index) }),
     }));
     const { container, transcript, session, renderRows } = await mountTestTranscript(
       "rail-offset",
@@ -602,8 +635,9 @@ describe("conversation position rail", () => {
     props.onHistoryIntent = historyIntent;
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = mountThread(container, transcript);
     const rerender = () => {
-      render(renderChatThread(props, transcript), container);
+      view.render(props);
       transcript.hostUpdated();
     };
     props.onRequestUpdate = rerender;
@@ -665,7 +699,7 @@ describe("conversation position rail", () => {
       expect(preview()).toBeUndefined();
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
-      render(nothing, container);
+      view.render(null);
       await Promise.resolve();
       const escapeAfterRemoval = new KeyboardEvent("keydown", {
         key: "Escape",
@@ -715,8 +749,9 @@ describe("conversation position rail", () => {
       }
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
+      const view = mountThread(container, transcript);
       const rerender = () => {
-        render(renderChatThread(props, transcript), container);
+        view.render(props);
         transcript.hostUpdated();
       };
       props.onRequestUpdate = rerender;
@@ -757,7 +792,7 @@ describe("conversation position rail", () => {
         expect(preview.querySelector("script")).toBeNull();
         expect(preview.closest("[inert]")).not.toBeNull();
       } finally {
-        render(nothing, container);
+        view.unmount();
         transcript.hostDisconnected();
       }
     },
@@ -801,8 +836,9 @@ describe("conversation position rail", () => {
     };
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = mountThread(container, transcript);
     props.onRequestUpdate = () => {
-      render(renderChatThread(props, transcript), container);
+      view.render(props);
       transcript.hostUpdated();
     };
     try {
@@ -818,7 +854,7 @@ describe("conversation position rail", () => {
         container.querySelector(".chat-position-rail__preview-copy")?.textContent,
       ).not.toContain("Styles loaded");
     } finally {
-      render(nothing, container);
+      view.unmount();
       transcript.hostDisconnected();
     }
   });
@@ -848,8 +884,9 @@ describe("conversation position rail", () => {
     });
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = mountThread(container, transcript);
     const rerender = () => {
-      render(renderChatThread(props, transcript), container);
+      view.render(props);
       transcript.hostUpdated();
     };
     props.onRequestUpdate = rerender;
@@ -928,7 +965,7 @@ describe("conversation position rail", () => {
       expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
       expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
     } finally {
-      render(nothing, container);
+      view.unmount();
       transcript.hostDisconnected();
     }
   });

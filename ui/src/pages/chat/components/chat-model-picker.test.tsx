@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 it.each([false, true])(
@@ -36,7 +37,19 @@ it.each([false, true])(
       open: true,
       onModelSelect: vi.fn(async () => {}),
     };
-    render(solidTemplate(ChatModelPicker, params), container);
+    let update!: (next: typeof params) => void;
+    mountSolid(
+      () => {
+        const [props, setProps] = createSignal(params);
+        update = (next) => {
+          setProps(() => next);
+          flush();
+        };
+        return <ChatModelPicker {...props()} />;
+      },
+      { container },
+    );
+    flush();
     await Promise.resolve();
     const details = container.querySelector<HTMLDetailsElement>("details")!;
     const selected = container.querySelector<HTMLButtonElement>(
@@ -54,6 +67,7 @@ it.each([false, true])(
 
     // A deliberate collapse survives closing and reopening the picker.
     toggle.click();
+    flush();
     expect(selected.hidden).toBe(true);
     details.open = false;
     details.dispatchEvent(new Event("toggle"));
@@ -65,10 +79,7 @@ it.each([false, true])(
     expect(other.hidden).toBe(true);
 
     // The next selection, including a change while closed, owns the open group.
-    render(
-      solidTemplate(ChatModelPicker, { ...params, open: false, selectedModelValue: "other/first" }),
-      container,
-    );
+    update({ ...params, open: false, selectedModelValue: "other/first" });
     details.dispatchEvent(new Event("toggle"));
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
@@ -80,25 +91,30 @@ it.each([false, true])(
 
 it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => {
   const container = document.createElement("div");
-  render(
-    solidTemplate(ChatModelPicker, {
-      disabled: false,
-      modelSelectionLocked: false,
-      modelOptions: Array.from({ length: 300 }, (_, index) => ({
-        provider: "fixture",
-        value: `fixture/model-${index}`,
-        commitValue: hasDefault && index === 0 ? "" : `fixture/model-${index}`,
-        label: `Model ${index}`,
-        isDefault: hasDefault && index === 0,
-      })),
-      selectedModelValue: "fixture/model-299",
-      sessionModelPinned: true,
-      sessionKey: "main",
-      triggerModelLabel: "Model 299",
-      onModelSelect: vi.fn(async () => {}),
-    }),
-    container,
+  mountSolid(
+    () => (
+      <ChatModelPicker
+        {...{
+          disabled: false,
+          modelSelectionLocked: false,
+          modelOptions: Array.from({ length: 300 }, (_, index) => ({
+            provider: "fixture",
+            value: `fixture/model-${index}`,
+            commitValue: hasDefault && index === 0 ? "" : `fixture/model-${index}`,
+            label: `Model ${index}`,
+            isDefault: hasDefault && index === 0,
+          })),
+          selectedModelValue: "fixture/model-299",
+          sessionModelPinned: true,
+          sessionKey: "main",
+          triggerModelLabel: "Model 299",
+          onModelSelect: vi.fn(async () => {}),
+        }}
+      />
+    ),
+    { container },
   );
+  flush();
   const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-option]"));
   expect(rows).toHaveLength(300);
   expect(rows.slice(0, 3).map((row) => row.dataset.chatModelOption)).toEqual(
@@ -114,37 +130,42 @@ it.each([false, true])(
   async (restDisabled) => {
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      solidTemplate(ChatModelPicker, {
-        disabled: false,
-        modelSelectionLocked: false,
-        modelOptions: [
-          {
-            provider: "fixture",
-            value: "fixture/lead",
-            commitValue: "fixture/lead",
-            label: "lead",
-            isDefault: false,
-            recommended: true,
-          },
-          {
-            provider: "fixture",
-            value: "fixture/rest",
-            commitValue: "fixture/rest",
-            label: "rest",
-            isDefault: false,
-            disabled: restDisabled,
-          },
-        ],
-        selectedModelValue: "fixture/lead",
-        sessionModelPinned: true,
-        sessionKey: "main",
-        triggerModelLabel: "lead",
-        open: true,
-        onModelSelect: vi.fn(async () => {}),
-      }),
-      container,
+    mountSolid(
+      () => (
+        <ChatModelPicker
+          {...{
+            disabled: false,
+            modelSelectionLocked: false,
+            modelOptions: [
+              {
+                provider: "fixture",
+                value: "fixture/lead",
+                commitValue: "fixture/lead",
+                label: "lead",
+                isDefault: false,
+                recommended: true,
+              },
+              {
+                provider: "fixture",
+                value: "fixture/rest",
+                commitValue: "fixture/rest",
+                label: "rest",
+                isDefault: false,
+                disabled: restDisabled,
+              },
+            ],
+            selectedModelValue: "fixture/lead",
+            sessionModelPinned: true,
+            sessionKey: "main",
+            triggerModelLabel: "lead",
+            open: true,
+            onModelSelect: vi.fn(async () => {}),
+          }}
+        />
+      ),
+      { container },
     );
+    flush();
     await Promise.resolve();
     const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
     const rest = container.querySelector<HTMLButtonElement>(
@@ -156,6 +177,7 @@ it.each([false, true])(
 
     more.focus();
     more.click();
+    flush();
     expect(more.hidden).toBe(true);
     expect(rest.hidden).toBe(false);
     // Keyboard focus lands on the first selectable revealed model, else back on search.
@@ -165,7 +187,9 @@ it.each([false, true])(
 
     // Collapsing and reopening the provider group keeps the models inline, with no row to re-collapse.
     group.click();
+    flush();
     group.click();
+    flush();
     expect(more.hidden).toBe(true);
     expect(rest.hidden).toBe(false);
     container.remove();
@@ -182,26 +206,31 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
     isDefault: false,
     ...(agentRuntimeId ? { agentRuntimeId } : {}),
   });
-  render(
-    solidTemplate(ChatModelPicker, {
-      disabled: false,
-      modelSelectionLocked: false,
-      modelOptions: [
-        option("anthropic", "claude-opus-4-8", "claude-cli"),
-        option("claude-cli", "claude-haiku-5-5"),
-        option("anthropic", "claude-sonnet-5-5", "openclaw"),
-      ],
-      selectedModelValue: "anthropic/claude-opus-4-8",
-      sessionModelPinned: true,
-      sessionKey: "main",
-      triggerModelLabel: "claude-opus-4-8",
-      onModelSelect: vi.fn(async () => {}),
-      providerAuth: new Map<string, ModelProviderAuthLabel>([
-        ["anthropic", { kind: "subscription", label: "Claude Max" }],
-      ]),
-    }),
-    container,
+  mountSolid(
+    () => (
+      <ChatModelPicker
+        {...{
+          disabled: false,
+          modelSelectionLocked: false,
+          modelOptions: [
+            option("anthropic", "claude-opus-4-8", "claude-cli"),
+            option("claude-cli", "claude-haiku-5-5"),
+            option("anthropic", "claude-sonnet-5-5", "openclaw"),
+          ],
+          selectedModelValue: "anthropic/claude-opus-4-8",
+          sessionModelPinned: true,
+          sessionKey: "main",
+          triggerModelLabel: "claude-opus-4-8",
+          onModelSelect: vi.fn(async () => {}),
+          providerAuth: new Map<string, ModelProviderAuthLabel>([
+            ["anthropic", { kind: "subscription", label: "Claude Max" }],
+          ]),
+        }}
+      />
+    ),
+    { container },
   );
+  flush();
   const groups = Object.fromEntries(
     Array.from(container.querySelectorAll<HTMLElement>("[data-chat-model-provider-group]")).map(
       (group) => [

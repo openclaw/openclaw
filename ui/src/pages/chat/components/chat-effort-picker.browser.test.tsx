@@ -1,20 +1,22 @@
-import { nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveChatFastModeSelectState,
   type ChatFastModeSelectState,
 } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 let host: HTMLDivElement | undefined;
+let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | undefined;
 
 afterEach(() => {
   if (host) {
-    render(nothing, host);
+    updatePicker = undefined;
     host.remove();
     host = undefined;
   }
@@ -30,36 +32,46 @@ async function fixture(
   host ??= document.body.appendChild(document.createElement("div"));
   const onThinkingSelect = vi.fn(async () => undefined);
   const onFastModeSelect = vi.fn(async () => undefined);
-  render(
-    solidTemplate(ChatEffortPicker, {
-      disabled: false,
-      thinkingDisabled: false,
+  const next: Parameters<typeof ChatEffortPicker>[0] = {
+    disabled: false,
+    thinkingDisabled: false,
+    sessionKey: "effort-preview",
+    thinking: resolveChatThinkingSelectState({
+      catalog: [],
       sessionKey: "effort-preview",
-      thinking: resolveChatThinkingSelectState({
-        catalog: [],
-        sessionKey: "effort-preview",
-        sessionsResult: null,
-        session: {
-          thinkingLevel: inherited ? undefined : value,
-          thinkingDefault: inherited ? value : "low",
-          thinkingLevels: levels.map((level) =>
-            typeof level === "string" ? { id: level, label: level } : level,
-          ),
-        },
-      }),
-      fastMode: fastMode ?? {
-        active: false,
-        currentOverride: "",
-        disabled: true,
-        label: "Off",
-        nextValue: "on",
-        supported: false,
+      sessionsResult: null,
+      session: {
+        thinkingLevel: inherited ? undefined : value,
+        thinkingDefault: inherited ? value : "low",
+        thinkingLevels: levels.map((level) =>
+          typeof level === "string" ? { id: level, label: level } : level,
+        ),
       },
-      onFastModeSelect,
-      onThinkingSelect,
     }),
-    host,
-  );
+    fastMode: fastMode ?? {
+      active: false,
+      currentOverride: "",
+      disabled: true,
+      label: "Off",
+      nextValue: "on",
+      supported: false,
+    },
+    onFastModeSelect,
+    onThinkingSelect,
+  };
+  if (updatePicker) {
+    updatePicker(next);
+  } else {
+    mountSolid(
+      () => {
+        const [props, setProps] = createSignal(next);
+        updatePicker = (nextProps) => setProps(() => nextProps);
+        return <ChatEffortPicker {...props()} />;
+      },
+      { container: host },
+    );
+  }
+  flush();
   const details = host.querySelector("details")!;
   if (!details.open) {
     const opened = new Promise<void>((resolve) => {
@@ -217,18 +229,22 @@ describe("effort bar colour and flow", () => {
     for (const resetEvent of ["pointercancel", "blur"]) {
       input.value = "2";
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
       expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
       expect(appearance(input)).not.toEqual(maximumStyle);
       expect(onThinkingSelect).not.toHaveBeenCalled();
       input.dispatchEvent(new Event(resetEvent));
+      flush();
       expect(input.value).toBe("1");
       expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
       expect(appearance(input)).toEqual(maximumStyle);
     }
     input.value = "0";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
     expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
     input.dispatchEvent(new Event("change"));
+    flush();
     expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
     expect(appearance(input)).toEqual(maximumStyle);
   });
