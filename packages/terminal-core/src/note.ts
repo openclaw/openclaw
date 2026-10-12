@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { iterateGraphemes, visibleWidth } from "./ansi.js";
+import { resolveNoteOutput } from "./note-output.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 const MIN_NOTE_COLUMNS = 80;
@@ -9,14 +10,10 @@ const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+  return (
+    Boolean(normalized) && normalized !== "0" && normalized !== "false" && normalized !== "off"
+  );
 }
 
 function isCopySensitiveToken(word: string): boolean {
@@ -99,9 +96,6 @@ function coerceNoteMessage(message: unknown): string {
   if (typeof message === "string") {
     return message;
   }
-  if (message == null) {
-    return "";
-  }
   if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
     return String(message);
   }
@@ -170,7 +164,7 @@ export function noteToStream(
 }
 
 export function note(message: unknown, title?: string) {
-  noteToStream(message, title, process.stdout);
+  noteToStream(message, title, resolveNoteOutput());
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

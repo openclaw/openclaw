@@ -8,7 +8,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
-import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
@@ -45,35 +45,22 @@ export function readSqliteSchemaHeader(
   agentSchemaVersionForOwnership?: number,
 ): SqliteSchemaHeader {
   configureSqliteReadOnlyPragmas(database);
-  return runSqliteDeferredTransactionSync(database, () => {
-    const userVersion = readSqliteUserVersion(database);
-    const writerAppVersion = readSqliteWriterAppVersion(database);
-    return {
-      userVersion,
-      ...(writerAppVersion ? { writerAppVersion } : {}),
-      // A newer schema may have a different metadata contract; its version alone refuses admission.
-      ...(agentSchemaVersionForOwnership !== undefined &&
-      userVersion <= agentSchemaVersionForOwnership
-        ? { agentSchemaMeta: readExistingAgentSchemaMeta(database) }
-        : {}),
-    };
-  });
-}
-
-function readSqliteSchemaHeaderSnapshot(
-  location: string,
-  signal?: AbortSignal,
-  agentSchemaVersionForOwnership?: number,
-): SqliteSchemaHeader {
-  signal?.throwIfAborted();
-  const database = openNodeSqliteDatabase(location, { readOnly: true });
-  return runWithSqliteCoordinator(
-    { release: () => database.close() },
-    "SQLite schema header read",
+  return runSqliteDeferredTransactionSync(
+    database,
     () => {
-      setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-      return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
+      const userVersion = readSqliteUserVersion(database);
+      const writerAppVersion = readSqliteWriterAppVersion(database);
+      return {
+        userVersion,
+        ...(writerAppVersion ? { writerAppVersion } : {}),
+        // A newer schema may have a different metadata contract; its version alone refuses admission.
+        ...(agentSchemaVersionForOwnership !== undefined &&
+        userVersion <= agentSchemaVersionForOwnership
+          ? { agentSchemaMeta: readExistingAgentSchemaMeta(database) }
+          : {}),
+      };
     },
+    { operationLabel: "database.schema-header" },
   );
 }
 
@@ -83,7 +70,7 @@ export function readSqliteSchemaHeaderFromSnapshot(
   signal?: AbortSignal,
   agentSchemaVersionForOwnership?: number,
 ): SqliteSchemaHeader {
-  return runWithSqliteCoordinator(
+  return runWithSqliteCleanup(
     {
       release: () => {
         if (!prepared.cleanup()) {
@@ -92,6 +79,18 @@ export function readSqliteSchemaHeaderFromSnapshot(
       },
     },
     "SQLite schema header snapshot",
-    () => readSqliteSchemaHeaderSnapshot(prepared.location, signal, agentSchemaVersionForOwnership),
+    () => {
+      const location = prepared.location;
+      signal?.throwIfAborted();
+      const database = openNodeSqliteDatabase(location, { readOnly: true });
+      return runWithSqliteCleanup(
+        { release: () => database.close() },
+        "SQLite schema header read",
+        () => {
+          setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+          return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
+        },
+      );
+    },
   );
 }

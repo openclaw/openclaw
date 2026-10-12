@@ -1,14 +1,36 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+function observeLifecycleContention() {
+  // Admission probes this PID only after the real lock reports contention.
+  const contended = createDeferred();
+  const isPidAlive = pidAlive.isPidAlive;
+  vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => {
+    const alive = isPidAlive(pid);
+    contended.resolve();
+    return alive;
+  });
+  return async (contender: Promise<boolean>) => {
+    await Promise.race([
+      contended.promise,
+      contender.then(() => {
+        throw new Error("lifecycle contender completed before observing the held owner");
+      }),
+    ]);
+  };
+}
 
 async function markModernLifecyclePending(packageRoot: string): Promise<string> {
   const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
@@ -41,19 +63,18 @@ describe("package lifecycle completion", () => {
         const caller = completePendingPackageLifecycle({ packageRoot, runScript });
         void caller.catch(() => {});
         callers.push(caller);
+        return caller;
       };
-      startCaller();
+      void startCaller();
       try {
         await firstPreinstall;
-        startCaller();
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        const waitForContention = observeLifecycleContention();
+        await waitForContention(startCaller());
         expect(calls).toEqual(["preinstall"]);
         releasePreinstall();
         await expect(Promise.all(callers)).resolves.toEqual([true, false]);
 
-        startCaller();
+        void startCaller();
         await expect(Promise.all(callers)).resolves.toEqual([true, false, false]);
         expect(calls).toEqual(["preinstall", "postinstall"]);
       } finally {
@@ -118,16 +139,15 @@ describe("package lifecycle completion", () => {
         });
         completions.push(contender);
         void contender.then(returned, returned);
+        return contender;
       };
       try {
         await preEntered.promise;
         releasePre.resolve();
         await postEntered.promise;
         // One observing waiter isolates marker settlement from concurrent SDK admissions.
-        startContender();
-        await new Promise((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        const waitForContention = observeLifecycleContention();
+        await waitForContention(startContender());
         expect(returned).not.toHaveBeenCalled();
         expect(contenderScript).not.toHaveBeenCalled();
         releasePost.resolve();
@@ -161,11 +181,10 @@ describe("package lifecycle completion", () => {
         await started;
         const now = Date.now();
         clock = vi.spyOn(Date, "now").mockReturnValue(now + direction * 24 * 60 * 60_000);
+        const waitForContention = observeLifecycleContention();
         second = completePendingPackageLifecycle({ packageRoot, runScript, timeoutMs: 1000 });
         void second.catch(() => {});
-        await new Promise((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        await waitForContention(second);
         expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
         clock.mockRestore();
         release();

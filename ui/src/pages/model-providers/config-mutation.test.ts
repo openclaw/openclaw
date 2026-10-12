@@ -2,11 +2,23 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDefaultsPatch,
-  DEFAULT_MODELS_REPLACE_PATHS,
   modelProviderErrorMessage,
+  readModelBehaviorConfig,
 } from "./config-mutation.ts";
 
 describe("model provider config patches", () => {
+  it("preserves a configured Ultrafast preference when another default is saved", () => {
+    const behavior = readModelBehaviorConfig({ fastModeDefault: "ultrafast" });
+    expect(behavior.fastMode).toBe("ultrafast");
+    expect(
+      buildDefaultsPatch({
+        primary: "openai/model",
+        fallbacks: [],
+        utilityModel: null,
+        ...behavior,
+      }),
+    ).toMatchObject({ agents: { defaults: { fastModeDefault: "ultrafast" } } });
+  });
   it("redacts secrets in displayed mutation failures", () => {
     expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
       "OPENAI_API_KEY=sk-123...cdef",
@@ -57,10 +69,6 @@ describe("model provider config patches", () => {
         },
       },
     });
-  });
-
-  it("confirms fallback-array shrinkage for the gateway destructive-array guard", () => {
-    expect(DEFAULT_MODELS_REPLACE_PATHS).toEqual(["agents.defaults.model.fallbacks"]);
   });
 
   it.each(["openai/gpt-5-mini", "", null])(

@@ -162,13 +162,13 @@ export const marginCases = [
     id: ["forwarded", "other-agent", "subagent", "legacy"][index]!,
     messages: forwarded(key, longText),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   })),
   {
     id: "forwarded-short",
     messages: forwarded("agent:main:cron:release-review", "Review complete."),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   },
   {
     id: "forwarded-media",
@@ -178,7 +178,7 @@ export const marginCases = [
       { type: "text", text: "The sample checklist is ready." },
     ]),
     side: "left",
-    selector: ".chat-bubble",
+    selector: ".chat-session-activity",
   },
   {
     id: "clawhub",
@@ -260,6 +260,29 @@ export async function createMarginImage(
     return canvas.toDataURL("image/png").split(",")[1]!;
   }, size);
   return Buffer.from(encoded, "base64");
+}
+
+export async function resizeMarginViewport(page: Page, width: number): Promise<void> {
+  await page.setViewportSize({ width, height: 1200 });
+  // Excluded cases have no mobile measurement between resizes. Await native
+  // layout publication before issuing the desktop restore.
+  await page.evaluate(
+    (expectedWidth) =>
+      new Promise<void>((resolve) => {
+        const observer = new ResizeObserver(([entry]) => {
+          if (
+            window.innerWidth !== expectedWidth ||
+            entry?.borderBoxSize[0]?.inlineSize !== expectedWidth
+          ) {
+            return;
+          }
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.documentElement, { box: "border-box" });
+      }),
+    width,
+  );
 }
 
 export async function measureMargin(page: Page, testCase: MarginCase) {

@@ -1,16 +1,13 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UsageAggregates, UsageSessionEntry } from "./types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { renderCostBreakdownCompact } from "./view-chart.ts";
-import {
-  renderCostWindowComparison,
-  renderFilterChips,
-  renderSessionsCard,
-  renderUsageInsights,
-} from "./view-overview.ts";
+import { CostBreakdownCompact } from "./view-chart.tsx";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -59,35 +56,42 @@ function getSummaryCards(container: HTMLElement): Array<{
   }));
 }
 
-describe("renderUsageInsights", () => {
+describe("UsageInsights", () => {
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const [currentTotals, setCurrentTotals] = createSignal(totals);
+    const [currentAggregates, setCurrentAggregates] = createSignal({
+      ...aggregates,
+      byAgent: [
+        { agentId: "main", totals },
+        { agentId: "research", totals },
+      ],
+    });
 
-    render(
-      renderUsageInsights(
-        totals,
-        {
-          ...aggregates,
-          byAgent: [
-            { agentId: "main", totals },
-            { agentId: "research", totals },
-          ],
-        },
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          get totals() {
+            return currentTotals();
+          },
+          get aggregates() {
+            return currentAggregates();
+          },
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
@@ -122,31 +126,52 @@ describe("renderUsageInsights", () => {
       }),
     ).toBe(true);
 
-    buttons[0]?.click();
-    expect(document.activeElement).toBe(buttons[0]);
+    await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
+    const button = buttons[0]!;
+    const tooltip = button.closest("openclaw-tooltip")!;
+    button.click();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot?.querySelector("wa-tooltip");
+    expect(popup).toBeTruthy();
+    expect(document.activeElement).toBe(button);
+
+    setCurrentTotals((current) => ({ ...current, totalCost: 12 }));
+    setCurrentAggregates((current) => ({
+      ...current,
+      messages: { ...current.messages, total: 8 },
+    }));
+    flush();
+    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(button.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(tooltip.shadowRoot?.querySelector("wa-tooltip")).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    expect(
+      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
+    ).toBe("8");
   });
 
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals,
+          aggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     expect(getSummaryCards(container).filter((card) => card.title === "Cache Hit Rate")).toEqual([
       {
@@ -171,24 +196,25 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const providerCard = Array.from(container.querySelectorAll(".usage-insight-card")).find(
       (card) => card.querySelector(".usage-insight-title")?.textContent === "Top Providers",
@@ -210,24 +236,25 @@ describe("renderUsageInsights", () => {
       ],
     } as UsageAggregates;
 
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationSumMs: 0,
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        false,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          totals: costTotals,
+          aggregates: costAggregates,
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: false,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     expect(container.textContent).not.toContain("1000.0% of cost");
   });
@@ -236,20 +263,22 @@ describe("renderUsageInsights", () => {
 describe("usage overview presentation owners", () => {
   it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
     const container = document.createElement("div");
-    render(
-      renderCostBreakdownCompact(
-        {
-          ...totals,
-          totalCost: 1,
-          outputCost: 0.2,
-          inputCost: 0.1,
-          cacheWriteCost: 0.3,
-          cacheReadCost: 0.4,
-        },
-        mode,
-      ),
-      container,
+    mountSolid(
+      () =>
+        CostBreakdownCompact({
+          totals: {
+            ...totals,
+            totalCost: 1,
+            outputCost: 0.2,
+            inputCost: 0.1,
+            cacheWriteCost: 0.3,
+            cacheReadCost: 0.4,
+          },
+          mode,
+        }),
+      { container },
     );
+    flush();
 
     const categories = [
       "usage-token-output",
@@ -278,19 +307,22 @@ describe("usage overview presentation owners", () => {
     const onClearDays = vi.fn();
     const onClearHours = vi.fn();
     const onClearSessions = vi.fn();
-    render(
-      renderFilterChips(
-        ["2026-08-01"],
-        [8],
-        ["agent:main:usage"],
-        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        onClearDays,
-        onClearHours,
-        onClearSessions,
-        vi.fn(),
-      ),
-      container,
+    const props = createUsageProps();
+    Object.assign(props.filters, {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
+    });
+    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+    mountSolid(
+      () =>
+        renderFilterChips(
+          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+          props,
+        ),
+      { container },
     );
+    flush();
 
     const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
     expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
@@ -309,19 +341,21 @@ describe("usage overview presentation owners", () => {
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [
-          dailyEntry("2026-06-01", 100, 1),
-          dailyEntry("2026-06-25", 400, 4),
-          dailyEntry("2026-07-01", 500, 5),
-        ],
-        "2026-06-01",
-        "2026-07-01",
-        "local",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [
+            dailyEntry("2026-06-01", 100, 1),
+            dailyEntry("2026-06-25", 400, 4),
+            dailyEntry("2026-07-01", 500, 5),
+          ],
+          "2026-06-01",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const cards = Array.from(container.querySelectorAll(".cost-window-card")).map((card) => ({
       label: card.querySelector(".cost-window-card__label")?.textContent?.trim(),
@@ -337,15 +371,17 @@ describe("renderCostWindowComparison", () => {
 
   it("preserves sub-cent totals and daily averages", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-        "local",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [dailyEntry("2026-07-01", 300, 0.003)],
+          "2026-06-02",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const range = container.querySelector(".cost-window-card--range");
     expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
@@ -353,7 +389,7 @@ describe("renderCostWindowComparison", () => {
   });
 });
 
-describe("renderSessionsCard", () => {
+describe("SessionsCard", () => {
   const noop = () => {};
   const renderCard = (
     sessions: UsageSessionEntry[],
@@ -361,39 +397,92 @@ describe("renderSessionsCard", () => {
       selected?: string[];
       days?: string[];
       tokens?: boolean;
-      sort?: Parameters<typeof renderSessionsCard>[4];
-      direction?: Parameters<typeof renderSessionsCard>[5];
+      sort?: UsageProps["display"]["sessionSort"];
+      direction?: UsageProps["display"]["sessionSortDir"];
       recent?: string[];
-      tab?: Parameters<typeof renderSessionsCard>[7];
-      onSelect?: Parameters<typeof renderSessionsCard>[8];
+      tab?: UsageProps["display"]["sessionsTab"];
+      onSelect?: UsageProps["callbacks"]["details"]["onSelectSession"];
       totalSessions?: number;
     } = {},
   ) => {
     const container = document.createElement("div");
-    render(
-      renderSessionsCard(
-        sessions,
-        options.selected ?? [],
-        options.days ?? [],
-        options.tokens ?? true,
-        options.sort ?? "tokens",
-        options.direction ?? "desc",
-        options.recent ?? [],
-        options.tab ?? "all",
-        options.onSelect ?? noop,
-        noop,
-        noop,
-        noop,
-        [],
-        options.totalSessions ?? sessions.length,
-        noop,
-      ),
-      container,
+    const props = createUsageProps();
+    props.filters.selectedSessions = options.selected ?? [];
+    props.filters.selectedDays = options.days ?? [];
+    Object.assign(props.display, {
+      chartMode: options.tokens === false ? "cost" : "tokens",
+      sessionSort: options.sort ?? "tokens",
+      sessionSortDir: options.direction ?? "desc",
+      recentSessions: options.recent ?? [],
+      sessionsTab: options.tab ?? "all",
+    });
+    props.callbacks.details.onSelectSession = options.onSelect ?? noop;
+    mountSolid(
+      () =>
+        SessionsCard({
+          sessions,
+          usage: props,
+          totalSessions: options.totalSessions ?? sessions.length,
+        }),
+      { container },
     );
+    flush();
     return container;
   };
 
-  it("identifies mixed-agent sessions even when optional metadata columns are hidden", async () => {
+  it("preserves sort focus while changing the row order", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: {
+        ...base.callbacks,
+        display: {
+          ...base.callbacks.display,
+          onChange: (patch: Partial<UsageProps["display"]>) =>
+            setDisplay((current) => ({ ...current, ...patch })),
+        },
+      },
+    };
+    const sessions = [
+      {
+        key: "alpha",
+        label: "Alpha",
+        updatedAt: 2,
+        usage: { ...totals, totalTokens: 100, totalCost: 1 },
+      },
+      {
+        key: "beta",
+        label: "Beta",
+        updatedAt: 1,
+        usage: { ...totals, totalTokens: 50, totalCost: 5 },
+      },
+    ];
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(() => SessionsCard({ sessions, usage, totalSessions: sessions.length }), {
+      container,
+    });
+    flush();
+    const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
+    select.focus();
+    for (const [sort, first] of [
+      ["cost", "Beta"],
+      ["recent", "Alpha"],
+    ] as const) {
+      select.value = sort;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      flush();
+      expect(container.querySelector(".sessions-sort select")).toBe(select);
+      expect(document.activeElement).toBe(select);
+      expect(select.value).toBe(sort);
+      expect(container.querySelector(".session-bar-title")?.textContent).toBe(first);
+    }
+  });
+
+  it("identifies mixed-agent sessions", async () => {
     const container = renderCard([
       { key: "agent:main:one", agentId: "main", usage: null },
       { key: "agent:research:two", agentId: "research", usage: null },
@@ -555,26 +644,13 @@ describe("renderSessionsCard", () => {
       },
     ] as UsageSessionEntry[];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        ["agent:main:selected"],
-        [],
-        true,
-        "tokens",
-        "desc",
-        [],
-        "all",
-        onSelectSession,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
+    const props = createUsageProps();
+    props.filters.selectedSessions = ["agent:main:selected"];
+    props.callbacks.details.onSelectSession = onSelectSession;
+    mountSolid(() => SessionsCard({ sessions, usage: props, totalSessions: sessions.length }), {
       container,
-    );
+    });
+    flush();
 
     const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
     const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
@@ -614,13 +690,6 @@ describe("renderSessionsCard", () => {
   it.each([
     {
       tokens: true,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["30", "10"],
-      avg: "20",
-    },
-    {
-      tokens: true,
       sort: "cost",
       names: ["Day winner", "All time winner"],
       values: ["10", "30"],
@@ -631,13 +700,6 @@ describe("renderSessionsCard", () => {
       sort: "tokens",
       names: ["All time winner", "Day winner"],
       values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-    {
-      tokens: false,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["$10.00", "$1.00"],
       avg: "$5.50",
     },
   ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {

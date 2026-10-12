@@ -15,14 +15,7 @@ type DetailsToken = ReturnType<StateBlock["push"]>;
 type DetailsTokenSink = {
   push(type: string, tag: string, nesting: -1 | 0 | 1): DetailsToken;
 };
-type MarkdownRawHtmlContext =
-  | "comment"
-  | "processing_instruction"
-  | "declaration"
-  | "cdata"
-  | { element: string };
-
-type MarkdownRawHtmlState = { context: MarkdownRawHtmlContext | null };
+type MarkdownRawHtmlState = { context: string | null };
 
 type MarkdownDisclosureTag = {
   end: number;
@@ -69,19 +62,20 @@ function markdownDisclosureTagKind(raw: string): MarkdownDisclosureTagKind | nul
 /** Disclosure markup is structural only when it starts the current Markdown block line. */
 export function scanMarkdownDisclosureLine(
   line: string,
-  codeSpans: ReadonlyArray<readonly [number, number]> = findMarkdownCodeSpans(line),
+  codeSpans?: ReadonlyArray<readonly [number, number]>,
   lineOffset = 0,
 ): MarkdownDisclosureTag[] | null {
   const first = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/i.exec(line);
   if (!first) {
     return null;
   }
+  const spans = codeSpans ?? findMarkdownCodeSpans(line);
   const tags: MarkdownDisclosureTag[] = [];
   for (const match of line.matchAll(DISCLOSURE_TAG_RE)) {
     const start = match.index ?? 0;
     if (
       isEscapedMarkdownCharacter(line, start) ||
-      isInsideMarkdownCode(lineOffset + start, codeSpans)
+      isInsideMarkdownCode(lineOffset + start, spans)
     ) {
       continue;
     }
@@ -90,27 +84,23 @@ export function scanMarkdownDisclosureLine(
   return tags.length > 0 ? tags : null;
 }
 
-function pushInlineParagraph(state: DetailsTokenSink, content: string, line: number): void {
-  if (!content.trim()) {
+function pushInlineBlock(
+  state: DetailsTokenSink,
+  content: string,
+  line: number,
+  kind: "paragraph" | "summary" = "paragraph",
+): void {
+  if (kind === "paragraph" && !content.trim()) {
     return;
   }
-  const open = state.push("paragraph_open", "p", 1);
+  const tag = kind === "paragraph" ? "p" : "summary";
+  const open = state.push(`${kind}_open`, tag, 1);
   open.map = [line, line + 1];
   const inline = state.push("inline", "", 0);
   inline.content = content;
   inline.map = [line, line + 1];
   inline.children = [];
-  state.push("paragraph_close", "p", -1);
-}
-
-function pushSummary(state: DetailsTokenSink, label: string, line: number): void {
-  const open = state.push("summary_open", "summary", 1);
-  open.map = [line, line + 1];
-  const inline = state.push("inline", "", 0);
-  inline.content = label;
-  inline.map = [line, line + 1];
-  inline.children = [];
-  state.push("summary_close", "summary", -1);
+  state.push(`${kind}_close`, tag, -1);
 }
 
 /** Share nesting decisions between rendered blocks and streaming-tail repair. */
@@ -172,15 +162,12 @@ function pushDisclosureLine(
   line: string,
   lineNumber: number,
   stack: MarkdownDetailsFrame[],
-): boolean {
-  const tags = scanMarkdownDisclosureLine(line);
-  if (!tags) {
-    return false;
-  }
+  tags: readonly MarkdownDisclosureTag[],
+): void {
   let cursor = 0;
   const flushText = (tag: MarkdownDisclosureTag, end = tag.end) => {
     // Unaccepted tags stay in the literal span between structural events.
-    pushInlineParagraph(state, line.slice(cursor, tag.start), lineNumber);
+    pushInlineBlock(state, line.slice(cursor, tag.start), lineNumber);
     cursor = end;
   };
   walkMarkdownDisclosureTags(tags, stack, {
@@ -197,11 +184,10 @@ function pushDisclosureLine(
     },
     onSummary(open, close) {
       flushText(open, close.end);
-      pushSummary(state, line.slice(open.end, close.start), lineNumber);
+      pushInlineBlock(state, line.slice(open.end, close.start), lineNumber, "summary");
     },
   });
-  pushInlineParagraph(state, line.slice(cursor), lineNumber);
-  return true;
+  pushInlineBlock(state, line.slice(cursor), lineNumber);
 }
 
 function detailsBlockRule(
@@ -216,50 +202,35 @@ function detailsBlockRule(
   const start = (state.bMarks[startLine] ?? 0) + (state.tShift[startLine] ?? 0);
   const end = state.eMarks[startLine] ?? state.src.length;
   const line = state.src.slice(start, end);
-  if (!scanMarkdownDisclosureLine(line)) {
+  const tags = scanMarkdownDisclosureLine(line);
+  if (!tags) {
     return false;
   }
   if (silent) {
     return true;
   }
 
-  pushDisclosureLine(state, line, startLine, (state[DETAILS_STACK] ??= []));
+  pushDisclosureLine(state, line, startLine, (state[DETAILS_STACK] ??= []), tags);
   state.line = startLine + 1;
   return true;
 }
 
-function openingRawHtmlContext(line: string): MarkdownRawHtmlContext | null {
+function openingRawHtmlContext(line: string): string | null {
   const trimmed = line.trimStart();
   if (trimmed.startsWith("<!--")) {
-    return "comment";
+    return "-->";
   }
   if (trimmed.startsWith("<?")) {
-    return "processing_instruction";
+    return "?>";
   }
   if (trimmed.startsWith("<![CDATA[")) {
-    return "cdata";
+    return "]]>";
   }
   if (/^<![A-Za-z]/.test(trimmed)) {
-    return "declaration";
+    return ">";
   }
   const element = /^<(pre|script|style|textarea)(?=[\s>]|$)/i.exec(trimmed)?.[1];
-  return element ? { element: element.toLowerCase() } : null;
-}
-
-function closesRawHtmlContext(context: MarkdownRawHtmlContext, line: string): boolean {
-  if (typeof context === "object") {
-    return line.toLowerCase().includes(`</${context.element}>`);
-  }
-  if (context === "comment") {
-    return line.includes("-->");
-  }
-  if (context === "processing_instruction") {
-    return line.includes("?>");
-  }
-  if (context === "declaration") {
-    return line.includes(">");
-  }
-  return line.includes("]]>");
+  return element ? `</${element.toLowerCase()}>` : null;
 }
 
 export function consumeMarkdownRawHtmlLine(
@@ -276,7 +247,8 @@ export function consumeMarkdownRawHtmlLine(
   if (!state.context && isInsideMarkdownCode(lineOffset + start, codeSpans)) {
     return false;
   }
-  state.context = closesRawHtmlContext(context, line) ? null : context;
+  const content = context.startsWith("</") ? line.toLowerCase() : line;
+  state.context = content.includes(context) ? null : context;
   return true;
 }
 
@@ -330,41 +302,24 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
     for (const token of state.tokens) {
       if (token.type === "details_open") {
         stack.push({ hasSummary: false });
-        output.push(token);
-        continue;
-      }
-      if (token.type === "summary_open") {
+      } else if (token.type === "summary_open") {
         const frame = stack.at(-1);
         if (frame) {
           frame.hasSummary = true;
         }
-        output.push(token);
-        continue;
-      }
-      if (token.type === "details_close") {
+      } else if (token.type === "details_close") {
         stack.pop();
-        output.push(token);
-        continue;
       }
       if (token.type !== "html_block" || stack.length === 0) {
         output.push(token);
         continue;
       }
 
-      let level = token.level;
-      const replacement: DetailsToken[] = [];
       const sink: DetailsTokenSink = {
         push(type, tag, nesting) {
           const next = new state.Token(type, tag, nesting);
           next.block = true;
-          if (nesting < 0) {
-            level -= 1;
-          }
-          next.level = level;
-          if (nesting > 0) {
-            level += 1;
-          }
-          replacement.push(next);
+          output.push(next);
           return next;
         },
       };
@@ -382,20 +337,18 @@ export function installMarkdownDetails(markdownParser: MarkdownIt): void {
       };
       for (const [lineOffset, line] of lines.entries()) {
         const hasLineBreak = lineOffset < lines.length - 1;
-        if (consumeMarkdownRawHtmlLine(line, rawHtml)) {
-          pendingHtml += line + (hasLineBreak ? "\n" : "");
-          continue;
-        }
-        if (!scanMarkdownDisclosureLine(line)) {
+        const tags = consumeMarkdownRawHtmlLine(line, rawHtml)
+          ? null
+          : scanMarkdownDisclosureLine(line);
+        if (!tags) {
           pendingHtml += line + (hasLineBreak ? "\n" : "");
           continue;
         }
         flushHtml();
         const lineNumber = (token.map?.[0] ?? 0) + lineOffset;
-        pushDisclosureLine(sink, line, lineNumber, stack);
+        pushDisclosureLine(sink, line, lineNumber, stack, tags);
       }
       flushHtml();
-      output.push(...replacement);
     }
 
     // Streaming can end with open details; balance only our structured tokens at EOF.

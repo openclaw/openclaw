@@ -1,8 +1,30 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
+import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("create-as-draft availability", () => {
+  const capabilities = new NewSessionCapabilityController(
+    () => {},
+    () => {},
+  );
+  const canStartSessionAsDraft = (policy: {
+    allowedVisibilities?: string[];
+    hasMultipleIdentities?: boolean;
+  }) =>
+    capabilities.canStartAsDraft({
+      gateway: {
+        snapshot: {
+          hello: {
+            policy: {
+              allowedSessionVisibilities: policy.allowedVisibilities,
+              hasMultipleSessionSharingIdentities: policy.hasMultipleIdentities,
+            },
+          },
+        },
+      },
+    } as ApplicationContext);
   it("requires both draft policy and multiple creator identities", () => {
     expect(
       canStartSessionAsDraft({
@@ -190,21 +212,6 @@ describe("buildDraftSessionCreateParams", () => {
         contextWindow: "200k",
         thinkingLevel: "medium",
         fastMode: true,
-        worktree: false,
-        catalogId: "claude",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "start coding",
-      catalogId: "claude",
-    });
-  });
-
-  it("submits the catalog target for server-side resolution", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "start coding",
         worktree: false,
         catalogId: "claude",
       }),

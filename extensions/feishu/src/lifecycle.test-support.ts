@@ -196,6 +196,9 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     resolveRuntimeConversationBindingRoute: (
       params: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0],
     ) => {
+      if (params.resolveRoute) {
+        throw new Error("Feishu lifecycle tests require a completed route");
+      }
       const conversation =
         "conversation" in params
           ? params.conversation

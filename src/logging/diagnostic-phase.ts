@@ -1,4 +1,3 @@
-// Diagnostic phase helpers measure named phases and emit timing diagnostics.
 import { performance } from "node:perf_hooks";
 import {
   areDiagnosticsEnabledForProcess,
@@ -6,8 +5,8 @@ import {
   type DiagnosticPhaseDetails,
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 
-// Tracks nested diagnostic phases for recent-phase snapshots and optional event emission.
 const RECENT_PHASE_CAPACITY = 40;
 
 type ActiveDiagnosticPhase = {
@@ -40,19 +39,11 @@ export function getCurrentDiagnosticPhase(): string | undefined {
   return activePhaseStack.at(-1)?.name;
 }
 
-function resolveRecentPhaseLimit(limit: number): number | null {
-  if (!Number.isFinite(limit) || limit <= 0) {
-    return null;
-  }
-  return Math.floor(limit);
-}
-
 export function getRecentDiagnosticPhases(
   limit = 8,
   options?: { completedAfter?: number },
 ): DiagnosticPhaseSnapshot[] {
-  const resolved = resolveRecentPhaseLimit(limit);
-  if (resolved === null) {
+  if (!Number.isFinite(limit) || limit <= 0) {
     return [];
   }
   const completedAfter = options?.completedAfter;
@@ -62,10 +53,9 @@ export function getRecentDiagnosticPhases(
       : recentPhases.filter(
           (phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter,
         );
-  return eligiblePhases.slice(-resolved).map((phase) => Object.assign({}, phase));
+  return eligiblePhases.slice(-Math.floor(limit)).map((phase) => Object.assign({}, phase));
 }
 
-/** Records a completed phase in memory and emits it when diagnostics are enabled. */
 function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
   pushRecentPhase(snapshot);
   if (!areDiagnosticsEnabledForProcess()) {
@@ -92,7 +82,7 @@ export async function withDiagnosticPhase<T>(
   };
   activePhaseStack.push(active);
   try {
-    return await run();
+    return await runWithMainThreadTask(name, run);
   } finally {
     // Remove by identity so nested or overlapping phases do not corrupt the active stack.
     const endedAt = Date.now();
@@ -116,7 +106,6 @@ export async function withDiagnosticPhase<T>(
   }
 }
 
-/** Clears phase history and active stack for isolated tests. */
 export function resetDiagnosticPhasesForTest(): void {
   activePhaseStack = [];
   recentPhases = [];

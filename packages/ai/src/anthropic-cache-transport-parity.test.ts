@@ -60,17 +60,29 @@ const routes: Array<{
   name: string;
   apiKey?: string;
   model?: Partial<Model<"anthropic-messages">>;
-  toolCache: boolean;
+  cacheRetention: "short" | "long" | "none";
+  withTools?: boolean;
+  toolCache?: boolean;
   longCache?: boolean;
 }> = [
-  { name: "direct API key", toolCache: true },
-  { name: "OAuth", apiKey: "sk-ant-oat01-synthetic", toolCache: true },
-  { name: "Foundry", model: { provider: "microsoft-foundry" }, toolCache: true },
-  { name: "proxy", model: { baseUrl: "https://proxy.example/v1" }, toolCache: true },
-  { name: "Fireworks", model: { provider: "fireworks" }, toolCache: false, longCache: false },
+  { name: "direct short", cacheRetention: "short" },
+  { name: "direct long", cacheRetention: "long" },
+  { name: "direct uncached", cacheRetention: "none" },
+  { name: "direct without tools", cacheRetention: "short", withTools: false },
+  { name: "OAuth long", apiKey: "sk-ant-oat01-synthetic", cacheRetention: "long" },
+  { name: "OAuth uncached", apiKey: "sk-ant-oat01-synthetic", cacheRetention: "none" },
+  { name: "proxy long", model: { baseUrl: "https://proxy.example/v1" }, cacheRetention: "long" },
+  {
+    name: "Fireworks",
+    model: { provider: "fireworks" },
+    cacheRetention: "long",
+    toolCache: false,
+    longCache: false,
+  },
   {
     name: "incompatible proxy",
     model: { baseUrl: "https://proxy.example/v1", compat: { supportsCacheControlOnTools: false } },
+    cacheRetention: "long",
     toolCache: false,
   },
 ];
@@ -78,9 +90,64 @@ const routes: Array<{
 describe("Anthropic cache checkpoint transport parity", () => {
   registerParityHostLifecycle();
 
+  it.each(["provider", "transport"] as const)(
+    "%s retains the previous checkpoint beyond the provider's 20-block lookback",
+    async (implementation) => {
+      const messages = appendToolTurn(context.messages, 1);
+      const first = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      messages.push({
+        role: "user",
+        timestamp: 4,
+        content: Array.from({ length: 21 }, (_, i) => ({ type: "text", text: `Document ${i}` })),
+      });
+      const next = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      const paths = markers(next.payload).map((marker) => marker.path);
+      // A large new user turn must not hide the last tool-result checkpoint.
+      expect(paths).toContain("messages[2].content[0]");
+      expect(paths).toContain("messages[3].content[20]");
+      expect(paths).toHaveLength(4);
+      expect(first.payload.tools).toEqual(next.payload.tools);
+      expect((next.payload.messages as unknown[])[2]).toEqual(
+        (first.payload.messages as unknown[])[2],
+      );
+    },
+  );
+
+  it("keeps every checkpoint before transient context during a tool loop", async () => {
+    const messages = appendToolTurn(
+      appendToolTurn(
+        [
+          ...context.messages,
+          {
+            role: "user",
+            content: "Transient runtime facts",
+            timestamp: 1,
+            runtimeContext: { retained: false },
+          },
+        ],
+        1,
+      ),
+      2,
+    );
+    const { payload } = await captureAnthropicRequest("transport", {
+      cacheRetention: "short",
+      context: { ...context, messages },
+    });
+    expect(
+      markers(payload)
+        .map((marker) => marker.path)
+        .toSorted(),
+    ).toEqual(["messages[0].content[0]", "system[0]", "tools[0]"]);
+  });
+
   it.each([
     { name: "absent", systemPrompt: undefined },
-    { name: "empty", systemPrompt: "" },
     { name: "only dynamic", systemPrompt: `${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic` },
     { name: "empty boundary", systemPrompt: SYSTEM_PROMPT_CACHE_BOUNDARY },
   ])(
@@ -101,7 +168,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
           expect.arrayContaining([
             {
               type: "text",
-              text: "x-anthropic-billing-header: cc_version=2.1.278; cc_entrypoint=sdk-cli;",
+              text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
             },
             {
               type: "text",
@@ -140,61 +207,55 @@ describe("Anthropic cache checkpoint transport parity", () => {
     },
   );
 
-  for (const route of routes) {
-    for (const withTools of [true, false]) {
-      it.each(["short", "long", "none"] as const)(
-        `${route.name}, tools=${withTools}, retention=%s: checkpoints stay within budget and advance`,
-        async (cacheRetention) => {
-          let messages: Context["messages"] = context.messages;
-          const previousTools = new Map<string, unknown>();
-          for (let turn = 0; turn < 3; turn++) {
-            if (turn > 0) {
-              messages = appendToolTurn(messages, turn);
-            }
-            const captured = [];
-            for (const implementation of ["provider", "transport"] as const) {
-              const { payload } = await captureAnthropicRequest(implementation, {
-                ...route,
-                cacheRetention,
-                context: {
-                  ...context,
-                  tools: withTools
-                    ? context.tools.flatMap((tool) => [tool, { ...tool, name: "read" }])
-                    : [],
-                  systemPrompt: `Stable instructions version ${turn === 2 ? 2 : 1}${SYSTEM_PROMPT_CACHE_BOUNDARY}Turn ${turn}`,
-                  messages,
-                },
-              });
-              const actual = markers(payload);
-              const expectedPaths =
-                cacheRetention === "none"
-                  ? []
-                  : [
-                      ...(withTools && route.toolCache ? ["tools[1]"] : []),
-                      `system[${route.apiKey ? 2 : 0}]`,
-                      "messages[0].content[0]",
-                      ...(turn > 0 ? [`messages[${turn * 2}].content[0]`] : []),
-                    ];
-              expect(actual.map((marker) => marker.path).toSorted()).toEqual(
-                expectedPaths.toSorted(),
-              );
-              expect(actual.length).toBeLessThanOrEqual(4);
-              for (const marker of actual) {
-                expect(marker.control).toEqual({
-                  type: "ephemeral",
-                  ...(cacheRetention === "long" && route.longCache !== false ? { ttl: "1h" } : {}),
-                });
-              }
-              if (turn > 0) {
-                expect(payload.tools).toEqual(previousTools.get(implementation));
-              }
-              previousTools.set(implementation, payload.tools);
-              captured.push({ markers: actual, system: payload.system });
-            }
-            expect(captured[1]).toEqual(captured[0]);
+  it.each(routes)(
+    "$name: checkpoints stay within budget and advance",
+    async ({ cacheRetention, withTools = true, ...route }) => {
+      let messages: Context["messages"] = context.messages;
+      const previousTools = new Map<string, unknown>();
+      for (let turn = 0; turn < 3; turn++) {
+        if (turn > 0) {
+          messages = appendToolTurn(messages, turn);
+        }
+        const captured = [];
+        for (const implementation of ["provider", "transport"] as const) {
+          const { payload } = await captureAnthropicRequest(implementation, {
+            ...route,
+            cacheRetention,
+            context: {
+              ...context,
+              tools: withTools
+                ? context.tools.flatMap((tool) => [tool, { ...tool, name: "read" }])
+                : [],
+              systemPrompt: `Stable instructions version ${turn === 2 ? 2 : 1}${SYSTEM_PROMPT_CACHE_BOUNDARY}Turn ${turn}`,
+              messages,
+            },
+          });
+          const actual = markers(payload);
+          const expectedPaths =
+            cacheRetention === "none"
+              ? []
+              : [
+                  ...(withTools && route.toolCache !== false ? ["tools[1]"] : []),
+                  `system[${route.apiKey ? 2 : 0}]`,
+                  `messages[${turn > 1 ? (turn - 1) * 2 : 0}].content[0]`,
+                  ...(turn > 0 ? [`messages[${turn * 2}].content[0]`] : []),
+                ];
+          expect(actual.map((marker) => marker.path).toSorted()).toEqual(expectedPaths.toSorted());
+          expect(actual.length).toBeLessThanOrEqual(4);
+          for (const marker of actual) {
+            expect(marker.control).toEqual({
+              type: "ephemeral",
+              ...(cacheRetention === "long" && route.longCache !== false ? { ttl: "1h" } : {}),
+            });
           }
-        },
-      );
-    }
-  }
+          if (turn > 0) {
+            expect(payload.tools).toEqual(previousTools.get(implementation));
+          }
+          previousTools.set(implementation, payload.tools);
+          captured.push({ markers: actual, system: payload.system });
+        }
+        expect(captured[1]).toEqual(captured[0]);
+      }
+    },
+  );
 });

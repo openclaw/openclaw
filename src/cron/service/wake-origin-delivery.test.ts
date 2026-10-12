@@ -1,18 +1,6 @@
-// Covers the "capture origin delivery context, carry it to the wake event"
-// half of the cron wake origin fix: a sessionKey-targeted wake() must thread
-// the bound channel thread/topic (e.g. Telegram topic 4052) onto the enqueued
-// system event's deliveryContext so the delivered heartbeat routes back into
-// the originating thread instead of the chat root.
-//
-// The channel-correct threadId is sourced via the resolveOriginDeliveryContext
-// dep (implemented in server-cron from the session store), NOT by splitting the
-// composite session-key thread suffix. The tests mock that dep so they exercise
-// only wake()'s carry behavior. Scheduled main-session cron jobs resolve their
-// delivery context natively in timer.ts (resolveMainSessionCronDeliveryContext)
-// and are covered there.
 import { describe, expect, it, vi } from "vitest";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { wake } from "./wake.js";
 
 const TOPIC_DELIVERY_CONTEXT: DeliveryContext = {
@@ -23,10 +11,7 @@ const TOPIC_DELIVERY_CONTEXT: DeliveryContext = {
 };
 
 function makeStateWithMocks(
-  resolveOriginDeliveryContext?: (params: {
-    sessionKey?: string;
-    agentId?: string;
-  }) => DeliveryContext | undefined,
+  resolveOriginDeliveryContext?: CronServiceDeps["resolveOriginDeliveryContext"],
 ): {
   state: CronServiceState;
   enqueueSystemEvent: ReturnType<typeof vi.fn>;
@@ -52,12 +37,12 @@ function makeStateWithMocks(
 }
 
 describe("cron wake() origin delivery-context carry", () => {
-  it("threads the resolved deliveryContext onto a sessionKey-targeted wake", () => {
+  it("threads the resolved deliveryContext onto a sessionKey-targeted wake", async () => {
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
-      () => TOPIC_DELIVERY_CONTEXT,
+      async () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    const result = wake(state, {
+    const result = await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -76,17 +61,13 @@ describe("cron wake() origin delivery-context carry", () => {
     });
   });
 
-  it("resolves and carries deliveryContext for a sessionKey-only wake (no agentId)", () => {
-    // Caught by mutation testing: `sessionKey || agentId` -> `&&` in the
-    // resolver guard survived because every resolver-wired test passed both
-    // fields. A sessionKey-only wake (the common tool-path shape for
-    // single-agent setups) must still consult the resolver and carry the
-    // stored topic/thread context.
+  it("resolves and carries deliveryContext for a sessionKey-only wake (no agentId)", async () => {
+    // Pins the resolver guard against requiring both sessionKey and agentId.
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, {
+    await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -102,10 +83,10 @@ describe("cron wake() origin delivery-context carry", () => {
     });
   });
 
-  it("omits deliveryContext when no origin context resolves (unchanged default routing)", () => {
+  it("omits deliveryContext when no origin context resolves (unchanged default routing)", async () => {
     const { state, enqueueSystemEvent } = makeStateWithMocks(() => undefined);
 
-    wake(state, {
+    await wake(state, {
       mode: "now",
       text: "check the queue",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -118,33 +99,13 @@ describe("cron wake() origin delivery-context carry", () => {
     expect(options).not.toHaveProperty("deliveryContext");
   });
 
-  it("works when no resolveOriginDeliveryContext dep is wired (legacy deps)", () => {
-    const { state, enqueueSystemEvent } = makeStateWithMocks();
-    // Drop the dep entirely to mirror a deployment whose adapter predates the fix.
-    (state.deps as { resolveOriginDeliveryContext?: unknown }).resolveOriginDeliveryContext =
-      undefined;
-
-    const result = wake(state, {
-      mode: "now",
-      text: "check the queue",
-      sessionKey: "agent:main:telegram:8661849123:topic:4052",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
-      sessionKey: "agent:main:telegram:8661849123:topic:4052",
-    });
-  });
-
-  it("keeps the no-origin call shape (enqueueSystemEvent(text, undefined)) when untargeted", () => {
+  it("keeps the no-origin call shape (enqueueSystemEvent(text, undefined)) when untargeted", async () => {
     const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    wake(state, { mode: "now", text: "no origin" });
+    await wake(state, { mode: "now", text: "no origin" });
 
-    // Untargeted wakes must not even consult the resolver, preserving the exact
-    // pre-fix default-sessionKey binding behavior.
     expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("no origin", undefined);
   });

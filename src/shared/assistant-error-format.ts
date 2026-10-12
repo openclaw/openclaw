@@ -1,5 +1,5 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -33,31 +33,34 @@ const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
+export const CONTEXT_OVERFLOW_ERROR_MESSAGE =
+  "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
 
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
-
-export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+export function formatProviderRefusalText(message: {
+  diagnostics?: unknown;
+  errorCode?: unknown;
+}): string | undefined {
   const refusal = Array.isArray(message.diagnostics)
     ? message.diagnostics.find(
         (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
       )
     : undefined;
   if (!refusal) {
-    return undefined;
+    // Older transcripts retain the code but have no review findings or continuation state.
+    return message.errorCode === "misalignment_policy_violation"
+      ? "The provider stopped this request as a safety precaution (misalignment)."
+      : undefined;
   }
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  if (safeCategory === "misalignment") {
+    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+  }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
 
@@ -75,15 +78,12 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   const error = asOptionalRecord(record.error);
   return (
     [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
-    (typeof record.error === "string" && typeof record.message === "string")
+    typeof record.error === "string"
   );
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -134,10 +134,6 @@ export function extractErrorHttpStatus(raw: string): { code: number; rest: strin
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -162,20 +158,14 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
 
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
     (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+export function parseApiErrorInfo(raw?: string) {
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -212,13 +202,18 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     ? errorCode !== undefined && !errorType
       ? errorCode
       : errorType
-    : readStringField(payload, "error");
+    : typeof payload.message === "string"
+      ? readStringField(payload, "error")
+      : undefined;
   const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
     type: type ?? readStringField(payload, "type"),
     ...(code === undefined ? {} : { code }),
-    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    message:
+      readStringField(error, "message") ??
+      readStringField(payload, "message") ??
+      readStringField(payload, "error"),
     requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }
@@ -237,18 +232,8 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE;
   }
 
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
-  if (leadingStatus && isHtmlChallenge) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
-  }
-
-  if (isHtmlChallenge) {
-    return (
-      "The provider returned an HTML error page instead of an API response. " +
-      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
-      "Retry in a moment or check provider status."
-    );
+  if (isCloudflareOrHtmlErrorPage(trimmed)) {
+    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
   }
 
   const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
@@ -268,64 +253,43 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }
 
-const REFUSED_TRANSPORT_CODE_RE = /\beconnrefused\b/i;
-const INTERRUPTED_TRANSPORT_CODE_RE = /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i;
-const DNS_TRANSPORT_CODE_RE = /\benotfound\b|\beai_again\b/i;
-const UNREACHABLE_TRANSPORT_CODE_RE = /\benetunreach\b|\behostunreach\b|\behostdown\b/i;
+const CONNECTION_FAILED_MESSAGE =
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+const TRANSPORT_ERRORS = [
+  {
+    code: /\beconnrefused\b/i,
+    phrases: /connection refused|actively refused/i,
+    message: CONNECTION_FAILED_MESSAGE,
+  },
+  {
+    code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
+    phrases: /socket hang up|connection reset|connection aborted/i,
+    message:
+      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  },
+  {
+    code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
+    phrases:
+      /getaddrinfo|no such host|\bdns\b|network is unreachable|host is unreachable|fetch failed|connection error|network request failed/i,
+    message: CONNECTION_FAILED_MESSAGE,
+  },
+];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return [
-    REFUSED_TRANSPORT_CODE_RE,
-    INTERRUPTED_TRANSPORT_CODE_RE,
-    DNS_TRANSPORT_CODE_RE,
-    UNREACHABLE_TRANSPORT_CODE_RE,
-  ].some((pattern) => pattern.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
     return undefined;
   }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    REFUSED_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-  if (
-    INTERRUPTED_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-  if (
-    DNS_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-  if (
-    UNREACHABLE_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
+  for (const { code, phrases, message } of TRANSPORT_ERRORS) {
+    if (code.test(raw) || phrases.test(raw)) {
+      return message;
+    }
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
+    return CONNECTION_FAILED_MESSAGE;
   }
   return undefined;
 }

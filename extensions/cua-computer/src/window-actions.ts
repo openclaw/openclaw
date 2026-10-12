@@ -10,7 +10,7 @@ import {
 } from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
 import { handleBrowserAct } from "./browser-actions.js";
-import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
+import type { CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
   callWindowTool,
@@ -24,7 +24,6 @@ import {
 import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
-  resolveAppRef,
   resolveObservation,
   resolveWindowRef,
   verifyGeneration,
@@ -58,6 +57,11 @@ async function handleTargetedAct(
   const base = { pid: target.pid, window_id: target.windowId };
   const delivery = params.deliveryMode ? { delivery_mode: params.deliveryMode } : {};
   const element = elementArgs(state, params, windowRef);
+  const optionalTarget = (label: string) =>
+    element ??
+    (params.x !== undefined || params.y !== undefined
+      ? windowPointArgs(state, params, windowRef, params, label)
+      : {});
   let tool: string;
   let args: Record<string, unknown>;
 
@@ -113,38 +117,23 @@ async function handleTargetedAct(
       };
       break;
     }
-    case "left_mouse_down": {
-      if (platform !== "linux") {
-        throw new Error("COMPUTER_UNSUPPORTED_ACTION: left_mouse_down is Linux-only");
-      }
-      if (element || params.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: left_mouse_down supports only background window pixels",
-        );
-      }
-      tool = "mouse_button_down";
-      args = {
-        ...base,
-        ...windowPointArgs(state, params, windowRef, params, "mouse down"),
-        button: "left",
-      };
-      break;
-    }
+    case "left_mouse_down":
     case "left_mouse_up": {
+      const down = params.action === "left_mouse_down";
       if (platform !== "linux") {
-        throw new Error("COMPUTER_UNSUPPORTED_ACTION: left_mouse_up is Linux-only");
+        throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action} is Linux-only`);
       }
       if (element || params.deliveryMode === "foreground") {
         throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: left_mouse_up supports only background window pixels",
+          `COMPUTER_UNSUPPORTED_ACTION: ${params.action} supports only background window pixels`,
         );
       }
-      tool = "mouse_button_up";
+      tool = down ? "mouse_button_down" : "mouse_button_up";
       args = {
         ...base,
-        ...(params.x !== undefined || params.y !== undefined
-          ? windowPointArgs(state, params, windowRef, params, "mouse up")
-          : {}),
+        ...(down
+          ? { ...windowPointArgs(state, params, windowRef, params, "mouse down"), button: "left" }
+          : optionalTarget("mouse up")),
       };
       break;
     }
@@ -160,10 +149,7 @@ async function handleTargetedAct(
       tool = "scroll";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "scroll")
-            : {})),
+        ...optionalTarget("scroll"),
         direction: params.scrollDirection,
         by: "line",
         amount: Math.min(50, params.scrollAmount ?? 3),
@@ -178,10 +164,7 @@ async function handleTargetedAct(
       tool = "type_text";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "type")
-            : {})),
+        ...optionalTarget("type"),
         text: params.text,
         ...delivery,
       };
@@ -192,10 +175,7 @@ async function handleTargetedAct(
       tool = "press_key";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "key")
-            : {})),
+        ...optionalTarget("key"),
         ...chord,
         ...delivery,
       };
@@ -208,8 +188,6 @@ async function handleTargetedAct(
   const result = await callWindowTool(driver, state, tool, args, signal);
   return JSON.stringify(actionEnvelope(result));
 }
-
-export type { CuaComputerActParams } from "./action-targets.js";
 
 /// Entry point for `computer.act` on the CUA driver. Owns every window- and
 /// element-scoped action (targeted input, discovery, app/window lifecycle) and
@@ -314,7 +292,7 @@ export async function handleWindowAct(
     case "launch_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
@@ -341,7 +319,7 @@ export async function handleWindowAct(
     case "kill_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app?.pid) {
         throw new Error(
           "COMPUTER_INVALID_REQUEST: kill_app requires a running app reference from list_apps",
@@ -350,93 +328,41 @@ export async function handleWindowAct(
       const result = await callWindowTool(driver, state, "kill_app", { pid: app.pid }, signal);
       return JSON.stringify(actionEnvelope(result, { app: appName }));
     }
-    case "bring_to_front": {
-      const { target } = requireWindowTarget(driver, state, input);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "bring_to_front",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
-    case "set_value": {
-      const { ref, target } = requireWindowTarget(driver, state, input);
-      if (input.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: cua-driver set_value is background accessibility delivery",
-        );
-      }
-      const element = elementArgs(state, input, ref);
-      if (!element) {
-        throw new Error("COMPUTER_INVALID_REQUEST: elementRef is required for set_value");
-      }
-      const result = await callWindowTool(
-        driver,
-        state,
-        "set_value",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          ...element,
-          value: input.value,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
-    case "invoke_menu": {
-      const { target } = requireWindowTarget(driver, state, input);
-      if (input.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: cua-driver invoke_menu is background accessibility delivery",
-        );
-      }
-      const result = await callWindowTool(
-        driver,
-        state,
-        "invoke_menu",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          path: input.path,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
+    case "bring_to_front":
+    case "set_value":
+    case "invoke_menu":
     case "zoom": {
       const { ref, target } = requireWindowTarget(driver, state, input);
-      resolveObservation(state, input.observationId!, ref);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "zoom",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          x1: input.x1,
-          y1: input.y1,
-          x2: input.x2,
-          y2: input.y2,
-        },
-        signal,
+      const args: Record<string, unknown> = { pid: target.pid, window_id: target.windowId };
+      if (
+        (input.action === "set_value" || input.action === "invoke_menu") &&
+        input.deliveryMode === "foreground"
+      ) {
+        throw new Error(
+          `COMPUTER_UNSUPPORTED_ACTION: cua-driver ${input.action} is background accessibility delivery`,
+        );
+      }
+      if (input.action === "set_value") {
+        const element = elementArgs(state, input, ref);
+        if (!element) {
+          throw new Error("COMPUTER_INVALID_REQUEST: elementRef is required for set_value");
+        }
+        Object.assign(args, element, { value: input.value });
+      } else if (input.action === "invoke_menu") {
+        args.path = input.path;
+      } else if (input.action === "zoom") {
+        resolveObservation(state, input.observationId!, ref);
+        Object.assign(args, { x1: input.x1, y1: input.y1, x2: input.x2, y2: input.y2 });
+      }
+      const result = await callWindowTool(driver, state, input.action, args, signal);
+      return JSON.stringify(
+        input.action === "zoom"
+          ? windowObservation(result, state, ref, { fromZoom: true })
+          : actionEnvelope(result),
       );
-      return JSON.stringify(windowObservation(result, state, ref, { fromZoom: true }));
     }
     case "escalate_scope": {
-      const reason = {
-        ax_tree_pixel_mismatch: EscalationReason.AxTreePixelMismatch,
-        background_delivery_failed: EscalationReason.BackgroundDeliveryFailed,
-        foreground_ineffective: EscalationReason.ForegroundIneffective,
-        no_window_target: EscalationReason.NoWindowTarget,
-        other: EscalationReason.Other,
-      }[input.reason!];
-      const result = await driver.escalateScope(reason, signal);
+      const result = await driver.getSessionState(signal);
       adoptGeneration(state, driver.generation);
       return JSON.stringify({
         ok: true,

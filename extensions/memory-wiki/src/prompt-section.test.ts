@@ -1,4 +1,5 @@
 // Memory Wiki tests cover synchronous guidance and async compiled prompt preparation.
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +10,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  createMemoryWikiCompiledCachePublicationId,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -114,8 +114,8 @@ async function seedCompiledDigest(params: {
       },
     },
   };
-  const publicationId = createMemoryWikiCompiledCachePublicationId();
-  const reservationId = createMemoryWikiCompiledCachePublicationId();
+  const publicationId = randomUUID();
+  const reservationId = randomUUID();
   const parentPublicationId = (await loadMemoryWikiVaultIdentity(params.config.vault.path))
     .compiledCachePublicationId;
   await appendMemoryWikiLog(params.config.vault.path, {
@@ -161,46 +161,6 @@ describe("Memory Wiki prompt section", () => {
     expect(lines.join("\n")).toContain("`memory_search` with `corpus=all`");
     expect(lines.join("\n")).toContain("`memory_get` with `corpus=wiki` or `corpus=all`");
     expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
-  });
-
-  it("stays empty when no wiki or memory-adjacent tools are registered", () => {
-    expect(buildGuidance({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
-  });
-
-  it("prepares a compact compiled digest from SQLite", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-enabled") },
-      context: { includeCompiledDigestPrompt: true },
-    });
-    await seedCompiledDigest({
-      config,
-      claimCount: 8,
-      contradictionCount: 1,
-      pages: [
-        {
-          title: "Alpha",
-          kind: "entity",
-          claimCount: 3,
-          questions: ["Still active?"],
-          contradictions: ["Conflicts with source.beta"],
-          topClaims: [
-            {
-              text: "Alpha uses PostgreSQL for production writes.",
-              confidence: 0.91,
-              freshnessLevel: "fresh",
-            },
-          ],
-        },
-      ],
-    });
-
-    const lines = await createStaticPreparer(config)({ availableTools: new Set() });
-
-    expect(lines.join("\n")).toContain("## Compiled Wiki Snapshot");
-    expect(lines.join("\n")).toContain(
-      "Alpha: entity, 3 claims, 1 open questions, 1 contradiction notes",
-    );
-    expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
   });
 
   it.each([
@@ -334,7 +294,7 @@ describe("Memory Wiki prompt section", () => {
   it("prepares only the invoking agent's compiled digest", async () => {
     const rootDir = path.join(suiteRoot, "agent-digests");
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     } as OpenClawConfig;
     const config = resolveMemoryWikiConfig({
       vault: { scope: "agent", path: rootDir },

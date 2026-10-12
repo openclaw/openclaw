@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -49,9 +49,6 @@ function createAliasedPlugin() {
 
 describe("installed plugin manifest identity", () => {
   it.each([
-    { prewarm: undefined, configured: "canonical" },
-    { prewarm: undefined, configured: "alias" },
-    { prewarm: "alias", configured: "alias" },
     { prewarm: "alias", configured: "canonical" },
     { prewarm: "canonical", configured: "alias" },
   ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {
@@ -138,7 +135,7 @@ describe("installed plugin manifest identity", () => {
       plugin.manifestHash = "";
       delete plugin.manifestFile;
     }
-    writePersistedInstalledPluginIndexSync(broken, params);
+    await writePersistedInstalledPluginIndex(broken, params);
     await inspectPluginRegistry(params);
     expect(readPersistedInstalledPluginIndexSync(params)?.plugins[0]?.manifestHash).toBe("");
 

@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Response } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -104,7 +105,6 @@ const mobileStandaloneSettingsPageRoutes = [
   "worktrees",
   "usage",
   "cron",
-  "tasks",
   "memory-import",
 ] as const satisfies readonly RouteId[];
 
@@ -124,7 +124,6 @@ const responsiveViewports = [
 
 const standaloneHeaderCases = [
   { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
-  { route: "tasks", subtitle: "Background tasks: subagents, automation runs, CLI." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
@@ -193,7 +192,7 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
-  it("keeps agent identity inputs inside their fields at desktop and mobile widths", async () => {
+  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
@@ -204,15 +203,18 @@ suite.define(() => {
 
       for (const viewport of responsiveViewports) {
         await page.setViewportSize(viewport);
-        for (const name of ["Display name", "Emoji"]) {
-          const input = editor.getByRole("textbox", { name, exact: true });
-          await input.focus();
+        for (const [name, control] of [
+          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
+          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
+          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
+        ] as const) {
+          await control.focus();
           await expect
             .poll(
               () =>
-                input.evaluate((element) => {
+                control.evaluate((element) => {
                   const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest("label")!.getBoundingClientRect();
+                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
                   const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
                   return (
                     inputBox.width > 0 &&
@@ -235,8 +237,9 @@ suite.define(() => {
       async ({ context, page: firstPage }) => {
         const errors: string[] = [];
         const failedScripts: string[] = [];
-        const startupScripts: string[] = [];
-        const settingsScripts: string[] = [];
+        const startupResponses: Response[] = [];
+        const settingsResponses: Response[] = [];
+        const stopCapturing: Array<() => void> = [];
         const settingsOnlyCopy = [
           "Global model defaults and provider access for your agents.",
           "Find existing connections or prepare a local model for {agent}.",
@@ -246,7 +249,7 @@ suite.define(() => {
         for (const pathname of ["new", "chat", "settings/model-providers"]) {
           const page = pathname === "new" ? firstPage : await context.newPage();
           const isSettings = pathname === "settings/model-providers";
-          const scripts = isSettings ? settingsScripts : startupScripts;
+          const responses = isSettings ? settingsResponses : startupResponses;
           page.on("pageerror", (error) => errors.push(error.message));
           page.on("console", (message) => {
             if (message.type() === "error") {
@@ -259,19 +262,17 @@ suite.define(() => {
             }
           });
           await installMockGateway(page);
-          // Capture before delivery so copy assertions include every script that can execute.
-          await page.route("**/*", async (route) => {
-            if (route.request().resourceType() !== "script") {
-              await route.fallback();
+          const captureScript = (response: Response) => {
+            if (response.request().resourceType() !== "script") {
               return;
             }
-            const response = await route.fetch();
             if (!response.ok()) {
               failedScripts.push(`${pathname}: ${response.url()} (HTTP ${response.status()})`);
             }
-            scripts.push(await response.text());
-            await route.fulfill({ response });
-          });
+            responses.push(response);
+          };
+          page.on("response", captureScript);
+          stopCapturing.push(() => page.off("response", captureScript));
 
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
@@ -279,17 +280,11 @@ suite.define(() => {
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
-            expect(settingsScripts.join("\n")).toContain(settingsOnlyCopy[0]);
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility Model",
             );
             await openModelSetup(page);
             await page.getByText(/Find existing connections or prepare a local model/).waitFor();
-            expect(settingsScripts.join("\n")).toContain(settingsOnlyCopy[1]);
-          } else {
-            for (const copy of settingsOnlyCopy) {
-              expect(startupScripts.join("\n")).not.toContain(copy);
-            }
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -298,14 +293,20 @@ suite.define(() => {
             });
           }
         }
+        // Observe without intercepting requests; keep documents alive until every
+        // captured body is read, so teardown cannot cancel the work being asserted.
+        stopCapturing.forEach((stop) => stop());
+        const [startupScripts, settingsScripts] = await Promise.all(
+          [startupResponses, settingsResponses].map(async (responses) =>
+            (await Promise.all(responses.map((response) => response.text()))).join("\n"),
+          ),
+        );
         for (const copy of settingsOnlyCopy) {
-          expect(startupScripts.join("\n")).not.toContain(copy);
+          expect(startupScripts).not.toContain(copy);
+          expect(settingsScripts).toContain(copy);
         }
         expect(errors).toEqual([]);
         expect(failedScripts).toEqual([]);
-      },
-      async ({ context }) => {
-        await Promise.all(context.pages().map((page) => page.unrouteAll({ behavior: "wait" })));
       },
     );
   });
@@ -586,7 +587,9 @@ suite.define(() => {
             label.trim(),
           ),
         ).toEqual(["All", "Active", "Paused", "Run history"]);
-        expect(await page.locator(".cron-toolbar__filters wa-radio-group").count()).toBe(0);
+        expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
+          0,
+        );
         expect(await page.locator(".cron-stats").count()).toBe(0);
         expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
         expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([

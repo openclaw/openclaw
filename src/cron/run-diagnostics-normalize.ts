@@ -49,13 +49,6 @@ export function formatUnknownError(error: unknown): string {
   return String(error);
 }
 
-export function normalizeDiagnosticToolName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return normalizeOptionalString(value);
-}
-
 export function normalizeExitCode(value: unknown): number | null | undefined {
   return asFiniteNumber(value) ?? (value === null ? null : undefined);
 }

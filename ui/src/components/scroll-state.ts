@@ -1,31 +1,36 @@
 import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import { observeScrollState, type ScrollState } from "./scroll-state-observer.ts";
 
-export function syncScrollState(element: HTMLElement, horizontal = false) {
-  const size = horizontal ? element.scrollWidth : element.scrollHeight;
-  const viewport = horizontal ? element.clientWidth : element.clientHeight;
-  const position = horizontal ? element.scrollLeft : element.scrollTop;
-  const scrollable = size > viewport + 1;
-  element.dataset.scrollable = String(scrollable);
-  element.dataset.atStart = String(!scrollable || position <= 1);
-  element.dataset.atEnd = String(!scrollable || position + viewport >= size - 1);
+/** Reveal an option without scrollIntoView also moving its popup's ancestors. */
+export function revealInScrollRegion(region: HTMLElement, option: HTMLElement): void {
+  const bounds = region.getBoundingClientRect();
+  const row = option.getBoundingClientRect();
+  if (row.top < bounds.top) {
+    region.scrollTop -= bounds.top - row.top;
+  } else if (row.bottom > bounds.bottom) {
+    region.scrollTop += row.bottom - bounds.bottom;
+  }
 }
 
 class ScrollStateDirective extends AsyncDirective {
   private element: HTMLElement | undefined;
   private horizontal = false;
   private trackScroll = true;
-  private pending = false;
-  private readonly sync = () => {
+  private observation: ReturnType<typeof observeScrollState> | undefined;
+  private readonly publish = (state: ScrollState) => {
     const element = this.element;
-    if (!this.isConnected || !element?.isConnected) {
+    if (!element) {
       return;
     }
-    syncScrollState(element, this.horizontal);
+    for (const key of ["scrollable", "atStart", "atEnd"] as const) {
+      const value = String(state[key]);
+      if (element.dataset[key] !== value) {
+        element.dataset[key] = value;
+      }
+    }
   };
-  private readonly observer =
-    typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(this.sync);
 
   render(_horizontal = false, _trackScroll = true) {
     return nothing;
@@ -35,43 +40,41 @@ class ScrollStateDirective extends AsyncDirective {
     part: ElementPart,
     [horizontal = false, trackScroll = true]: [boolean?, boolean?],
   ) {
-    this.element = part.element instanceof HTMLElement ? part.element : undefined;
-    this.horizontal = horizontal;
-    this.trackScroll = trackScroll;
-    this.schedule();
+    const element = part.element instanceof HTMLElement ? part.element : undefined;
+    if (
+      element !== this.element ||
+      horizontal !== this.horizontal ||
+      trackScroll !== this.trackScroll
+    ) {
+      this.observation?.disconnect();
+      this.observation = undefined;
+      this.element = element;
+      this.horizontal = horizontal;
+      this.trackScroll = trackScroll;
+    }
+    this.connect();
+    this.observation?.schedule();
     return nothing;
   }
 
-  private schedule(): void {
-    if (this.pending || !this.isConnected) {
-      return;
+  private connect(): void {
+    if (this.isConnected && this.element && !this.observation) {
+      this.observation = observeScrollState(
+        this.element,
+        this.publish,
+        this.horizontal,
+        this.trackScroll,
+      );
     }
-    this.pending = true;
-    // Element directives run before children commit. Measure the completed content,
-    // including retained DOM updates, and fence work when its host disconnects.
-    queueMicrotask(() => {
-      this.pending = false;
-      const element = this.element;
-      if (!this.isConnected || !element?.isConnected) {
-        return;
-      }
-      this.observer?.observe(element);
-      if (this.trackScroll) {
-        element.addEventListener("scroll", this.sync);
-      } else {
-        element.removeEventListener("scroll", this.sync);
-      }
-      this.sync();
-    });
   }
 
   protected override disconnected(): void {
-    this.observer?.disconnect();
-    this.element?.removeEventListener("scroll", this.sync);
+    this.observation?.disconnect();
+    this.observation = undefined;
   }
 
   protected override reconnected(): void {
-    this.schedule();
+    this.connect();
   }
 }
 

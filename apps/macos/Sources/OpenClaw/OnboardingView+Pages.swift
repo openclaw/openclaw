@@ -100,7 +100,8 @@ extension OnboardingView {
                     self.connectionChoiceButton(
                         title: "On another computer",
                         badge: nil,
-                        subtitle: self.remoteChoiceSubtitle,
+                        subtitle: Self
+                            .remoteChoiceSubtitle(discoveredGatewayCount: self.gatewayDiscovery.gateways.count),
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
@@ -186,14 +187,7 @@ extension OnboardingView {
     }
 
     private var localGatewaySubtitle: String {
-        guard let probe = localGatewayProbe else {
-            return "Private to this computer. Installs and starts automatically."
-        }
-        return probe.subtitle
-    }
-
-    private var remoteChoiceSubtitle: String {
-        Self.remoteChoiceSubtitle(discoveredGatewayCount: gatewayDiscovery.gateways.count)
+        self.localGatewayProbe?.subtitle ?? "Private to this computer. Installs and starts automatically."
     }
 
     static func remoteChoiceSubtitle(discoveredGatewayCount count: Int) -> String {
@@ -529,14 +523,14 @@ extension OnboardingView {
 
     func isSelectedGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
         guard state.connectionMode == .remote else { return false }
-        return effectivePreferredGatewayID == gateway.stableID
+        return GatewayDiscoveryPreferences.preferredStableID() == gateway.stableID
     }
 
     func connectionChoiceButton(
         title: String,
         badge: String? = nil,
         subtitle: String?,
-        systemImage: String? = nil,
+        systemImage: String,
         monospacedSubtitle: Bool = false,
         selected: Bool,
         action: @escaping () -> Void) -> some View
@@ -547,12 +541,10 @@ extension OnboardingView {
             }
         } label: {
             HStack(alignment: .center, spacing: 12) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                        .frame(width: 26)
-                }
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(width: 26)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(title)
@@ -586,7 +578,11 @@ extension OnboardingView {
     }
 
     func cliPage() -> some View {
-        let detail = "OpenClaw is setting up its Gateway background service on this Mac. " +
+        let bundled = BundledRuntime.isBundledApp
+        let detail = bundled
+            ? "Everything needed to run the Gateway is included in OpenClaw. " +
+            "The app prepares a private copy in your user folder and starts it on this Mac."
+            : "OpenClaw is setting up its Gateway background service on this Mac. " +
             "Published Stable and Beta installs are usually quick. " +
             "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
             "and several gigabytes of free space. No administrator password is required."
@@ -602,27 +598,62 @@ extension OnboardingView {
 
             self.onboardingCard(spacing: 14, padding: 16) {
                 self.installStepRow(
-                    title: "Install OpenClaw",
+                    title: bundled ? "Prepare OpenClaw" : "Install OpenClaw",
                     detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
-                    state: self.installStepStateForInstall,
+                    state: self.installStepStates.install,
                     monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: "Start the background service",
-                    detail: "Runs quietly and starts again after a restart.",
-                    state: self.installStepStateForService)
+                    title: bundled ? "Start the Gateway" : "Start the background service",
+                    detail: bundled
+                        ? (GatewayProcessManager.shared.gatewayHosting == .service
+                            ? "Keeps running after you quit OpenClaw."
+                            : "Runs while OpenClaw is open.")
+                        : "Runs quietly and starts again after a restart.",
+                    state: self.installStepStates.service)
                 self.installStepRow(
-                    title: "Ready for the next step",
-                    detail: "Once the service answers, you’ll connect your AI.",
+                    title: bundled ? "Ready" : "Ready for the next step",
+                    detail: "Once the Gateway answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
+
+                if bundled {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Keep OpenClaw running when the app is closed", isOn: Binding(
+                            get: { GatewayProcessManager.shared.gatewayHosting == .service },
+                            set: { self.setKeepGatewayRunning($0) }))
+                            .disabled(self.installingCLI || self.updatingGatewayHosting ||
+                                !GatewayProcessManager.shared.keepGatewayRunningAvailable)
+                        Text(
+                            "Runs the Gateway as a background service so channels and automations " +
+                                "keep working after you quit OpenClaw.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if self.updatingGatewayHosting {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Updating how the Gateway runs…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let gatewayHostingError {
+                            Text(gatewayHostingError)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
 
                 if self.installFailed {
                     OnboardingErrorCard(
                         title: self.cliExecutableReady
                             ? "The Gateway didn’t start"
-                            : "OpenClaw installation failed",
-                        message: self.cliStatus ?? "The installer did not finish.",
+                            : (bundled ? "OpenClaw preparation failed" : "OpenClaw installation failed"),
+                        message: self.cliStatus ?? "OpenClaw setup did not finish.",
                         docsSlug: "platforms/mac/bundled-gateway",
                         retryTitle: "Try again")
                     {
@@ -647,22 +678,13 @@ extension OnboardingView {
 
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
-    private var installStepStateForInstall: InstallStepState {
+    private var installStepStates: (install: InstallStepState, service: InstallStepState) {
         Self.cliInstallStepStates(
             executableReady: self.cliExecutableReady,
             gatewayReady: self.cliInstalled,
             statusKnown: self.cliStatusKnown,
             installing: self.installingCLI,
-            phase: self.cliInstallPhase).install
-    }
-
-    private var installStepStateForService: InstallStepState {
-        Self.cliInstallStepStates(
-            executableReady: self.cliExecutableReady,
-            gatewayReady: self.cliInstalled,
-            statusKnown: self.cliStatusKnown,
-            installing: self.installingCLI,
-            phase: self.cliInstallPhase).service
+            phase: self.cliInstallPhase)
     }
 
     static func cliInstallStepStates(
@@ -764,7 +786,7 @@ extension OnboardingView {
                     title: "Open the menu bar panel",
                     subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
                     systemImage: "bubble.left.and.bubble.right")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
@@ -782,7 +804,7 @@ extension OnboardingView {
                     subtitle: "Open the compact chat panel; the agent can show previews " +
                         "and richer visuals in Canvas.",
                     systemImage: "rectangle.inset.filled.and.person.filled")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Give your agent more powers",
                     subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
                     systemImage: "sparkles",

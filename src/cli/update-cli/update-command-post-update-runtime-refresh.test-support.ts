@@ -1,7 +1,15 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
+import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import {
+  createManagedServiceIdentityFixture,
+  finishSuccessfulPackageSwitch,
+} from "./update-command-post-update.test-support.js";
+import * as rollbackModule from "./update-command-rollback.js";
+import type * as serviceOperations from "./update-command-service.js";
 
 type RuntimeRefreshMocks = {
   readService: Mock<typeof import("../../daemon/service.js").readGatewayServiceState>;
@@ -25,6 +33,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
     { mode: "no-restart", changed: false, activate: false },
     { mode: "not-running", changed: false, activate: false },
     { mode: "absent", changed: false, activate: false },
+    { mode: "operator-restart", changed: false, activate: false },
   ] as const)(
     "activates current-core runtime refresh exactly once ($mode, changed=$changed)",
     async ({ mode, changed, activate }) => {
@@ -34,13 +43,18 @@ export function registerCurrentCoreRuntimeRefreshTests(
       params.result.status = "skipped";
       params.result.reason = "already-current";
       params.result.before = params.result.after;
-      params.serviceRuntimeRefreshRequired = mode !== "healthy";
+      params.serviceRuntimeRefreshRequired = mode !== "healthy" && mode !== "operator-restart";
       params.packageUpdateNodeRunner = "/supported-node/bin/node";
       params.shouldRestart = mode !== "no-restart";
       params.preManagedServiceStop!.stopped = false;
       params.preManagedServiceStop!.running = mode !== "not-running" && mode !== "absent";
       if (mode === "absent") {
         params.preManagedServiceStop!.serviceUpdateVerdict = { kind: "absent" };
+      }
+      const restartCommand = "sudo systemctl restart openclaw-production.service";
+      if (mode === "operator-restart") {
+        params.preManagedServiceStop!.serviceMutationAllowed = false;
+        params.preManagedServiceStop!.serviceMutationSkipMessage = `System-scope Gateway requires an operator restart. Run: ${restartCommand}`;
       }
       const order: string[] = [];
       mocks.readService.mockResolvedValue({
@@ -89,6 +103,11 @@ export function registerCurrentCoreRuntimeRefreshTests(
         expect(mocks.restart.mock.calls[0]?.[0].refreshServiceEnv).toBe(true);
         expect(mocks.restart.mock.calls[0]?.[0].nodeRunner).toBe("/supported-node/bin/node");
       }
+      if (mode === "operator-restart") {
+        expect(mocks.stop).not.toHaveBeenCalled();
+        const run = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+        expect(renderUpdateRunReport(run!).markdown).toContain(restartCommand);
+      }
     },
   );
 
@@ -132,4 +151,82 @@ export function registerCurrentCoreRuntimeRefreshTests(
     expect(mocks.stop).toHaveBeenCalledOnce();
     expect(mocks.restart).not.toHaveBeenCalled();
   });
+}
+
+export function registerServiceStartRefusalFinalizationTests({
+  makeTempDir,
+  mocks,
+}: {
+  makeTempDir: (prefix: string) => string;
+  mocks: {
+    readServiceState: Mock;
+    restartService: Mock<typeof serviceOperations.maybeRestartService>;
+    printResult: Mock;
+  };
+}) {
+  it.for(["restart", "revalidation"] as const)(
+    "keeps the activated candidate when its service definition refuses startup (%s)",
+    async (phase, { onTestFinished }) => {
+      const identity = createManagedServiceIdentityFixture(makeTempDir("finalizer-service-hold-"));
+      onTestFinished(identity.restore);
+      const root = identity.home;
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      const restorePackage = vi.fn();
+      const complete = vi.fn(async () => undefined);
+      if (phase === "revalidation") {
+        mocks.readServiceState.mockRejectedValueOnce(
+          new ServiceStartRefusalError({
+            reason: "masked",
+            message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+          }),
+        );
+        const actual = await vi.importActual<typeof serviceOperations>(
+          "./update-command-service.js",
+        );
+        mocks.restartService.mockImplementationOnce(actual.maybeRestartService);
+      } else {
+        mocks.restartService.mockResolvedValueOnce("reconciliation-pending");
+      }
+
+      const failure = await finishSuccessfulPackageSwitch(
+        {
+          packageRoot: root,
+          restartEnvironment: process.env,
+          stoppedForUpdate: phase === "revalidation",
+        },
+        { packageTransaction: { backupRoot: root, rollback: restorePackage, complete } },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(rollback).not.toHaveBeenCalled();
+      expect(restorePackage).not.toHaveBeenCalled();
+      expect(failure).toBeUndefined();
+      expect(mocks.restartService).toHaveBeenCalledOnce();
+      if (phase === "revalidation") {
+        expect(mocks.restartService).toHaveBeenCalledWith(
+          expect.objectContaining({
+            shouldRestart: false,
+            serviceMutationSkipMessage: expect.stringMatching(
+              /SERVICE-DEFINITION.*unmask.*openclaw gateway start/,
+            ),
+          }),
+        );
+        expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
+          expect.objectContaining({
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("SERVICE-DEFINITION"),
+            }),
+          }),
+        );
+      }
+      expect(complete).toHaveBeenCalledOnce();
+      expect(mocks.printResult).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "ok", root }),
+        expect.anything(),
+        expect.anything(),
+      );
+    },
+  );
 }

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   loadApnsRegistrations,
   type ApnsRegistration,
@@ -37,12 +38,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("./state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic/coordinator",
-    keepAlive: false,
-  }),
-}));
 vi.mock("./device-pairing-store.js", () => ({
   loadPairedDevicePairingStoreRecordFromDatabase: mocks.native,
 }));
@@ -51,7 +46,8 @@ vi.mock("./push-apns-store-transaction.js", () => ({
   clearApnsRegistrationFromDatabase: mocks.native,
   nextApnsRegistrationVersion: mocks.native,
 }));
-vi.mock("./push-apns.relay.js", () => ({
+// mock-isolation: Worker-read forwarding must not decode or validate APNs rows on the host.
+vi.mock("./push-apns-relay-url.js", () => ({
   normalizeApnsRelayBaseUrl: mocks.native,
   normalizePersistedApnsRelayBaseUrl: mocks.native,
 }));
@@ -78,34 +74,6 @@ afterEach(() => {
 });
 
 describe("APNs registration worker reads", () => {
-  it("delegates a single lookup without host SQLite", async () => {
-    mocks.execute.mockResolvedValue(registration);
-    await expect(loadApnsRegistration(" device-a ", "/synthetic/apns-a")).resolves.toEqual(
-      registration,
-    );
-    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-      type: "apns.registration.read",
-      input: "device-a",
-    });
-    expect(mocks.native).not.toHaveBeenCalled();
-  });
-  it("delegates a batch lookup without host SQLite", async () => {
-    mocks.execute.mockResolvedValue(new Map([["device-a", registration]]));
-    await expect(
-      loadApnsRegistrations(
-        [" device-a ", "missing", "device-a", "", "x".repeat(257)],
-        "/synthetic/apns-a",
-      ),
-    ).resolves.toEqual([
-      { nodeId: " device-a ", registration },
-      { nodeId: "device-a", registration },
-    ]);
-    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-      type: "apns.registrations.read",
-      input: ["device-a", "missing"],
-    });
-    expect(mocks.native).not.toHaveBeenCalled();
-  });
   it("does not create storage for blank single or invalid-only batch inputs", async () => {
     await expect(loadApnsRegistration(" \t ", "/synthetic/unused")).resolves.toBeNull();
     await expect(
@@ -114,21 +82,33 @@ describe("APNs registration worker reads", () => {
     expect(mocks.execute).not.toHaveBeenCalled();
     expect(mocks.native).not.toHaveBeenCalled();
   });
-  it("retains the single lookup's nonempty overlong-ID behavior", async () => {
-    const nodeId = "x".repeat(257);
-    mocks.execute.mockResolvedValue(null);
-    await expect(loadApnsRegistration(nodeId, "/synthetic/apns-a")).resolves.toBeNull();
+  it.each([
+    { nodeId: "x".repeat(257), failure: undefined },
+    { nodeId: "device-a", failure: new Error("invalid APNs registration row") },
+  ])("keeps the single lookup's worker result for $nodeId", async ({ nodeId, failure }) => {
+    if (failure) {
+      mocks.execute.mockRejectedValue(failure);
+    } else {
+      mocks.execute.mockResolvedValue(null);
+    }
+    const pending = loadApnsRegistration(` ${nodeId} `, "/synthetic/apns-a");
+    if (failure) {
+      await expect(pending).rejects.toBe(failure);
+    } else {
+      await expect(pending).resolves.toBeNull();
+    }
     expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
       type: "apns.registration.read",
       input: nodeId,
     });
+    expect(mocks.native).not.toHaveBeenCalled();
   });
   it("captures the original inputs and relative state path before waiting", async () => {
     const ready = createDeferredCore<Map<string, ApnsRegistration>>();
     mocks.execute.mockReturnValue(ready.promise);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue("/synthetic/original");
     vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-a");
-    const inputs = [" device-a ", "device-a"];
+    const inputs = [" device-a ", "missing", "device-a", "", "x".repeat(257)];
     const pending = loadApnsRegistrations(inputs, "relative-state");
     inputs.splice(0, inputs.length, "replacement");
     cwd.mockReturnValue("/synthetic/replacement");
@@ -141,11 +121,45 @@ describe("APNs registration worker reads", () => {
     expect(mocks.execute.mock.calls[0]?.[0].admission.databasePath).toBe(
       path.join("/synthetic/original/relative-state", "state/openclaw.sqlite"),
     );
-  });
-  it("keeps a worker rejection without a synchronous fallback", async () => {
-    const failure = new Error("invalid APNs registration row");
-    mocks.execute.mockRejectedValue(failure);
-    await expect(loadApnsRegistration("device-a", "/synthetic/apns-a")).rejects.toBe(failure);
+    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
+      type: "apns.registrations.read",
+      input: ["device-a", "missing"],
+    });
     expect(mocks.native).not.toHaveBeenCalled();
   });
+});
+
+describe("APNs registration worker cleanup", () => {
+  it.each([false, new Error("cleanup refused")])(
+    "awaits conditional cleanup without host SQLite: %s",
+    async (result) => {
+      const ready = createDeferredCore<boolean>();
+      void ready.promise.catch(() => {});
+      mocks.execute.mockReturnValue(ready.promise);
+      const observed = { ...registration };
+      const completed = vi.fn();
+      const pending = clearApnsRegistrationIfCurrent({
+        nodeId: " device-a ",
+        registration: observed,
+        baseDir: "/synthetic/apns-a",
+      });
+      const outcome = pending.then(completed, (error: unknown) => error);
+      observed.updatedAtMs += 1;
+      expect(completed).not.toHaveBeenCalled();
+      if (result instanceof Error) {
+        ready.reject(result);
+        expect(await outcome).toBe(result);
+        expect(completed).not.toHaveBeenCalled();
+      } else {
+        ready.resolve(result);
+        await outcome;
+        expect(completed).toHaveBeenCalledWith(result);
+      }
+      expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
+        type: "apns.registration.clearIfCurrent",
+        input: { nodeId: "device-a", registration, nowMs: expect.any(Number) },
+      });
+      expect(mocks.native).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,4 +1,3 @@
-// Session goal state tracks objective progress and token budgets in the session store.
 import {
   recordSessionGoalChanged,
   type SessionStateActorType,
@@ -10,7 +9,8 @@ import {
   buildUpdatedSessionGoalObjective,
   buildUpdatedSessionGoalStatus,
 } from "./goals-transitions.js";
-import { loadSessionEntryReadOnly, patchSessionEntryCore } from "./session-accessor.js";
+import { patchSessionEntryCore } from "./session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 type SessionGoalSnapshot = {
@@ -44,10 +44,6 @@ function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
-function cloneGoal(goal: SessionGoal): SessionGoal {
-  return { ...goal };
-}
-
 function recordGoalChange(
   options: SessionGoalStoreOptions,
   entry: SessionEntry,
@@ -68,10 +64,6 @@ export function resolveSessionGoalDisplayState(
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
   return accountSessionGoalUsage(entry, nowMs(now), options);
-}
-
-function goalsEqual(a: SessionGoal | undefined, b: SessionGoal | undefined): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
@@ -117,21 +109,28 @@ export async function getSessionGoal(
   const now = nowMs(options.now);
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
-    const entry =
-      loadSessionEntryReadOnly({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
-      options.fallbackEntry;
-    const projected = entry
-      ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
-      : undefined;
-    return projected ? { status: "found", goal: projected } : { status: "missing" };
+    return withSessionEntryReadOnlyInWorker(
+      { sessionKey: options.sessionKey, storePath: options.storePath },
+      () => {},
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value ?? options.fallbackEntry;
+        const goal = entry
+          ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
+          : undefined;
+        return goal ? { status: "found", goal } : { status: "missing" };
+      },
+    );
   }
   let goal: SessionGoal | undefined;
   const result = await patchSessionEntryCore(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountSessionGoalUsage(entry, now);
-      goal = accounted ? cloneGoal(accounted) : undefined;
-      if (!accounted || goalsEqual(accounted, entry.goal)) {
+      goal = accounted ? { ...accounted } : undefined;
+      if (!accounted || JSON.stringify(accounted) === JSON.stringify(entry.goal)) {
         return null;
       }
       return { goal: accounted };
@@ -167,28 +166,17 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
     throw new Error("session not found");
   }
   await recordGoalChange(options, result, "goal created");
-  return cloneGoal(created);
+  return { ...created };
 }
 
 export async function updateSessionGoalStatus(
   options: UpdateSessionGoalStatusOptions,
 ): Promise<SessionGoal> {
-  const now = nowMs(options.now);
-  let updated: SessionGoal | undefined;
-  let foundSession = false;
-  const result = await patchSessionEntryCore(
-    { sessionKey: options.sessionKey, storePath: options.storePath },
-    (entry) => {
-      foundSession = true;
-      updated = buildUpdatedSessionGoalStatus(entry, options, now);
-      return { goal: updated };
-    },
+  return updateSessionGoal(
+    options,
+    (entry, now) => buildUpdatedSessionGoalStatus(entry, options, now),
+    (goal) => `goal status changed to ${goal.status}`,
   );
-  if (!result || !updated) {
-    throw new Error(foundSession ? "goal not found" : "session not found");
-  }
-  await recordGoalChange(options, result, `goal status changed to ${updated.status}`);
-  return cloneGoal(updated);
 }
 
 export async function updateSessionGoalObjective(
@@ -198,6 +186,18 @@ export async function updateSessionGoalObjective(
   if (!objective) {
     throw new Error("objective required");
   }
+  return updateSessionGoal(
+    options,
+    (entry, now) => buildUpdatedSessionGoalObjective(entry, objective, now),
+    () => "goal objective changed",
+  );
+}
+
+async function updateSessionGoal(
+  options: SessionGoalStoreOptions,
+  update: (entry: SessionEntry, now: number) => SessionGoal,
+  summarize: (goal: SessionGoal) => string,
+): Promise<SessionGoal> {
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
@@ -205,15 +205,15 @@ export async function updateSessionGoalObjective(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       foundSession = true;
-      updated = buildUpdatedSessionGoalObjective(entry, objective, now);
+      updated = update(entry, now);
       return { goal: updated };
     },
   );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
-  await recordGoalChange(options, result, "goal objective changed");
-  return cloneGoal(updated);
+  await recordGoalChange(options, result, summarize(updated));
+  return { ...updated };
 }
 
 export async function clearSessionGoal(options: SessionGoalStoreOptions): Promise<boolean> {

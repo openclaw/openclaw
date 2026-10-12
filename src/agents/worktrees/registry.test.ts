@@ -5,25 +5,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import {
-  clearRegistryWorktreeProvisionedChunks,
-  deleteRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
-  findLiveRegistryWorktreeByOwner,
-  findLiveRegistryWorktreeByPath,
-  getRegistryWorktree,
+  prepareWorktreeRegistryGuard,
+} from "./registry-read.js";
+import {
+  abortWorktreeRemovalRow,
+  claimWorktreeRemovalRow,
+  clearRegistryWorktreeProvisionedChunks,
+  createWorktreeRemovalClaimsGuard,
+  deleteRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
-  insertRegistryWorktreeProvisionedChunk,
   insertRegistryWorktree,
   listLegacyRegistryWorktreesForMigration,
-  listRegistryWorktrees,
   listRegistryWorktreesForMigration,
   updateRegistryWorktree,
 } from "./registry.js";
+import {
+  findLiveRegistryWorktreeByOwner,
+  findLiveRegistryWorktreeByPath,
+  getRegistryWorktree,
+  listRegistryWorktrees,
+} from "./registry.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 function isolatedWorktreeRecord(root: string): ManagedWorktreeRecord {
@@ -53,54 +63,78 @@ describe("managed worktree registry", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("keeps explicit-state writes independent of a read-only ambient database", () => {
+  it("checks every captured removal claim in the current database generation", async () => {
+    const token = "synthetic-shared-removal-token";
+    for (const id of ["first", "second", "unrelated"]) {
+      await insertRegistryWorktree(env, { ...isolatedWorktreeRecord(root), id });
+      await claimWorktreeRemovalRow(env, {
+        worktreeId: id,
+        token,
+        pid: process.pid,
+        startTime: null,
+        now: 1,
+      });
+    }
+    const assertClaims = createWorktreeRemovalClaimsGuard(env, ["first", "second", "first"], token);
+    expect(assertClaims).not.toThrow();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    expect(assertClaims).not.toThrow();
+    await abortWorktreeRemovalRow(env, "second", token);
+    expect(assertClaims).toThrow("Worktree removal claim changed");
+  });
+
+  it("keeps explicit-state writes independent of a read-only ambient database", async () => {
     const ambient = openOpenClawStateDatabase();
     const record = isolatedWorktreeRecord(root);
     const chunk = { worktreeId: record.id, path: "sample.txt", chunkIndex: 0 };
     const bytes = Buffer.from("synthetic snapshot bytes");
     ambient.db.exec("PRAGMA query_only = ON");
     try {
-      insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
+      await insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
       expect(getRegistryWorktree(env, record.id)).toEqual(record);
-      insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
-      expect(Buffer.from(getRegistryWorktreeProvisionedChunk(env, chunk)!)).toEqual(bytes);
-      clearRegistryWorktreeProvisionedChunks(env, record.id);
-      expect(getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
-      insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
-      updateRegistryWorktree(env, record.id, { lastActiveAt: 20 });
+      await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+      expect(Buffer.from((await getRegistryWorktreeProvisionedChunk(env, chunk))!)).toEqual(bytes);
+      await clearRegistryWorktreeProvisionedChunks(env, record.id);
+      expect(await getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
+      await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: 20 });
       expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(20);
-      deleteRegistryWorktree(env, record.id);
+      await deleteRegistryWorktree(env, record.id);
       expect(getRegistryWorktree(env, record.id)).toBeUndefined();
-      expect(getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
+      expect(await getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
       expect(listRegistryWorktrees(process.env)).toEqual([]);
     } finally {
       ambient.db.exec("PRAGMA query_only = OFF");
     }
   });
 
-  it("rolls back explicit-state snapshot deletion when deleting its worktree fails", () => {
+  it("rolls back explicit-state snapshot deletion when deleting its worktree fails", async () => {
     const record = isolatedWorktreeRecord(root);
     const chunk = { worktreeId: record.id, path: "sample.txt", chunkIndex: 0 };
     const bytes = Buffer.from("preserved snapshot bytes");
-    insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
-    insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+    await insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
+    await insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
     const { db } = openOpenClawStateDatabase({ env });
     db.exec(`
-      CREATE TEMP TRIGGER registry_delete_fault BEFORE DELETE ON worktrees
+      CREATE TRIGGER registry_delete_fault BEFORE DELETE ON worktrees
       WHEN OLD.id = 'isolated'
       BEGIN SELECT RAISE(ABORT, 'synthetic worktree deletion failure'); END;
     `);
 
-    expect(() => deleteRegistryWorktree(env, record.id)).toThrow(
+    await expect(deleteRegistryWorktree(env, record.id)).rejects.toThrow(
       "synthetic worktree deletion failure",
     );
     expect(getRegistryWorktree(env, record.id)).toEqual(record);
-    expect(Buffer.from(getRegistryWorktreeProvisionedChunk(env, chunk) ?? [])).toEqual(bytes);
+    expect(Buffer.from((await getRegistryWorktreeProvisionedChunk(env, chunk)) ?? [])).toEqual(
+      bytes,
+    );
   });
 
   it("inspects absent legacy worktrees without creating the state database", async () => {
@@ -109,7 +143,29 @@ describe("managed worktree registry", () => {
     await expect(fs.stat(env.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("persists, orders, updates, and deletes worktree rows through Kysely", () => {
+  it("keeps retirement preparation read-only and reaps dead consumers when deleting the snapshot", async () => {
+    const record = { ...isolatedWorktreeRecord(root), removedAt: 20 };
+    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
+    const { db } = openOpenClawStateDatabase({ env });
+    const scope = `worktree-run:${record.id}`;
+    db.prepare(`
+      INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at)
+      VALUES (?, 'dead-consumer', 'dead-owner', ?, 1, 1)
+    `).run(scope, JSON.stringify({ pid: 2_147_483_647, starttime: 4242 }));
+    const assertRetirement = await prepareWorktreeRegistryGuard(
+      captureOpenClawStateWorkerContext({ env }),
+      { predicates: [{ kind: "snapshot-retirement", record }] },
+    );
+    assertRetirement();
+    expect(db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?").all(scope)).toEqual([
+      { lease_key: "dead-consumer" },
+    ]);
+    await deleteRegistryWorktree(env, record.id, { expectedRetired: record });
+    expect(getRegistryWorktree(env, record.id)).toBeUndefined();
+    expect(db.prepare("SELECT lease_key FROM state_leases WHERE scope = ?").all(scope)).toEqual([]);
+  });
+
+  it("persists, orders, updates, and deletes worktree rows through Kysely", async () => {
     const record: ManagedWorktreeRecord = {
       id: "first",
       name: "task",
@@ -123,8 +179,8 @@ describe("managed worktree registry", () => {
       createdAt: 10,
       lastActiveAt: 10,
     };
-    insertRegistryWorktree(env, record, { provisionedPaths: [".env.local"] });
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, record, { provisionedPaths: [".env.local"] });
+    await insertRegistryWorktree(env, {
       ...record,
       id: "second",
       name: "task-2",
@@ -143,10 +199,10 @@ describe("managed worktree registry", () => {
       ownerKind: "workboard",
       ownerId: "card-1",
     });
-    expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
-    expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
+    expect(await getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
 
-    updateRegistryWorktree(env, "first", {
+    await updateRegistryWorktree(env, "first", {
       repositoryIdentity: {
         repoRoot: path.join(root, "rebound-repo"),
         repoFingerprint: "fedcba9876543210",
@@ -164,11 +220,11 @@ describe("managed worktree registry", () => {
       snapshotRef: "refs/openclaw/snapshots/first",
     });
     expect(findLiveRegistryWorktreeByPath(env, record.path)).toBeUndefined();
-    expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
-    expect(getRegistryWorktreeProvisionedState(env, "first")).toEqual([
+    expect(await getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
+    expect(await getRegistryWorktreeProvisionedState(env, "first")).toEqual([
       { path: ".env.local", mode: 0o600, chunks: 1 },
     ]);
-    insertRegistryWorktreeProvisionedChunk(env, {
+    await insertRegistryWorktreeProvisionedChunk(env, {
       worktreeId: "first",
       path: ".env.local",
       chunkIndex: 0,
@@ -176,18 +232,18 @@ describe("managed worktree registry", () => {
     });
     expect(
       Buffer.from(
-        getRegistryWorktreeProvisionedChunk(env, {
+        (await getRegistryWorktreeProvisionedChunk(env, {
           worktreeId: "first",
           path: ".env.local",
           chunkIndex: 0,
-        })!,
+        }))!,
       ).toString(),
     ).toBe("snapshot");
 
-    deleteRegistryWorktree(env, "first");
+    await deleteRegistryWorktree(env, "first");
     expect(getRegistryWorktree(env, "first")).toBeUndefined();
     expect(
-      getRegistryWorktreeProvisionedChunk(env, {
+      await getRegistryWorktreeProvisionedChunk(env, {
         worktreeId: "first",
         path: ".env.local",
         chunkIndex: 0,
@@ -197,10 +253,10 @@ describe("managed worktree registry", () => {
     openOpenClawStateDatabase({ env })
       .db.prepare("UPDATE worktrees SET provisioned_paths_json = ? WHERE id = ?")
       .run("not-json", "second");
-    expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
   });
 
-  it("keeps record reads bounded when a worktree has a large provisioning manifest", () => {
+  it("keeps record reads bounded when a worktree has a large provisioning manifest", async () => {
     const record: ManagedWorktreeRecord = {
       id: "provisioned",
       name: "provisioned",
@@ -220,7 +276,7 @@ describe("managed worktree registry", () => {
       { length: 1_000 },
       (_, index) => `local/settings/component-${index}.json`,
     );
-    insertRegistryWorktree(env, record, { provisionedPaths });
+    await insertRegistryWorktree(env, record, { provisionedPaths });
     const counter = trackSqliteStatementExecutions(
       openOpenClawStateDatabase({ env }).db,
       ["records"],
@@ -235,12 +291,15 @@ describe("managed worktree registry", () => {
     } finally {
       counter.restore();
     }
-    expect(getRegistryWorktreeProvisionedPaths(env, record.id)).toEqual(provisionedPaths);
+    expect(await getRegistryWorktreeProvisionedPaths(env, record.id)).toEqual(provisionedPaths);
   });
 
-  it("adds the provisioned-path ledger to an existing worktree registry", () => {
+  it("adds the provisioned-path ledger to an existing worktree registry", async () => {
     const databasePath = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    await fs.rename(databasePath, `${databasePath}.template`);
+    await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`
@@ -251,7 +310,7 @@ describe("managed worktree registry", () => {
     `);
     legacy.close();
 
-    expect(getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
+    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
     const database = openOpenClawStateDatabase({ env }).db;
     const columns = database.prepare("PRAGMA table_info(worktrees)").all() as Array<{
       name?: unknown;

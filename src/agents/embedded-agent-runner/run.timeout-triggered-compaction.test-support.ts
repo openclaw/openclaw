@@ -67,19 +67,19 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     fixture = session;
     const successor = {
       ...session.runParams.sessionTarget,
-      sessionId: "timeout-rotated-session",
+      sessionId: `${session.runParams.sessionId}-timeout-rotated`,
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "timeout recovery complete" }]);
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (params) => {
         params.onUserMessagePersisted?.(makeUserMessage("hello", 1));
-        return makeAttemptResult({
+        return session.makeAttemptResult({
           timedOut: true,
           lastAssistant: { usage: { input: 160_000 } } as never,
         });
       })
       .mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           promptError: null,
           sessionIdUsed: successor.sessionId,
           sessionFileUsed: successor.sessionKey,
@@ -112,7 +112,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).not.toBe(session.runParams.prompt);
     const compactParams = mockedCompactDirect.mock.calls[0]?.[0] as CompactParams | undefined;
     expect(compactParams).toMatchObject({
-      sessionId: "test-session",
+      sessionId: session.runParams.sessionId,
       tokenBudget: 200_000,
       force: true,
       compactionTarget: "budget",
@@ -145,7 +145,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
         }),
       ).toBe(true);
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-      return makeAttemptResult({
+      return session.makeAttemptResult({
         timedOut: true,
         lastAssistant: { usage: { input: 160_000 } } as never,
       });
@@ -210,7 +210,9 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
-      config: { agents: { defaults: { agentRuntime: { id: "codex" } } } },
+      config: {
+        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+      },
       runId: "forced-unlocked-codex-timeout-owner",
     }).finally(clearAgentHarnesses);
 
@@ -232,7 +234,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       mode: "api-key",
     }));
     mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
+      session.makeAttemptResult({
         timedOut: true,
         aborted: true,
         lastAssistant: { usage: { input: 150_000 } } as never,

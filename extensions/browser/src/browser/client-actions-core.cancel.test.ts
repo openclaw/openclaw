@@ -26,10 +26,11 @@ import {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
+  browserConsoleMessages,
   browserNavigate,
+  browserPdfSave,
   browserScreenshotAction,
-} from "./client-actions-core.js";
-import { browserConsoleMessages, browserPdfSave } from "./client-actions-observe.js";
+} from "./client-actions.js";
 import {
   browserCloseTab,
   browserDoctor,

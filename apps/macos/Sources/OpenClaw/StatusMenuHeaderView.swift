@@ -213,13 +213,8 @@ struct StatusMenuHeaderView: View {
         }
         if self.state.connectionMode == .remote {
             let presentation = GatewayConnectionPresentation(state: self.controlChannel.state)
-            switch presentation.tone {
-            case .healthy:
-                break
-            case .transient:
-                lines.append((presentation.generalSubtitle, nil, .orange))
-            case .attention:
-                lines.append((presentation.generalSubtitle, nil, .red))
+            if presentation.tone != .healthy {
+                lines.append((presentation.generalSubtitle, nil, presentation.tone == .transient ? .orange : .red))
             }
         }
 

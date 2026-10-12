@@ -104,12 +104,9 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
 }
 
 /** Removes stale compiled bundled plugin path records from an install record map. */
-export function pruneStaleLocalBundledPluginInstallRecords(params: {
-  installRecords: Record<string, PluginInstallRecord>;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  bundled?: ReadonlyMap<string, BundledPluginSource>;
-}): {
+export function pruneStaleLocalBundledPluginInstallRecords(
+  params: Parameters<typeof listStaleLocalBundledPluginInstallRecords>[0],
+): {
   records: Record<string, PluginInstallRecord>;
   stale: StaleLocalBundledPluginInstallRecord[];
 } {

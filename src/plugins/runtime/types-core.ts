@@ -1,13 +1,12 @@
-// Core runtime types define system, config, and task helper contracts for plugins.
+import type { StopReason } from "../../../packages/llm-core/src/types.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
-import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
+import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
-import type { PluginRuntimeTasks } from "./runtime-tasks.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
@@ -24,6 +23,8 @@ type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "s
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
+  /** Revalidate caller authority at guarded publication; accepted writes still settle. */
+  assertCurrent?: () => void;
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
   unsetPaths?: string[][];
@@ -76,6 +77,12 @@ type RuntimeSessionStoreReadParams = {
 };
 type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
   readOnly?: boolean;
+  /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+  sessionKeys?: readonly string[];
+  /** Set false to skip derived participant identities and counts when reading metadata. */
+  includeParticipants?: boolean;
+  /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+  captureSource?: (assertCurrent: () => void) => void;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -268,7 +275,10 @@ export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
   execution: {
-    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    /**
+     * Fresh completion through the configured agent runtime with no supplied tools.
+     * Agents API may retain service-owned helpers; it cannot guarantee zero tools.
+     */
     mode: "isolated-agent-runtime";
     /** Exact credential owner. Requires host-granted plugin policy. */
     authProfileId?: string;
@@ -305,7 +315,7 @@ export type LlmCompleteResult = {
   /** Concrete model identity returned by the provider, when available. */
   responseModel?: string;
   /** Provider terminal reason for direct completions, when available. */
-  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  stopReason?: StopReason;
   agentId: string;
   usage: LlmCompleteUsage;
   execution: LlmCompleteExecution;
@@ -331,6 +341,8 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
+  readonly capabilities?: readonly string[];
   decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
@@ -384,25 +396,56 @@ export type PluginRuntimeCore = {
      * registered backend, stored credential mode) so opted-in callers can
      * budget timeouts for the run that will actually execute.
      */
+    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Removed at the next Plugin SDK major. */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
-    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
+    ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
+      getSessionEntryAsync: (
+        params: RuntimeSessionStoreReadParams,
+      ) => Promise<RuntimeSessionEntry | undefined>;
+      /** Complete public entry for a visible current ID in the selected physical store. */
+      getSessionEntryByIdAsync: (
+        params: Omit<RuntimeSessionStoreReadParams, "sessionKey"> & {
+          sessionId: string;
+          /** Newest normalized-ID match; omitted preserves exact-ID-first listing order. */
+          orderBy?: "updatedAt";
+        },
+      ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Removed at the next Plugin SDK major. */
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
+      /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
+      listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
+      createSessionEntryListReader: (params: {
+        agentId: string;
+        storePath: string;
+        env?: NodeJS.ProcessEnv;
+      }) => Promise<
+        () => Promise<{
+          entries: RuntimeSessionStoreEntrySummary[];
+          assertCurrent: () => void;
+        }>
+      >;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
+      prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       runWithWorkAdmission: <T>(
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
+      /** @deprecated Use prepareSessionEntryPatch; removed in the next Plugin SDK major. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -515,16 +558,21 @@ export type PluginRuntimeCore = {
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    /** Data-only worker store; operations retain this runtime and optional action authority. */
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority?: import("../../plugin-state/plugin-state-store.types.js").PluginStateActionAuthority,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
     /**
-     * @deprecated Use openKeyedStore and await its operations. The synchronous
-     * compatibility adapter remains through the next Plugin SDK major.
+     * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
+     * compatibility adapter will be removed in the next Plugin SDK major.
      */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
-    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+    ) => import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
       TCompletedMetadata
@@ -534,7 +582,7 @@ export type PluginRuntimeCore = {
         CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
         "queue"
       > & {
-        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+        queue?: import("../../channels/message/ingress-queue.types.js").ChannelIngressQueue<
           TPayload,
           TMetadata,
           TCompletedMetadata
@@ -544,7 +592,6 @@ export type PluginRuntimeCore = {
       },
     ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
-  tasks: PluginRuntimeTasks;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (
@@ -567,10 +614,14 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */
     resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    /** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
     ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    ensureAuthProfileStoreAsync: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStoreAsync;
     resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
     listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
     isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
+    isProviderApiKeyConfiguredAsync: typeof import("../provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;

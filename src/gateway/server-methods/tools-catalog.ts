@@ -1,4 +1,4 @@
-// Gateway RPC handler for the tool catalog shown by clients and Control UI.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ToolsCatalogResult,
@@ -20,36 +20,43 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ToolCatalogEntry = {
-  id: string;
-  label: string;
-  description: string;
-  fullDescription?: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  optional?: boolean;
-  risk?: "low" | "medium" | "high";
-  tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
-};
+type ToolCatalogGroup = ToolsCatalogResult["groups"][number];
 
-type ToolCatalogGroup = {
-  id: string;
-  label: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  tools: ToolCatalogEntry[];
-};
+function summarizeToolParameters(schema: unknown): ToolCatalogGroup["tools"][number]["parameters"] {
+  if (!isRecord(schema) || schema.type !== "object" || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(schema.properties)
+    .filter(([name]) => name.length > 0)
+    .map(([name, property]) => {
+      const parameter: NonNullable<ToolCatalogGroup["tools"][number]["parameters"]>[number] = {
+        name,
+        required: required.has(name),
+      };
+      if (isRecord(property)) {
+        parameter.type = normalizeOptionalString(property.type);
+        if (typeof property.description === "string") {
+          parameter.description = property.description;
+        }
+      }
+      return parameter;
+    });
+}
 
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
   const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
-  return listCoreToolSections({ swarmEnabled }).map((section) => ({
+  return listCoreToolSections({
+    swarmEnabled,
+    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
+  }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -105,46 +112,49 @@ function buildPluginGroups(params: {
     }
   }
   const seenToolIds = new Set<string>();
+  const appendTool = (
+    pluginId: string,
+    label: string,
+    tool: Omit<ToolCatalogGroup["tools"][number], "source" | "pluginId" | "defaultProfiles">,
+  ) => {
+    const id = `plugin:${pluginId}`;
+    const group: ToolCatalogGroup = groups.get(id) ?? {
+      id,
+      label,
+      source: "plugin",
+      pluginId,
+      tools: [],
+    };
+    group.tools.push({ ...tool, source: "plugin", pluginId, defaultProfiles: [] });
+    seenToolIds.add(tool.id);
+    groups.set(id, group);
+  };
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
-    const groupId = `plugin:${pluginId}`;
-    const existing =
-      groups.get(groupId) ??
-      ({
-        id: groupId,
-        label: pluginId,
-        source: "plugin",
-        pluginId,
-        tools: [],
-      } as ToolCatalogGroup);
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
-    existing.tools.push({
+    const parameters = summarizeToolParameters(tool.parameters);
+    const fullDescription =
+      ownedMetadata?.description ??
+      (typeof tool.description === "string" ? tool.description : undefined);
+    appendTool(pluginId, pluginId, {
       id: tool.name,
       label:
         normalizeOptionalString(ownedMetadata?.displayName) ??
         normalizeOptionalString(tool.label) ??
         tool.name,
       description: summarizeToolDescriptionText({
-        rawDescription:
-          ownedMetadata?.description ??
-          (typeof tool.description === "string" ? tool.description : undefined),
+        rawDescription: fullDescription,
         displaySummary: tool.displaySummary,
       }),
-      fullDescription:
-        ownedMetadata?.description ??
-        (typeof tool.description === "string" ? tool.description : undefined),
-      source: "plugin",
-      pluginId,
+      fullDescription,
+      ...(parameters?.length ? { parameters } : {}),
       optional: meta?.optional,
       risk: ownedMetadata?.risk,
       tags: ownedMetadata?.tags,
-      defaultProfiles: [],
     });
-    seenToolIds.add(tool.name);
-    groups.set(groupId, existing);
   }
   for (const entry of catalogRegistry?.tools ?? []) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
@@ -152,22 +162,12 @@ function buildPluginGroups(params: {
       if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
         continue;
       }
-      const groupId = `plugin:${entry.pluginId}`;
       // Declared-but-unresolved plugin tools still appear so operators can see
       // optional capabilities that may need config before they bind at runtime.
-      const existing =
-        groups.get(groupId) ??
-        ({
-          id: groupId,
-          label: entry.pluginName ?? entry.pluginId,
-          source: "plugin",
-          pluginId: entry.pluginId,
-          tools: [],
-        } as ToolCatalogGroup);
       const ownedMetadata = pluginToolMetadata.get(
         buildPluginToolMetadataKey(entry.pluginId, name),
       );
-      existing.tools.push({
+      appendTool(entry.pluginId, entry.pluginName ?? entry.pluginId, {
         id: name,
         label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
         description:
@@ -175,15 +175,10 @@ function buildPluginGroups(params: {
             rawDescription: ownedMetadata?.description,
           }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
         fullDescription: ownedMetadata?.description,
-        source: "plugin",
-        pluginId: entry.pluginId,
         optional: entry.optional,
         risk: ownedMetadata?.risk,
         tags: ownedMetadata?.tags,
-        defaultProfiles: [],
       });
-      seenToolIds.add(name);
-      groups.set(groupId, existing);
     }
   }
   return Array.from(groups.values(), (group) => {
@@ -192,35 +187,6 @@ function buildPluginGroups(params: {
   }).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-/** Build the merged core/plugin tool catalog for one agent. */
-function buildToolsCatalogResult(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  includePlugins?: boolean;
-}): ToolsCatalogResult {
-  const agentId = params.agentId;
-  const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups({ cfg: params.cfg, agentId });
-  if (includePlugins) {
-    const existingToolNames = new Set(
-      groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-    );
-    groups.push(
-      ...buildPluginGroups({
-        cfg: params.cfg,
-        agentId,
-        existingToolNames,
-      }),
-    );
-  }
-  return {
-    agentId,
-    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-    groups,
-  };
-}
-
-/** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
@@ -230,18 +196,28 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       rawAgentId: params.agentId,
       respond,
       cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
     });
     if (!resolved) {
       return;
     }
+    const { cfg, agentId } = resolved;
+    const groups = buildCoreGroups({ cfg, agentId });
+    if (params.includePlugins !== false) {
+      groups.push(
+        ...buildPluginGroups({
+          cfg,
+          agentId,
+          existingToolNames: new Set(groups.flatMap((group) => group.tools.map((tool) => tool.id))),
+        }),
+      );
+    }
     respond(
       true,
-      buildToolsCatalogResult({
-        cfg: resolved.cfg,
-        agentId: resolved.agentId,
-        includePlugins: params.includePlugins,
-      }),
+      {
+        agentId,
+        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+        groups,
+      } satisfies ToolsCatalogResult,
       undefined,
     );
   },

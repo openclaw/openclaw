@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
-import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
+import { clearMcpOAuthCredentials } from "../agents/mcp-oauth.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -19,10 +20,18 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
+import {
+  measureMcpMigrationHostSql,
+  observeLegacyMcpOAuthImport,
+} from "./state-migrations.mcp-oauth-faults.test-support.js";
+import { isDefinitelyStaleLegacyMcpOAuthLock } from "./state-migrations.mcp-oauth-lock-stale.js";
+import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
+import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 
 type MigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -33,7 +42,8 @@ const DEFAULT_FILE_NAME = "server-0123456789abcdef.json";
 
 describe("legacy MCP OAuth Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.unstubAllEnvs();
       cleanup();
@@ -202,10 +212,9 @@ describe("legacy MCP OAuth Doctor migration", () => {
 
   it("imports validated fields, preserves SDK extensions, drops dead state, and records a receipt", async () => {
     const { env, stateDir } = useStateDir();
-    const sourcePath = await writeLegacy({ stateDir });
-
-    const result = await migrate(stateDir, env);
-
+    const bytes = Buffer.from(`${JSON.stringify(validStore())}\n`, "utf8");
+    const sourcePath = await writeLegacy({ stateDir, bytes });
+    const { result, hostQueries } = await measureMcpMigrationHostSql(() => migrate(stateDir, env));
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(`Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`);
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -226,38 +235,147 @@ describe("legacy MCP OAuth Doctor migration", () => {
       source_record_count: 1,
       status: "completed",
       target_table: "mcp_oauth_stores",
+      source_sha256: createHash("sha256").update(bytes).digest("hex"),
     });
     expect(JSON.parse(receipt(env, sourcePath)?.report_json ?? "null")).toMatchObject({
       importedRecordCount: 1,
       preservedSqliteRecordCount: 0,
       storeKey: DEFAULT_FILE_NAME.slice(0, -5),
     });
+    expect(hostQueries).toEqual([]);
   });
 
-  it("preserves a valid canonical SQLite row and removes stale JSON", async () => {
+  it("imports an exact 4 MiB UTF-8 source through the existing worker message bound", async () => {
     const { env, stateDir } = useStateDir();
-    const canonical: Record<string, unknown> = validStore({
-      tokens: { access_token: "winner", token_type: "Bearer" },
-      futureCanonicalField: { preserved: true },
-    });
-    delete canonical.state;
-    seedCanonical(env, canonical);
-    const sourcePath = await writeLegacy({
-      stateDir,
-      value: validStore({ tokens: { access_token: "stale", token_type: "Bearer" } }),
-    });
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      `Preserved canonical SQLite MCP OAuth store for ${DEFAULT_FILE_NAME}.`,
+    const value = validStore();
+    value.tokens.vendor_extension = "";
+    const remaining = 4 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(value), "utf8");
+    const extension = "é".repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2);
+    value.tokens.vendor_extension = extension;
+    const bytes = Buffer.from(JSON.stringify(value), "utf8");
+    expect(bytes.byteLength).toBe(4 * 1024 * 1024);
+    const sourcePath = await writeLegacy({ stateDir, bytes });
+    const observation = observeLegacyMcpOAuthImport(
+      resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+      "observe",
     );
-    expect(JSON.parse(storeRow(env)?.store_json ?? "null")).toEqual(canonical);
+    try {
+      const { result, hostQueries } = await measureMcpMigrationHostSql(() =>
+        migrate(stateDir, env),
+      );
+      expect(result.warnings).toEqual([]);
+      expect(hostQueries).toEqual([]);
+      expect(observation.importCount()).toBe(1);
+      expect(observation.importInputBytes()).toBeGreaterThan(0);
+      expect(observation.importInputBytes()).toBeLessThanOrEqual(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+    } finally {
+      observation.restore();
+    }
+    expect(JSON.parse(storeRow(env)?.store_json ?? "null").tokens.vendor_extension).toBe(extension);
+    expect(receipt(env, sourcePath)).toMatchObject({
+      source_size_bytes: bytes.byteLength,
+      source_sha256: createHash("sha256").update(bytes).digest("hex"),
+      removed_source: 1,
+    });
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(JSON.parse(receipt(env, sourcePath)?.report_json ?? "null")).toMatchObject({
-      importedRecordCount: 0,
-      preservedSqliteRecordCount: 1,
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+  });
+
+  it.each(["publication-error", "result-delivery-error", "native-exit"] as const)(
+    "retains the actual import outcome across %s failure",
+    async (mode) => {
+      const { env, stateDir } = useStateDir();
+      const bytes = Buffer.from(JSON.stringify(validStore()), "utf8");
+      const sourcePath = await writeLegacy({ stateDir, bytes });
+      const claimPath = `${sourcePath}.doctor-importing`;
+      const fault = observeLegacyMcpOAuthImport(
+        resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+        mode,
+      );
+      let result: Awaited<ReturnType<typeof migrate>>;
+      try {
+        result = await migrate(stateDir, env);
+        expect(fault.injected()).toBe(true);
+        expect(fault.importCount()).toBe(1);
+        if (mode === "native-exit") {
+          expect(fault.exitThreadId()).toBe(fault.writerThreadId());
+        }
+      } finally {
+        fault.restore();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(JSON.parse(storeRow(env)?.store_json ?? "null").tokens).toEqual(validStore().tokens);
+      expect(receipt(env, sourcePath)).toMatchObject({
+        source_sha256: createHash("sha256").update(bytes).digest("hex"),
+        removed_source: mode === "native-exit" ? 0 : 1,
+      });
+      if (mode !== "native-exit") {
+        if (mode === "publication-error") {
+          expect(result.warnings).toEqual([]);
+        } else {
+          expect(result.warnings.join("\n")).toContain(
+            "MCP OAuth import committed, but result delivery failed:",
+          );
+        }
+        expect(result.changes).toContain(
+          `Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`,
+        );
+        expect(fs.existsSync(claimPath)).toBe(false);
+      } else {
+        expect(result.warnings.join("\n")).toContain(
+          "SQLite import outcome is unresolved; retained Doctor claim",
+        );
+        expect(result.changes).toEqual([]);
+        expect(await fsp.readFile(claimPath)).toEqual(bytes);
+        // The receipt, not credential existence, owns recovery; replay must not resurrect this row.
+        deleteCanonical(env);
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const retryObservation = observeLegacyMcpOAuthImport(
+          resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+          "observe",
+        );
+        try {
+          const retry = await migrate(stateDir, env);
+          expect(retry.warnings).toEqual([]);
+          expect(retryObservation.importCount()).toBe(0);
+        } finally {
+          retryObservation.restore();
+        }
+        expect(storeRow(env)).toBeUndefined();
+        expect(fs.existsSync(claimPath)).toBe(false);
+        expect(receipt(env, sourcePath)).toMatchObject({ removed_source: 1 });
+      }
+    },
+  );
+
+  it("restores the exact source after the worker rejects canonical credential state before commit", async () => {
+    const { env, stateDir } = useStateDir();
+    const canonical = { credentialState: "invalid" };
+    seedCanonical(env, canonical);
+    const bytes = Buffer.from(JSON.stringify(validStore()), "utf8");
+    const sourcePath = await writeLegacy({ stateDir, bytes });
+    const observation = observeLegacyMcpOAuthImport(
+      resolveLegacyMigrationSourceKey("mcp-oauth-json", sourcePath),
+      "observe",
+    );
+    let result: Awaited<ReturnType<typeof migrate>>;
+    try {
+      result = await migrate(stateDir, env);
+      expect(observation.importCount()).toBe(1);
+    } finally {
+      observation.restore();
+    }
+    expect(result.warnings.join("\n")).toContain("credentialState is invalid");
+    expect(result.changes).toEqual([]);
+    expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+    expect(receipt(env, sourcePath)).toBeUndefined();
+    expect(storeRow(env)).toMatchObject({
+      format_version: 1,
+      store_json: JSON.stringify(canonical),
     });
   });
 
@@ -289,58 +407,6 @@ describe("legacy MCP OAuth Doctor migration", () => {
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(JSON.parse(receipt(env, sourcePath)?.report_json ?? "null")).toMatchObject({
       importedRecordCount: 1,
-      preservedSqliteRecordCount: 1,
-    });
-  });
-
-  it("does not import legacy credentials after challenge bootstrap becomes an active login", async () => {
-    const { env, stateDir } = useStateDir();
-    const serverName = "Remote Docs";
-    const serverUrl = "https://mcp.example.com/mcp";
-    const identity = operatorMcpOAuthIdentity(serverName, serverUrl);
-    const storeKey = identity.storeKey;
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await expect(
-      resolveMcpOAuthAccessToken({
-        identity,
-        authorizationChallenge: true,
-        scope: "docs.read",
-      }),
-    ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-    const provider = createMcpOAuthClientProvider({
-      identity,
-      allowAuthorizationRedirect: true,
-    });
-    await provider.saveCodeVerifier("new-login-verifier");
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toMatchObject({
-      credentialState: "uninitialized",
-    });
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty(
-      "codeVerifier",
-    );
-    await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
-    const sourcePath = await writeLegacy({
-      stateDir,
-      fileName: `${storeKey}.json`,
-    });
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      `Preserved canonical SQLite MCP OAuth store for ${storeKey}.json.`,
-    );
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toMatchObject({
-      codeVerifier: "new-login-verifier",
-      pendingAuthorizationChallenge: { scope: "docs.read" },
-    });
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty(
-      "credentialState",
-    );
-    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty("tokens");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(JSON.parse(receipt(env, sourcePath)?.report_json ?? "null")).toMatchObject({
-      importedRecordCount: 0,
       preservedSqliteRecordCount: 1,
     });
   });
@@ -409,24 +475,6 @@ describe("legacy MCP OAuth Doctor migration", () => {
     expect(receipt(env)).toBeUndefined();
   });
 
-  it("fails closed on malformed canonical challenge state before retiring JSON", async () => {
-    const { env, stateDir } = useStateDir();
-    seedCanonical(env, {
-      credentialState: "uninitialized",
-      codeVerifier: "inconsistent-verifier",
-      pendingAuthorizationChallenge: { scope: "docs.read" },
-    });
-    const sourcePath = await writeLegacy({ stateDir });
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings.join("\n")).toContain(
-      "uninitialized credential state contains authoritative OAuth fields",
-    );
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(receipt(env, sourcePath)).toBeUndefined();
-  });
-
   it("drops an orphaned legacy token expiry during import", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy({ stateDir, value: { tokenExpiresAt: 10_000 } });
@@ -436,59 +484,6 @@ describe("legacy MCP OAuth Doctor migration", () => {
     expect(result.warnings).toEqual([]);
     expect(JSON.parse(storeRow(env)?.store_json ?? "null")).toEqual({});
     expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("imports multiple exact stores while ignoring unrelated directory entries", async () => {
-    const { env, stateDir } = useStateDir();
-    await writeLegacy({ stateDir });
-    await writeLegacy({
-      stateDir,
-      fileName: "other-1234567890abcdef.json",
-      value: validStore({ codeVerifier: "other-verifier" }),
-    });
-    const ignoredPath = await writeLegacy({
-      stateDir,
-      fileName: "unrelated.json.bak",
-      value: { invalid: true },
-    });
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(2);
-    expect(storeRow(env)).toBeDefined();
-    expect(storeRow(env, "other-1234567890abcdef")).toBeDefined();
-    expect(fs.existsSync(ignoredPath)).toBe(true);
-  });
-
-  it("fails closed on an ambiguous retired-runtime lock sidecar", async () => {
-    const { env, stateDir } = useStateDir();
-    const sourcePath = await writeLegacy({ stateDir });
-    await fsp.writeFile(`${sourcePath}.lock`, "not a verifiable lock owner");
-
-    const retryDelays: number[] = [];
-    const setTimeoutActual = globalThis.setTimeout;
-    // fs-safe owns backoff timing; this migration test still exercises every failed acquisition.
-    const fastSetTimeout = (...params: Parameters<typeof setTimeout>) => {
-      const [callback, delay, ...args] = params;
-      retryDelays.push(delay ?? 0);
-      return setTimeoutActual(callback, 0, ...args);
-    };
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(fastSetTimeout);
-
-    let result: Awaited<ReturnType<typeof migrate>>;
-    try {
-      result = await migrate(stateDir, env);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-
-    expect(retryDelays).toHaveLength(20);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed locking legacy MCP OAuth store");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(storeRow(env)).toBeUndefined();
   });
 
   it.skipIf(process.platform === "win32")(
@@ -612,44 +607,30 @@ describe("legacy MCP OAuth Doctor migration", () => {
   });
 
   it("rejects symlinked, hardlinked, oversized, and invalid-UTF-8 sources", async () => {
-    const cases: Array<{ env: NodeJS.ProcessEnv; sourcePath: string; stateDir: string }> = [];
-
-    const symlink = useStateDir();
-    const symlinkTarget = path.join(symlink.stateDir, "outside.json");
-    await fsp.writeFile(symlinkTarget, JSON.stringify(validStore()), "utf8");
-    const symlinkPath = path.join(symlink.stateDir, "mcp-oauth", DEFAULT_FILE_NAME);
-    await fsp.mkdir(path.dirname(symlinkPath), { recursive: true });
-    await fsp.symlink(symlinkTarget, symlinkPath);
-    cases.push({ ...symlink, sourcePath: symlinkPath });
-
-    const hardlink = useStateDir();
-    const hardlinkTarget = path.join(hardlink.stateDir, "outside.json");
-    await fsp.writeFile(hardlinkTarget, JSON.stringify(validStore()), "utf8");
-    const hardlinkPath = path.join(hardlink.stateDir, "mcp-oauth", DEFAULT_FILE_NAME);
-    await fsp.mkdir(path.dirname(hardlinkPath), { recursive: true });
-    await fsp.link(hardlinkTarget, hardlinkPath);
-    cases.push({ ...hardlink, sourcePath: hardlinkPath });
-
-    const oversized = useStateDir();
-    const oversizedPath = await writeLegacy({
-      stateDir: oversized.stateDir,
-      bytes: Buffer.alloc(4 * 1024 * 1024 + 1, 0x20),
-    });
-    cases.push({ ...oversized, sourcePath: oversizedPath });
-
-    const invalidUtf8 = useStateDir();
-    const invalidUtf8Path = await writeLegacy({
-      stateDir: invalidUtf8.stateDir,
-      bytes: Buffer.from([0xff, 0xfe]),
-    });
-    cases.push({ ...invalidUtf8, sourcePath: invalidUtf8Path });
-
-    for (const testCase of cases) {
+    for (const kind of ["symlink", "hardlink", "oversized", "invalid-utf8"]) {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      const result = await migrate(testCase.stateDir, testCase.env);
+      const { env, stateDir } = useStateDir();
+      let sourcePath: string;
+      if (kind === "symlink" || kind === "hardlink") {
+        const target = path.join(stateDir, "outside.json");
+        await fsp.writeFile(target, JSON.stringify(validStore()), "utf8");
+        sourcePath = path.join(stateDir, "mcp-oauth", DEFAULT_FILE_NAME);
+        await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
+        await (kind === "symlink" ? fsp.symlink(target, sourcePath) : fsp.link(target, sourcePath));
+      } else {
+        sourcePath = await writeLegacy({
+          stateDir,
+          bytes:
+            kind === "oversized"
+              ? Buffer.alloc(4 * 1024 * 1024 + 1, 0x20)
+              : Buffer.from([0xff, 0xfe]),
+        });
+      }
+      const result = await migrate(stateDir, env);
       expect(result.warnings[0]).toContain("Failed reading legacy MCP OAuth store");
-      expect(fs.existsSync(testCase.sourcePath)).toBe(true);
-      expect(receipt(testCase.env)).toBeUndefined();
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(receipt(env)).toBeUndefined();
     }
   });
 
@@ -673,19 +654,57 @@ describe("legacy MCP OAuth Doctor migration", () => {
       await gatewayLock.release();
     }
 
-    expect(result.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
-  it("records the digest of the exact imported source bytes", async () => {
-    const { env, stateDir } = useStateDir();
-    const bytes = Buffer.from(`${JSON.stringify(validStore())}\n`, "utf8");
-    const sourcePath = await writeLegacy({ stateDir, bytes });
+  function lockPayload(overrides: Record<string, unknown> = {}): string {
+    return `${JSON.stringify({
+      pid: 123,
+      createdAt: "2026-07-16T00:00:00.000Z",
+      starttime: 456,
+      ...overrides,
+    })}\n`;
+  }
 
-    await migrate(stateDir, env);
+  it("fails closed for live, young, and malformed owner evidence", () => {
+    for (const raw of [
+      lockPayload(),
+      lockPayload({ createdAt: "2026-07-16T00:01:30.000Z" }),
+      lockPayload({ createdAt: "invalid" }),
+      lockPayload({ starttime: "456" }),
+      "not json",
+    ]) {
+      expect(
+        isDefinitelyStaleLegacyMcpOAuthLock({
+          raw,
+          nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
+          isPidDefinitelyDead: () => false,
+          getProcessStartTime: () => 456,
+        }),
+      ).toBe(false);
+    }
+  });
 
-    expect(receipt(env, sourcePath)).toMatchObject({
-      source_sha256: createHash("sha256").update(bytes).digest("hex"),
+  it("reports a stale sidecar without unlinking a replacement-prone path", async () => {
+    const { stateDir } = useStateDir();
+    const targetRelativePath = path.join("mcp-oauth", DEFAULT_FILE_NAME);
+    const lockPath = path.join(stateDir, `${targetRelativePath}.lock`);
+    await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+    const raw = lockPayload({
+      pid: 2 ** 30,
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      starttime: 1,
     });
+    await fsp.writeFile(lockPath, raw);
+    const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+    let entered = false;
+    await expect(
+      withRootBoundedLegacyFileLock({ stateRoot, targetRelativePath }, async () => {
+        entered = true;
+      }),
+    ).rejects.toMatchObject({ code: "file_lock_stale" });
+    expect(entered).toBe(false);
+    expect(await fsp.readFile(lockPath, "utf8")).toBe(raw);
   });
 });

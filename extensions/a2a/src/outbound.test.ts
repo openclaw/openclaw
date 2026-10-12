@@ -1,9 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { sendA2aChannelText } from "./outbound.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
 
-function createA2aOutboundConfig(peer: A2aPeerConfig): A2aCoreConfig {
+function createA2aOutboundConfig(
+  peer: A2aPeerConfig = { token: "inbound-token", url: "https://hermes.example/a2a/v1" },
+): A2aCoreConfig {
   return {
     channels: {
       a2a: {
@@ -66,54 +72,6 @@ afterEach(async () => {
 });
 
 describe("A2A outbound channel delivery", () => {
-  it("rejects revoked handoff authority after asynchronous transport preparation", async () => {
-    let resolveLookup: (() => void) | undefined;
-    let markLookupStarted: (() => void) | undefined;
-    const lookupStarted = new Promise<void>((resolve) => {
-      markLookupStarted = resolve;
-    });
-    const lookupFinished = new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
-      resolveLookup = () => resolve([{ address: "93.184.216.34", family: 4 }]);
-    });
-    const lookupFn: NonNullable<Parameters<typeof guardedFetch>[0]["lookupFn"]> = vi.fn(
-      async () => {
-        markLookupStarted?.();
-        return await lookupFinished;
-      },
-    );
-    vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(
-      async (params) => await trackGuardedFetch({ ...params, lookupFn }),
-    );
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(createA2aJsonResponse({ jsonrpc: "2.0", result: {} }));
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
-    let current = true;
-    const assertDirectAdapterHandoff = vi.fn(() => {
-      if (!current) {
-        throw new Error("source authority revoked");
-      }
-    });
-
-    const send = sendA2aChannelText({
-      cfg,
-      to: "hermes",
-      text: "hello",
-      assertDirectAdapterHandoff,
-    });
-    await lookupStarted;
-    current = false;
-    resolveLookup?.();
-
-    await expect(send).rejects.toThrow("source authority revoked");
-    expect(lookupFn).toHaveBeenCalledOnce();
-    expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("rechecks handoff authority before the compatibility retry", async () => {
     let current = true;
     const assertDirectAdapterHandoff = vi.fn(() => {
@@ -128,10 +86,7 @@ describe("A2A outbound channel delivery", () => {
         error: { code: -32601, message: "Method not found" },
       });
     });
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
 
     await expect(
       sendA2aChannelText({ cfg, to: "hermes", text: "hello", assertDirectAdapterHandoff }),
@@ -154,65 +109,13 @@ describe("A2A outbound channel delivery", () => {
         result: { task: { id: "accepted-task-1" } },
       });
     });
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
 
     await expect(
       sendA2aChannelText({ cfg, to: "hermes", text: "hello", assertDirectAdapterHandoff }),
     ).resolves.toMatchObject({ messageId: "accepted-task-1" });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
-  });
-
-  it("sends authenticated canonical A2A messages without following redirects", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      createA2aJsonResponse({
-        jsonrpc: "2.0",
-        id: "request-id",
-        result: { task: { id: "remote-task-1" } },
-      }),
-    );
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      outboundToken: "outbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
-
-    await expect(sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" })).resolves.toEqual({
-      to: "a2a:hermes",
-      messageId: "remote-task-1",
-    });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("https://hermes.example/a2a/v1");
-    expect(init).toMatchObject({
-      method: "POST",
-      // The SSRF guard inspects redirects itself instead of delegating to fetch.
-      redirect: "manual",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer outbound-token",
-      },
-      signal: expect.any(AbortSignal),
-    });
-    const body = parseA2aRequestBody(init?.body);
-    expect(body).toEqual({
-      jsonrpc: "2.0",
-      id: expect.any(String),
-      method: "SendMessage",
-      params: {
-        message: {
-          messageId: expect.any(String),
-          role: "ROLE_USER",
-          contextId: "ctx-oc-hermes",
-          parts: [{ text: "hello" }],
-        },
-        configuration: { returnImmediately: true },
-      },
-    });
   });
 
   it("retries the legacy dotted method exactly once when canonical dispatch is unavailable", async () => {
@@ -231,10 +134,7 @@ describe("A2A outbound channel delivery", () => {
           result: { task: { id: "legacy-task-1" } },
         });
       });
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
     const assertDirectAdapterHandoff = vi.fn();
 
     await expect(
@@ -253,10 +153,7 @@ describe("A2A outbound channel delivery", () => {
   });
 
   it("does not retry other JSON-RPC errors or retry the legacy alias repeatedly", async () => {
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       createA2aJsonResponse({
         jsonrpc: "2.0",
@@ -288,10 +185,7 @@ describe("A2A outbound channel delivery", () => {
         result: {},
       }),
     );
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
 
     const result = await sendA2aChannelText({ cfg, to: "hermes", text: "hello" });
     const request = parseA2aRequestBody(fetchMock.mock.calls[0]?.[1]?.body) as {
@@ -311,10 +205,7 @@ describe("A2A outbound channel delivery", () => {
   });
 
   it("surfaces transport and malformed peer-response failures", async () => {
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(createA2aJsonResponse({}, { status: 503 }))
@@ -338,10 +229,7 @@ describe("A2A outbound channel delivery", () => {
   });
 
   it("bounds oversized peer JSON responses before parsing", async () => {
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      url: "https://hermes.example/a2a/v1",
-    });
+    const cfg = createA2aOutboundConfig();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       createA2aJsonResponse({
         jsonrpc: "2.0",
@@ -382,5 +270,59 @@ describe("A2A outbound channel delivery", () => {
     expect(String(failure.cause)).not.toContain(outboundToken);
     expect(failure.cause).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("A2A outbound sends with unresolved authored credentials", () => {
+  async function loadPeerConfig(stateDir: string, peer: Record<string, unknown>) {
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ channels: { a2a: { peers: { hermes: peer } } } }),
+    );
+    return withEnv(
+      { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_A2A_OUTBOUND_TEST_UNSET: undefined },
+      // Each case needs a fresh load; the default read pins the first snapshot.
+      () => getRuntimeConfig({ pin: false }),
+    );
+  }
+
+  it("refuses to send, and performs no network I/O, when the authored outboundToken did not resolve", async () => {
+    await withStateDirEnv("a2a-outbound-unresolved-", async ({ stateDir }) => {
+      const cfg = await loadPeerConfig(stateDir, {
+        token: "inbound-token",
+        url: "https://hermes.example/a2a/v1",
+        outboundToken: "${OPENCLAW_A2A_OUTBOUND_TEST_UNSET}",
+      });
+
+      await expect(sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" })).rejects.toThrow(
+        /outboundToken reference did not resolve/,
+      );
+      expect(ssrfRuntime.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still sends anonymously to a peer that never authored an outboundToken", async () => {
+    await withStateDirEnv("a2a-outbound-anonymous-", async ({ stateDir }) => {
+      const cfg = await loadPeerConfig(stateDir, {
+        token: "inbound-token",
+        url: "https://hermes.example/a2a/v1",
+      });
+      vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(async () => ({
+        response: createA2aJsonResponse({
+          jsonrpc: "2.0",
+          id: "1",
+          result: { task: { id: "t1" } },
+        }),
+        finalUrl: "https://hermes.example/a2a/v1",
+        release: async () => {},
+      }));
+
+      await expect(
+        sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" }),
+      ).resolves.toMatchObject({ to: "a2a:hermes" });
+      const init = vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mock.calls[0]?.[0].init;
+      expect(init?.headers).not.toHaveProperty("authorization");
+    });
   });
 });

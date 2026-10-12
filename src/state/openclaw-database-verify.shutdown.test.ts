@@ -2,17 +2,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { ChildProcess } from "node:child_process";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type * as VerifierImplementation from "./openclaw-database-verify.impl.js";
 import {
-  requestOpenClawAgentDatabaseQuickCheck,
+  requestOpenClawAgentDatabaseIntegrityCheck,
   startOpenClawDatabaseIntegrityVerifier,
 } from "./openclaw-database-verify.js";
 import type { OpenClawDatabaseVerifyResult } from "./openclaw-database-verify.worker.js";
 
 const mocks = vi.hoisted(() => ({
-  collectOpenClawDatabaseVerifyTargets:
-    vi.fn<typeof VerifierImplementation.collectOpenClawDatabaseVerifyTargets>(),
   runDatabaseVerifyWorker: vi.fn<typeof VerifierImplementation.runDatabaseVerifyWorker>(),
   terminateDatabaseVerifyWorker:
     vi.fn<typeof VerifierImplementation.terminateDatabaseVerifyWorker>(),
@@ -29,9 +28,6 @@ describe("database verifier shutdown", () => {
     await import("./openclaw-database-verify.impl.js");
     vi.useFakeTimers();
     vi.resetAllMocks();
-    mocks.collectOpenClawDatabaseVerifyTargets.mockReturnValue([
-      { kind: "state", label: "synthetic state", path: "synthetic.sqlite" },
-    ]);
     mocks.terminateDatabaseVerifyWorker.mockResolvedValue(undefined);
     mocks.applyOpenClawDatabaseVerificationResults.mockResolvedValue(undefined);
   });
@@ -40,13 +36,118 @@ describe("database verifier shutdown", () => {
     vi.useRealTimers();
   });
 
+  it("cancels proof publication waiting for startup admission before releasing its writer", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/preparation-shutdown" };
+    const pathname = path.resolve("/synthetic/preparing.sqlite");
+    const preparation = createDeferredCore();
+    const entered = createDeferredCore();
+    const release = vi.fn(async () => {});
+    let publication: Promise<boolean> | undefined;
+    mocks.runDatabaseVerifyWorker.mockResolvedValue([{ path: pathname, ok: true }]);
+    mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(async (options) => {
+      await options.onVerified?.(pathname);
+    });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "full",
+      env,
+      path: pathname,
+      release,
+      proof: {
+        identity: "synthetic",
+        complete: (_assertCurrent, signal) => {
+          publication = racePromiseWithAbortSignal(preparation.promise, signal).then(() => true);
+          entered.resolve();
+          return publication;
+        },
+      },
+    });
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await entered.promise;
+      expect(release).not.toHaveBeenCalled();
+      await verifier.stop();
+      await expect(publication).rejects.toMatchObject({ name: "AbortError" });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      preparation.resolve();
+      await verifier.stop();
+    }
+  });
+
+  it("releases superseded checks and joins final queued cleanup", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/queued-cleanup" };
+    const cleanup = createDeferredCore();
+    const previous = vi.fn(async () => {});
+    const current = vi.fn(() => cleanup.promise);
+    const ignored = vi.fn(async () => {});
+    const request = { check: "full" as const, env, path: "/synthetic/retained.sqlite" };
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, release: previous });
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, release: current });
+    requestOpenClawAgentDatabaseIntegrityCheck({ ...request, check: "quick", release: ignored });
+    expect(previous).toHaveBeenCalledOnce();
+    expect(ignored).toHaveBeenCalledOnce();
+    expect(current).not.toHaveBeenCalled();
+    const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+    let stopped = false;
+    const stopping = verifier.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    cleanup.resolve();
+    await stopping;
+    expect(mocks.runDatabaseVerifyWorker).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure", "stop", "handoff"] as const)(
+    "holds active verification custody through %s settlement",
+    async (outcome) => {
+      const env = { OPENCLAW_STATE_DIR: `/synthetic/active-cleanup-${outcome}` };
+      const results = createDeferredCore<OpenClawDatabaseVerifyResult[]>();
+      const cleanup = createDeferredCore();
+      const release = vi.fn(() => cleanup.promise);
+      mocks.runDatabaseVerifyWorker.mockReturnValueOnce(results.promise).mockResolvedValue([]);
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        check: "full",
+        env,
+        path: "/synthetic/retained.sqlite",
+        release,
+      });
+      const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
+      const peer =
+        outcome === "handoff" ? startOpenClawDatabaseIntegrityVerifier({ env }) : undefined;
+      await vi.advanceTimersByTimeAsync(0);
+      const stopping = outcome === "stop" || peer ? verifier.stop() : undefined;
+      expect(release).not.toHaveBeenCalled();
+      if (outcome === "failure") {
+        results.reject(new Error("synthetic scan failed"));
+      } else {
+        results.resolve([]);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(release).toHaveBeenCalledOnce();
+      if (peer) {
+        expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
+      }
+      cleanup.resolve();
+      await stopping;
+      await verifier.stop();
+      await peer?.stop();
+      expect(release).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("waits for listening startup, then checks both queued and late cached opens", async () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/queued" };
     const firstPath = path.resolve("/synthetic/first.sqlite");
     const latePath = path.resolve("/synthetic/late.sqlite");
     mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
-    requestOpenClawAgentDatabaseQuickCheck({ env, path: firstPath });
-    requestOpenClawAgentDatabaseQuickCheck({ env, path: firstPath });
+    requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: firstPath });
+    requestOpenClawAgentDatabaseIntegrityCheck({ check: "full", env, path: firstPath });
+    requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: firstPath });
     await vi.advanceTimersByTimeAsync(100);
     expect(mocks.runDatabaseVerifyWorker).not.toHaveBeenCalled();
 
@@ -54,17 +155,16 @@ describe("database verifier shutdown", () => {
     try {
       await vi.advanceTimersByTimeAsync(0);
       expect(mocks.runDatabaseVerifyWorker.mock.calls[0]?.[0]).toEqual([
-        expect.objectContaining({ kind: "agent", path: firstPath, check: "quick" }),
+        expect.objectContaining({ kind: "agent", path: firstPath, check: "full" }),
       ]);
-      requestOpenClawAgentDatabaseQuickCheck({ env, path: latePath });
+      requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: latePath });
       await vi.advanceTimersByTimeAsync(0);
       expect(mocks.runDatabaseVerifyWorker.mock.calls[1]?.[0]).toEqual([
         expect.objectContaining({ kind: "agent", path: latePath, check: "quick" }),
       ]);
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
-      expect(mocks.runDatabaseVerifyWorker.mock.calls[2]?.[0]).toEqual([
-        { kind: "state", label: "synthetic state", path: "synthetic.sqlite" },
-      ]);
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 2 * 24 * 60 * 60_000);
+      expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       await verifier.stop();
     }
@@ -74,15 +174,23 @@ describe("database verifier shutdown", () => {
     const env = { OPENCLAW_STATE_DIR: "/synthetic/serial" };
     const results = createDeferredCore<OpenClawDatabaseVerifyResult[]>();
     mocks.runDatabaseVerifyWorker.mockReturnValueOnce(results.promise).mockResolvedValue([]);
-    requestOpenClawAgentDatabaseQuickCheck({ env, path: "/synthetic/first.sqlite" });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "quick",
+      env,
+      path: "/synthetic/first.sqlite",
+    });
     const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
     await vi.advanceTimersByTimeAsync(0);
-    requestOpenClawAgentDatabaseQuickCheck({ env, path: "/synthetic/late.sqlite" });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "quick",
+      env,
+      path: "/synthetic/late.sqlite",
+    });
     const stopping = verifier.stop();
     const replacement = startOpenClawDatabaseIntegrityVerifier({ env });
     const replacementPath = path.resolve("/synthetic/replacement.sqlite");
     try {
-      requestOpenClawAgentDatabaseQuickCheck({ env, path: replacementPath });
+      requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: replacementPath });
       await vi.advanceTimersByTimeAsync(10);
       expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledOnce();
       results.resolve([]);
@@ -129,11 +237,14 @@ describe("database verifier shutdown", () => {
       const latePath = path.resolve("/synthetic/late.sqlite");
       try {
         context.run("publisher", () =>
-          requestOpenClawAgentDatabaseQuickCheck({ env, path: firstPath }),
+          requestOpenClawAgentDatabaseIntegrityCheck({ check: "full", env, path: firstPath }),
         );
         await vi.advanceTimersByTimeAsync(0);
-        requestOpenClawAgentDatabaseQuickCheck({ env, path: latePath });
-        requestOpenClawAgentDatabaseQuickCheck({ env, path: latePath });
+        requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: latePath });
+        requestOpenClawAgentDatabaseIntegrityCheck({ check: "full", env, path: latePath });
+        if (retiring === "active") {
+          requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: firstPath });
+        }
         let stopped = false;
         const stopping = (retiring === "active" ? first : second).stop().then(() => {
           stopped = true;
@@ -144,6 +255,9 @@ describe("database verifier shutdown", () => {
         expect(mocks.terminateDatabaseVerifyWorker).toHaveBeenCalledTimes(
           retiring === "active" ? 1 : 0,
         );
+        if (retiring === "active") {
+          expect(mocks.terminateDatabaseVerifyWorker).toHaveBeenCalledWith(child);
+        }
         results.resolve([]);
         await stopping;
         await vi.advanceTimersByTimeAsync(1);
@@ -154,6 +268,11 @@ describe("database verifier shutdown", () => {
         expect(
           mocks.runDatabaseVerifyWorker.mock.calls[1]?.[0].map((target) => target.path).toSorted(),
         ).toEqual((retiring === "active" ? [firstPath, latePath] : [latePath]).toSorted());
+        expect(
+          mocks.runDatabaseVerifyWorker.mock.calls[1]?.[0].every(
+            (target) => target.check === "full",
+          ),
+        ).toBe(true);
       } finally {
         results.resolve([]);
         await Promise.all([first.stop(), second.stop()]);
@@ -162,38 +281,28 @@ describe("database verifier shutdown", () => {
     },
   );
 
-  it("shares the daily deadline and includes queued paths absent from the full inventory", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/synthetic/daily-peers" };
+  it("shares requested paths between peers and retains the startup environment", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/queued-peers" };
     const capturedEnv = { ...env };
     const registeredPath = path.resolve("/synthetic/registered.sqlite");
     const unregisteredPath = path.resolve("/synthetic/unregistered.sqlite");
-    const registered = {
-      kind: "agent" as const,
-      label: "synthetic registered agent",
-      path: registeredPath,
-    };
-    mocks.collectOpenClawDatabaseVerifyTargets.mockReturnValue([registered]);
     mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
     const first = startOpenClawDatabaseIntegrityVerifier({ env });
     const second = startOpenClawDatabaseIntegrityVerifier({ env });
     try {
-      vi.setSystemTime(Date.now() + 5 * 60_000);
-      requestOpenClawAgentDatabaseQuickCheck({ env, path: registeredPath });
-      requestOpenClawAgentDatabaseQuickCheck({ env, path: unregisteredPath });
+      requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: registeredPath });
+      requestOpenClawAgentDatabaseIntegrityCheck({ check: "quick", env, path: unregisteredPath });
       env.OPENCLAW_STATE_DIR = "/synthetic/changed-after-start";
       await vi.advanceTimersByTimeAsync(0);
       expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledOnce();
-      expect(mocks.collectOpenClawDatabaseVerifyTargets).toHaveBeenCalledWith({ env: capturedEnv });
       expect(mocks.applyOpenClawDatabaseVerificationResults).toHaveBeenCalledWith(
         expect.objectContaining({ env: capturedEnv }),
       );
       expect(mocks.runDatabaseVerifyWorker.mock.calls[0]?.[0]).toEqual([
-        registered,
+        expect.objectContaining({ path: registeredPath, check: "quick" }),
         expect.objectContaining({ path: unregisteredPath, check: "quick" }),
       ]);
-      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
-      expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
-      expect(mocks.runDatabaseVerifyWorker.mock.calls[1]?.[0]).toEqual([registered]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       await second.stop();
       await first.stop();
@@ -206,11 +315,19 @@ describe("database verifier shutdown", () => {
     mocks.runDatabaseVerifyWorker
       .mockRejectedValueOnce(new Error("synthetic child failure"))
       .mockResolvedValue([]);
-    requestOpenClawAgentDatabaseQuickCheck({ env, path: "/synthetic/first.sqlite" });
+    requestOpenClawAgentDatabaseIntegrityCheck({
+      check: "quick",
+      env,
+      path: "/synthetic/first.sqlite",
+    });
     const verifier = startOpenClawDatabaseIntegrityVerifier({ env });
     try {
       await vi.advanceTimersByTimeAsync(0);
-      requestOpenClawAgentDatabaseQuickCheck({ env, path: "/synthetic/late.sqlite" });
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        check: "quick",
+        env,
+        path: "/synthetic/late.sqlite",
+      });
       await vi.advanceTimersByTimeAsync(0);
       expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledTimes(2);
       expect(mocks.applyOpenClawDatabaseVerificationResults).toHaveBeenCalledOnce();
@@ -219,21 +336,36 @@ describe("database verifier shutdown", () => {
     }
   });
 
-  it.each(["fulfilled", "rejected"] as const)(
-    "joins %s result application after the child has exited",
-    async (outcome) => {
+  it.each(["draining", "confirming"] as const)(
+    "joins result application and cancels its lifetime while %s",
+    async (phase) => {
       const application = createDeferredCore();
       const entered = createDeferredCore();
+      const child = new ChildProcess();
+      let lifetime: VerifierImplementation.DatabaseVerifyWorkerLifetime | undefined;
       mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
-      mocks.applyOpenClawDatabaseVerificationResults.mockImplementation(() => {
+      mocks.applyOpenClawDatabaseVerificationResults.mockImplementation((options) => {
+        lifetime = options.workerLifetime;
+        if (phase === "confirming") {
+          lifetime?.onWorker?.(child);
+        }
         entered.resolve();
         return application.promise;
       });
       const verifier = startOpenClawDatabaseIntegrityVerifier({ env: {} });
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        check: "quick",
+        env: {},
+        path: "/synthetic/first.sqlite",
+      });
+      await vi.advanceTimersByTimeAsync(0);
       await entered.promise;
       const peer = startOpenClawDatabaseIntegrityVerifier({ env: {} });
-      requestOpenClawAgentDatabaseQuickCheck({ env: {}, path: "/synthetic/late.sqlite" });
+      requestOpenClawAgentDatabaseIntegrityCheck({
+        check: "quick",
+        env: {},
+        path: "/synthetic/late.sqlite",
+      });
       let stopped = false;
       const stopping = verifier.stop().then(() => {
         stopped = true;
@@ -243,13 +375,14 @@ describe("database verifier shutdown", () => {
           await vi.advanceTimersByTimeAsync(100);
           expect(stopped).toBe(false);
           expect(mocks.runDatabaseVerifyWorker).toHaveBeenCalledOnce();
-          expect(mocks.terminateDatabaseVerifyWorker).not.toHaveBeenCalled();
-        } finally {
-          if (outcome === "rejected") {
-            application.reject(new Error("synthetic confirmation failure"));
+          if (phase === "confirming") {
+            expect(mocks.terminateDatabaseVerifyWorker).toHaveBeenCalledExactlyOnceWith(child);
           } else {
-            application.resolve();
+            expect(mocks.terminateDatabaseVerifyWorker).not.toHaveBeenCalled();
           }
+          expect(() => lifetime?.assertCurrent?.()).toThrow("database integrity verifier stopped");
+        } finally {
+          application.reject(new Error("synthetic confirmation failure"));
           await stopping;
         }
         await vi.advanceTimersByTimeAsync(1);
@@ -261,29 +394,4 @@ describe("database verifier shutdown", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
-
-  it("joins the running turn after termination and skips results received during stop", async () => {
-    const results = createDeferredCore<OpenClawDatabaseVerifyResult[]>();
-    const child = new ChildProcess();
-    mocks.runDatabaseVerifyWorker.mockImplementation((_targets, options) => {
-      options?.onWorker?.(child);
-      return results.promise;
-    });
-    const verifier = startOpenClawDatabaseIntegrityVerifier({ env: {} });
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    let stopped = false;
-    const stopping = verifier.stop().then(() => {
-      stopped = true;
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(100);
-      expect(mocks.terminateDatabaseVerifyWorker).toHaveBeenCalledWith(child);
-      expect(stopped).toBe(false);
-    } finally {
-      results.resolve([]);
-      await stopping;
-    }
-    expect(mocks.applyOpenClawDatabaseVerificationResults).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
 });

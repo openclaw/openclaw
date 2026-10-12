@@ -4,7 +4,6 @@ import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import { resolveChannelAccountKey } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
@@ -174,16 +173,11 @@ function resolveAccountScopedWriteTarget(
   const channels = (parsed.channels ??= {}) as Record<string, unknown>;
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
-  if (isBlockedObjectKey(normalizedAccountId)) {
-    return {
-      target: channel,
-      pathPrefix: `channels.${channelId}`,
-      writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
-    };
-  }
-  const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
-  const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
-  if (!useAccount) {
+  if (
+    isBlockedObjectKey(normalizedAccountId) ||
+    (normalizedAccountId === DEFAULT_ACCOUNT_ID &&
+      !(channel.accounts && typeof channel.accounts === "object"))
+  ) {
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -222,31 +216,19 @@ function getNestedValue(root: Record<string, unknown>, path: string[]): unknown 
   return current;
 }
 
-function ensureNestedObject(
-  root: Record<string, unknown>,
-  path: string[],
-): Record<string, unknown> {
-  let current = root;
-  for (const key of path) {
-    const existing = current[key];
-    if (!existing || typeof existing !== "object") {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
-  }
-  return current;
-}
-
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
   const leaf = path.at(-1);
   if (leaf === undefined) {
     return;
   }
-  if (path.length === 1) {
-    root[leaf] = value;
-    return;
+  let parent = root;
+  for (const key of path.slice(0, -1)) {
+    const existing = parent[key];
+    if (!existing || typeof existing !== "object") {
+      parent[key] = {};
+    }
+    parent = parent[key] as Record<string, unknown>;
   }
-  const parent = ensureNestedObject(root, path.slice(0, -1));
   parent[leaf] = value;
 }
 
@@ -309,23 +291,18 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 
   let changed = false;
   let next = existing;
-  const configHasEntry = existingNormalized.some((value) => shouldMatch(value));
+  const configHasEntry = existingNormalized.some(shouldMatch);
   if (params.action === "add") {
     if (!configHasEntry) {
       next = [...existing, params.entry.trim()];
       changed = true;
     }
   } else {
-    const keep: string[] = [];
-    for (const entry of existing) {
+    next = existing.filter((entry) => {
       const normalized = params.normalize([entry]);
-      if (normalized.some((value) => shouldMatch(value))) {
-        changed = true;
-        continue;
-      }
-      keep.push(entry);
-    }
-    next = keep;
+      return !normalized.some(shouldMatch);
+    });
+    changed = next.length !== existing.length;
   }
 
   if (changed) {

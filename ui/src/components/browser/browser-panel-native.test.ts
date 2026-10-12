@@ -1,196 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type {
-  NativeBrowserMessage,
-  NativeBrowserState,
-  NativeBrowserTab,
-} from "../../app/native-browser-bridge.ts";
 import { startNativeLinkRouting } from "../../app/native-link-routing.ts";
 import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
-  createBrowserClient,
   createInspectedNode,
   createPointer,
   flushBrowserResponses,
-  stubScreenshotMedia,
-  TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
-import "./browser-panel.ts";
+import {
+  fakeNativeBrowser,
+  mountSessionPanel,
+  nativeTab,
+  setupNativeBrowserPanelTests,
+} from "./test-helpers/native-browser.ts";
 
-const nativeTab = (
-  id: string,
-  url = "https://example.test/page",
-  sessionKey = "",
-): NativeBrowserTab => ({
-  id,
-  sessionKey,
-  url,
-  title: "Example page",
-  loading: false,
-  canGoBack: true,
-  canGoForward: false,
-  openedBy: "web",
-});
-
-function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false) {
-  let state: NativeBrowserState = { revision: 0, tabs };
-  const publish = (nextTabs: NativeBrowserTab[]) => {
-    state = { revision: state.revision + 1, tabs: nextTabs };
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-    window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: state }));
-  };
-  const postMessage = vi.fn(async (message: NativeBrowserMessage) => {
-    switch (message.type) {
-      case "open": {
-        const tab = nativeTab(message.tabId, message.url, message.sessionKey);
-        if (legacy) {
-          delete tab.sessionKey;
-        }
-        publish([...state.tabs, tab]);
-        return { ok: true, tabId: message.tabId };
-      }
-      case "close":
-        publish(state.tabs.filter((tab) => tab.id !== message.tabId));
-        break;
-      case "snapshot":
-        return {
-          ok: true,
-          dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
-          cssWidth: 100,
-          cssHeight: 100,
-        };
-      case "inspect":
-        return { ok: true, node: createInspectedNode("Save") };
-      case "download":
-        return { ok: true, cancelled: false };
-      case "back":
-      case "forward":
-      case "navigate":
-      case "present":
-      case "release-scope":
-      case "reload":
-      case "stop":
-        break;
-    }
-    return { ok: true };
-  });
-  vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
-  return {
-    publish,
-    postMessage,
-    messages: () => postMessage.mock.calls.map(([message]) => message),
-  };
-}
-
-const controllers: BrowserPanelController[] = [];
-let hit: Element | null;
-let frames: Map<number, FrameRequestCallback>;
-let nextFrame: number;
-
-function controllerFixture(screencast = false, sessionKey = "") {
-  let remoteOpen = true;
-  const { client, request } = createBrowserClient(
-    async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/remote") {
-        remoteOpen = false;
-        return { ok: true };
-      }
-      if (envelope.path === "/tabs" && !remoteOpen) {
-        return { running: true, tabs: [] };
-      }
-      if (envelope.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [
-            { tabId: "remote", targetId: "remote", title: "Remote", url: "https://remote.test/" },
-          ],
-        };
-      }
-      if (envelope.path === "/screencast") {
-        return {
-          token: "token",
-          wsPath: "/browser/screencast?token=token",
-          targetId: "remote",
-          url: "https://remote.test/",
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
-      }
-      if (envelope.path === "/download") {
-        return { download: { path: "/managed/remote.png", suggestedFilename: "remote.png" } };
-      }
-      if (envelope.path === "/act") {
-        return {
-          result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },
-        };
-      }
-      return { ok: true };
-    },
-    { screencast },
-  );
-  const host = new TestBrowserPanelHost(client);
-  host.sessionKey = sessionKey;
-  document.body.append(host.renderRoot);
-  hit = host.renderRoot.querySelector(".bp-stage");
-  const controller = new BrowserPanelController(host);
-  controllers.push(controller);
-  controller.hostConnected();
-  return { controller, host, request };
-}
-
-function flushFrames() {
-  const pending = [...frames.values()];
-  frames.clear();
-  for (const frame of pending) {
-    frame(0);
-  }
-}
-
-beforeEach(() => {
-  frames = new Map();
-  nextFrame = 0;
-  hit = null;
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("ResizeObserver", undefined);
-  vi.stubGlobal("IntersectionObserver", undefined);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
-  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => hit });
-  stubScreenshotMedia();
-});
-
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
-  }
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  Reflect.deleteProperty(document, "elementFromPoint");
-});
-
-async function mountSessionPanel(sessionKey: string) {
-  const panel = document.createElement("openclaw-browser-panel");
-  panel.sessionKey = sessionKey;
-  panel.available = true;
-  panel.remoteAvailable = false;
-  panel.embedded = true;
-  panel.presented = true;
-  document.body.append(panel);
-  await panel.updateComplete;
-  return panel;
-}
+const { controllerFixture, flushFrames, setHit } = setupNativeBrowserPanelTests();
 
 describe("native Browser panel ownership", () => {
   it("keeps tabs local when opening Browser in another chat session", async () => {
@@ -203,13 +32,13 @@ describe("native Browser panel ownership", () => {
     );
     await flushBrowserResponses();
     await first.updateComplete;
-    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(first.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
     first.presented = false;
     await first.updateComplete;
 
     const second = await mountSessionPanel("agent:main:second");
-    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    expect(second.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+    expect(second.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(second.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
 
     second.handleToggleRequest(
       new CustomEvent("openclaw:browser-panel-toggle", {
@@ -218,17 +47,17 @@ describe("native Browser panel ownership", () => {
     );
     await flushBrowserResponses();
     await second.updateComplete;
-    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(second.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
     first.presented = true;
     await first.updateComplete;
-    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(first.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(first.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(first.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/first",
     );
     first.remove();
     const restored = await mountSessionPanel("agent:main:first");
-    expect(restored.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(restored.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(restored.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(restored.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/first",
     );
   });
@@ -278,13 +107,13 @@ describe("native Browser panel ownership", () => {
     reply.resolve({ ok: true, tabId: opening.tabId });
     await flushBrowserResponses();
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+    expect(panel.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
     panel.sessionKey = "agent:main:first";
     await panel.updateComplete;
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(opening.url);
+    expect(panel.renderRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(opening.url);
   });
 
   it("releases pending download feedback when the panel changes sessions", async () => {
@@ -295,26 +124,26 @@ describe("native Browser panel ownership", () => {
     const panel = await mountSessionPanel("agent:main:first");
     const reply = createDeferred<{ ok: true; cancelled: boolean }>();
     native.postMessage.mockImplementationOnce(() => reply.promise);
-    panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    panel.renderRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
     await panel.updateComplete;
     expect(
-      panel.shadowRoot?.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy"),
+      panel.renderRoot?.querySelector('[aria-label="Downloading…"]')?.getAttribute("aria-busy"),
     ).toBe("true");
 
     panel.sessionKey = "agent:main:second";
     await panel.updateComplete;
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+    expect(panel.renderRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
       "https://example.test/second",
     );
     expect(
-      panel.shadowRoot?.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy"),
+      panel.renderRoot?.querySelector('[aria-label="Download file"]')?.getAttribute("aria-busy"),
     ).toBe("false");
     reply.reject(new Error("The old session's save failed"));
     await flushBrowserResponses();
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector(".bp-note--error")).toBeNull();
-    panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
+    expect(panel.renderRoot?.querySelector(".bp-note--error")).toBeNull();
+    panel.renderRoot?.querySelector<HTMLButtonElement>('[aria-label="Download file"]')?.click();
     await flushBrowserResponses();
     expect(native.messages().filter((message) => message.type === "download")).toEqual([
       { type: "download", tabId: "mac-first" },
@@ -502,7 +331,8 @@ describe("native Browser panel ownership", () => {
     const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
     panel.remoteAvailable = false;
-    document.body.append(panel);
+    mountSolid(() => panel);
+    await panel.updateComplete;
     const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => false });
     const link = document.createElement("a");
     link.href = "https://example.test/article";
@@ -511,10 +341,10 @@ describe("native Browser panel ownership", () => {
       link.click();
       await flushBrowserResponses();
       await panel.updateComplete;
-      const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
+      const stage = panel.renderRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-      hit = panel;
+      setHit(panel);
       flushFrames();
       expect(native.messages()).toContainEqual(
         expect.objectContaining({ type: "open", url: link.href }),
@@ -526,7 +356,7 @@ describe("native Browser panel ownership", () => {
           rect: { x: 10, y: 20, width: 500, height: 300 },
         }),
       );
-      expect(panel.shadowRoot?.querySelector(".bp-shot")).toBeNull();
+      expect(panel.renderRoot?.querySelector(".bp-shot")).toBeNull();
     } finally {
       routing.dispose();
       panel.remove();
@@ -542,12 +372,12 @@ describe("native Browser panel ownership", () => {
       panel.remoteAvailable = false;
       panel.embedded = true;
       panel.presented = true;
-      document.body.append(panel);
+      mountSolid(() => panel);
       await panel.updateComplete;
-      const stage = panel.shadowRoot?.querySelector<HTMLElement>(".bp-stage--native");
+      const stage = panel.renderRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();
       vi.spyOn(stage!, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 500, 300));
-      hit = panel;
+      setHit(panel);
       window.dispatchEvent(new Event("resize"));
       flushFrames();
       expect(native.messages().at(-1)).toMatchObject({
@@ -564,7 +394,9 @@ describe("native Browser panel ownership", () => {
       await panel.updateComplete;
       expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
       panel.remove();
-      expect(native.messages().at(-1)).toMatchObject({ type: "release-scope" });
+      await waitForSolid(() =>
+        expect(native.messages().at(-1)).toMatchObject({ type: "release-scope" }),
+      );
       expect(panel.hasAttribute("data-native-browser-scope")).toBe(false);
     },
   );
@@ -757,7 +589,7 @@ describe("native Browser panel ownership", () => {
     second();
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
-    hit = document.body;
+    setHit(document.body);
     window.dispatchEvent(new Event("resize"));
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
@@ -783,7 +615,7 @@ describe("native Browser panel ownership", () => {
         first.controller.native.presentation.scope,
       );
       native.postMessage.mockClear();
-      hit = first.host.renderRoot.querySelector(".bp-stage");
+      setHit(first.host.renderRoot.querySelector(".bp-stage"));
 
       if (action === "select") {
         await first.controller.selectTab("mac-one");

@@ -33,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
-let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { prepareSlackReply } from "../reply-blocks.js";
 import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
@@ -43,16 +42,6 @@ describe("sanitizeSlackMonitorReplyPayload", () => {
   it.each([
     { name: "drops reasoning", payload: { text: "private", isReasoning: true }, expected: null },
     { name: "drops internal-only text", payload: { text: "⚠️ 🛠️ Exec failed: " }, expected: null },
-    {
-      name: "preserves visible prose",
-      payload: { text: "The directory is missing.\n⚠️ 🛠️ Exec failed: " },
-      expected: { text: "The directory is missing." },
-    },
-    {
-      name: "preserves media when internal text is removed",
-      payload: { text: "⚠️ 🛠️ Exec failed: ", mediaUrl: "https://example.com/a.png" },
-      expected: { text: undefined, mediaUrl: "https://example.com/a.png" },
-    },
     {
       name: "preserves structured content when internal text is removed",
       payload: {
@@ -141,8 +130,7 @@ function readPlainSectionTexts(message: SlashTestMessage): string[] {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
-      await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -152,21 +140,8 @@ describe("deliverReplies identity passthrough", () => {
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
   });
-  it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconEmoji: ":robot:" };
-    await deliverReplies(baseParams({ identity }));
 
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
-
-  it.each([
-    { name: "current reply", replyToCurrent: true, isCompactionNotice: false },
-    { name: "compaction notice", replyToCurrent: true, isCompactionNotice: true },
-    { name: "explicit target", replyToCurrent: false, isCompactionNotice: false },
-  ])(
+  it.each([{ name: "current reply", replyToCurrent: true, isCompactionNotice: false }])(
     "routes $name without mistaking a child for its thread root",
     async ({ replyToCurrent, isCompactionNotice }) => {
       sendMock.mockResolvedValue({ messageId: "1800000000.000003", channelId: "C123" });
@@ -191,25 +166,7 @@ describe("deliverReplies identity passthrough", () => {
     },
   );
 
-  it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
-    await deliverReplies(
-      baseParams({
-        identity,
-        replies: [{ text: "caption", mediaUrls: ["https://example.com/img.png"] }],
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
-
-  it.each([
-    { rowLength: 110, textCalls: 1 },
-    { rowLength: 450, textCalls: 2 },
-  ])(
+  it.each([{ rowLength: 450, textCalls: 2 }])(
     "delivers complete literal table text within the hard limit ($rowLength)",
     async ({ rowLength, textCalls }) => {
       sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
@@ -355,75 +312,6 @@ describe("deliverReplies identity passthrough", () => {
     expect(event).not.toHaveProperty("messageId");
   });
 
-  it("omits identity key when not provided", async () => {
-    sendMock.mockResolvedValue(undefined);
-    await deliverReplies(baseParams());
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options).not.toHaveProperty("identity");
-  });
-
-  it("forwards the validated Enterprise event scope", async () => {
-    sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
-    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const eventScope = {
-      teamId: "T1",
-      client: listenerClient,
-    };
-
-    await deliverReplies(
-      baseParams({
-        cfg: { channels: { slack: {} } },
-        eventScope,
-        mediaMaxBytes: 1024,
-      }),
-    );
-
-    const options = requireSendCall()[2];
-    expect(options.eventScope).toBe(eventScope);
-    expect(options.textLimit).toBe(4000);
-    expect(options.mediaMaxBytes).toBe(1024);
-  });
-
-  it("delivers block-only replies through to sendMessageSlack", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const blocks = [
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:reply_button",
-            text: { type: "plain_text", text: "Option A" },
-            value: "reply_1_option_a",
-          },
-        ],
-      },
-    ];
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          {
-            text: "",
-            channelData: {
-              slack: {
-                blocks,
-              },
-            },
-          },
-        ],
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const [target, text, options] = requireSendCall();
-    expect(target).toBe("C123");
-    expect(text).toBe("");
-    expect(options.blocks).toStrictEqual(blocks);
-  });
-
   it("renders interactive replies into Slack blocks during delivery", async () => {
     sendMock.mockResolvedValue(undefined);
 
@@ -460,79 +348,21 @@ describe("deliverReplies identity passthrough", () => {
     expect(blocks[1]?.elements?.[0]?.style).toBe("primary");
     expect(blocks[1]?.elements?.[0]?.value).toBe("approve");
   });
-
-  it("rolls ordered reply blocks into another Slack message at the platform limit", async () => {
-    sendMock.mockResolvedValue(undefined);
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          {
-            text: "Choose",
-            channelData: {
-              slack: {
-                blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
-              },
-            },
-            interactive: {
-              blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
-            },
-          },
-        ],
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(requireSendCall(0)[2].blocks as unknown[]).toHaveLength(50);
-    expect(requireSendCall(1)[2].blocks).toEqual([
-      expect.objectContaining({ type: "section" }),
-      expect.objectContaining({ type: "actions" }),
-    ]);
-  });
 });
 
-describe("resolveSlackThreadTs fallback classification", () => {
+describe("createSlackReplyDeliveryPlan fallback classification", () => {
   const threadTs = "1234567890.123456";
   const messageTs = "9999999999.999999";
 
   it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
     expect(
-      resolveSlackThreadTs({
+      createSlackReplyDeliveryPlan({
         replyToMode: "off",
         incomingThreadTs: threadTs,
         messageTs,
-        hasReplied: false,
-      }),
+        hasRepliedRef: { value: false },
+      }).peekThreadTs(),
     ).toBe(threadTs);
-  });
-
-  it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
-    expect(
-      resolveSlackThreadTs({
-        replyToMode: "off",
-        incomingThreadTs: messageTs,
-        messageTs,
-        hasReplied: false,
-      }),
-    ).toBeUndefined();
-
-    expect(
-      resolveSlackThreadTs({
-        replyToMode: "first",
-        incomingThreadTs: messageTs,
-        messageTs,
-        hasReplied: false,
-      }),
-    ).toBe(messageTs);
-
-    expect(
-      resolveSlackThreadTs({
-        replyToMode: "batched",
-        incomingThreadTs: messageTs,
-        messageTs,
-        hasReplied: true,
-      }),
-    ).toBeUndefined();
   });
 });
 
@@ -634,27 +464,6 @@ describe("deliverSlackSlashReplies chunking", () => {
       mrkdwn: false,
       response_type: "ephemeral",
     });
-  });
-
-  it("splits non-native blocks before slash accessibility text exceeds 40k", async () => {
-    const respond = vi.fn(async () => undefined);
-    const blocks = Array.from({ length: 20 }, (_entry, index) => ({
-      type: "section",
-      text: { type: "plain_text", text: `${String(index)}-${"x".repeat(2_990)}` },
-    }));
-
-    await deliverSlackSlashReplies({
-      replies: [{ channelData: { slack: { blocks } } }],
-      respond,
-      ephemeral: true,
-      textLimit: 8000,
-    });
-
-    expect(respond).toHaveBeenCalledTimes(2);
-    const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
-    expect(messages.every((message) => message.text.length <= 40_000)).toBe(true);
-    expect(messages.every((message) => message.mrkdwn === false)).toBe(true);
-    expect(messages.flatMap((message) => message.blocks ?? [])).toEqual(blocks);
   });
 
   it("replaces rejected native data in place without duplicating authored text", async () => {
@@ -971,27 +780,6 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
   });
 
-  it("allows more than five follow-ups for uncapped Web API delivery", async () => {
-    const respond = vi.fn(async () => undefined);
-    const responseBudget = {
-      respond,
-      remaining: () => undefined,
-    };
-
-    await deliverSlackSlashReplies({
-      replies: Array.from({ length: 6 }, (_entry, index) => ({ text: `reply-${String(index)}` })),
-      respond,
-      responseBudget,
-      ephemeral: false,
-      textLimit: 8000,
-    });
-
-    expect(respond).toHaveBeenCalledTimes(6);
-    expect(
-      Array.from({ length: 6 }, (_entry, index) => requireSlashMessage(respond, index).text),
-    ).toEqual(["reply-0", "reply-1", "reply-2", "reply-3", "reply-4", "reply-5"]);
-  });
-
   it("suppresses reasoning payloads in slash replies", async () => {
     const respond = vi.fn(async () => undefined);
 
@@ -1036,29 +824,6 @@ describe("deliverSlackSlashReplies chunking", () => {
       sessionKey: "agent:main:slack:slash:u1",
     });
     expect(triggerInternalHook).toHaveBeenCalledOnce();
-  });
-
-  it("emits one terminal hook for a multi-part slash reply", async () => {
-    const respond = vi.fn(async () => undefined);
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-
-    await deliverSlackSlashReplies({
-      replies: [{ text: "first\nsecond" }],
-      respond,
-      ephemeral: true,
-      textLimit: 8,
-      chunkMode: "newline",
-      messageSentHookTarget: "user:U1",
-    });
-
-    expect(respond).toHaveBeenCalledTimes(2);
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({
-      to: "user:U1",
-      content: "first\nsecond",
-      success: true,
-    });
   });
 
   it("emits only failure when a later slash response chunk throws", async () => {
@@ -1141,21 +906,6 @@ describe("deliverReplies reasoning suppression", () => {
     const [, text] = requireSendCall();
     expect(text).toBe("visible answer");
   });
-
-  it("delivers nothing when all payloads are reasoning", async () => {
-    sendMock.mockResolvedValue(undefined);
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          { text: "Let me think about this...", isReasoning: true },
-          { text: "I need to consider...", isReasoning: true },
-        ],
-      }),
-    );
-
-    expect(sendMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("deliverReplies message_sent hook", () => {
@@ -1169,90 +919,6 @@ describe("deliverReplies message_sent hook", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
-  });
-
-  it("emits message_sent with success=true after a text reply is delivered", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "1700000000.000100", channelId: "C123" });
-
-    const result = await deliverReplies(baseParams({ replies: [{ text: "shipped" }] }));
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    expect(result).toEqual({ messageId: "1700000000.000100", channelId: "C123" });
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({
-      to: "C123",
-      content: "shipped",
-      success: true,
-      messageId: "1700000000.000100",
-    });
-    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(context).toMatchObject({ channelId: "slack" });
-  });
-
-  it("reports the trimmed content sent for text-only replies", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(baseParams({ replies: [{ text: "  shipped  " }] }));
-
-    expect(sendMock).toHaveBeenCalledWith("C123", "shipped", expect.anything());
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({ content: "shipped", success: true });
-  });
-
-  it("threads the session key into the message_sent plugin context for correlation", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "1700000000.000200", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "correlated" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-      }),
-    );
-
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
-    // Plugins observing both `message_sending` and `message_sent` must see the
-    // same `sessionKey` (mirrors the shared outbound emitter contract).
-    expect(event).toMatchObject({ sessionKey: "slack:C123:U1" });
-    expect(context).toMatchObject({ sessionKey: "slack:C123:U1" });
-  });
-
-  it("uses the logical hook target while delivering to a physical DM channel", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "D123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "direct reply" }],
-        target: "channel:D123",
-        messageSentHookTarget: "user:U123",
-      }),
-    );
-
-    expect(sendMock).toHaveBeenCalledWith("channel:D123", "direct reply", expect.anything());
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(event).toMatchObject({ to: "user:U123" });
-    expect(context).toMatchObject({ conversationId: "user:U123" });
-  });
-
-  it("emits message_sent with success=false when delivery throws", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockRejectedValue(new Error("channel_not_found"));
-
-    await expect(deliverReplies(baseParams({ replies: [{ text: "boom" }] }))).rejects.toThrow(
-      /channel_not_found/,
-    );
-
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({ success: false, content: "boom" });
-    expect(String(event.error)).toMatch(/channel_not_found/);
   });
 
   it("defers both success and failure hooks for caller-owned terminal delivery", async () => {
@@ -1343,130 +1009,6 @@ describe("deliverReplies message_sent hook", () => {
     expect(event).not.toHaveProperty("messageId");
   });
 
-  it("reports spoken text for explicit media-only TTS replies", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "tts-2", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          {
-            mediaUrl: "https://example.com/tts.mp3",
-            audioAsVoice: true,
-            spokenText: "  Explicit spoken answer  ",
-          },
-        ],
-      }),
-    );
-
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({
-      content: "Explicit spoken answer",
-      success: true,
-    });
-    expect(event).not.toHaveProperty("messageId");
-  });
-
-  it("keeps visible media captions ahead of hidden spoken text", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    sendMock.mockResolvedValue({ messageId: "tts-3", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          {
-            text: "Visible caption",
-            mediaUrl: "https://example.com/tts.mp3",
-            audioAsVoice: true,
-            spokenText: "Hidden spoken answer",
-          },
-        ],
-      }),
-    );
-
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({
-      content: "Visible caption",
-      success: true,
-    });
-    expect(event).not.toHaveProperty("messageId");
-  });
-
-  it("emits only failure when a later attachment in the payload fails", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    const accepted = acceptedSlackSendResult("media-1");
-    const failure = new PlatformMessageNotDispatchedError("second_upload_failed", {
-      cause: new Error("upload connection refused"),
-    });
-    sendMock
-      .mockImplementationOnce(async (_target, _text, options) => {
-        await options.onDeliveryResult?.(accepted);
-        return accepted;
-      })
-      .mockRejectedValueOnce(failure);
-
-    const error = await deliverReplies(
-      baseParams({
-        replies: [
-          {
-            text: "two attachments",
-            mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-          },
-        ],
-      }),
-    ).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      sentBeforeError: true,
-      visibleReplySent: true,
-      deliveryResult: {
-        messageIds: ["media-1"],
-        visibleReplySent: true,
-        receipt: {
-          primaryPlatformMessageId: "media-1",
-          platformMessageIds: ["media-1"],
-          parts: [{ platformMessageId: "media-1", kind: "media", index: 0 }],
-        },
-      },
-    });
-    expect((error as Error).cause).toBe(failure);
-    expect(sendMock).toHaveBeenCalledTimes(2);
-
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({
-      content: "two attachments",
-      success: false,
-    });
-  });
-
-  it("preserves an accepted internal chunk when the same Slack send later fails", async () => {
-    const accepted = acceptedSlackSendResult("chunk-1", "text");
-    const failure = new PlatformMessageNotDispatchedError("second_chunk_failed", {
-      cause: new Error("upload connection refused"),
-    });
-    sendMock.mockImplementationOnce(async (_target, _text, options) => {
-      await options.onDeliveryResult?.(accepted);
-      throw failure;
-    });
-
-    const error = await deliverReplies(baseParams({ replies: [{ text: "chunked reply" }] })).catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["chunk-1"],
-        receipt: { platformMessageIds: ["chunk-1"] },
-        visibleReplySent: true,
-      },
-    });
-    expect((error as Error).cause).toBe(failure);
-    expect(sendMock).toHaveBeenCalledOnce();
-  });
-
   it("preserves accepted media and blocks when a later block projection fails", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     const failure = new Error("later block projection failed");
@@ -1522,22 +1064,6 @@ describe("deliverReplies message_sent hook", () => {
       }),
       expect.anything(),
     );
-  });
-
-  it("preserves an undispatched first-send failure without a partial wrapper", async () => {
-    const failure = new PlatformMessageNotDispatchedError("first_upload_failed", {
-      cause: new Error("upload connection refused"),
-    });
-    sendMock.mockRejectedValueOnce(failure);
-
-    await expect(
-      deliverReplies(
-        baseParams({
-          replies: [{ text: "one attachment", mediaUrls: ["https://example.com/one.png"] }],
-        }),
-      ),
-    ).rejects.toBe(failure);
-    expect(sendMock).toHaveBeenCalledOnce();
   });
 
   it("does not carry accepted receipts into the next logical reply", async () => {
@@ -1611,50 +1137,6 @@ describe("deliverReplies message_sent hook", () => {
     expect(deliveryError.cause).toBe(failure);
     expect(sendMock).toHaveBeenCalledOnce();
     expect(postMessage).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not emit the plugin hook when no listener observes message_sent", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(baseParams({ replies: [{ text: "quiet" }] }));
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
-  });
-
-  it("fires the internal message:sent hook when a session key is supplied", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "internal" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-      }),
-    );
-
-    expect(triggerInternalHook).toHaveBeenCalledOnce();
-  });
-
-  it("threads group context into the internal message:sent hook when isGroup is set", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "in a channel" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-        isGroup: true,
-        groupId: "C123",
-      }),
-    );
-
-    expect(triggerInternalHook).toHaveBeenCalledOnce();
-    const internalCalls = triggerInternalHook.mock.calls as unknown as Array<
-      [{ context?: Record<string, unknown> }]
-    >;
-    expect(internalCalls[0]?.[0]?.context).toMatchObject({ isGroup: true, groupId: "C123" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

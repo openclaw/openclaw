@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -14,33 +15,14 @@ import {
 } from "./matrix/account-config.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
-import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
+import { setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import type { MatrixOwnDeviceVerificationStatus, MatrixRoomKeyBackupStatus } from "./matrix/sdk.js";
+import { setMatrixConsoleLogging } from "./matrix/sdk/logger.js";
 import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-let matrixCliExitScheduled = false;
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
-
-function scheduleMatrixCliExit(): void {
-  if (matrixCliExitScheduled || process.env.VITEST) {
-    return;
-  }
-  matrixCliExitScheduled = true;
-  // matrix-js-sdk rust crypto can leave background async work alive after command completion.
-  setTimeout(() => {
-    process.stdout.write("", () => {
-      process.stderr.write("", () => {
-        process.exit(process.exitCode ?? 0);
-      });
-    });
-  }, 0);
-}
-
-function markCliFailure(): void {
-  process.exitCode = 1;
-}
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const bytes = await readByteStreamWithLimit(process.stdin, {
@@ -196,11 +178,6 @@ export function formatMatrixCliText(
   return sanitizeMatrixCliText(value ?? fallback);
 }
 
-function configureCliLogMode(verbose: boolean): void {
-  setMatrixSdkLogMode(verbose ? "default" : "quiet");
-  setMatrixSdkConsoleLogging(verbose);
-}
-
 export function parseOptionalInt(
   value: string | undefined,
   fieldName: string,
@@ -227,9 +204,13 @@ export function parseOptionalInt(
   return parsed;
 }
 
+export type MatrixCliOptions = {
+  account?: string;
+  verbose?: boolean;
+  json?: boolean;
+};
+
 type MatrixCliCommandConfig<TResult> = {
-  verbose: boolean;
-  json: boolean;
   run: () => Promise<TResult>;
   onText: (result: TResult, verbose: boolean) => void;
   onJson?: (result: TResult) => unknown;
@@ -237,33 +218,83 @@ type MatrixCliCommandConfig<TResult> = {
   errorPrefix: string;
   onJsonError?: (message: string) => unknown;
   onTextError?: (message: string) => void;
+  gateway?: {
+    method: string;
+    params: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+    onAccount?: (accountId: string) => void;
+  };
 };
 
+export async function runMatrixCliAccountCommand<TResult>(
+  options: MatrixCliOptions,
+  config: Omit<MatrixCliCommandConfig<TResult>, "run" | "onText"> & {
+    run: (context: ReturnType<typeof resolveMatrixCliAccountContext>) => Promise<TResult>;
+    onText: (result: TResult, verbose: boolean, accountId: string) => void;
+  },
+): Promise<void> {
+  let accountId = normalizeAccountId(options.account);
+  await runMatrixCliCommand(options, {
+    ...config,
+    ...(config.gateway
+      ? {
+          gateway: {
+            ...config.gateway,
+            onAccount: (id: string) => {
+              accountId = id;
+            },
+          },
+        }
+      : {}),
+    run: () => {
+      const context = resolveMatrixCliAccountContext(options.account);
+      accountId = context.accountId;
+      return config.run(context);
+    },
+    onText: (result, verbose) => {
+      printAccountLabel(accountId);
+      config.onText(result, verbose, accountId);
+    },
+  });
+}
+
 export async function runMatrixCliCommand<TResult>(
+  options: Pick<MatrixCliOptions, "verbose" | "json">,
   config: MatrixCliCommandConfig<TResult>,
 ): Promise<void> {
-  configureCliLogMode(config.verbose);
+  const verbose = options.verbose === true;
+  const json = options.json === true;
+  setMatrixSdkLogMode(verbose ? "default" : "quiet");
+  setMatrixConsoleLogging(verbose);
   try {
-    const result = await config.run();
-    if (config.json) {
+    const outcome = await runWithLocalStateOwner<{ result: TResult; accountId?: string }>({
+      method: config.gateway?.method ?? "matrix.cli",
+      params: (await config.gateway?.params()) ?? {},
+      target: "Matrix account state",
+      // Even diagnostics can initialize crypto and persist its final snapshot.
+      ...(config.gateway ? {} : { onForeignOwner: "refuse" as const }),
+      runLocal: async () => ({ result: await config.run() }),
+    });
+    if (outcome.accountId) {
+      config.gateway?.onAccount?.(outcome.accountId);
+    }
+    const result = outcome.result;
+    if (json) {
       printJson(config.onJson ? config.onJson(result) : result);
     } else {
-      config.onText(result, config.verbose);
+      config.onText(result, verbose);
     }
     if (config.shouldFail?.(result)) {
-      markCliFailure();
+      process.exitCode = 1;
     }
   } catch (err) {
     const message = formatErrorMessage(err);
-    if (config.json) {
+    if (json) {
       printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
     } else {
       console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
       config.onTextError?.(message);
     }
-    markCliFailure();
-  } finally {
-    scheduleMatrixCliExit();
+    process.exitCode = 1;
   }
 }
 
@@ -271,18 +302,20 @@ export function sanitizeMatrixCliText(value: string): string {
   let withoutAnsi = "";
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
-    if (code === 0x9b) {
-      index++;
+    const marker = code === 0x1b ? value[index + 1] : undefined;
+    if (code === 0x9b || marker === "[") {
+      index += code === 0x9b ? 1 : 2;
       while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
         index++;
       }
       continue;
     }
-    if (code === 0x9d) {
-      index++;
+    const isC1String = code === 0x90 || code === 0x9d || code === 0x9e || code === 0x9f;
+    if (isC1String || marker === "]") {
+      index += isC1String ? 1 : 2;
       while (index < value.length) {
         const current = value.charCodeAt(index);
-        if (current === 0x07 || current === 0x9c) {
+        if (current === 0x07 || (isC1String && current === 0x9c)) {
           break;
         }
         if (current === 0x1b && value[index + 1] === "\\") {
@@ -293,77 +326,20 @@ export function sanitizeMatrixCliText(value: string): string {
       }
       continue;
     }
-    if (code === 0x90 || code === 0x9e || code === 0x9f) {
+    if (code === 0x1b) {
       index++;
-      while (index < value.length) {
-        const current = value.charCodeAt(index);
-        if (current === 0x07 || current === 0x9c) {
-          break;
-        }
-        if (current === 0x1b && value[index + 1] === "\\") {
-          index++;
-          break;
-        }
-        index++;
-      }
-      continue;
-    }
-    if (code !== 0x1b) {
+    } else {
       withoutAnsi += value[index];
-      continue;
-    }
-
-    const marker = value[index + 1];
-    if (marker === "[") {
-      index += 2;
-      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
-        index++;
-      }
-      continue;
-    }
-    if (marker === "]") {
-      index += 2;
-      while (index < value.length) {
-        const current = value.charCodeAt(index);
-        if (current === 0x07) {
-          break;
-        }
-        if (current === 0x1b && value[index + 1] === "\\") {
-          index++;
-          break;
-        }
-        index++;
-      }
-      continue;
-    }
-    index++;
-  }
-
-  let sanitized = "";
-  for (const character of withoutAnsi) {
-    const code = character.charCodeAt(0);
-    if (!isUnsafeMatrixCliTerminalCode(code)) {
-      sanitized += character;
     }
   }
-  return sanitized;
-}
 
-function isUnsafeMatrixCliTerminalCode(code: number): boolean {
-  return (
-    code < 0x20 ||
-    code === 0x7f ||
-    (code >= 0x80 && code <= 0x9f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069)
-  );
+  // Strip terminal controls and directional overrides after removing escape sequences.
+  return withoutAnsi.replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, "");
 }
 
 function isAnsiFinalByte(code: number): boolean {
   return code >= 0x40 && code <= 0x7e;
 }
-
-type MatrixCliBackupStatus = MatrixRoomKeyBackupStatus;
 
 export type MatrixCliVerificationStatus = MatrixOwnDeviceVerificationStatus & {
   pendingVerifications: number;
@@ -373,12 +349,9 @@ export type MatrixCliVerificationStatus = MatrixOwnDeviceVerificationStatus & {
   deviceOwnerVerified?: boolean;
 };
 
-export type MatrixCliVerificationCommandOptions = {
-  account?: string;
+export type MatrixCliVerificationCommandOptions = MatrixCliOptions & {
   userId?: string;
   roomId?: string;
-  verbose?: boolean;
-  json?: boolean;
 };
 
 export type MatrixCliSelfVerificationCommandOptions = {
@@ -387,35 +360,13 @@ export type MatrixCliSelfVerificationCommandOptions = {
   verbose?: boolean;
 };
 
-export type MatrixCliVerificationSummary = MatrixVerificationSummary;
 type MatrixCliVerificationSas = NonNullable<MatrixVerificationSummary["sas"]>;
 
-export function resolveBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixCliBackupStatus;
-}): MatrixCliBackupStatus {
-  return {
-    serverVersion: status.backup?.serverVersion ?? status.backupVersion ?? null,
-    activeVersion: status.backup?.activeVersion ?? null,
-    trusted: status.backup?.trusted ?? null,
-    matchesDecryptionKey: status.backup?.matchesDecryptionKey ?? null,
-    decryptionKeyCached: status.backup?.decryptionKeyCached ?? null,
-    keyLoadAttempted: status.backup?.keyLoadAttempted ?? false,
-    keyLoadError: status.backup?.keyLoadError ?? null,
-  };
-}
-
 function yesNoUnknown(value: boolean | null): string {
-  if (value === true) {
-    return "yes";
-  }
-  if (value === false) {
-    return "no";
-  }
-  return "unknown";
+  return value === true ? "yes" : value === false ? "no" : "unknown";
 }
 
-export function printBackupStatus(backup: MatrixCliBackupStatus): void {
+export function printBackupStatus(backup: MatrixRoomKeyBackupStatus): void {
   console.log(`Backup server version: ${formatMatrixCliText(backup.serverVersion, "none")}`);
   console.log(`Backup active on this device: ${formatMatrixCliText(backup.activeVersion, "no")}`);
   console.log(`Backup trusted by this device: ${yesNoUnknown(backup.trusted)}`);
@@ -433,20 +384,6 @@ export function printVerificationIdentity(status: {
 }): void {
   console.log(`User: ${formatMatrixCliText(status.userId)}`);
   console.log(`Device: ${formatMatrixCliText(status.deviceId)}`);
-}
-
-export function printVerificationBackupSummary(status: {
-  backupVersion: string | null;
-  backup?: MatrixCliBackupStatus;
-}): void {
-  printBackupSummary(resolveBackupStatus(status));
-}
-
-export function printVerificationBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixCliBackupStatus;
-}): void {
-  printBackupStatus(resolveBackupStatus(status));
 }
 
 export function printVerificationTrustDiagnostics(status: {
@@ -468,7 +405,7 @@ function formatMatrixCliSasEmoji(emoji: NonNullable<MatrixCliVerificationSas["em
     .join(" | ");
 }
 
-export function printMatrixVerificationSummary(summary: MatrixCliVerificationSummary): void {
+export function printMatrixVerificationSummary(summary: MatrixVerificationSummary): void {
   console.log(`Verification id: ${sanitizeMatrixCliText(summary.id)}`);
   if (summary.transactionId) {
     console.log(`Transaction id: ${sanitizeMatrixCliText(summary.transactionId)}`);
@@ -491,17 +428,15 @@ export function printMatrixVerificationSummary(summary: MatrixCliVerificationSum
   if (summary.chosenMethod) {
     console.log(`Chosen method: ${sanitizeMatrixCliText(summary.chosenMethod)}`);
   }
-  if (summary.hasSas && summary.sas?.emoji?.length) {
-    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(summary.sas.emoji)}`);
-  } else if (summary.hasSas && summary.sas?.decimal) {
-    console.log(`SAS decimals: ${summary.sas.decimal.join(" ")}`);
+  if (summary.hasSas && (summary.sas?.emoji?.length || summary.sas?.decimal)) {
+    printMatrixVerificationSas(summary.sas);
   }
   if (summary.error) {
     console.log(`Verification error: ${sanitizeMatrixCliText(summary.error)}`);
   }
 }
 
-export function printMatrixVerificationSummaries(summaries: MatrixCliVerificationSummary[]): void {
+export function printMatrixVerificationSummaries(summaries: MatrixVerificationSummary[]): void {
   if (summaries.length === 0) {
     console.log("Verifications: none");
     return;
@@ -532,14 +467,14 @@ export function printVerificationGuidance(
 }
 
 export function printBackupGuidance(
-  backup: MatrixCliBackupStatus,
+  backup: MatrixRoomKeyBackupStatus,
   accountId?: string,
   options: { recoveryKeyStored?: boolean } = {},
 ): void {
   printGuidance(buildBackupGuidance(backup, accountId, options));
 }
 
-export function printBackupSummary(backup: MatrixCliBackupStatus): void {
+export function printBackupSummary(backup: MatrixRoomKeyBackupStatus): void {
   const issue = resolveMatrixRoomKeyBackupIssue(backup);
   console.log(`Backup: ${issue.summary}`);
   if (backup.serverVersion) {
@@ -551,7 +486,7 @@ function buildVerificationGuidance(
   status: MatrixCliVerificationStatus,
   accountId?: string,
 ): string[] {
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const nextSteps = new Set<string>();
   if (!status.verified) {
     if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
@@ -586,7 +521,7 @@ function buildVerificationGuidance(
 }
 
 function buildBackupGuidance(
-  backup: MatrixCliBackupStatus,
+  backup: MatrixRoomKeyBackupStatus,
   accountId?: string,
   options: { recoveryKeyStored?: boolean } = {},
 ): string[] {
@@ -654,9 +589,9 @@ export function printVerificationStatus(
   if (status.serverDeviceKnown === false) {
     console.log("Device issue: current Matrix device is missing from the homeserver device list");
   }
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
-  printVerificationBackupSummary(status);
+  printBackupSummary(backup);
   if (backupIssue.message) {
     console.log(`Backup issue: ${backupIssue.message}`);
   }
@@ -674,7 +609,7 @@ export function printVerificationStatus(
       console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown ?? null)}`);
     }
     printVerificationTrustDiagnostics(status);
-    printVerificationBackupStatus(status);
+    printBackupStatus(backup);
     printTimestamp("Recovery key created at", status.recoveryKeyCreatedAt);
     console.log(`Pending verifications: ${status.pendingVerifications}`);
   }

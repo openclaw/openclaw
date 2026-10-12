@@ -7,34 +7,32 @@ import {
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import { createBoundSessionHistorySubagentProjection } from "./session-history-readonly-reader.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
 /** Bind host-owned stores and retain their admission for one display operation. */
 export function createSessionHistorySubagentProjection(
   scope: SessionTranscriptReadScope,
-  options: { deferSources?: boolean } = {},
 ): SubagentCoordinationDisplayResolver {
   const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
   const currentSource = {
     agentId: databaseOptions.agentId,
     path: resolveOpenClawAgentSqlitePath(databaseOptions),
   };
-  const context = captureOpenClawStateWorkerContext();
+  const env = process.env;
+  const context = captureOpenClawStateWorkerContext({ env });
   const sourceReads = prepareGatewaySessionStoreReadSources({
     cfg: getRuntimeConfig(),
     currentSource,
-    env: process.env,
+    env,
     registryPath: context.admission.databasePath,
-    deferSources: options.deferSources,
   });
   const bound = createBoundSessionHistorySubagentProjection(
     (read) => withCurrentProjectionSnapshot(scope, read, { readOnly: true }),
     {
       path: context.admission.databasePath,
       environment: context.environment,
-      coordinatorRuntime: context.coordinatorRuntime,
     },
     () => sourceReads.sources,
   );

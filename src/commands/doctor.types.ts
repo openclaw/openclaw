@@ -1,4 +1,3 @@
-/** CLI option shape shared by doctor command entrypoints and prompt helpers. */
 export type DoctorOptions = {
   workspaceSuggestions?: boolean;
   yes?: boolean;

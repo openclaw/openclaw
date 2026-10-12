@@ -11,13 +11,14 @@ import {
 import { hasLiveDeliveryQueueClaim } from "../delivery-queue-sqlite.types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";
 import { createDeliveryQueueMediaRetentionInDatabase } from "./delivery-queue-media-staging.kernel.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import { outboundDeliveryQueueName } from "./delivery-queue-namespaces.js";
+import { resolveOutboundDeliveryQueueNameInDatabase } from "./delivery-queue-ownership.kernel.js";
 import type {
   AckDeliveryOptions,
   FailPendingDeliveryResult,
 } from "./delivery-queue-settlement.types.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 /** Retires an unsent live claim while its adapter preparation still owns resources. */
 export function retireUnsentDeliveryInDatabase(
@@ -30,11 +31,12 @@ export function retireUnsentDeliveryInDatabase(
   terminalOutcome?: "failed",
 ): { spoolPaths: string[]; retention?: string } | undefined {
   const stateDir = params.stateDir;
+  const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, params.id);
   let retired: { spoolPaths: string[]; retention?: string } | undefined;
   transitionOwnedDeliveryQueueEntryInDatabase(
     database,
     {
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      queueName,
       id: params.id,
       platformSendAttemptId: params.producerClaimId,
     },
@@ -56,7 +58,7 @@ export function retireUnsentDeliveryInDatabase(
         return;
       }
       const artifacts = collectEntrySpoolPaths(
-        acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
+        preparedOutboundPayloads(entry.preparedBatch),
         stateDir,
       );
       if (
@@ -64,7 +66,7 @@ export function retireUnsentDeliveryInDatabase(
         terminalizePendingDeliveryQueueEntryInDatabase(
           database,
           prepareDeliveryQueueTerminalEntry({
-            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            queueName,
             id: entry.id,
             entry,
             expectedStatus: "pending",
@@ -83,7 +85,7 @@ export function retireUnsentDeliveryInDatabase(
       if (terminalOutcome !== "failed") {
         // Cancellation removes custody without recording a successful receipt,
         // including for stable intents with completion retention.
-        deleteDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, entry.id);
+        deleteDeliveryQueueEntryInDatabase(database, queueName, entry.id);
       }
       retired = { spoolPaths: artifacts, retention };
     },
@@ -98,51 +100,38 @@ export function ackDeliveryInDatabase(
   options?: AckDeliveryOptions,
 ): string[] {
   const stateDir = requestedStateDir;
+  const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, id);
   // Read the media references before the row goes, then unlink only after the
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
   let spoolPaths: string[] = [];
-  const settle = (current: QueuedDelivery | null): void => {
-    spoolPaths = current
-      ? collectEntrySpoolPaths(
-          acceptedPreparedOutboundEntries(current.preparedBatch).map(
-            (prepared) => prepared.payload,
-          ),
-          stateDir,
-        )
-      : [];
-    if (current?.completionRetention && options?.suppressCompletionReceipt !== true) {
-      if (options && "expectedPlatformSendAttemptId" in options) {
-        completeLoadedDeliveryQueueEntryInDatabase(
-          database,
-          OUTBOUND_DELIVERY_QUEUE_NAME,
-          id,
-          current,
-        );
-      } else {
-        completeDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
-      }
-    } else {
-      deleteDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
-    }
-  };
   // A claimless caller has no owner to assert, so an unclaimed row settles and an
   // already-missing row is a no-op; either way it must never touch a live claim.
-  const platformSendAttemptId =
-    options && "expectedPlatformSendAttemptId" in options
-      ? (options.expectedPlatformSendAttemptId ?? null)
-      : null;
+  const hasExpectedClaim = Boolean(options && "expectedPlatformSendAttemptId" in options);
   const settled = transitionOwnedDeliveryQueueEntryInDatabase(
     database,
     {
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      queueName,
       id,
-      platformSendAttemptId,
-      allowMissingEntry: !(options && "expectedPlatformSendAttemptId" in options),
+      platformSendAttemptId: options?.expectedPlatformSendAttemptId ?? null,
+      allowMissingEntry: !hasExpectedClaim,
     },
     (entry) => {
       // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-      settle(entry as QueuedDelivery);
+      const current = entry as QueuedDelivery;
+      spoolPaths = collectEntrySpoolPaths(
+        preparedOutboundPayloads(current.preparedBatch),
+        stateDir,
+      );
+      if (current.completionRetention && options?.suppressCompletionReceipt !== true) {
+        if (hasExpectedClaim) {
+          completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current);
+        } else {
+          completeDeliveryQueueEntryInDatabase(database, queueName, id);
+        }
+      } else {
+        deleteDeliveryQueueEntryInDatabase(database, queueName, id);
+      }
     },
   );
   if (!settled) {
@@ -162,7 +151,8 @@ export function failPendingDeliveryInDatabase(
   },
   preparedTerminal?: ReturnType<typeof prepareDeliveryQueueTerminalEntry>,
 ): FailPendingDeliveryResult {
-  const terminal = { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, id: params.id, entry: params.entry };
+  const queueName = outboundDeliveryQueueName(params.entry);
+  const terminal = { queueName, id: params.id, entry: params.entry };
   // An unmatched claim must remain a no-op; standalone calls validate before opening state.
   const prepared =
     params.expectedPlatformSendAttemptId === undefined
@@ -180,7 +170,7 @@ export function failPendingDeliveryInDatabase(
     transitionOwnedDeliveryQueueEntryInDatabase(
       database,
       {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        queueName,
         id: params.id,
         platformSendAttemptId: params.expectedPlatformSendAttemptId,
       },
@@ -189,8 +179,5 @@ export function failPendingDeliveryInDatabase(
   } else {
     terminalize();
   }
-  if (terminalized) {
-    return { status: "failed" };
-  }
-  return { status: "not_pending" };
+  return { status: terminalized ? "failed" : "not_pending" };
 }

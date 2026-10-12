@@ -14,6 +14,8 @@ export type ReleaseToolingIdentityInput = {
 
 export function resolveReleaseToolingIdentity(
   input: {
+    qualificationAdmission?: unknown;
+    candidateSha?: string;
     requestedIdentityJson?: string;
     workflowContract: string;
   } & Pick<ReleaseToolingIdentityInput, "workflowFullRef" | "workflowRef" | "workflowSha">,

@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
@@ -16,16 +19,22 @@ type StoreReadResult =
         revision: number;
         text: string;
         mentions?: readonly HumanMention[];
+        modelSelection?: { agentId: string; model: string; thinkingLevel: string };
         attachments: unknown[];
         writeId: string;
       };
     }
-  | { status: "not-found"; revision?: number; writeId?: string };
+  | { status: "not-found"; revision?: number; writeId?: string }
+  | { status: "storage-failed" };
 
 const store = vi.hoisted(() => {
   const pendingReads: Array<(result: unknown) => void> = [];
   return {
     pendingReads,
+    hydrateDurableComposerAttachments:
+      vi.fn<
+        typeof import("../chat/durable-composer-persistence.ts").hydrateDurableComposerAttachments
+      >(),
     readDurableComposerDraft: vi.fn(
       () =>
         new Promise((resolve) => {
@@ -59,7 +68,14 @@ vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
 // files' module singletons.
 vi.mock("../chat/durable-composer-persistence.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat/durable-composer-persistence.ts")>();
-  return { ...actual, writeDurableComposerSnapshot: store.writeDurableComposerSnapshot };
+  store.hydrateDurableComposerAttachments.mockImplementation(
+    actual.hydrateDurableComposerAttachments,
+  );
+  return {
+    ...actual,
+    writeDurableComposerSnapshot: store.writeDurableComposerSnapshot,
+    hydrateDurableComposerAttachments: store.hydrateDurableComposerAttachments,
+  };
 });
 
 async function resolvePendingRead(result: StoreReadResult) {
@@ -95,6 +111,146 @@ afterEach(() => {
 });
 
 describe("NewSessionDraftPersistence restore race", () => {
+  it("preserves a newer edit when stored attachment hydration succeeds late", async () => {
+    const flow = createFlow();
+    const hydrationEntered = createDeferred();
+    const hydration = createDeferred<[]>();
+    const restoreSelection = vi.fn();
+    flow.draftPersistence.modelSelection = {
+      read: () => undefined,
+      restore: restoreSelection,
+      retire: vi.fn(),
+    };
+    store.readDurableComposerDraft.mockResolvedValueOnce({
+      status: "found",
+      draft: {
+        revision: 7,
+        text: "@Alex stored draft",
+        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
+        modelSelection: { agentId: "main", model: "openai/stored", thinkingLevel: "low" },
+        attachments: [],
+        writeId: "stored",
+      },
+    });
+    store.hydrateDurableComposerAttachments.mockImplementationOnce(() => {
+      hydrationEntered.resolve();
+      return hydration.promise;
+    });
+    try {
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await hydrationEntered.promise;
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      flow.setMessage("@Alex newer edit", mentions);
+      hydration.resolve([]);
+      // The restore registered its continuation before this await.
+      await hydration.promise;
+      expect(flow.message).toBe("@Alex newer edit");
+      expect(flow.mentions).toEqual(mentions);
+      expect(restoreSelection).not.toHaveBeenCalled();
+    } finally {
+      hydration.resolve([]);
+      await hydration.promise;
+      const submitted = flow.draftPersistence.captureSubmission();
+      flow.disconnect();
+      await Promise.all(submitted.mutation.writes);
+    }
+  });
+
+  it.each(["pending", "canceled", "read", "attachments"] as const)(
+    "reconciles stored content before persisting a model-only edit (%s restore)",
+    async (restoration) => {
+      const flow = createFlow();
+      const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
+      flow.draftPersistence.modelSelection = {
+        read: () => selection,
+        restore: vi.fn(),
+        retire: vi.fn(),
+      };
+      flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+      flow.draftPersistence.activateRoute("failed-restoration");
+      if (restoration !== "pending") {
+        flow.draftPersistence.captureSubmission();
+      }
+      flow.draftPersistence.noteModelSelectionMutation();
+      const saved = {
+        status: "found" as const,
+        draft: { revision: 10, text: "Keep saved content", attachments: [], writeId: "saved" },
+      };
+      if (restoration !== "pending") {
+        await resolvePendingRead(saved);
+        await settle();
+        flow.draftPersistence.persistNow();
+        expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+      }
+      if (restoration === "read" || restoration === "attachments") {
+        if (restoration === "attachments") {
+          store.hydrateDurableComposerAttachments.mockRejectedValueOnce(
+            new Error("Attachment unavailable"),
+          );
+        }
+        await resolvePendingRead(restoration === "read" ? { status: "storage-failed" } : saved);
+        await settle();
+        flow.draftPersistence.persistNow();
+        expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
+        flow.draftPersistence.noteModelSelectionMutation();
+      }
+      await resolvePendingRead(saved);
+      await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
+      flow.draftPersistence.persistNow();
+      await vi.waitFor(() =>
+        expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+          expect.objectContaining({ text: "Keep saved content", modelSelection: selection }),
+        ),
+      );
+      flow.disconnect();
+    },
+  );
+
+  it("persists a model-only edit after a submission capture fails without consuming the draft", async () => {
+    const flow = createFlow();
+    let selected = "openai/first";
+    flow.draftPersistence.modelSelection = {
+      read: () => ({ agentId: "main", model: selected, thinkingLevel: "low" }),
+      restore: vi.fn(),
+      retire: vi.fn(),
+    };
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.activateRoute("failed-submission");
+    await resolvePendingRead({ status: "not-found" });
+    await settle();
+    flow.setMessage("Still unsent");
+    flow.draftPersistence.captureSubmission();
+    // A rejected/no-result create keeps this same unsent mutation and text.
+    selected = "openai/second";
+    flow.draftPersistence.noteModelSelectionMutation();
+    flow.draftPersistence.persistNow();
+    await vi.waitFor(() =>
+      expect(store.writeDurableComposerSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          text: "Still unsent",
+          modelSelection: expect.objectContaining({ model: selected }),
+        }),
+      ),
+    );
+    flow.disconnect();
+  });
+
+  it("retires accepted model intent only while the submitted mutation still owns the view", async () => {
+    const flow = createFlow();
+    const retire = vi.fn();
+    flow.draftPersistence.modelSelection = { read: () => undefined, restore: vi.fn(), retire };
+    flow.setMessage("Submitted draft");
+    const accepted = flow.draftPersistence.captureSubmission();
+    await flow.draftPersistence.clearSubmittedDraft(accepted);
+    expect(retire).toHaveBeenCalledTimes(1);
+    const previous = flow.draftPersistence.captureSubmission();
+    flow.setMessage("Newer draft");
+    await flow.draftPersistence.clearSubmittedDraft(previous);
+    expect(retire).toHaveBeenCalledTimes(1);
+    flow.disconnect();
+  });
+
   it("saves the captured normal draft after retirement settles on another route", async () => {
     let finishRetirement!: (result: {
       status: "persisted";
@@ -177,7 +333,7 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("keeps an incognito draft private when navigation hands it to a fresh page", async () => {
     const { context, flow: source } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     source.draftPersistence.setOwner("ws://gateway.example", "principal-a");
     source.draftPersistence.selectRoute("private-route");
@@ -185,8 +341,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     source.setMessage("private incognito draft");
     retainDraft(context, source, "private-route", "private-route");
     source.disconnect();
+    expect(canReloadControlUiDocument()).toBe(false);
     const target = createFlow();
     restoreDraft(context, target, "private-route", "");
+    expect(canReloadControlUiDocument()).toBe(true);
     await settle();
     if (store.pendingReads.length) {
       await resolvePendingRead({ status: "not-found", revision: Date.now() });
@@ -197,6 +355,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     expect(store.writeDurableComposerSnapshot).not.toHaveBeenCalled();
     target.disconnect();
     handoff.dispose();
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it.each(["conflict", "late commit"])("reconciles a handed-off edit after %s", async (outcome) => {
@@ -258,9 +417,10 @@ describe("NewSessionDraftPersistence restore race", () => {
 
   it("lets durable restoration supersede a stale handoff during initial owner setup", async () => {
     const { context, flow } = createDraftFixture();
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(context.gateway);
     Object.assign(context, { chatAttachmentHandoff: handoff });
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner: context.gateway.snapshot.client,
       paneId: "new-session-draft",
       scopeKey: "first-owner",
@@ -413,79 +573,56 @@ describe("NewSessionDraftPersistence restore race", () => {
     persistence.disconnect();
   });
 
-  it("never applies a stored draft over text typed before the restore resolves", async () => {
-    const flow = createFlow();
-    // Reload flow: the composer renders and the user types before the gateway
-    // recovery scope arrives, so the route activates after the mutation.
-    flow.setMessage("typed before restore");
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 7, text: "stored draft", attachments: [], writeId: "w-1" },
-    });
-    await settle();
-    expect(flow.message).toBe("typed before restore");
-    // The typed text also wins persistence: local-wins writes it above the
-    // stored revision instead of leaving the stale draft in place.
-    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
-      | { revision: number; text: string }
-      | undefined;
-    expect(write?.text).toBe("typed before restore");
-    expect(write?.revision).toBeGreaterThan(7);
-  });
-
-  it("persists text typed before activation even when no stored draft exists", async () => {
-    const flow = createFlow();
-    flow.setMessage("typed before restore");
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({ status: "not-found" });
-    await settle();
-    expect(flow.message).toBe("typed before restore");
-    const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0] as
-      | { text: string }
-      | undefined;
-    expect(write?.text).toBe("typed before restore");
-  });
-
-  it("restores stored text and selected recipients into a pristine composer", async () => {
-    const flow = createFlow();
-    const mentions = [{ profileId: "alex", start: 0, end: 5 }];
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: { revision: 7, text: "@Alex", mentions, attachments: [], writeId: "w-1" },
-    });
-    await settle();
-    expect(flow.message).toBe("@Alex");
-    expect(flow.mentions).toEqual(mentions);
-  });
-
-  it("preserves a same-name recipient selected before stored draft restoration completes", async () => {
-    const flow = createFlow();
-    const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
-    flow.setMessage("@Alex", mentions);
-    flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    flow.draftPersistence.activateRoute("agent:main");
-    await resolvePendingRead({
-      status: "found",
-      draft: {
-        revision: 7,
-        text: "@Alex",
-        mentions: [{ profileId: "old-alex", start: 0, end: 5 }],
-        attachments: [],
-        writeId: "w-1",
-      },
-    });
-    await settle();
-    expect(flow.mentions).toEqual(mentions);
-    expect(store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      text: "@Alex",
-      mentions,
-    });
-  });
+  it.each(["newer text", "missing", "pristine", "recipient"] as const)(
+    "reconciles the initial stored draft with the composer (%s)",
+    async (state) => {
+      const flow = createFlow();
+      const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
+      const expectedText =
+        state === "pristine" || state === "recipient" ? "@Alex" : "typed before restore";
+      if (state !== "pristine") {
+        flow.setMessage(expectedText, state === "recipient" ? mentions : undefined);
+      }
+      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
+      flow.draftPersistence.activateRoute("agent:main");
+      await resolvePendingRead(
+        state === "missing"
+          ? { status: "not-found" }
+          : {
+              status: "found",
+              draft: {
+                revision: 7,
+                text: state === "newer text" ? "stored draft" : "@Alex",
+                ...(state === "pristine" || state === "recipient"
+                  ? {
+                      mentions:
+                        state === "pristine"
+                          ? mentions
+                          : [{ profileId: "old-alex", start: 0, end: 5 }],
+                    }
+                  : {}),
+                attachments: [],
+                writeId: "w-1",
+              },
+            },
+      );
+      await settle();
+      expect(flow.message).toBe(expectedText);
+      if (state === "pristine" || state === "recipient") {
+        expect(flow.mentions).toEqual(mentions);
+      }
+      if (state !== "pristine") {
+        const write = store.writeDurableComposerSnapshot.mock.calls.at(-1)?.[0];
+        expect(write?.text).toBe(expectedText);
+        if (state === "newer text") {
+          expect(write?.revision).toBeGreaterThan(7);
+        } else if (state === "recipient") {
+          expect(write).toMatchObject({ text: "@Alex", mentions });
+        }
+      }
+      flow.disconnect();
+    },
+  );
 
   it("re-arms restore for the next route once the page resets the draft", async () => {
     const flow = createFlow();

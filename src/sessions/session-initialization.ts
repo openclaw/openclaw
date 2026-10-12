@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -9,6 +12,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SessionUpstreamLinkCurrentCheck } from "./session-upstream-links.worker-contract.js";
 
 /** Creation-only authority. Copied fields never identify an initializer to the host. */
 export type SessionInitialization = {
@@ -38,69 +42,61 @@ type Owner = {
   handle: SessionInitialization;
   committed: () => void;
 };
+type Source = {
+  assertCurrent: SessionSourceAssertion;
+  assertRollbackCurrent: () => void;
+  upstreamLinkCurrent?: SessionUpstreamLinkCurrentCheck;
+};
 // Built core chunks and source plugins must redeem the same process-local owner.
-const { rollbackOwner, sources } = resolveGlobalSingleton(
+const { rollbackOwner, sources, upstreamLinks } = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionInitialization"),
   () => ({
     rollbackOwner: new AsyncLocalStorage<Owner>(),
-    sources: new AsyncLocalStorage<() => void>(),
+    sources: new AsyncLocalStorage<Source>(),
+    upstreamLinks: new WeakMap<SessionInitialization, SessionUpstreamLinkCurrentCheck>(),
   }),
 );
 
 /** The message-cut owner supplies its exact source incarnation, never plugin-provided fields. */
 export async function withSessionInitializationSource<T>(
-  assertCurrent: () => void,
-  run: () => Promise<T>,
+  source: Source,
+  run: (assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
   let active = true;
   try {
-    return await sources.run(() => {
+    const assertActive = (assert: () => void) => {
       if (!active) {
         throw new Error("Session initialization source is closed");
       }
-      assertCurrent();
-    }, run);
+      assert();
+    };
+    const current = Object.freeze({
+      assertCurrent: composeSessionSourceAssertion([source.assertCurrent], (assertSources) =>
+        assertActive(assertSources),
+      ),
+      assertRollbackCurrent: () => assertActive(source.assertRollbackCurrent),
+      upstreamLinkCurrent: source.upstreamLinkCurrent,
+    });
+    return await sources.run(current, () => run(current.assertCurrent));
   } finally {
     active = false;
   }
 }
 
-export function captureSessionInitializationOwner(harnessId: string | undefined): () => void {
-  const assertSource = sources.getStore();
-  const scopedRegistry = () =>
-    getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const scoped = scopedRegistry();
-  const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
-  const registration = registry?.agentHarnesses.find(
-    (candidate) => candidate.harness.id === harnessId,
-  );
-  const record = registry?.plugins.find((candidate) => candidate.id === registration?.pluginId);
-  const registryCurrent =
-    registry &&
-    capturePluginLifecycleAuthority(registry, record, { scopedRuntime: scoped === registry });
-  const harness = registration?.harness;
-  const deletion = harness?.withSessionDeletion;
-  return () => {
-    assertSource?.();
-    if (
-      registry &&
-      (!registryCurrent?.() ||
-        (scoped && scopedRegistry() !== scoped) ||
-        (!scoped && getPluginRegistryState()?.activeRegistry !== registry) ||
-        (registration &&
-          (!registry.agentHarnesses.includes(registration) ||
-            registration.harness !== harness ||
-            harness?.withSessionDeletion !== deletion)))
-    ) {
-      throw new Error("Session initialization registry owner changed");
-    }
+export function captureSessionInitializationOwner(_harnessId: string | undefined): Source {
+  const source = sources.getStore();
+  return {
+    upstreamLinkCurrent: source?.upstreamLinkCurrent,
+    assertCurrent: composeSessionSourceAssertion([source?.assertCurrent]),
+    assertRollbackCurrent: () => source?.assertRollbackCurrent(),
   };
 }
 
 export function createSessionInitialization(
   target: Target,
-  assertOwner: (deleted: boolean) => void,
+  assertOwner: (phase: "forward" | "rollback", deleted: boolean) => void,
   preparation: { config: OpenClawConfig; agentId: string; entry: SessionEntry },
+  source?: Source,
 ) {
   const registry =
     getPluginRuntimeGenerationRegistry() ??
@@ -109,23 +105,23 @@ export function createSessionInitialization(
     undefined;
   let active = true;
   let deleted = false;
-  const assertLive = () => {
+  const assertLive = (phase: "forward" | "rollback") => {
     if (!active) {
       throw new Error("Session initialization is closed");
     }
-    assertOwner(deleted);
+    assertOwner(phase, deleted);
   };
   const owner: Owner = {
     target,
     handle: Object.freeze({
       assertCurrent() {
-        assertLive();
+        assertLive("forward");
         if (deleted || rollbackOwner.getStore() === owner) {
           throw new Error("Session initialization is rolling back");
         }
       },
       assertRollbackCurrent() {
-        assertLive();
+        assertLive("rollback");
         if (rollbackOwner.getStore() !== owner) {
           throw new Error("Session initialization rollback is not active");
         }
@@ -199,13 +195,22 @@ export function createSessionInitialization(
       deleted = true;
     },
   };
+  if (source?.upstreamLinkCurrent) {
+    upstreamLinks.set(owner.handle, source.upstreamLinkCurrent);
+  }
   return {
     handle: owner.handle,
     rollback: <T>(run: () => Promise<T>) => rollbackOwner.run(owner, run),
     close: () => {
       active = false;
+      upstreamLinks.delete(owner.handle);
     },
   };
+}
+
+/** Only the host creation owner can bind a source predicate to an initializer. */
+export function getSessionInitializationUpstreamLinkCurrent(handle: SessionInitialization) {
+  return upstreamLinks.get(handle);
 }
 
 export function getSessionInitializationRollback(

@@ -10,58 +10,54 @@ type CodexOrdinaryElicitation =
 export function compileCodexOrdinaryElicitation(params: {
   snapshot: Record<string, unknown>;
   turnId: string;
+  resourceContext?: Parameters<typeof structuredInput.compileForm>[0]["options"]["resourceContext"];
 }): CodexOrdinaryElicitation {
   const requestTurnId = readValue(params.snapshot, "turnId");
   if (typeof requestTurnId === "string" && requestTurnId !== params.turnId) {
     return { kind: "ignored" };
   }
-  if (requestTurnId !== null && typeof requestTurnId !== "string") {
-    return {
-      kind: "compiled",
-      input: {
+  return { kind: "compiled", input: compileInput() };
+
+  function compileInput(): StructuredInputCompileResult {
+    if (requestTurnId !== null && typeof requestTurnId !== "string") {
+      return {
         kind: "unsupported",
         message: "OpenClaw declined an MCP elicitation with invalid turn correlation.",
-      },
-    };
-  }
-  const mode = readCodexElicitationString(params.snapshot, "mode");
-  if (mode === "url") {
-    return {
-      kind: "compiled",
-      input: structuredInput.compileUrl({
+      };
+    }
+    const mode = readCodexElicitationString(params.snapshot, "mode");
+    if (mode === "url") {
+      return structuredInput.compileUrl({
         url: readValue(params.snapshot, "url"),
         elicitationId: readValue(params.snapshot, "elicitationId"),
         message: readValue(params.snapshot, "message"),
         fallbackMessage: "Codex provided a URL",
         protocolName: "MCP",
-      }),
-    };
-  }
-  if (mode !== "form" && mode !== "openai/form") {
-    return {
-      kind: "compiled",
-      input: {
+      });
+    }
+    if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm") {
+      return {
         kind: "unsupported",
         message: `OpenClaw does not support MCP elicitation mode ${JSON.stringify(mode ?? "unknown")}.`,
-      },
-    };
-  }
-  return {
-    kind: "compiled",
-    input: structuredInput.compileForm({
+      };
+    }
+    return structuredInput.compileForm({
       schema: readValue(params.snapshot, "requestedSchema"),
       message: readCodexElicitationString(params.snapshot, "message"),
       fallbackMessage: "Codex needs input",
       options: {
-        protocolName: mode === "openai/form" ? "OpenAI" : "MCP",
+        protocolName: mode === "form" ? "MCP" : "OpenAI",
+        // Legacy forms keep their label-based question/answer contract.
+        allowRichForms: mode === "openaiForm",
+        resourceContext: params.resourceContext,
         allowEmptyForm: true,
         minimumChoiceCount: 1,
         allowEnumNames: true,
         allowImagePicker: mode === "openai/form",
         metadata: { secretPath: ["isSecret"] },
       },
-    }),
-  };
+    });
+  }
 }
 
 function readValue(record: Record<string, unknown>, key: string): unknown {

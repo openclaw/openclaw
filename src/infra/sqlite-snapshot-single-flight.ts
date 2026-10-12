@@ -1,131 +1,291 @@
-import { getChildLogger } from "../logging/logger.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
-import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import {
+  retainSnapshotWork,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-readonly-location-cleanup.js";
+import type {
+  PreparedSqliteReadOnlyLocation,
+  RetainedPreparedSqliteReadOnlyLocation,
+  RetainedSqliteSnapshotPreparation,
+} from "./sqlite-readonly-location.types.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
+type PreparedSnapshot = PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation;
+type SnapshotProducer = (
+  signal: AbortSignal,
+  recordFailure: (error: unknown) => void,
+) => {
+  operation: RetainedOperation<PreparedSnapshot>;
+  startClose?: () => RetainedOperation<void>;
+};
 type SnapshotFlight = {
-  base?: PreparedSqliteReadOnlyLocation;
-  cleanupFailure?: { error: unknown };
   controller: AbortController;
-  leases: number;
-  promise: Promise<PreparedSqliteReadOnlyLocation>;
-  settled: Promise<PreparedSqliteReadOnlyLocation>;
-  finishWaiters: () => void;
-  waiters: number;
+  references: number;
+  listeners: Set<() => void>;
+  production: RetainedOperation<PreparedSnapshot>;
+  settled: RetainedOperation<PreparedSnapshot>;
+  closeProducer(): RetainedOperation<void>;
+};
+type SnapshotLifecycle = {
+  trackProducer?: (producer: Promise<PreparedSqliteReadOnlyLocation>) => void;
+  /** Shared bytes must belong to the same source lifetime. */
+  scope?: object;
 };
 
 const snapshotFlights = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSnapshotFlights"),
-  () => new Map<string, SnapshotFlight>(),
+  () => ({
+    unscoped: new Map<string, SnapshotFlight>(),
+    scoped: new WeakMap<object, Map<string, SnapshotFlight>>(),
+  }),
 );
 
-async function waitForFlight<T>(
-  promise: Promise<T>,
-  signal: AbortSignal | undefined,
-  withdraw: () => void,
-): Promise<T> {
-  signal?.throwIfAborted();
-  if (!signal) {
-    return promise;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const release = () => signal.removeEventListener("abort", abort);
-    const abort = () => {
-      release();
-      withdraw();
-      reject(signal.reason instanceof Error ? signal.reason : new Error("SQLite snapshot aborted"));
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        release();
-        resolve(value);
-      },
-      (error: unknown) => {
-        release();
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-    if (signal.aborted) {
-      abort();
+function completed<T>(value: T): RetainedOperation<T> {
+  const retained = createRetainedOperation<T>(() => {});
+  retained.resolve(value);
+  return retained.operation;
+}
+
+function serviceWhenSettled(source: RetainedOperation<unknown>, service: () => void): void {
+  void source.result.then(service, service);
+}
+
+function createFlight(
+  flights: Map<string, SnapshotFlight>,
+  key: string,
+  producer: SnapshotProducer,
+): SnapshotFlight {
+  let source: ReturnType<SnapshotProducer> | undefined;
+  let started = false;
+  let servicing = false;
+  let cleanup: RetainedOperation<boolean> | undefined;
+  let closing: RetainedOperation<void> | undefined;
+  let cleanupFailure: unknown;
+  const production = createRetainedOperation<PreparedSnapshot>(() => {
+    if (servicing || production.operation.read().status !== "pending") {
+      return;
     }
+    servicing = true;
+    try {
+      if (!started) {
+        started = true;
+        source = producer(flight.controller.signal, (error) => (cleanupFailure = error));
+        serviceWhenSettled(source.operation, serviceFlight);
+      }
+      source!.operation.service();
+      const outcome = source!.operation.read();
+      if (outcome.status === "fulfilled") {
+        production.resolve(outcome.value);
+      } else if (outcome.status === "rejected") {
+        production.reject(outcome.error);
+      }
+    } catch (error) {
+      production.reject(error);
+    } finally {
+      servicing = false;
+    }
+  });
+  const settled = createRetainedOperation<PreparedSnapshot>(() => {
+    production.operation.service();
+    const outcome = production.operation.read();
+    if (outcome.status === "pending" || settled.operation.read().status !== "pending") {
+      return;
+    }
+    if (flights.get(key) === flight) {
+      flights.delete(key);
+    }
+    if (outcome.status === "rejected") {
+      settled.reject(cleanupFailure ?? outcome.error);
+    } else if (flight.references > 0) {
+      settled.resolve(outcome.value);
+    } else {
+      if (!cleanup) {
+        cleanup = releaseSnapshot(flight, outcome.value);
+        serviceWhenSettled(cleanup, () => settled.operation.service());
+      }
+      cleanup.service();
+      const removed = cleanup.read();
+      if (removed.status === "fulfilled") {
+        settled.resolve(outcome.value);
+      } else if (removed.status === "rejected") {
+        settled.reject(removed.error);
+      }
+    }
+  });
+  function serviceFlight() {
+    production.operation.service();
+    for (const service of flight.listeners) {
+      service();
+    }
+    settled.operation.service();
+  }
+  const flight: SnapshotFlight = {
+    controller: new AbortController(),
+    references: 0,
+    listeners: new Set(),
+    production: production.operation,
+    settled: settled.operation,
+    closeProducer() {
+      closing ??= source?.startClose?.() ?? completed(undefined);
+      return closing;
+    },
+  };
+  void retainSnapshotWork(settled.operation.result, () => {
+    flight.controller.abort(new Error("SQLite snapshot owner stopped"));
+    serviceFlight();
+  });
+  return flight;
+}
+
+function releaseSnapshot(
+  flight: SnapshotFlight,
+  base: PreparedSnapshot,
+): RetainedOperation<boolean> {
+  return flatMapRetainedOperation(base.startCleanup(), (removed) => {
+    if (!removed) {
+      throw new SqliteSnapshotCleanupError("SQLite snapshot lease cleanup did not complete");
+    }
+    return mapRetainedOperation(flight.closeProducer(), () => true);
   });
 }
 
-function cleanupUnleasedFlight(key: string, flight: SnapshotFlight): void {
-  if (flight.waiters > 0 || flight.leases > 0) {
-    return;
-  }
-  if (snapshotFlights.get(key) === flight) {
-    snapshotFlights.delete(key);
-  }
-  if (!flight.base) {
-    flight.controller.abort();
-  }
-}
-
-function releaseFlight(key: string, flight: SnapshotFlight, asyncCleanup: false): boolean;
-function releaseFlight(key: string, flight: SnapshotFlight, asyncCleanup: true): Promise<boolean>;
-function releaseFlight(
-  key: string,
-  flight: SnapshotFlight,
-  asyncCleanup: boolean,
-): boolean | Promise<boolean> {
-  if (flight.leases > 1 || flight.waiters > 0) {
-    flight.leases -= 1;
-    return asyncCleanup ? Promise.resolve(true) : true;
-  }
-  const finish = (cleaned: boolean) => {
-    if (cleaned) {
-      flight.leases -= 1;
-      if (snapshotFlights.get(key) === flight) {
-        snapshotFlights.delete(key);
-      }
+function leaseFlight(flight: SnapshotFlight, base: PreparedSnapshot): PreparedSnapshot {
+  let released = false;
+  let cleanup: RetainedOperation<boolean> | undefined;
+  const releaseReference = () => {
+    if (!released) {
+      released = true;
+      flight.references--;
     }
-    return cleaned;
+    return flight.references === 0;
   };
-  return asyncCleanup ? flight.base!.cleanupAsync().then(finish) : finish(flight.base!.cleanup());
-}
-
-function leaseFlight(
-  key: string,
-  flight: SnapshotFlight,
-  base: PreparedSqliteReadOnlyLocation,
-): PreparedSqliteReadOnlyLocation {
-  flight.leases += 1;
-  let active = true;
-  let pending: Promise<boolean> | undefined;
+  const startCleanup = () => {
+    cleanup ??= !released && releaseReference() ? releaseSnapshot(flight, base) : completed(true);
+    return cleanup;
+  };
   return {
     location: base.location,
     cleanupRoot: base.cleanupRoot,
-    cleanup: () => {
-      if (!active) {
+    cleanup() {
+      if (released) {
+        return cleanup ? cleanup.read().status === "fulfilled" : true;
+      }
+      if (flight.references > 1) {
+        releaseReference();
         return true;
       }
-      if (pending) {
-        return false;
+      const removed = base.cleanup();
+      if (removed) {
+        releaseReference();
       }
-      const cleaned = releaseFlight(key, flight, false);
-      active = !cleaned;
-      return cleaned;
+      return removed;
     },
-    cleanupAsync: () => {
-      if (!active) {
-        return pending ?? Promise.resolve(true);
+    cleanupAsync: () => startCleanup().result,
+    startCleanup,
+  };
+}
+
+function startSnapshotFlight(
+  databasePath: string,
+  operation: string,
+  producer: SnapshotProducer,
+  signal?: AbortSignal,
+  lifecycle?: SnapshotLifecycle,
+): RetainedSqliteSnapshotPreparation & RetainedOperation<PreparedSnapshot> {
+  signal?.throwIfAborted();
+  const key = `${readDatabasePathIdentitySync(databasePath).key}:${operation}`;
+  let flights = snapshotFlights.unscoped;
+  if (lifecycle?.scope) {
+    let scoped = snapshotFlights.scoped.get(lifecycle.scope);
+    if (!scoped) {
+      scoped = new Map();
+      snapshotFlights.scoped.set(lifecycle.scope, scoped);
+    }
+    flights = scoped;
+  }
+  let flight = flights.get(key);
+  if (!flight) {
+    flight = createFlight(flights, key, producer);
+    flights.set(key, flight);
+  }
+  const selected = flight;
+  selected.references++;
+  lifecycle?.trackProducer?.(selected.settled.result);
+  let closed = false;
+  let withdrew = false;
+  let closing: RetainedOperation<void> | undefined;
+  const retained = createRetainedOperation<PreparedSnapshot>(() => {
+    if (retained.operation.read().status !== "pending") {
+      return;
+    }
+    if (closed || signal?.aborted) {
+      if (!withdrew) {
+        withdrew = true;
+        selected.references--;
       }
-      pending ??= releaseFlight(key, flight, true)
-        .then((cleaned) => {
-          active = !cleaned;
-          return cleaned;
-        })
-        .finally(() => {
-          pending = undefined;
-        });
-      return pending;
+      if (selected.references === 0) {
+        selected.controller.abort(signal?.reason);
+        if (flights.get(key) === selected) {
+          flights.delete(key);
+        }
+        if (!lifecycle?.trackProducer) {
+          selected.settled.service();
+          if (selected.settled.read().status === "pending") {
+            return;
+          }
+        }
+      }
+      retained.reject(signal?.reason ?? new Error("SQLite snapshot preparation closed"));
+    } else {
+      selected.production.service();
+      const outcome = selected.production.read();
+      if (outcome.status === "pending") {
+        return;
+      }
+      if (outcome.status === "fulfilled") {
+        retained.resolve(leaseFlight(selected, outcome.value));
+      } else {
+        selected.references--;
+        retained.reject(outcome.error);
+      }
+    }
+    signal?.removeEventListener("abort", service);
+    selected.listeners.delete(service);
+    selected.settled.service();
+  });
+  const service = () => retained.operation.service();
+  serviceWhenSettled(selected.settled, service);
+  selected.listeners.add(service);
+  signal?.addEventListener("abort", service, { once: true });
+  queueMicrotask(service);
+  return {
+    ...retained.operation,
+    startClose() {
+      closed = true;
+      retained.operation.service();
+      const outcome = retained.operation.read();
+      closing ??=
+        outcome.status === "fulfilled"
+          ? mapRetainedOperation(outcome.value.startCleanup(), () => undefined)
+          : selected.references === 0
+            ? selected.closeProducer()
+            : completed(undefined);
+      return closing;
     },
   };
+}
+
+/** Promise-only producers remain on their existing awaited path, never a sync bridge. */
+function startAwaitedSnapshotWork<T>(produce: () => Promise<T>): RetainedOperation<T> {
+  const retained = createRetainedOperation<T>(() => {});
+  void Promise.resolve().then(produce).then(retained.resolve, retained.reject);
+  return retained.operation;
 }
 
 export async function prepareSingleFlightSqliteSnapshot(
@@ -136,117 +296,45 @@ export async function prepareSingleFlightSqliteSnapshot(
     recordCleanupFailure: (error: unknown) => void,
   ) => Promise<PreparedSqliteReadOnlyLocation>,
   signal?: AbortSignal,
-  lifecycle?: {
-    trackProducer?: (producer: Promise<PreparedSqliteReadOnlyLocation>) => void;
-  },
+  lifecycle?: SnapshotLifecycle,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  signal?.throwIfAborted();
-  const identity = readDatabasePathIdentitySync(databasePath);
-  const key = `${identity.key}:${operation}`;
-  let flight = snapshotFlights.get(key);
-  if (!flight) {
-    const controller = new AbortController();
-    const waitersDrained = createDeferredCore();
-    const produced = Promise.resolve().then(() =>
-      producer(controller.signal, (error) => {
-        flight!.cleanupFailure ??= { error };
+  return startSnapshotFlight(
+    databasePath,
+    operation,
+    (flightSignal, recordFailure) => ({
+      operation: startAwaitedSnapshotWork(async () => {
+        const base = await producer(flightSignal, recordFailure);
+        return {
+          ...base,
+          startCleanup: () => startAwaitedSnapshotWork(() => base.cleanupAsync()),
+        };
       }),
-    );
-    flight = {
-      controller,
-      leases: 0,
-      waiters: 0,
-      promise: produced,
-      settled: produced,
-      finishWaiters: () => waitersDrained.resolve(),
-    };
-    snapshotFlights.set(key, flight);
-    flight.promise = produced.then(
-      (base) => {
-        flight!.base = base;
-        if (snapshotFlights.get(key) === flight) {
-          snapshotFlights.delete(key);
-        }
-        return base;
-      },
-      (error: unknown) => {
-        if (snapshotFlights.get(key) === flight) {
-          snapshotFlights.delete(key);
-        }
-        throw error;
-      },
-    );
-    // A cancelled caller detaches promptly, but its lifecycle owner must still
-    // join production, waiter admission and any cleanup of unpublished bytes.
-    flight.settled = retainSnapshotWork(
-      flight.promise.then(async (base) => {
-        await waitersDrained.promise;
-        if (flight!.leases === 0) {
-          try {
-            if (!(await base.cleanupAsync())) {
-              throw new Error("SQLite orphan snapshot cleanup did not complete");
-            }
-          } catch (error) {
-            flight!.cleanupFailure ??= { error };
-            // Prepared locations retain failed removals in the existing temp
-            // directory registry for signal/exit retry; never drop that owner.
-            try {
-              getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
-                { cleanupRoot: base.cleanupRoot },
-                "SQLite orphan snapshot cleanup failed; retained for cleanup retry.",
-              );
-            } catch {
-              // Diagnostics must not replace the cleanup failure.
-            }
-            throw error;
-          }
-        }
-        return base;
-      }),
-      () => controller.abort(new Error("SQLite snapshot owner stopped")),
-    );
-    // An orphan has no caller left to observe rejection. The lifecycle retains
-    // the original rejecting settlement promise, not this observation branch.
-    void flight.settled.catch(() => undefined);
-  }
-  lifecycle?.trackProducer?.(flight.settled);
-  flight.waiters += 1;
-  let waiting = true;
-  const withdraw = () => {
-    if (!waiting) {
-      return;
-    }
-    waiting = false;
-    flight.waiters -= 1;
-    if (flight.waiters === 0) {
-      flight.finishWaiters();
-    }
-    // Abort queued production before its microtask can allocate native resources.
-    cleanupUnleasedFlight(key, flight);
-  };
-  let outcome: { value: PreparedSqliteReadOnlyLocation } | { error: unknown };
-  try {
-    const base = await waitForFlight(flight.promise, signal, withdraw);
-    signal?.throwIfAborted();
-    outcome = { value: leaseFlight(key, flight, base) };
-  } catch (error) {
-    outcome = { error };
-  }
-  withdraw();
-  if (flight.waiters === 0 && flight.leases === 0 && !lifecycle?.trackProducer) {
-    // A standalone last caller is the cleanup owner. Only an explicit
-    // enclosing lifecycle may take custody and let that caller detach.
-    try {
-      await flight.settled;
-    } catch {
-      // Preserve caller cancellation unless cleanup recorded an independent failure.
-      if (flight.cleanupFailure) {
-        throw flight.cleanupFailure.error;
-      }
-    }
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
+    }),
+    signal,
+    lifecycle,
+  ).result;
+}
+
+export function startSingleFlightSqliteSnapshot(
+  databasePath: string,
+  operation: string,
+  producer: (
+    signal: AbortSignal,
+    recordFailure: (error: unknown) => void,
+  ) => RetainedOperation<PreparedSnapshot> & {
+    startClose(): RetainedOperation<void>;
+  },
+  signal?: AbortSignal,
+  lifecycle?: SnapshotLifecycle,
+): RetainedSqliteSnapshotPreparation {
+  return startSnapshotFlight(
+    databasePath,
+    operation,
+    (flightSignal, recordFailure) => {
+      const source = producer(flightSignal, recordFailure);
+      return { operation: source, startClose: () => source.startClose() };
+    },
+    signal,
+    lifecycle,
+  );
 }

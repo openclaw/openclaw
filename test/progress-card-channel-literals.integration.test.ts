@@ -134,9 +134,6 @@ describe("registered progress cards at the final channel renderer", () => {
         deliveryRest: rest,
         deliverChannelId: "test-channel",
         replyReference: { peek: () => undefined },
-        tableMode: "off",
-        maxLinesPerMessage: undefined,
-        chunkMode: "length",
         log: () => {},
       });
       try {
@@ -159,7 +156,7 @@ describe("registered progress cards at the final channel renderer", () => {
       [false, true].map((richMessages) => ({ markdown, text, html, richMessages })),
     ),
   )(
-    "keeps Telegram literal text and inactive links (rich=$richMessages): $markdown",
+    "keeps Telegram notes literal with headline styling (rich=$richMessages): $markdown",
     async ({ markdown, text, html, richMessages }) => {
       const previews: ReturnType<typeof renderTelegramProgressDraftPreview>[] = [];
       const progress = createChannelProgressDraftCompositor({
@@ -186,11 +183,11 @@ describe("registered progress cards at the final channel renderer", () => {
         if (richMessages) {
           expect(preview?.text).toBe(text);
           expect(preview?.richMessage).toEqual({
-            blocks: [{ type: "paragraph", text: { type: "code", text } }],
+            blocks: [{ type: "paragraph", text: { type: "bold", text } }],
             skip_entity_detection: true,
           });
         } else {
-          expect(preview?.text).toBe(`<code>${html}</code>`);
+          expect(preview?.text).toBe(`<b>${html}</b>`);
           expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
           expect(preview?.text).not.toContain("href=");
         }

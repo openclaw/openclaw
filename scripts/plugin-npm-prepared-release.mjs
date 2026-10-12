@@ -62,7 +62,7 @@ function normalizeProducer(value) {
       Number.isSafeInteger(value.runAttempt) &&
       value.runAttempt > 0 &&
       typeof value.workflowHeadBranch === "string" &&
-      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
+      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-ci\/[a-f0-9]{12}-[1-9][0-9]*|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
         value.workflowHeadBranch,
       ),
     "Prepared npm producer must bind an exact trusted workflow run and attempt.",
@@ -137,6 +137,25 @@ export function preparedNpmArtifactName(sourceSha, producer) {
   requireValue(SHA.test(sourceSha), "Prepared npm source must be a full lowercase SHA.");
   const identity = normalizeProducer(producer);
   return `plugin-npm-prepared-${sourceSha}-${identity.runId}-${identity.runAttempt}`;
+}
+
+export function validatePreparedNpmArtifactDescriptor(value, expected) {
+  const producer = normalizeProducer(value);
+  requireValue(
+    producer.repository === expected.repository &&
+      producer.workflowSha === expected.workflowSha &&
+      value.artifactName === preparedNpmArtifactName(expected.sourceSha, producer),
+    "Prepared npm artifact descriptor differs from the approved source or tooling.",
+  );
+  return artifactTuple(
+    {
+      id: value.artifactId,
+      name: value.artifactName,
+      digest: value.artifactDigest,
+      size_in_bytes: value.artifactSizeBytes,
+    },
+    producer,
+  );
 }
 
 function sourcePackageRoster(sourceRoot, npmDistTag, selectedNames) {
@@ -411,11 +430,41 @@ export async function verifyPreparedNpmRegistry(params) {
     label: "qualified plugin tarball",
     maxBytes: MAX_PACKAGE_BYTES,
   });
-  return verifyNpmRegistryPublication(params, tarball);
+  const { distTags } = await verifyNpmRegistryPublication(params, tarball);
+  if (distTags) {
+    requireNpmDistTagSelection(params, distTags);
+  }
+  return { alreadyPublished: distTags !== null };
 }
 
+// A version this run never published may already be superseded: a later
+// release owns the primary selector, so no tag is verified or repaired for it.
 export async function verifyPublishedNpmRegistry(params) {
-  return verifyNpmRegistryPublication({ ...params, route: "npm-readback", allowMissing: false });
+  const { distTags } = await verifyNpmRegistryPublication({
+    ...params,
+    route: "npm-readback",
+    allowMissing: false,
+  });
+  const [primaryTag] = params.publishTags;
+  const supersededBy = distTags[primaryTag];
+  if (classifyNpmDistTagVersion(supersededBy, params.version) === "ahead") {
+    return { alreadyPublished: true, supersededBy };
+  }
+  requireNpmDistTagSelection(params, distTags);
+  return { alreadyPublished: true, supersededBy: null };
+}
+
+function requireNpmDistTagSelection(params, distTags) {
+  for (const publishTag of params.publishTags) {
+    const selectorState = classifyNpmDistTagVersion(distTags[publishTag], params.version);
+    if (selectorState !== "match") {
+      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
+      if (selectorState === "missing" || selectorState === "lagging") {
+        throw new NpmRegistryUnavailableError(message);
+      }
+      throw new Error(message);
+    }
+  }
 }
 
 async function verifyNpmRegistryPublication(params, tarball) {
@@ -463,7 +512,7 @@ async function verifyNpmRegistryPublication(params, tarball) {
         registry.status !== 404 || params.route === "npm-token-bootstrap",
         "Prepared OIDC package no longer exists; obtain an explicitly approved bootstrap.",
       );
-      return { alreadyPublished: false };
+      return { distTags: null };
     }
     const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
@@ -516,20 +565,7 @@ async function verifyNpmRegistryPublication(params, tarball) {
       "Published npm archive package identity differs from the requested version.",
     );
   }
-  for (const publishTag of params.publishTags) {
-    const selectorState = classifyNpmDistTagVersion(
-      registry.packument["dist-tags"][publishTag],
-      params.version,
-    );
-    if (selectorState !== "match") {
-      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
-      if (selectorState === "missing" || selectorState === "lagging") {
-        throw new NpmRegistryUnavailableError(message);
-      }
-      throw new Error(message);
-    }
-  }
-  return { alreadyPublished: true };
+  return { distTags: registry.packument["dist-tags"] };
 }
 
 function outputValues(file, values) {

@@ -8,7 +8,6 @@ vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
 }));
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import type { SecretInput } from "../../config/types.secrets.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
@@ -33,6 +32,9 @@ const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn<typeof createInstallPlanFixture>());
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../program/config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -120,6 +122,17 @@ vi.mock("./shared.js", async (importOriginal) => ({
       emit: (payload: DaemonActionResponse) => {
         actionState.emitted.push(payload);
       },
+      // This fixture records plan decisions; output behavior uses the real-owner integration suite.
+      emitMessage: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      warn: (message: string) => {
+        if (json) {
+          actionState.warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
       fail: (message: string, hints?: string[]) => {
         actionState.failed.push({ message, hints });
       },
@@ -145,10 +158,6 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-function expectFirstInstallPlanCallOmitsToken() {
-  expect("token" in readFirstInstallPlanArg()).toBe(false);
-}
-
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -167,16 +176,6 @@ function readFirstInstallPlanArg(): Record<string, unknown> {
   return firstArg as Record<string, unknown>;
 }
 
-function readFirstConfigWriteParams(): {
-  sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } };
-} {
-  const [params] = replaceConfigFileMock.mock.calls[0] ?? [];
-  if (!params || typeof params !== "object") {
-    throw new Error("expected first config write params");
-  }
-  return params as { sourceConfig?: { gateway?: { mode?: string; auth?: { token?: string } } } };
-}
-
 function readFirstNodeStartupTlsEnvironmentArg(): Record<string, unknown> {
   const [params] = resolveNodeStartupTlsEnvironmentMock.mock.calls[0] ?? [];
   if (!params || typeof params !== "object") {
@@ -187,21 +186,6 @@ function readFirstNodeStartupTlsEnvironmentArg(): Record<string, unknown> {
 
 function expectLastEmittedResult(result: string): void {
   expectFields(actionState.emitted.at(-1), { result });
-}
-
-function mockResolvedGatewayTokenSecretRef(
-  token: SecretInput = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-) {
-  const config = { gateway: { mode: "local" as const, auth: { mode: "token" as const, token } } };
-  readConfigFileSnapshotMock.mockResolvedValue({
-    exists: true,
-    valid: true,
-    config,
-    sourceConfig: config,
-  });
-  resolveSecretRefValuesMock.mockResolvedValue(
-    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-  );
 }
 
 const { runDaemonInstall } = await import("./install.js");
@@ -224,6 +208,7 @@ export function setupInstallTests() {
     buildGatewayInstallPlanMock.mockReset();
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
+    ensureConfigReadyMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
     service.install.mockReset();
@@ -276,21 +261,17 @@ export {
   actionState,
   buildGatewayInstallPlanMock,
   expectFields,
-  expectFirstInstallPlanCallOmitsToken,
   expectLastEmittedResult,
+  ensureConfigReadyMock,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
-  mockResolvedGatewayTokenSecretRef,
-  randomTokenMock,
   readConfigFileSnapshotMock,
-  readFirstConfigWriteParams,
   readFirstInstallPlanArg,
   readFirstNodeStartupTlsEnvironmentArg,
   replaceConfigFileMock,
   resolveGatewayAuthMock,
   resolveGatewayBindHostMock,
   resolveNodeStartupTlsEnvironmentMock,
-  resolveSecretRefValuesMock,
   runDaemonInstall,
   runExecMock,
   service,

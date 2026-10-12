@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,10 +14,13 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { connectUserModelAccount } from "../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "./agent-runtime-identity-token.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -34,15 +41,110 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 
+test("new unpinned sessions bind the account for the permitted operator default", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const owner = ensureProfileForEmail("role-default-account@example.test");
+  const accounts = new Map(
+    ["primary", "permitted"].map((provider) => [
+      provider,
+      connectUserModelAccount({
+        ownerProfileId: owner.id,
+        credential: { type: "token", provider, token: `synthetic-${provider}-account` },
+        assertCurrent() {},
+      }).authProfileId,
+    ]),
+  );
+  const base = (await getGatewayConfigModule()).getRuntimeConfig();
+  const model: ModelDefinitionConfig = {
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 1024,
+  };
+  const cfg: OpenClawConfig = {
+    ...base,
+    agents: {
+      ...base.agents,
+      defaults: {
+        ...base.agents?.defaults,
+        model: { primary: "primary/model", fallbacks: ["permitted/model"] },
+      },
+    },
+    models: {
+      providers: Object.fromEntries(
+        ["primary", "permitted"].map((provider) => [
+          provider,
+          {
+            api: "openai-completions" as const,
+            baseUrl: `https://${provider}.invalid/v1`,
+            agentRuntime: { id: "openclaw" },
+            models: [model],
+          },
+        ]),
+      ),
+    },
+  };
+  const client: GatewayClient = {
+    connId: "role-default-account",
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.write"],
+    },
+    authenticatedUserProfile: {
+      profileId: owner.id,
+      displayName: owner.displayName,
+      hasAvatar: false,
+      updatedAt: owner.updatedAt,
+    },
+    internal: {
+      operatorRunAuthority: createAdmittedRunOperatorAuthority({
+        profileId: owner.id,
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["primary/model"] } }),
+      }),
+    },
+  };
+  const key = "agent:main:dashboard:role-default-account";
+  const created = await directSessionReq(
+    "sessions.create",
+    { key, agentId: "main" },
+    {
+      client,
+      context: {
+        getRuntimeConfig: () => cfg,
+        getCommittedRuntimeConfig: () => cfg,
+        getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
+          new Set(!filter || filter(client) ? [client.connId!] : []),
+      },
+    },
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+  expect(entry).toMatchObject({
+    authProfileOverride: expectDefined(accounts.get("permitted"), "permitted account"),
+    authProfileOverrideSource: "user-link",
+  });
+  expect(entry?.modelOverride).toBeUndefined();
+});
+
 test.each([
+  { mode: "public", model: "default", expected: "default" },
+  { mode: "in-process", model: "default", expected: "default" },
   { mode: "public", model: "middle", expected: "final" },
   { mode: "in-process", model: "middle", expected: "middle" },
   { mode: "signed", model: "middle", expected: "middle" },
-  { mode: "in-process", model: "custom/model", expected: "custom/model" },
   { mode: "disallowed", model: "middle", expected: undefined },
   { mode: "revoked", model: "middle", expected: undefined },
   { mode: "mismatched", model: "middle", expected: undefined },
   { mode: "public-spoof", model: "middle", expected: undefined },
+  { mode: "role-denied", model: "middle", expected: undefined },
+  { mode: "role-allowed", model: "middle", expected: "middle" },
 ])("sessions.create consumes $mode model $model", async ({ mode, model, expected }) => {
   const { storePath } = await createSessionStoreDir();
   const baseConfig = (await getGatewayConfigModule()).getRuntimeConfig();
@@ -76,11 +178,18 @@ test.each([
   };
   const parentSessionKey = "agent:main:main";
   const childSessionKey = `agent:main:dashboard:resolved-${mode}-${model.replaceAll("/", "-")}`;
-  await writeSessionStore({ entries: { [parentSessionKey]: sessionStoreEntry("model-parent") } });
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("model-parent", {
+        lifecycleRevision: "parent-generation",
+      }),
+    },
+  });
   const operationalRunInstance = createOperationalRunInstanceRef(`model-parent-${mode}`);
   const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const resolvedModel = { provider: "custom", model };
   const spawnContext = {
+    requesterSenderIsOwner: mode === "in-process",
     inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
     resolvedModel,
     spawnModelAutoSelection: { model: `custom/${model}`, hasFallbackOrigin: true },
@@ -110,6 +219,20 @@ test.each([
         }
       : {}),
   });
+  if (mode === "role-denied" || mode === "role-allowed") {
+    client.internal = {
+      ...client.internal,
+      operatorRunAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "limited-operator",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        modelPolicy: prepareOperatorModelPolicy({
+          cfg,
+          policy: { allow: [mode === "role-allowed" ? "custom/middle" : "custom/default"] },
+        }),
+      }),
+    };
+  }
   try {
     if (mode === "signed") {
       const token = await mintAgentRuntimeIdentityToken({
@@ -167,7 +290,15 @@ test.each([
       expect(result).toMatchObject(
         mode === "public-spoof"
           ? { ok: false, error: { code: "INVALID_REQUEST" } }
-          : { ok: false, error: { message: expect.stringContaining("model not allowed") } },
+          : mode === "role-denied"
+            ? {
+                ok: false,
+                error: {
+                  code: "FORBIDDEN",
+                  message: expect.stringContaining("operator role cannot use this model"),
+                },
+              }
+            : { ok: false, error: { message: expect.stringContaining("model not allowed") } },
       );
       expect(entry).toBeUndefined();
     } else {
@@ -179,6 +310,11 @@ test.each([
         modelOverrideSource: mode === "public" ? "user" : "auto",
         ...(mode !== "public"
           ? {
+              spawnedBy: parentSessionKey,
+              parentSessionId: "model-parent",
+              spawnedBySessionId: "model-parent",
+              parentSessionLifecycleRevision: "parent-generation",
+              spawnedBySenderIsOwner: mode === "in-process",
               modelOverrideFallbackOriginProvider: "custom",
               modelOverrideFallbackOriginModel: expected,
             }

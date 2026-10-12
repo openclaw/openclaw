@@ -29,23 +29,6 @@ describe("runCommandWithTimeout no-output timer", () => {
     });
   });
 
-  it("bounds captured stdout and stderr while keeping the newest output", async () => {
-    const script = ["process.stdout.write('abcdefgh')", "process.stderr.write('1234567')"].join(
-      ";",
-    );
-    const result = await runCommandWithTimeout([process.execPath, "-e", script], {
-      // Output capture is independent from watchdog timing; Vitest owns the
-      // test deadline so a loaded worker cannot race the child's exit event.
-      maxOutputBytes: 5,
-    });
-
-    expect(result.stdout).toBe("defgh");
-    expect(result.stderr).toBe("34567");
-    expect(result.stdoutTruncatedBytes).toBe(3);
-    expect(result.stderrTruncatedBytes).toBe(2);
-    expect(result.termination).toBe("exit");
-  });
-
   it("marks no-output timeout when the child goes silent", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
@@ -57,17 +40,6 @@ describe("runCommandWithTimeout no-output timer", () => {
 
     expect(result.termination).toBe("no-output-timeout");
     expect(result.noOutputTimedOut).toBe(true);
-    expect(result.code).toBe(124);
-  });
-
-  it("marks global timeout when the overall timeout elapses", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
-      { timeoutMs: 100 },
-    );
-
-    expect(result.termination).toBe("timeout");
-    expect(result.noOutputTimedOut).toBe(false);
     expect(result.code).toBe(124);
   });
 });

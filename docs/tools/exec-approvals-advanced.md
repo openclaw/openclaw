@@ -42,13 +42,12 @@ so file operands cannot be smuggled as ambiguous positionals.
 
 ### Argv validation and denied flags
 
-Validation is deterministic from argv shape only (no host filesystem existence
+Validation depends only on the argument structure (no host filesystem existence
 checks), which prevents file-existence oracle behavior from allow/deny
 differences. File-oriented options are denied for default safe bins; long
-options validate fail-closed (unknown flags and ambiguous abbreviations are
+options must be recognized (unknown flags and ambiguous abbreviations are
 rejected). Recognized read-only boolean flags of the default bins (for example
-`wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags stay
-fail-closed and fall through to the configured approval policy, including the
+`wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags are rejected by safe-bin validation and fall through to the configured approval policy, including the
 automatic reviewer in `mode=auto`.
 
 Denied flags by safe-bin profile:
@@ -189,7 +188,7 @@ automatic review with `Exec auto-review skipped: dispatch chain cannot be bound`
 binding checks succeed, these forms take the one-shot human approval path. Plain commands and
 transparent `env` without assignments remain eligible when all executable identities are bound.
 A gateway reviewing a remote node command accepts a prepared pinned direct command, including
-the node's own canonical POSIX shell transport around one direct absolute executable with static
+the node's own built-in POSIX shell transport around one direct absolute executable with static
 arguments. That transport is the node's dispatcher; user-supplied shell or dispatch wrappers,
 bare executable names, and unquoted globs still require a human because the gateway cannot
 inspect the node's in-memory executable binding. Existing binding rejections remain in force.
@@ -305,10 +304,10 @@ not offered.
 
 When an exec or plugin approval request originates from a deliverable chat surface, that same chat
 can approve it with `/approve` by default. This applies to Slack, Matrix, Microsoft Teams, and
-similar deliverable chats, in addition to the existing Web UI and terminal UI flows, using the
-normal channel auth model for that conversation. If the originating chat can already send commands
-and receive replies, approval requests no longer need a separate native delivery adapter just to
-stay pending.
+similar deliverable chats, using the normal channel auth model for that conversation. The Web UI
+supports both approval kinds; the terminal UI supports plugin approvals only. If the originating
+chat can already send commands and receive replies, approval requests no longer need a separate
+native delivery adapter just to stay pending.
 
 Discord, Telegram, and QQ bot also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.
@@ -324,7 +323,7 @@ The agent should not also echo a duplicate plain chat `/approve` command unless 
 chat approvals are unavailable or manual approval is the only remaining path.
 
 If a native approval client is configured but no native runtime is active for the originating
-channel, OpenClaw keeps the local deterministic `/approve` prompt visible. If the native runtime is
+channel, OpenClaw keeps the local `/approve` prompt visible. If the native runtime is
 active and attempts delivery but no target receives the card, OpenClaw sends a same-chat fallback
 notice with the exact `/approve <id> <decision>` command so the request can still be resolved.
 
@@ -417,7 +416,7 @@ The official iOS and Android apps can also review Gateway-owned pending exec
 approvals when an `operator.admin` connection is used, or when their paired
 `operator.approvals` device was explicitly targeted by the request. They read
 the same sanitized durable record used by the
-Control UI, submit a kind-aware decision, and display the Gateway's canonical
+Control UI, submit a kind-aware decision, and display the Gateway's stored
 first-answer result. The Apple Watch mirrors these approval prompts through
 the paired iPhone, with allow-once and deny actions. Direct Watch Gateway mode
 does not review approvals.

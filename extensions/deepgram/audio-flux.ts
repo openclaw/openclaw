@@ -1,6 +1,6 @@
 // Deepgram Flux voice-note transcription uses the provider's one-shot WebSocket protocol.
 import { open } from "node:fs/promises";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -51,10 +51,8 @@ function buildDeepgramFluxUrl(params: {
   model: string;
   query?: Record<string, string | number | boolean | undefined>;
 }): string {
-  let url: URL;
-  try {
-    url = new URL(params.baseUrl);
-  } catch {
+  const url = URL.parse(params.baseUrl);
+  if (!url) {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
   if (url.protocol === "http:") {

@@ -3,11 +3,13 @@ import {
   WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
 } from "@openclaw/ai/diagnostics";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { REPEATED_TOOL_ERROR_CODE } from "../../../packages/agent-core/src/errors.js";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
   shouldRetryFailoverSignal,
 } from "../../agents/failover/retry-evidence.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../agents/sessions/transcript-turn-error.js";
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
@@ -15,6 +17,7 @@ import {
 } from "../types.js";
 
 const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
+  REPEATED_TOOL_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
@@ -27,12 +30,14 @@ const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
 export function isTerminalAssistantError(
   message:
     | (Pick<AssistantMessage, "diagnostics" | "errorCode"> &
-        Partial<Pick<AssistantMessage, "stopReason" | "errorBody" | "content">>)
+        Partial<Pick<AssistantMessage, "stopReason" | "errorBody" | "errorMessage" | "content">>)
     | null
     | undefined,
 ): boolean {
   return (
     Boolean(message?.errorCode && TERMINAL_ASSISTANT_ERROR_CODES.has(message.errorCode)) ||
+    (message?.stopReason === "error" &&
+      isSessionTranscriptTurnMismatchErrorMessage(message.errorMessage)) ||
     (message != null && resolveResponsesOutputIdentityRetry(message) === "stop") ||
     isProviderRefusalAssistantError(message)
   );

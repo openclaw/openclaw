@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import fs from "node:fs";
+import path from "node:path";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -14,7 +14,7 @@ import {
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-admission-fence-");
 describe("SQLite admitted input reset fence", () => {
   let scope: {
     agentId: string;
@@ -25,68 +25,101 @@ describe("SQLite admitted input reset fence", () => {
   beforeEach(() => {
     scope = {
       agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-fence-") },
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make() },
       sessionId: "admission-fence-test",
       sessionKey: "agent:main:admission-fence-test",
     };
   });
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+
+  it("rejects a retained completion source reset before admission", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("source", null, {
+          role: "user",
+          content: "completed child",
+          idempotencyKey: "source:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    expect(everySessionTranscriptUserInputFrom(scope, "source:user", () => true)).toBe(true);
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "before-admission-reset",
+      parentId: "source",
+      timestamp: "2026-09-14T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "source",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("admitted", "before-admission-reset", {
+          role: "user",
+          content: "admitted",
+          idempotencyKey: "admitted:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    expect(
+      readSessionTranscriptMessageEvents(scope).some(
+        ({ event }) =>
+          typeof event === "object" && event !== null && "id" in event && event.id === "source",
+      ),
+    ).toBe(true);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    const accept = () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true);
+    expect(accept()).toBe(false);
+    expect(
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "recovery", role: "user" },
+        accept,
+      ),
+    ).toBe(false);
   });
 
-  it.each([false, true])(
-    "rejects a completion source reset before admission (retained=%s)",
-    async (retained) => {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("source", null, {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: "source:user",
-          }),
-        ],
-        touchSessionEntry: false,
-      });
-      expect(everySessionTranscriptUserInputFrom(scope, "source:user", () => true)).toBe(true);
-      await appendTranscriptEvent(scope, {
-        type: "reset",
-        id: "before-admission-reset",
-        parentId: "source",
-        timestamp: "2026-09-14T00:00:00.000Z",
-        reason: "new",
-        ...(retained ? { firstKeptEntryId: "source" } : {}),
-      });
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("admitted", "before-admission-reset", {
-            role: "user",
-            content: "admitted",
-            idempotencyKey: "admitted:user",
-          }),
-        ],
-        touchSessionEntry: false,
-      });
-      expect(
-        readSessionTranscriptMessageEvents(scope).some(
-          ({ event }) =>
-            typeof event === "object" && event !== null && "id" in event && event.id === "source",
-        ),
-      ).toBe(retained);
-      const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
-      if (!anchor) {
-        throw new Error("missing real admission anchor");
-      }
-      const accept = () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true);
-      expect(accept()).toBe(false);
-      expect(
-        runWithSessionTranscriptReadFence(
-          { ...anchor, logicalTurnId: "recovery", role: "user" },
-          accept,
-        ),
-      ).toBe(false);
-    },
-  );
+  it("accepts an admission store path that aliases the same database", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("source", null, {
+          role: "user",
+          content: "source",
+          idempotencyKey: "source:user",
+        }),
+        transcriptMessage("admitted", "source", {
+          role: "user",
+          content: "admitted",
+          idempotencyKey: "admitted:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    const aliasDir = path.join(path.dirname(path.dirname(anchor.storePath)), "agent-alias");
+    fs.symlinkSync(
+      path.dirname(anchor.storePath),
+      aliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    expect(
+      runWithSessionTranscriptReadFence(
+        {
+          ...anchor,
+          logicalTurnId: "aliased-store",
+          role: "user",
+          storePath: path.join(aliasDir, path.basename(anchor.storePath)),
+        },
+        () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true),
+      ),
+    ).toBe(true);
+  });
 
   it.each([false, true])(
     "keeps pre-fence control facts through a later reset (human=%s)",

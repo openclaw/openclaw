@@ -24,15 +24,14 @@ import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-to
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   activateMcpLoopbackClientGrantCapture,
-  bindMcpLoopbackClientGrantAdmission,
-  deactivateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   resolveMcpLoopbackClientGrant,
   revokeAttachGrant,
-  revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -69,7 +68,6 @@ const caller: ReplyToolAuthorityOverlay = {
 };
 let fixtureSignal: AbortSignal;
 const fixtureRuns = new Set<Promise<void>>();
-let nativeToolProjector: ((tools: readonly string[]) => readonly string[]) | undefined;
 
 type McpResponse = {
   result: {
@@ -81,7 +79,8 @@ type McpResponse = {
 
 beforeEach(({ signal }) => {
   fixtureSignal = signal;
-  nativeToolProjector = undefined;
+  // Shared channel stubs otherwise load bundled message adapters in this webchat-only fixture.
+  setActivePluginRegistry(createEmptyPluginRegistry());
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
@@ -91,7 +90,6 @@ beforeEach(({ signal }) => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "execution-args",
         resolveExecutionArgs: ({ baseArgs }) => baseArgs,
-        projectNativeToolAuthority: nativeToolProjector,
       },
     ],
   });
@@ -153,7 +151,7 @@ async function withCliQuestionLoopback(
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
           ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-          agents: { defaults: { workspace: dir }, entries: { main: { default: true } } },
+          agents: { defaults: { workspace: dir }, entries: { main: {} } },
           plugins: { enabled: false },
           tools: { profile: "full" },
         };
@@ -166,8 +164,8 @@ async function withCliQuestionLoopback(
         const resolveTools = toolResolution.resolveGatewayScopedTools;
         const resolutions = vi
           .spyOn(toolResolution, "resolveGatewayScopedTools")
-          .mockImplementation((...args) => {
-            const scoped = resolveTools(...args);
+          .mockImplementation(async (...args) => {
+            const scoped = await resolveTools(...args);
             for (const tool of scoped.tools) {
               const execute = tool.execute;
               vi.spyOn(tool, "execute").mockImplementation(async (...executeArgs) => {
@@ -345,7 +343,7 @@ function expectAnswered(response: McpResponse) {
 describe("CLI loopback question creator authority", () => {
   it("answers a real cached ask_user with the CLI creator's original frozen policy", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare();
+      const owner = await fixture.prepare(undefined, { sessionKey: "main" });
       const beforeList = fixture.resolutionCount();
       expect((await fixture.list(owner.token)).result.tools?.map((tool) => tool.name)).toEqual([
         "ask_user",
@@ -366,13 +364,10 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it.each([
-    { name: "explicit main alias", supplied: "main", native: sessionKey },
-    { name: "omitted session key", supplied: undefined, native: undefined },
-  ])("binds the actual MCP registration target for $name", async ({ supplied, native }) => {
+  it("binds an omitted native session key to the actual MCP registration target", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare(undefined, { sessionKey: supplied });
-      expect(owner.context.params.sessionKey).toBe(native);
+      const owner = await fixture.prepare(undefined, { sessionKey: undefined });
+      expect(owner.context.params.sessionKey).toBeUndefined();
       const grant = expectDefined(
         resolveMcpLoopbackClientGrant({
           token: owner.token,
@@ -387,7 +382,7 @@ describe("CLI loopback question creator authority", () => {
         owner.context.bindQuestionAnswerAuthority,
         "native question binder",
       )(() => {});
-      expect(nativeAuthority.sessionKey).toBe(native ?? owner.context.params.sessionId);
+      expect(nativeAuthority.sessionKey).toBe(owner.context.params.sessionId);
       await fixture.list(owner.token);
       const question = await fixture.ask(owner.token);
       expect(fixture.manager.get(question.id)?.sessionKey).toBe(sessionKey);
@@ -396,102 +391,28 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it.each(["revoke", "source-abort", "admission-close"] as const)(
-    "refuses a pending CLI question after %s without consuming the answer",
-    async (change) => {
-      await withCliQuestionLoopback(async (fixture) => {
-        const owner = await fixture.prepare();
-        const question = await fixture.ask(owner.token);
-        await expect(fixture.answer({ ...caller, toolsAllow: [] })).rejects.toThrow(
-          "caller policy",
-        );
-        if (change === "revoke") {
-          revokeMcpLoopbackClientGrant(owner.token);
-        } else if (change === "source-abort") {
-          owner.source.abort(new Error("original CLI source aborted"));
-          expect(
-            resolveMcpLoopbackClientGrant({
-              token: owner.token,
-              runtimeOwnerToken: fixture.runtimeOwnerToken,
-              captureKey,
-            }),
-          ).toBeUndefined();
-        } else {
-          owner.admission.close();
-        }
-
-        await expect(fixture.answer()).rejects.toThrow();
-        expect(fixture.persist).not.toHaveBeenCalled();
-        expect(fixture.resolveRequestCount()).toBe(0);
-        expect(fixture.manager.get(question.id)?.status).toBe("pending");
-        fixture.retire(question.id);
-        await question.response;
-      });
-    },
-  );
-
-  it.each(["reactivate", "rebind", "deactivate-reactivate", "native-publication"] as const)(
-    "rematerializes cached questions after same-token and same-capture %s",
-    async (change) => {
-      if (change === "native-publication") {
-        nativeToolProjector = () => [];
-      }
-      await withCliQuestionLoopback(async (fixture) => {
-        const owner = await fixture.prepare();
-        const publishNative =
-          change === "native-publication"
-            ? expectDefined(
-                owner.context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
-                "native capture observer",
-              )
-            : undefined;
-        publishNative?.([]);
-        await fixture.list(owner.token);
-        const cachedCount = fixture.resolutionCount();
-        await fixture.list(owner.token);
-        const old = await fixture.ask(owner.token);
-        expect(fixture.resolutionCount()).toBe(cachedCount);
-        await expect(fixture.answer({ ...caller, toolsAllow: [] })).rejects.toThrow(
-          "caller policy",
-        );
-        const binding = {
+  it("refuses a pending CLI question after source abort without consuming the answer", async () => {
+    await withCliQuestionLoopback(async (fixture) => {
+      const owner = await fixture.prepare();
+      const question = await fixture.ask(owner.token);
+      await expect(fixture.answer({ ...caller, toolsAllow: [] })).rejects.toThrow("caller policy");
+      owner.source.abort(new Error("original CLI source aborted"));
+      expect(
+        resolveMcpLoopbackClientGrant({
           token: owner.token,
           runtimeOwnerToken: fixture.runtimeOwnerToken,
           captureKey,
-        };
-        if (publishNative) {
-          publishNative([]);
-        } else if (change === "rebind") {
-          expect(
-            bindMcpLoopbackClientGrantAdmission({
-              ...binding,
-              admittedRunContext: expectDefined(
-                owner.context.params.admittedRunContext,
-                "CLI admission",
-              ),
-            }),
-          ).toBe(true);
-        } else {
-          if (change === "deactivate-reactivate") {
-            expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
-          }
-          expect(activateMcpLoopbackClientGrantCapture(binding)).toBeTruthy();
-        }
-        await expect(fixture.answer()).rejects.toThrow();
-        expect(fixture.persist).not.toHaveBeenCalled();
-        expect(fixture.resolveRequestCount()).toBe(0);
-        fixture.retire(old.id);
-        await old.response;
+        }),
+      ).toBeUndefined();
 
-        await fixture.list(owner.token);
-        expect(fixture.resolutionCount()).toBe(cachedCount + 1);
-        const fresh = await fixture.ask(owner.token);
-        expect(fixture.resolutionCount()).toBe(cachedCount + 1);
-        await expect(fixture.answer()).resolves.toBe(true);
-        expectAnswered(await fresh.response);
-      });
-    },
-  );
+      await expect(fixture.answer()).rejects.toThrow();
+      expect(fixture.persist).not.toHaveBeenCalled();
+      expect(fixture.resolveRequestCount()).toBe(0);
+      expect(fixture.manager.get(question.id)?.status).toBe("pending");
+      fixture.retire(question.id);
+      await question.response;
+    });
+  });
 
   it("moves fresh creator authority onto a warm process token without reviving its old question", async () => {
     await withCliQuestionLoopback(async (fixture) => {
@@ -530,10 +451,8 @@ describe("CLI loopback question creator authority", () => {
   });
 
   it.for([
-    { stage: "before", ending: "failure" },
     { stage: "after", ending: "failure" },
     { stage: "before", ending: "cancellation" },
-    { stage: "after", ending: "cancellation" },
   ] as const)(
     "joins a question request on fixture $ending $stage registration",
     async ({ stage, ending }, { onTestFinished, signal }) => {

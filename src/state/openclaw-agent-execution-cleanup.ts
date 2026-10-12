@@ -1,6 +1,15 @@
-import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
+import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runSqliteWorkerStoreOperation } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { openOpenClawStateWorkerCleanupStore } from "./openclaw-state-worker-store.js";
 
@@ -10,24 +19,40 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   stopped: Promise<void>;
   assertOwned(): void;
   lease: OpenClawAgentDatabaseWorkerLeaseReceipt;
+  closed?: () => ReturnType<typeof readAgentDatabaseClosedReceipt>;
 }): Promise<void> {
   params.assertOwned();
   await params.stopped;
   params.assertOwned();
+  // A confirmed native close already released its lease; exit alone still needs recovery.
+  if (params.closed?.()) {
+    assertExistingDatabaseIdentity(params.lease.sharedStatePath, params.lease.sharedStateIdentity);
+    return;
+  }
   const observed = await readDatabasePathIdentity(params.lease.sharedStatePath);
   if (observed.key !== params.lease.sharedStateIdentity) {
     throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
   }
+  params.assertOwned();
+  // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
+  invalidateOpenClawAgentDatabaseValidation(params.lease.path);
   const context = {
     environment: params.context.environment,
-    coordinatorRuntime: { ...params.context.coordinatorRuntime, keepAlive: false },
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     params.lease.sharedStatePath,
     context,
     () => params.assertOwned(),
-  );
+    observed,
+  ).catch((error: unknown) => {
+    if (error instanceof Error) {
+      error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;
+      error.stack = `${error.name}: ${error.message}\n${error.stack ?? ""}`;
+    }
+    throw error;
+  });
   if (!store) {
     throw new Error("Retired agent cleanup lost its original shared database");
   }
@@ -38,6 +63,16 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
       (scope) => scope.execute({ type: "agentDatabases.releaseExitedLease", input: params.lease }),
       context,
       () => params.assertOwned(),
+      () => ({
+        nativeLocations: [params.lease.sharedStatePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          params.assertOwned();
+          if (request.stage === "prepare" && request.facts === "agent-integrity-invalidated") {
+            invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+          }
+          grant();
+        }),
+      }),
     );
   } catch (error) {
     errors.push(error);
@@ -47,12 +82,45 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   } catch (error) {
     errors.push(error);
   }
-  if (errors.length === 1) {
-    throw errors[0];
+  throwSqliteLifecycleErrors(errors, "Retired agent lease cleanup and Worker close failed");
+}
+
+/** Native closure is reusable only for the exact incarnation and original worker lease. */
+export function readAgentDatabaseClosedReceipt(
+  receipt: SqliteWorkerCloseReceipt | undefined,
+  identity: AgentDatabaseFileExecutionIdentity | undefined,
+  lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined,
+) {
+  if (
+    !receipt ||
+    !identity ||
+    !lease ||
+    receipt.incarnation !== identity.incarnation ||
+    receipt.identity.key !== `file:${identity.physicalIdentity}` ||
+    receipt.identity.canonicalPath !== identity.nativeLocation
+  ) {
+    return undefined;
   }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Retired agent lease cleanup and Worker close failed", {
-      cause: errors[0],
-    });
+  return { receipt, identity, lease };
+}
+
+export function publishAgentDatabaseCloseCheckpoint(
+  pathname: string,
+  closed: ReturnType<typeof readAgentDatabaseClosedReceipt>,
+  assertCleanupOwned: () => void,
+): void {
+  if (!closed) {
+    return;
+  }
+  const { receipt, identity, lease } = closed;
+  try {
+    // Cleanup retains custody after ordinary admission is revoked during shutdown.
+    assertCleanupOwned();
+    assertExistingDatabaseIdentity(pathname, receipt.identity.key);
+    assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
+    assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
+    publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
+  } catch {
+    // A stale diagnostic must not clear another generation's budget or fail native cleanup.
   }
 }

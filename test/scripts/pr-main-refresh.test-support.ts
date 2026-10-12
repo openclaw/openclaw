@@ -11,7 +11,9 @@ import {
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -24,8 +26,10 @@ function shellQuote(value: string): string {
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
+  const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
+    ...handoff.env,
+    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -45,7 +49,7 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git };
+  return { env, realGit, git, handoff };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
@@ -102,7 +106,11 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
 // transport faults, and GitHub responses are synthetic.
 export function createMainRefreshFixture(
   directory: string,
-  options: { perWorktreeConfig?: boolean; partialCloneFilter?: string } = {},
+  options: {
+    perWorktreeConfig?: boolean;
+    partialCloneFilter?: string;
+    precreateWorktree?: boolean;
+  } = {},
 ) {
   // Existing regression fixtures retain worktreeConfig; acceleration starts with
   // a distinct pristine fixture, never a shared-config reset after sparse use.
@@ -121,7 +129,8 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git } = createFixtureGit(root);
+  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
@@ -143,7 +152,8 @@ export function createMainRefreshFixture(
   } else {
     // Copy complete object stores (including sameTreeHead), never shared refs or
     // hardlinks. Create worktrees afterward so their absolute back-links stay local.
-    cpSync(template.canonical, canonical, copyOptions);
+    // The wrapper's process-group runner executes canonical scripts/pr directly.
+    copyTreeCloseOnExec(template.canonical, canonical);
   }
   git(canonical, "remote", "set-url", "origin", origin);
   git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
@@ -154,10 +164,8 @@ export function createMainRefreshFixture(
     `url.${origin}.insteadOf`,
     "https://github.com/fixture/repo.git",
   );
-  git(canonical, "worktree", "add", "--detach", worktree, head);
   linkPrWrapperDependencies(canonical);
   const local = join(worktree, ".local");
-  mkdirSync(local);
   const metadata = {
     id: "fixture-pr",
     number: 42,
@@ -175,59 +183,70 @@ export function createMainRefreshFixture(
     author: { login: "fixture" },
     baseRefName: "main",
     baseRefOid: main,
+    baseRepository: {
+      id: "fixture-repo",
+      databaseId: 123,
+      nameWithOwner: "fixture/repo",
+      url: "https://github.com/fixture/repo",
+    },
     headRefName: "topic",
     headRefOid: head,
     headRepository: { name: "repo", nameWithOwner: "fixture/repo", url: origin },
-    headRepositoryOwner: { login: "fixture" },
+    headRepositoryOwner: { login: "fixture", is_bot: false },
     changedFiles: 1,
     additions: 1,
     deletions: 1,
     files: [{ path: "src/subject.ts", additions: 1, deletions: 1, changeType: "MODIFIED" }],
   };
-  writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
-  writeFileSync(
-    join(local, "pr-meta.env"),
-    `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
-  );
-  writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
-  writeFileSync(
-    join(local, "review.md"),
-    [
-      `Review artifact for PR #42 at ${head}`,
-      ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
-    ].join("\n"),
-  );
-  writeFileSync(
-    join(local, "review.json"),
-    JSON.stringify({
-      pr: { number: 42, headSha: head },
-      recommendation: "READY FOR /prepare-pr",
-      findings: [],
-      nitSweep: { performed: true, status: "none", summary: "No optional nits." },
-      behavioralSweep: {
-        performed: true,
-        status: "pass",
-        summary: "Synthetic tooling fixture.",
-        silentDropRisk: "none",
-        branches: [
-          {
-            path: "src/subject.ts",
-            decision: "synthetic change",
-            outcome: "reviewed fixture value",
-          },
-        ],
-      },
-      issueValidation: {
-        performed: true,
-        source: "pr_body",
-        status: "valid",
-        summary: "Synthetic fixture.",
-      },
-      tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
-      docs: "not_applicable",
-      changelog: "not_required",
-    }),
-  );
+  mkdirSync(join(canonical, ".worktrees"), { recursive: true });
+  if (options.precreateWorktree !== false) {
+    git(canonical, "worktree", "add", "--detach", worktree, head);
+    mkdirSync(local);
+    writeFileSync(join(local, "pr-meta.json"), JSON.stringify(metadata));
+    writeFileSync(
+      join(local, "pr-meta.env"),
+      `PR_NUMBER=42\nPR_URL=https://example.invalid/pr/42\nPR_AUTHOR=fixture\nPR_BASE=main\nPR_HEAD=topic\nPR_HEAD_SHA=${head}\nPR_HEAD_REPO_URL=${origin}\n`,
+    );
+    writeFileSync(join(local, "review-mode.env"), "REVIEW_MODE=pr\n");
+    writeFileSync(
+      join(local, "review.md"),
+      [
+        `Review artifact for PR #42 at ${head}`,
+        ..."ABCDEFGHIJ".split("").map((letter) => `${letter}) Synthetic evidence.`),
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(local, "review.json"),
+      JSON.stringify({
+        pr: { number: 42, headSha: head },
+        recommendation: "READY FOR /prepare-pr",
+        findings: [],
+        nitSweep: { performed: true, status: "none", summary: "No optional nits." },
+        behavioralSweep: {
+          performed: true,
+          status: "pass",
+          summary: "Synthetic tooling fixture.",
+          silentDropRisk: "none",
+          branches: [
+            {
+              path: "src/subject.ts",
+              decision: "synthetic change",
+              outcome: "reviewed fixture value",
+            },
+          ],
+        },
+        issueValidation: {
+          performed: true,
+          source: "pr_body",
+          status: "valid",
+          summary: "Synthetic fixture.",
+        },
+        tests: { ran: ["synthetic local proof"], gaps: [], result: "pass" },
+        docs: "not_applicable",
+        changelog: "not_required",
+      }),
+    );
+  }
   const controlFile = join(root, "control.json");
   const eventsFile = join(root, "events.jsonl");
   const control = {
@@ -235,8 +254,9 @@ export function createMainRefreshFixture(
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
-    prIdentityDriftAfterFetch: "" as "" | "oid" | "branch" | "repository",
-    wrongPrFetch: false,
+    unsupportedNoLazy: false,
+    prIdentityDriftAfterAcquisition: "" as "" | "oid" | "branch" | "repository",
+    wrongPrAcquisition: false,
     failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
@@ -277,7 +297,8 @@ export function createMainRefreshFixture(
   writeFileSync(eventsFile, "");
   const prelude = `#!${process.execPath}
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, statSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 
 const controlFile = ${JSON.stringify(controlFile)};
 const eventsFile = ${JSON.stringify(eventsFile)};
@@ -303,10 +324,14 @@ function runGit(args, input) {
     instrumentedGit,
     prelude +
       `
+event({ kind: 'git-runtime', args });
+if (control.unsupportedNoLazy && args[0] === '--no-lazy-fetch') process.exit(129);
 const prFetch = args.includes('fetch') && args.some(arg =>
   arg.startsWith('pull/42/head') ||
   arg.replace(/^\\+/, '').split(':')[0] === control.metadata.headRefOid
 );
+const reusedPrHead = args[0] === 'branch' && args[1] === '--force' &&
+  args[2] === '--no-track' && args.at(-1) === control.metadata.headRefOid;
 if ((control.failPrFetch && prFetch) ||
     (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
   console.error('fatal: injected prepare handoff failure');
@@ -341,21 +366,21 @@ if (args.includes('push')) {
   event({ kind: 'leased-cleanup', args });
 }
 const result = spawnSync(git, args, { stdio: 'inherit' });
-if (prFetch && result.status === 0) {
-  const prefix = args.slice(0, args.indexOf('fetch'));
-  const destination = args.at(-1).split(':')[1];
-  if (control.wrongPrFetch && destination) {
+if ((prFetch || reusedPrHead) && result.status === 0) {
+  const prefix = prFetch ? args.slice(0, args.indexOf('fetch')) : [];
+  const destination = prFetch ? args.at(-1).split(':')[1] : 'refs/heads/' + args.at(-2);
+  if (control.wrongPrAcquisition && destination) {
     runGit([...prefix, 'update-ref', destination.startsWith('refs/') ? destination : 'refs/heads/' + destination,
       ${JSON.stringify(sameTreeHead)}]);
   }
-  if (control.prIdentityDriftAfterFetch === 'oid') {
+  if (control.prIdentityDriftAfterAcquisition === 'oid') {
     control.metadata.headRefOid = ${JSON.stringify(sameTreeHead)};
-  } else if (control.prIdentityDriftAfterFetch === 'branch') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'branch') {
     control.metadata.headRefName = 'renamed';
-  } else if (control.prIdentityDriftAfterFetch === 'repository') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'repository') {
     control.metadata.headRepository.nameWithOwner = 'fixture/replacement';
   }
-  if (control.prIdentityDriftAfterFetch) writeFileSync(controlFile, JSON.stringify(control));
+  if (control.prIdentityDriftAfterAcquisition) writeFileSync(controlFile, JSON.stringify(control));
 }
 if (mainFetch && result.status === 0) {
   const prefix = args.slice(0, args.indexOf('fetch'));
@@ -379,17 +404,26 @@ if (mainFetch && result.status === 0) {
 process.exit(result.status ?? 1);
 `,
   );
-  // Scan every argument like the Node shim, including values after -C/-c prefixes.
-  // Unobserved queries can execute real Git directly without starting another Node process.
+  // Only stateful faults need Node. Record observation-only decisions in the
+  // shell so repeated diff/ref guards do not boot another runtime for real Git.
   writeFileSync(
     join(bin, "git"),
     `#!/bin/sh
+instrument=false
+decision=false
+case "$*" in 'branch --force --no-track '*) instrument=true ;; esac
 for arg in "$@"; do
   case "$arg" in
-    fetch|merge-base|diff|checkout|update-ref|push)
-      exec ${shellQuote(process.execPath)} ${shellQuote(instrumentedGit)} "$@" ;;
+    fetch|checkout|push|--no-lazy-fetch) instrument=true ;;
+    merge-base|diff|update-ref) decision=true ;;
   esac
 done
+if [ "$instrument" = true ]; then
+  exec ${shellQuote(process.execPath)} ${shellQuote(instrumentedGit)} "$@"
+fi
+if [ "$decision" = true ]; then
+  jq -cn --args '{kind:"git-decision",args:$ARGS.positional}' -- "$@" >> ${shellQuote(eventsFile)} || exit
+fi
 exec ${shellQuote(realGit)} "$@"
 `,
   );
@@ -398,6 +432,15 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+const inputPath = args.find(arg => arg.startsWith('--input='))?.slice('--input='.length)
+  ?? (args.includes('--input') ? args[args.indexOf('--input') + 1] : undefined);
+let inputPayload;
+if (args[0] === 'api' && inputPath !== undefined) {
+  if (inputPath === '-' || !isAbsolute(inputPath)) throw new Error('API payload must use an absolute file, not stdin');
+  if (!statSync(inputPath).isFile()) throw new Error('API payload file is unavailable');
+  if (readFileSync(0).length) throw new Error('API payload leaked to child stdin');
+  inputPayload = readFileSync(inputPath, 'utf8');
+}
 if (args[0] === 'browse') {
   console.log('https://github.com/fixture/repo');
   process.exit(0);
@@ -408,28 +451,35 @@ if (repositoryLocatorRequest) {
   console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
   process.exit(0);
 }
+const repositoryAuthorityArgs = ['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'];
+const repositoryAuthorityRequests = [repositoryAuthorityArgs,
+  [...repositoryAuthorityArgs, '-H', 'X-GitHub-Api-Version: 2026-03-10']];
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    !repositoryAuthorityRequests.some(expected => JSON.stringify(args.filter(arg => arg !== '--include')) === JSON.stringify(expected))) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;
 if (args[0] === 'auth') process.exit(1);
 if (args[0] === 'pr' && args[1] === 'view') {
   value = control.metadata;
-} else if (args[0] === 'pr' && args[1] === 'merge') {
-  if (!args.includes('--match-head-commit') || !args.includes(control.metadata.headRefOid)) {
-    throw new Error('Unpinned synthetic merge');
+} else if (args[0] === 'pr' && args[1] === 'merge' && args.includes('--auto')) {
+  if (args[2] !== '42' || !args.includes('--squash') ||
+      args[args.indexOf('--match-head-commit') + 1] !== control.metadata.headRefOid) {
+    throw new Error('Unpinned synthetic auto-merge');
   }
-  if (args.includes('--auto')) {
-    control.metadata.autoMergeRequest = { mergeMethod: 'SQUASH' };
-    writeFileSync(controlFile, JSON.stringify(control));
-    console.log('{}');
-    process.exit(0);
+  control.metadata.autoMergeRequest = { mergeMethod: 'SQUASH' };
+  writeFileSync(controlFile, JSON.stringify(control));
+  value = {};
+} else if (args[0] === 'api' && args.includes('graphql') && inputPayload !== undefined) {
+  const payload = JSON.parse(inputPayload);
+  const input = payload.variables.input;
+  if (input.expectedHeadOid !== control.metadata.headRefOid || input.pullRequestId !== control.metadata.id ||
+      input.mergeMethod !== 'SQUASH' || Object.hasOwn(input, 'commitHeadline')) {
+    throw new Error('Unpinned synthetic merge');
   }
   const parent = runGit(['-C', origin, 'rev-parse', 'refs/heads/main']);
   const tree = runGit(['-C', origin, 'merge-tree', '--write-tree', parent, control.metadata.headRefOid]);
-  const bodyIndex = args.indexOf('--body-file');
-  const body = bodyIndex < 0 ? '' : readFileSync(args[bodyIndex + 1], 'utf8');
+  const body = input.commitBody;
   const landed = runGit(['-C', origin, '-c', 'user.name=Fixture', '-c',
     'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', parent], 'Fixture squash\\n\\n' + body);
   runGit(['-C', origin, 'update-ref', 'refs/heads/main', landed, parent]);
@@ -502,6 +552,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
         headRefOid: control.metadata.headRefOid,
         author: { ...control.metadata.author, __typename: 'User' },
         isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
+        viewerMergeHeadlineText: 'Fixture merge headline',
         viewerMergeBodyText: 'Reviewed fixture body',
       } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
@@ -571,15 +622,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       status: file.changeType === 'DELETED' ? 'removed' : file.changeType.toLowerCase(),
     }))];
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number) {
-    let baseSha = control.metadata.baseRefOid;
-    // The hosted verifier's explicit GET follows the two preparation snapshots.
-    const hostedGateRead = JSON.stringify(args) === JSON.stringify(['api', endpoint, '--method', 'GET']);
-    if (control.remoteOnlyBase && hostedGateRead) {
-      baseSha = control.remoteOnlyBase;
-      runGit(['-C', origin, 'update-ref', 'refs/heads/main', baseSha]);
-      const localObject = spawnSync(git, ['-C', canonical, 'cat-file', '-e', baseSha]);
-      event({ kind: 'remote-only-base', sha: baseSha, localObject: localObject.status === 0 });
-    }
+    const baseSha = control.remoteOnlyBase || control.metadata.baseRefOid;
     value = {
       number: control.metadata.number,
       node_id: control.metadata.id,
@@ -608,7 +651,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
       } },
       base: { ref: control.metadata.baseRefName, sha: baseSha, repo: {
         id: control.metadata.isCrossRepository ? 456 : 123,
-        node_id: 'fixture-repo', full_name: 'fixture/repo',
+        node_id: 'fixture-repo', full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo',
       } },
     };
   } else if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) {
@@ -622,6 +665,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/actions/runs/1') {
     value = { run_attempt: 1, status: 'in_progress', conclusion: null };
   } else if (/^repos\\/(fixture\\/repo|openclaw\\/openclaw)\\/actions\\/runs\\?/.test(endpoint)) {
+    if (control.remoteOnlyBase && !control.remoteOnlyBaseMoved) {
+      runGit(['-C', origin, 'update-ref', 'refs/heads/main', control.remoteOnlyBase]);
+      const localObject = spawnSync(git, ['-C', canonical, 'cat-file', '-e', control.remoteOnlyBase]);
+      event({ kind: 'remote-only-base', sha: control.remoteOnlyBase, localObject: localObject.status === 0 });
+      control.remoteOnlyBaseMoved = true;
+      writeFileSync(controlFile, JSON.stringify(control));
+    }
     if (control.moveAtGate) {
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', ${JSON.stringify(gateMain)}]);
     }
@@ -722,14 +772,33 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
+    seedPreparedMerge() {
+      // Merge-only cases need prepared inputs, not another prepare/gates/push run.
+      // Preparation lifecycle cases still create these artifacts through the wrapper.
+      git(worktree, "checkout", "-B", "pr-42-prep", head);
+      git(worktree, "update-ref", "refs/heads/pr-42", head);
+      writeFileSync(
+        join(local, "prep-context.env"),
+        `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_BRANCH=pr-42-prep\nPR_AUTHOR_ACCESS_AT_PREP=maintainer\n`,
+      );
+      writeFileSync(
+        join(local, "prep.env"),
+        `PR_NUMBER=42\nPR_AUTHOR=fixture\nPR_URL=https://github.com/fixture/repo/pull/42\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${head}\nPREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${main}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=maintainer\n`,
+      );
+      writeFileSync(
+        join(local, "gates.env"),
+        `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=hosted_exact_or_recent_parent\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\nLAST_VERIFIED_HEAD_SHA=${head}\n`,
+      );
+      writeFileSync(join(local, "prep.md"), "Prepared synthetic merge fixture.\n");
+    },
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") {
-        delete env.NODE_OPTIONS;
-      } else {
-        env.NODE_OPTIONS = `--import=${clock}`;
-      }
+      env.NODE_OPTIONS =
+        control.hostedCi === "scheduled"
+          ? privateNodeOptions
+          : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

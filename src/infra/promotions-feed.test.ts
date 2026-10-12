@@ -2,16 +2,14 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
-import {
-  readConfigMachineState,
-  readConfigMachineStateWithMetadata,
-} from "../state/config-machine-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

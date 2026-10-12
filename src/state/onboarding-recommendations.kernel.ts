@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   deleteConfigMachineState,
   updateConfigMachineState,
@@ -12,9 +11,13 @@ import {
   type AcknowledgeOnboardingRecommendationsParams,
   type PreparedOnboardingRecommendationPending,
   type ClearPendingOnboardingRecommendationsParams,
-  type OnboardingRecommendationWriteOperations,
 } from "./onboarding-recommendations.contract.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "./worker-operation-registry.js";
 
 export function readOnboardingRecommendationsInDatabase(
   db: DatabaseSync,
@@ -44,7 +47,7 @@ function matchesExpectedOnboardingRecommendations(
 function writeOnboardingRecommendationsOffer(
   configKey: string,
   params: PreparedOnboardingRecommendationOffer,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord {
   const nowMs = params.nowMs;
   const inventoryHash = params.inventoryHash;
@@ -72,8 +75,8 @@ function writeOnboardingRecommendationsOffer(
 
 function acknowledgeOnboardingRecommendations(
   configKey: string,
-  params: AcknowledgeOnboardingRecommendationsParams = {},
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  params: AcknowledgeOnboardingRecommendationsParams,
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs ?? Date.now();
   let acknowledged: OnboardingRecommendationsRecord | null = null;
@@ -100,7 +103,7 @@ function acknowledgeOnboardingRecommendations(
 function updatePendingOnboardingRecommendations(
   configKey: string,
   params: PreparedOnboardingRecommendationPending,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs;
   const matches = params.matches;
@@ -126,7 +129,7 @@ function updatePendingOnboardingRecommendations(
 function clearPendingOnboardingRecommendations(
   configKey: string,
   params: ClearPendingOnboardingRecommendationsParams,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): boolean {
   let cleared = false;
   updateConfigMachineState<OnboardingRecommendationsRecord>(
@@ -147,44 +150,34 @@ function clearPendingOnboardingRecommendations(
   return cleared;
 }
 
-function clearOnboardingRecommendations(
-  configKey: string,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return deleteConfigMachineState(configKey, databaseOptions);
+function recommendationOperation<Params, Result>(
+  operation: (configKey: string, params: Params, options: OpenClawStateDatabaseOptions) => Result,
+) {
+  return (
+    { configKey, params }: { configKey: string; params: Params },
+    { open, stateOptions }: WorkerOperationContext,
+  ) => operation(configKey, params, { database: open(), ...stateOptions() });
 }
 
-export function executeOnboardingRecommendationCommand(
-  command: SqliteWorkerCommand<OnboardingRecommendationWriteOperations>,
-  database: OpenClawStateDatabaseOptions,
-): OnboardingRecommendationWriteOperations[keyof OnboardingRecommendationWriteOperations]["output"] {
-  switch (command.type) {
-    case "onboardingRecommendations.writeOffer":
-      return writeOnboardingRecommendationsOffer(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.acknowledge":
-      return acknowledgeOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.updatePending":
-      return updatePendingOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.clearPending":
-      return clearPendingOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.clear":
-      return clearOnboardingRecommendations(command.input.configKey, database);
-  }
-  throw new Error("Unexpected onboarding recommendation write command");
-}
+export const onboardingRecommendationOperations = {
+  "onboardingRecommendations.writeOffer": recommendationOperation(
+    writeOnboardingRecommendationsOffer,
+  ),
+  "onboardingRecommendations.acknowledge": recommendationOperation(
+    acknowledgeOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.updatePending": recommendationOperation(
+    updatePendingOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.clearPending": recommendationOperation(
+    clearPendingOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.clear": (
+    { configKey }: { configKey: string },
+    { open, stateOptions },
+  ) => deleteConfigMachineState(configKey, { database: open(), ...stateOptions() }),
+} satisfies WorkerOperationHandlers;
+
+export type OnboardingRecommendationWriteOperations = WorkerOperations<
+  typeof onboardingRecommendationOperations
+>;

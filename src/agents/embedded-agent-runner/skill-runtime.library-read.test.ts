@@ -25,8 +25,15 @@ import {
   manualLibraryFiles as supporting,
 } from "../../skills/test-support/manual-library.test-support.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../harness/host-capability.test-support.js";
@@ -39,24 +46,30 @@ import { prepareEmbeddedSkills } from "./skill-runtime.js";
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     for (const host of hosts.splice(0)) {
       host.closeHost();
       host.closeAdmission();
     }
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    expect(
+      hasOpenClawAgentDatabaseAsyncResources(),
+      "fixture workers must settle before root deletion",
+    ).toBe(false);
     cleanup();
   }),
 );
 
 describe("manual library resources through embedded and host-bound reads", () => {
-  it.each(
-    (["embedded", "codex-host", "copilot-host"] as const).flatMap((toolOwner) =>
-      (["warm", "hydrated"] as const).map((reuse) => ({ toolOwner, reuse })),
-    ),
-  )(
+  it.each([
+    { toolOwner: "embedded", reuse: "warm" },
+    { toolOwner: "codex-host", reuse: "hydrated" },
+    { toolOwner: "copilot-host", reuse: "warm" },
+  ] as const)(
     "reads the pinned revision whole through $toolOwner with a $reuse snapshot without expanding model visibility",
     async ({ toolOwner, reuse }) => {
       const createTools = async (
@@ -135,7 +148,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         files: supporting,
         expectedRevision: null,
       });
-      const pins = changeSkillLibrarySelection(alice, [], {
+      const pins = await changeSkillLibrarySelection(alice, [], {
         action: "attach",
         sessionKey: "agent:main:manual",
         skillId: saved.entry.skillId,
@@ -187,30 +200,39 @@ describe("manual library resources through embedded and host-bound reads", () =>
         "SKILL.md",
       );
       expect(invocation?.command.skillFile).toBe(instructionPath);
-      const prepared = await prepareEmbeddedSkills({
-        attempt: { config, skillsSnapshot: snapshot },
-        effectiveWorkspace: workspaceDir,
-        sandbox: undefined,
-        sessionAgentId: "main",
-        includeCodeModeSkills: true,
-      });
-      try {
-        expect(prepared.skillsPrompt).toBe(snapshot.prompt.trim());
-        expect(prepared.skillsPrompt).not.toContain(saved.entry.name);
-        expect(prepared.codeModeSkills.map((skill) => skill.name)).not.toContain(saved.entry.name);
-        expect(prepared.codeModeSkills.map((skill) => skill.name)).toContain("visible");
-        const tools = await createTools(
+      const prepare = (skillsSnapshot: SkillSnapshot, toolExecutionAllow?: string[]) =>
+        prepareEmbeddedSkills({
+          attempt: { config, skillsSnapshot, toolExecutionAllow },
+          effectiveWorkspace: workspaceDir,
+          sandbox: undefined,
+          sessionAgentId: "main",
+          includeCodeModeSkills: true,
+        });
+      const preparedTools = (
+        prepared: Awaited<ReturnType<typeof prepare>>,
+        options: NonNullable<Parameters<typeof createTools>[0]> = {},
+      ) =>
+        createTools(
           {
             codeModeSkills: prepared.codeModeSkills,
             skillUsagePaths: prepared.skillUsagePaths,
             workspaceDir,
             config,
-            modelProvider: "openai",
-            modelId: "test-model",
             skillsSnapshot: prepared.skillsSnapshotForRun,
+            ...options,
           },
           prepared.skillReadResources,
         );
+      const prepared = await prepare(snapshot);
+      try {
+        expect(prepared.skillsPrompt).toBe(snapshot.prompt.trim());
+        expect(prepared.skillsPrompt).not.toContain(saved.entry.name);
+        expect(prepared.codeModeSkills.map((skill) => skill.name)).not.toContain(saved.entry.name);
+        expect(prepared.codeModeSkills.map((skill) => skill.name)).toContain("visible");
+        const tools = await preparedTools(prepared, {
+          modelProvider: "openai",
+          modelId: "test-model",
+        });
         const read = tools.find((tool) => tool.name === "read")!;
         expect(read).toBeDefined();
         // Real publication -> exact session pin -> snapshot -> preparation -> registered read.
@@ -290,26 +312,11 @@ describe("manual library resources through embedded and host-bound reads", () =>
             })
           ).snapshot;
           expect(filtered.skills.map((skill) => skill.name)).not.toContain(saved.entry.name);
-          const filteredPrepared = await prepareEmbeddedSkills({
-            attempt: { config, skillsSnapshot: filtered },
-            effectiveWorkspace: workspaceDir,
-            sandbox: undefined,
-            sessionAgentId: "main",
-            includeCodeModeSkills: true,
-          });
+          const filteredPrepared = await prepare(filtered);
           try {
-            const filteredRead = (
-              await createTools(
-                {
-                  codeModeSkills: filteredPrepared.codeModeSkills,
-                  skillUsagePaths: filteredPrepared.skillUsagePaths,
-                  workspaceDir,
-                  config,
-                  skillsSnapshot: filteredPrepared.skillsSnapshotForRun,
-                },
-                filteredPrepared.skillReadResources,
-              )
-            ).find((tool) => tool.name === "read")!;
+            const filteredRead = (await preparedTools(filteredPrepared)).find(
+              (tool) => tool.name === "read",
+            )!;
             await expect(
               filteredRead.execute("filtered", { path: instructionPath }),
             ).rejects.toThrow(/Path escapes sandbox root/i);
@@ -322,13 +329,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
             filteredPrepared.restoreSkillEnv();
           }
         }
-        const deniedPreparation = await prepareEmbeddedSkills({
-          attempt: { config, skillsSnapshot: snapshot, toolExecutionAllow: ["write"] },
-          effectiveWorkspace: workspaceDir,
-          sandbox: undefined,
-          sessionAgentId: "main",
-          includeCodeModeSkills: true,
-        });
+        const deniedPreparation = await prepare(snapshot, ["write"]);
         expect(deniedPreparation.skillReadResources).toBeUndefined();
         expect(deniedPreparation.skillsSnapshotForRun).toBeUndefined();
         expect(deniedPreparation.codeModeSkills).toEqual([]);
@@ -341,6 +342,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         );
         const child = await createInitialSubagentSession({
           cfg: config,
+          requesterAgentId: "main",
           targetAgentId: "main",
           childSessionKey: childKey,
           incognito: false,
@@ -359,26 +361,11 @@ describe("manual library resources through embedded and host-bound reads", () =>
             librarySelections: childEntry!.skillLibrarySelections,
           })
         ).snapshot;
-        const childPrepared = await prepareEmbeddedSkills({
-          attempt: { config, skillsSnapshot: childSnapshot },
-          effectiveWorkspace: workspaceDir,
-          sandbox: undefined,
-          sessionAgentId: "main",
-          includeCodeModeSkills: true,
-        });
+        const childPrepared = await prepare(childSnapshot);
         try {
-          const childRead = (
-            await createTools(
-              {
-                codeModeSkills: childPrepared.codeModeSkills,
-                skillUsagePaths: childPrepared.skillUsagePaths,
-                workspaceDir,
-                config,
-                skillsSnapshot: childPrepared.skillsSnapshotForRun,
-              },
-              childPrepared.skillReadResources,
-            )
-          ).find((tool) => tool.name === "read")!;
+          const childRead = (await preparedTools(childPrepared)).find(
+            (tool) => tool.name === "read",
+          )!;
           expect(
             getTextContent(
               await childRead.execute("child-pinned-read", { path: instructionPath, limit: 1 }),
@@ -391,7 +378,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
 
         // Pin survival across unshare/removal is intentional; current library defaults are not revocation.
         for (const action of ["share", "unshare", "remove"] as const) {
-          mutateSkillLibrary(alice, {
+          await mutateSkillLibrary(alice, {
             skillId: saved.entry.skillId,
             expectedRevision: newer.entry.revision,
             action,

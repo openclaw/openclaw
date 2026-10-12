@@ -1,27 +1,40 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as backfill from "./session-row-transcript-backfill.js";
+import * as records from "./session-row-projection-record.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
-/** Observe real background work so warm-read fixtures do not measure startup enrichment. */
-export function observeSessionRowBackfill(sessionKeys: string[]) {
-  const remaining = new Set(sessionKeys);
+/** Observe accepted publications so warm-read fixtures do not measure startup enrichment. */
+export function observeSessionRowBackfill(
+  identities: string[],
+  projection?: Pick<SessionRowProjection, "capture">,
+  identify: (row: records.MaterializedRow) => string = (row) => row.key,
+) {
+  const remaining = new Set(identities);
   const completed = createDeferredCore();
-  const read = backfill.backfillSessionRowTranscriptFields;
-  const spy = vi
-    .spyOn(backfill, "backfillSessionRowTranscriptFields")
-    .mockImplementation(async (params) => {
-      try {
-        const result = await read(params);
-        remaining.delete(params.sessionKey);
-        if (!remaining.size) {
-          completed.resolve();
-        }
-        return result;
-      } catch (error) {
-        completed.reject(error);
-        throw error;
+  const publish = records.publishTranscriptFields;
+  const spy = vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
+    try {
+      const changed = publish(...args);
+      const [row] = args;
+      if (
+        projection &&
+        projection.capture({
+          agentId: row.agentId,
+          key: row.key,
+          storePath: row.storeTarget.storePath,
+        }) !== row
+      ) {
+        return changed;
       }
-    });
-  return completed.promise.then(nextTurn).finally(() => spy.mockRestore());
+      remaining.delete(identify(row));
+      if (!remaining.size) {
+        completed.resolve();
+      }
+      return changed;
+    } catch (error) {
+      completed.reject(error);
+      throw error;
+    }
+  });
+  return completed.promise.finally(() => spy.mockRestore());
 }

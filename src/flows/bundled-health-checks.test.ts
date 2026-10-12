@@ -11,6 +11,7 @@ import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.j
 import {
   registerBundledHealthChecks,
   resolveBundledHealthCheckPluginStateMode,
+  resolveCodexHealthApi,
 } from "./bundled-health-checks.js";
 import { runDoctorLintChecks, selectUpdateReadinessChecks } from "./doctor-lint-flow.js";
 import {
@@ -395,6 +396,9 @@ describe("registerBundledHealthChecks", () => {
   };
 
   it("continues Doctor when an implicit Codex preference has no installed owner", () => {
+    expect(resolveCodexHealthApi({ cfg: implicitCodexConfig, cwd: workspaceDir })).toEqual({
+      status: "not-configured",
+    });
     registerBundledHealthChecks({ cfg: implicitCodexConfig, cwd: workspaceDir });
 
     expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
@@ -531,12 +535,22 @@ describe("registerBundledHealthChecks", () => {
   it.each([
     ["bundled", "implicit"],
     ["bundled", "explicit"],
+    ["bundled", "passive"],
     ["global", "implicit"],
     ["global", "explicit"],
+    ["global", "passive"],
   ] as const)(
     "registers and runs health from the selected %s Codex public artifact with %s routing",
     async (origin, routing) => {
-      const cfg = routing === "implicit" ? implicitCodexConfig : codexConfig;
+      const cfg =
+        routing === "implicit"
+          ? implicitCodexConfig
+          : routing === "passive"
+            ? {
+                agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+                plugins: { entries: { codex: { enabled: true } } },
+              }
+            : codexConfig;
       mkdirSync(join(workspaceDir, "dist"));
       writeFileSync(
         join(workspaceDir, "dist", "api.js"),

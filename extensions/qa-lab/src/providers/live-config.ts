@@ -1,13 +1,12 @@
-// Qa Lab plugin module owns host live-provider config projection.
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  asOptionalRecord,
   isRecord,
   normalizeOptionalString,
-  normalizeStringEntries,
-  uniqueStrings,
+  normalizeUniqueStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LIVE_PROVIDER_CONFIG_PATH_ENV, resolveQaLiveProviderConfigPath } from "./env.js";
 
@@ -32,7 +31,7 @@ export async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds));
+  const providerIds = normalizeUniqueStringEntries(params.providerIds);
   if (providerIds.length === 0) {
     return {};
   }
@@ -43,13 +42,8 @@ export async function readQaLiveProviderConfigOverrides(params: {
   try {
     const raw = await fs.readFile(configPath.path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-    const providers = isRecord(parsed)
-      ? isRecord(parsed.models)
-        ? isRecord(parsed.models.providers)
-          ? parsed.models.providers
-          : {}
-        : {}
-      : {};
+    const models = asOptionalRecord(asOptionalRecord(parsed)?.models);
+    const providers = asOptionalRecord(models?.providers) ?? {};
     const selected: Record<string, ModelProviderConfig> = {};
     for (const providerId of providerIds) {
       const providerConfig = normalizeQaLiveProviderConfig(providers[providerId]);

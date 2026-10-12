@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
-import type { v2 } from "./protocol.js";
+import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
 
 describe("resolveCodexExplicitSkillInputs", () => {
   const cwd = path.resolve("repo");
@@ -26,7 +26,7 @@ describe("resolveCodexExplicitSkillInputs", () => {
               errors: [],
             },
           ],
-        }) satisfies v2.SkillsListResponse,
+        }) satisfies CodexSkillsListResponse,
     );
 
     await expect(
@@ -62,7 +62,7 @@ describe("resolveCodexExplicitSkillInputs", () => {
               errors: [],
             },
           ],
-        }) satisfies v2.SkillsListResponse,
+        }) satisfies CodexSkillsListResponse,
     );
 
     await expect(

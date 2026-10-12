@@ -15,7 +15,7 @@ import {
   NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
 } from "./replay-migration-contract.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
-import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookPayload } from "./types.js";
+import type { NextcloudTalkInboundMessage } from "./types.js";
 import {
   inspectNextcloudTalkWebhookEnvelope,
   migrateNextcloudTalkLegacyReplayState,
@@ -39,7 +39,8 @@ function describeIgnoredWebhookEvent(rawEvent: string): string {
   return `type=${type} objectType=${objectType}`;
 }
 
-const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
+// Activity Streams payload: https://nextcloud-talk.readthedocs.io/en/latest/bots/
+const NextcloudTalkWebhookPayloadSchema = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
     type: z.literal("Person"),
@@ -61,13 +62,6 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
 });
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
-
-type NextcloudTalkIngressMonitor = {
-  receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
-  ready: () => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
 
 function parseClaimedMessage(
   payload: NextcloudTalkIngressPayload,
@@ -133,7 +127,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
   legacyReplayStore?: NextcloudTalkLegacyReplayStore | null;
-}): NextcloudTalkIngressMonitor {
+}) {
   let queue = options.queue;
 
   const getQueue = (): ChannelIngressQueue<NextcloudTalkIngressPayload> => {
@@ -216,7 +210,7 @@ export function createNextcloudTalkWebhookSpool(options: {
 
   return {
     ready: async () => await startAfterMigration,
-    receive: (rawEvent) => {
+    receive: (rawEvent: string) => {
       if (stopping) {
         return Promise.reject(new Error("Nextcloud Talk ingress stopped"));
       }

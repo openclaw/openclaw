@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectedNpmCommand, npmCommandArgs } from "../test-utils/npm-command.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
@@ -968,7 +969,7 @@ describe("installHooksFromNpmSpec", () => {
     let packTmpDir = "";
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
-      if (argv[0] === "npm" && argv[1] === "pack") {
+      if (npmCommandArgs(argv)?.[0] === "pack") {
         packTmpDir = typeof opts === "number" ? "" : (opts.cwd ?? "");
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
         return {
@@ -1009,15 +1010,14 @@ describe("installHooksFromNpmSpec", () => {
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
     expect(run).toHaveBeenCalledExactlyOnceWith(
-      [
-        "npm",
+      expectedNpmCommand([
         "pack",
         "@openclaw/test-hooks@0.0.1",
         "--ignore-scripts",
         "--json",
         "--dry-run=false",
         `--pack-destination=${packTmpDir}`,
-      ],
+      ]),
       expect.objectContaining({
         cwd: packTmpDir,
         env: expect.objectContaining({ NPM_CONFIG_IGNORE_SCRIPTS: "true" }),

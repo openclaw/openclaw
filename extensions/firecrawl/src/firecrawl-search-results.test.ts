@@ -1,18 +1,13 @@
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFirecrawlFreeWebSearchProvider } from "./firecrawl-search-provider.js";
 
 const first = { url: "https://example.com/first", title: "First" };
 const second = { url: "https://example.com/second", title: "Second" };
 
-let dnsMock: ReturnType<typeof mockPinnedHostnameResolution>;
-
-beforeEach(() => {
-  dnsMock = mockPinnedHostnameResolution();
-});
+installPinnedHostnameTestHooks();
 
 afterEach(() => {
-  dnsMock.mockRestore();
   vi.restoreAllMocks();
 });
 
@@ -29,34 +24,34 @@ async function search(payload: Record<string, unknown>, count = 10) {
 
 describe("Firecrawl search result selection", () => {
   it.each([
-    { data: [first] },
-    { results: [first] },
-    { data: { results: [first] } },
-    { data: { data: [first] } },
-    { data: { web: [first] } },
-    { web: { results: [first] } },
-    { data: [first], results: [second] },
-    { results: [first], data: { results: [second] } },
-    { data: { results: [first], data: [second], web: [second] } },
-    { data: { data: [first], web: [second] } },
-    { data: { web: [first] }, web: { results: [second] } },
-    { data: false, results: "invalid", web: { results: [first] } },
-  ])("selects the first supported result array: %j", async (payload) => {
+    { data: { news: [first] } },
+    { data: { images: [first] } },
+    { data: { web: [], news: [first] } },
+  ])("preserves source-specific results: %j", async (payload) => {
     expect(await search(payload)).toMatchObject({ count: 1, results: [{ url: first.url }] });
   });
 
-  it.each([
-    { label: "empty", entries: [] },
-    { label: "all-invalid", entries: [null, false, 7, "text", []] },
-  ])(
-    "keeps the $label winning array instead of selecting a later envelope",
-    async ({ entries }) => {
-      expect(await search({ data: entries, results: [first] })).toMatchObject({
-        count: 0,
-        results: [],
-      });
-    },
-  );
+  it("combines populated Firecrawl source arrays", async () => {
+    expect(await search({ data: { web: [first], news: [second] } })).toMatchObject({
+      count: 2,
+      results: [{ url: first.url }, { url: second.url }],
+    });
+  });
+
+  it("finds the last supported envelope after malformed candidates", async () => {
+    expect(
+      await search({ data: false, results: "invalid", web: { results: [first] } }),
+    ).toMatchObject({ count: 1, results: [{ url: first.url }] });
+  });
+
+  it("keeps an empty winning array instead of selecting a later envelope", async () => {
+    expect(
+      await search({
+        data: { results: [], data: [first], web: [first] },
+        web: { results: [first] },
+      }),
+    ).toMatchObject({ count: 0, results: [] });
+  });
 
   it("counts objects with invalid URLs toward the scan cap after skipping primitive rows", async () => {
     const result = await search({
@@ -91,6 +86,7 @@ describe("Firecrawl search result selection", () => {
   it("fills the requested count after invalid rows and preserves schema field fallbacks", async () => {
     const result = await search(
       {
+        results: [second],
         data: [
           null,
           [],

@@ -49,7 +49,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
     return false;
   }
   // Registration rollback can restore record fields, so read them only when reporting.
-  const recordSetupFailure = (error: unknown, phase: "load" | "register", message: string) => {
+  const recordSetupFailure = (
+    error: unknown,
+    phase: "load" | "register",
+    message: string,
+  ): true => {
     registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordPluginError({
       logger: params.logger,
@@ -62,11 +66,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
       diagnosticMessagePrefix: `${message}: `,
       diagnosticCode: "channel-setup-failure",
     });
+    return true;
   };
   const setupRegistration = resolveSetupChannelRegistration(params.mod);
   if ("loadError" in setupRegistration) {
-    recordSetupFailure(setupRegistration.loadError, "load", "failed to load setup entry");
-    return true;
+    return recordSetupFailure(setupRegistration.loadError, "load", "failed to load setup entry");
   }
   if (!setupRegistration.plugin) {
     return false;
@@ -100,12 +104,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
     instance.run(() => setter(api.runtime));
   };
-  let mergedSetupRegistration = setupRegistration;
+  let mergedSetupPlugin = setupRegistration.plugin;
   try {
     applyChannelRuntime(setupRegistration.setChannelRuntime);
   } catch (error) {
-    recordSetupFailure(error, "load", "failed to apply setup channel runtime");
-    return true;
+    return recordSetupFailure(error, "load", "failed to apply setup channel runtime");
   }
   const runtimeEntry =
     registrationPlan.loadSetupRuntimeEntry && setupRegistration.usesBundledSetupContract
@@ -139,8 +142,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
         () => params.loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
       );
     } catch (error) {
-      recordSetupFailure(error, "load", "failed to load setup-runtime entry");
-      return true;
+      return recordSetupFailure(error, "load", "failed to load setup-runtime entry");
     }
     const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
     if (runtimeRegistration.id && runtimeRegistration.id !== record.id) {
@@ -155,20 +157,18 @@ export function loadSetupRuntimeChannelCandidate(params: {
           applyChannelRuntime(runtimeRegistration.setChannelRuntime);
         }
       } catch (error) {
-        recordSetupFailure(error, "load", "failed to apply setup-runtime channel runtime");
-        return true;
+        return recordSetupFailure(error, "load", "failed to apply setup-runtime channel runtime");
       }
     }
     const runtimePluginRegistration = loadBundledRuntimeChannelPlugin({
       registration: runtimeRegistration,
     });
     if ("loadError" in runtimePluginRegistration) {
-      recordSetupFailure(
+      return recordSetupFailure(
         runtimePluginRegistration.loadError,
         "load",
         "failed to load setup-runtime channel entry",
       );
-      return true;
     }
     if (runtimePluginRegistration.plugin) {
       if (
@@ -180,20 +180,11 @@ export function loadSetupRuntimeChannelCandidate(params: {
         );
         return true;
       }
-      mergedSetupRegistration = {
-        ...setupRegistration,
-        plugin: mergeSetupRuntimeChannelPlugin(
-          runtimePluginRegistration.plugin,
-          setupRegistration.plugin,
-        ),
-        setChannelRuntime:
-          runtimeRegistration.setChannelRuntime ?? setupRegistration.setChannelRuntime,
-      };
+      mergedSetupPlugin = mergeSetupRuntimeChannelPlugin(
+        runtimePluginRegistration.plugin,
+        setupRegistration.plugin,
+      );
     }
-  }
-  const mergedSetupPlugin = mergedSetupRegistration.plugin;
-  if (!mergedSetupPlugin) {
-    return true;
   }
   if (
     !channelPluginIdBelongsToManifest({
@@ -207,28 +198,26 @@ export function loadSetupRuntimeChannelCandidate(params: {
     );
     return true;
   }
-  if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
+  if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {
       runPluginRegisterSyncInRegistry(
-        (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
+        (registrationApi) => setupRegistration.registerSetupRuntime?.(registrationApi),
         api,
         registryBuilder.registry,
         record.id,
       );
     } catch (error) {
-      recordSetupFailure(
+      return recordSetupFailure(
         error,
         "register",
         "failed to register setup-runtime channel side effects",
       );
-      return true;
     }
   }
   try {
     api.registerChannel(mergedSetupPlugin);
   } catch (error) {
-    recordSetupFailure(error, "load", "failed to register setup channel");
-    return true;
+    return recordSetupFailure(error, "load", "failed to register setup channel");
   }
   registryBuilder.registry.plugins.push(record);
   params.seenIds.set(record.id, record.origin);

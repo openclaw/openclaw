@@ -1,8 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
 import {
@@ -10,6 +8,7 @@ import {
   isCoreQuotaExhausted,
   parseGithubResponse,
   rateLimitRetryGuidance,
+  readWriterLogin,
 } from "./gh-api-preflight.mjs";
 
 function githubAccessFailure(error) {
@@ -106,8 +105,28 @@ export function execPrGh(args, options = {}, route = "read") {
       ...notifier,
     ],
   };
+  let commandArgs = args;
   let gitPath;
+  let inputDirectory;
   try {
+    if (args[0] === "api" && option(args, "--input") === "-") {
+      // The relay cannot forward stdin. Keep caller bytes intact until its
+      // synchronous child finishes, including an explicitly empty payload.
+      const input =
+        options.input ?? (captured.stdio[0] === "inherit" ? readFileSync(0) : Buffer.alloc(0));
+      inputDirectory = mkdtempSync(join(resolve(tmpdir()), "openclaw-pr-gh-input-"));
+      const inputPath = join(inputDirectory, "payload");
+      writeFileSync(inputPath, input, { flag: "wx", mode: 0o600 });
+      commandArgs = args.map((arg, index) =>
+        arg === "--input=-"
+          ? `--input=${inputPath}`
+          : args[index - 1] === "--input" && arg === "-"
+            ? inputPath
+            : arg,
+      );
+      delete captured.input;
+      captured.stdio[0] = "ignore";
+    }
     if (selectedGit) {
       // gh resolves Git through PATH even for local repository selection. This
       // call-owned adapter also covers advisory commands without a supervisor.
@@ -115,7 +134,7 @@ export function execPrGh(args, options = {}, route = "read") {
       symlinkSync(resolve(options.cwd ?? process.cwd(), selectedGit), join(gitPath, "git"));
       captured.env = { ...inherited, PATH: `${gitPath}${delimiter}${inherited.PATH ?? ""}` };
     }
-    return run(args, captured);
+    return run(commandArgs, captured);
   } catch (error) {
     const graphqlQuotaExhausted = resourceFor(args) === "graphql" && isGraphqlQuotaExhausted(error);
     const coreQuotaExhausted = resourceFor(args) === "core" && isCoreQuotaExhausted(error);
@@ -166,9 +185,12 @@ export function execPrGh(args, options = {}, route = "read") {
     failure.coreQuotaExhausted = coreQuotaExhausted;
     throw failure;
   } finally {
-    if (gitPath) {
+    for (const directory of [inputDirectory, gitPath]) {
+      if (!directory) {
+        continue;
+      }
       try {
-        rmSync(gitPath, { recursive: true, force: true });
+        rmSync(directory, { recursive: true, force: true });
       } catch {
         // Best-effort cleanup must preserve the result and combined JSON output.
       }
@@ -332,6 +354,22 @@ function connectionNodes(readPage) {
   return nodes;
 }
 
+function validateRepoAuthority(repo, record) {
+  if (
+    !record ||
+    !Number.isSafeInteger(record.databaseId) ||
+    record.databaseId <= 0 ||
+    typeof record.id !== "string" ||
+    !record.id ||
+    typeof record.nameWithOwner !== "string" ||
+    record.nameWithOwner.toLowerCase() !== repo.name.toLowerCase() ||
+    typeof record.url !== "string" ||
+    record.url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase()
+  ) {
+    throw invalidMetadata("GitHub returned invalid repository authority.");
+  }
+}
+
 function readRepoAuthority(repo, route) {
   return restPreferred(
     () => api(repo, `repos/${repo.name}`, route, false, { revalidate: true }),
@@ -342,19 +380,7 @@ function readRepoAuthority(repo, route) {
         repositoryVariables(repo),
         route,
       ).repository;
-      if (
-        !record ||
-        !Number.isSafeInteger(record.databaseId) ||
-        record.databaseId <= 0 ||
-        typeof record.id !== "string" ||
-        !record.id ||
-        typeof record.nameWithOwner !== "string" ||
-        record.nameWithOwner.toLowerCase() !== repo.name.toLowerCase() ||
-        typeof record.url !== "string" ||
-        record.url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase()
-      ) {
-        throw invalidMetadata("GitHub returned invalid repository authority.");
-      }
+      validateRepoAuthority(repo, record);
       return {
         id: record.databaseId,
         node_id: record.id,
@@ -480,11 +506,7 @@ function writerLogin(host) {
     response = `${error.stdout ?? ""}${error.stderr ?? ""}`;
     status = error.status || 1;
   }
-  return execFileSync(
-    process.execPath,
-    [fileURLToPath(new URL("./gh-api-preflight.mjs", import.meta.url)), String(status)],
-    { input: response, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-  ).trim();
+  return readWriterLogin(status, response).trim();
 }
 
 function readAuthorPermission(repo, login, route) {
@@ -567,6 +589,15 @@ function readPrRest(repo, pr, fields, route, options = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("GitHub did not return one PR JSON object.");
   }
+  if (
+    fields.includes("baseRepository") &&
+    (typeof record.base?.repo?.full_name !== "string" ||
+      typeof record.base.repo.html_url !== "string" ||
+      record.base.repo.full_name.toLowerCase() !== repo.name.toLowerCase() ||
+      record.base.repo.html_url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase())
+  ) {
+    throw invalidMetadata("GitHub PR base repository does not match the requested repository.");
+  }
   const result = {
     number: record.number,
     title: record.title,
@@ -575,6 +606,15 @@ function readPrRest(repo, pr, fields, route, options = {}) {
     author: user(record.user),
     baseRefName: record.base?.ref,
     baseRefOid: record.base?.sha,
+    baseRepository:
+      record.base?.repo == null
+        ? record.base?.repo
+        : {
+            id: record.base.repo.node_id,
+            databaseId: record.base.repo.id,
+            nameWithOwner: record.base.repo.full_name,
+            url: record.base.repo.html_url,
+          },
     headRefName: record.head?.ref,
     headRefOid: record.head?.sha,
     headRepository:
@@ -655,23 +695,33 @@ function readPr(repo, pr, fields, route, options = {}) {
         mergeable: "mergeable",
         mergeStateStatus: "mergeStateStatus",
       };
-      const scalarFields = fields.filter((field) => !Object.hasOwn(connections, field));
+      const needsBaseRepository = fields.includes("baseRepository");
+      const scalarFields = fields.filter(
+        (field) => field !== "baseRepository" && !Object.hasOwn(connections, field),
+      );
       const selection = Object.values(selectFields(selections, scalarFields, "PR")).join(" ");
       const freshOptions = { ...options, revalidate: true };
       const variables = { ...repositoryVariables(repo), number: Number(pr) };
       // A top-level pr view can be projected back to REST by a relay. An explicit
       // GraphQL request both selects the independent quota and carries freshness.
-      const result = scalarFields.length
-        ? graphql(
-            repo,
-            `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){${selection}}}}`,
-            variables,
-            route,
-            freshOptions,
-          ).repository?.pullRequest
-        : {};
+      const repository =
+        scalarFields.length || needsBaseRepository
+          ? graphql(
+              repo,
+              `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){${needsBaseRepository ? "id databaseId nameWithOwner url " : ""}pullRequest(number:$number){${selection || "id"}}}}`,
+              variables,
+              route,
+              freshOptions,
+            ).repository
+          : null;
+      const result = scalarFields.length || needsBaseRepository ? repository?.pullRequest : {};
       if (!result || typeof result !== "object" || Array.isArray(result)) {
         throw invalidMetadata("GitHub did not return one PR JSON object.");
+      }
+      if (needsBaseRepository) {
+        validateRepoAuthority(repo, repository);
+        const { id, databaseId, nameWithOwner, url } = repository;
+        result.baseRepository = { id, databaseId, nameWithOwner, url };
       }
       const actor = (record) =>
         record == null ? record : user({ ...record, node_id: record.id, type: record.__typename });
@@ -709,7 +759,27 @@ export function createPrMetadataReader(repository) {
   let repo;
   return (pr, fields, readOptions = () => ({})) => {
     repo ??= repositoryLocator(repository, "read", readOptions);
-    return readPr(repo, String(pr), fields, "read", { readOptions, revalidate: true });
+    return readPr(repo, String(pr), fields, "read", { readOptions });
+  };
+}
+
+function commitAuthor(author, account, changesTree) {
+  if (
+    typeof author?.name !== "string" ||
+    typeof author.email !== "string" ||
+    (account !== null &&
+      (typeof account?.login !== "string" ||
+        !account.login ||
+        typeof account.type !== "string" ||
+        !account.type))
+  ) {
+    throw invalidMetadata("Cannot establish the requested source commit author.");
+  }
+  return {
+    name: author.name,
+    email: author.email,
+    user: account === null ? null : { login: account.login, type: account.type },
+    changesTree,
   };
 }
 
@@ -755,25 +825,10 @@ function readCommitAuthorsRest(repository, hostname, commits, route) {
       if (!source) {
         continue;
       }
-      const author = commit.commit?.author;
-      const account = commit.author;
-      if (
-        typeof author?.name !== "string" ||
-        typeof author.email !== "string" ||
-        (account !== null &&
-          (typeof account?.login !== "string" ||
-            !account.login ||
-            typeof account.type !== "string" ||
-            !account.type))
-      ) {
-        throw invalidMetadata("Cannot establish the requested source commit author.");
-      }
-      authors.set(commit.sha, {
-        name: author.name,
-        email: author.email,
-        user: account === null ? null : { login: account.login, type: account.type },
-        changesTree: source.changesTree,
-      });
+      authors.set(
+        commit.sha,
+        commitAuthor(commit.commit?.author, commit.author, source.changesTree),
+      );
       remaining.delete(commit.sha);
       resolved += 1;
     }
@@ -811,26 +866,17 @@ function readCommitAuthors(repository, hostname, commits, route) {
         ).repository;
         for (const [index, source] of batch.entries()) {
           const commit = data?.[`commit${index}`];
-          const author = commit?.author;
-          const account = author?.user;
-          if (
-            commit?.oid !== source.oid ||
-            typeof author?.name !== "string" ||
-            typeof author.email !== "string" ||
-            (account !== null &&
-              (typeof account?.login !== "string" ||
-                !account.login ||
-                typeof account.__typename !== "string" ||
-                !account.__typename))
-          ) {
+          if (commit?.oid !== source.oid) {
             throw invalidMetadata("Cannot establish the requested source commit author.");
           }
-          result.push({
-            name: author.name,
-            email: author.email,
-            user: account === null ? null : { login: account.login, type: account.__typename },
-            changesTree: source.changesTree,
-          });
+          const account = commit.author?.user;
+          result.push(
+            commitAuthor(
+              commit.author,
+              account === null ? null : { login: account?.login, type: account?.__typename },
+              source.changesTree,
+            ),
+          );
         }
       }
       return result;
@@ -922,6 +968,29 @@ function main([requestedRoute, ...args]) {
       );
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);
+  } else if (
+    requestedRoute === "plain-quota" &&
+    args[0] === "api" &&
+    args.includes("graphql") &&
+    args.some((arg) => /^query=\s*query\b/.test(arg))
+  ) {
+    // Mergeability and viewer previews must describe the writer, not a pooled reader.
+    const response = parseGithubResponse(
+      execPrGh(
+        [...args, "--include"],
+        { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"] },
+        route,
+      ),
+    );
+    if (
+      response.status !== "200" ||
+      !response.body ||
+      typeof response.body !== "object" ||
+      Array.isArray(response.body)
+    ) {
+      throw invalidMetadata("GitHub did not return a valid writer GraphQL response.");
+    }
+    process.stdout.write(`${JSON.stringify(response.body)}\n`);
   } else {
     if (args[0] === "pr" && !option(args, "--repo") && !option(args, "-R")) {
       const repo = repositoryLocator(undefined, route);
@@ -946,14 +1015,18 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       process.stdout.write('{"graphqlQuotaExhausted":true}\n');
     } else {
       // Quota errors contain only bounded numeric metadata, never raw response text.
-      if (error.code !== "OPENCLAW_GH_ACCESS" && error.stdout) {
-        process.stdout.write(error.stdout);
+      if (error.code === "OPENCLAW_GH_ACCESS") {
+        console.error(error.message);
+      } else if (error.stdout?.length || error.stderr?.length) {
+        if (error.stdout?.length) {
+          process.stdout.write(error.stdout);
+        }
+        if (error.stderr?.length) {
+          process.stderr.write(error.stderr);
+        }
+      } else {
+        console.error(error.message);
       }
-      console.error(
-        error.code === "OPENCLAW_GH_ACCESS"
-          ? error.message
-          : String(error.stderr || error.message).trim(),
-      );
       process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
     }
   }

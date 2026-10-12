@@ -19,9 +19,11 @@ vi.mock("./delivery-queue-ack.js", () => ({
   retireUnsentDelivery: mocks.retire,
   ackDelivery: mocks.ack,
 }));
-vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => undefined }));
 vi.mock("./message-sent-hook.js", () => ({
-  createMessageSentEmitter: () => ({ emitMessageSent: vi.fn(), hasMessageSentHooks: false }),
+  createOutboundMessageSentEmitter: () => ({
+    emitMessageSent: vi.fn(),
+    hasMessageSentHooks: false,
+  }),
 }));
 vi.mock("./outbound-audit.js", () => ({
   emitOutboundAuditTerminals: mocks.terminal,
@@ -66,7 +68,10 @@ function startDelivery() {
   const delivery = deliverOutboundPayloadsWithQueueCleanup(params, "queued-1", 1, "claim-1", lease);
   const outcome = delivery.then(
     (results) => ({ results, error: undefined }),
-    (error: unknown) => ({ results: undefined, error }),
+    (error: unknown) => {
+      entered.reject(error);
+      return { results: undefined, error };
+    },
   );
   return { controller, core, entered, stopped, stopEntered, lease, owner, outcome };
 }
@@ -79,43 +84,39 @@ describe("queued delivery lifecycle joins", () => {
     mocks.ack.mockResolvedValue(undefined);
   });
 
-  it("joins lease stop before cancellation retires custody and later releases preparation", async () => {
-    const retired = createDeferredCore();
-    mocks.terminal.mockImplementationOnce(() => retired.resolve());
+  it("settles the adapter and queue before joining lease stop on cancellation", async () => {
     const run = startDelivery();
     await run.entered.promise;
     run.controller.abort();
-    await run.stopEntered.promise;
     expect(run.owner.custody).toBe("held");
     expect(mocks.retire).not.toHaveBeenCalled();
     expect(mocks.terminal).not.toHaveBeenCalled();
-    run.stopped.resolve();
-    await retired.promise;
-    expect(run.owner.custody).toBe("released");
-    expect(mocks.retire).toHaveBeenCalledOnce();
-    expect(mocks.release).not.toHaveBeenCalled();
+    expect(run.lease.stop).not.toHaveBeenCalled();
     run.core.reject(run.controller.signal.reason);
+    await run.stopEntered.promise;
+    expect(run.owner.custody).toBe("released");
+    expect(mocks.ack).toHaveBeenCalledOnce();
+    expect(mocks.release).not.toHaveBeenCalled();
+    run.stopped.resolve();
     expect((await run.outcome).error).toMatchObject({ queueCustody: "released" });
     expect(mocks.terminal).toHaveBeenCalledOnce();
-    expect(mocks.release).toHaveBeenCalledOnce();
-    expect(mocks.ack).not.toHaveBeenCalled();
+    expect(mocks.retire).not.toHaveBeenCalled();
   });
 
-  it("retains custody and reports a rejected stop without retrying retirement or cleanup", async () => {
+  it("reports a rejected lease stop without retrying settled queue cleanup", async () => {
     const run = startDelivery();
     await run.entered.promise;
     run.controller.abort();
+    run.core.reject(run.controller.signal.reason);
     await run.stopEntered.promise;
     const failure = new Error("lease stop failed");
     run.stopped.reject(failure);
-    run.core.reject(run.controller.signal.reason);
-    expect((await run.outcome).error).toMatchObject({ cause: failure, queueCustody: "held" });
-    expect(run.owner.custody).toBe("held");
+    expect((await run.outcome).error).toBe(failure);
+    expect(run.owner.custody).toBe("released");
     expect(run.lease.stop).toHaveBeenCalledOnce();
-    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("lease stop failed"));
     expect(mocks.retire).not.toHaveBeenCalled();
-    expect(mocks.ack).not.toHaveBeenCalled();
-    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.ack).toHaveBeenCalledOnce();
+    expect(mocks.terminal).toHaveBeenCalledOnce();
     expect(mocks.release).not.toHaveBeenCalled();
   });
 });

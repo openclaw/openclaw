@@ -2,19 +2,31 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import type { ProcessAncestry } from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
+
+const readProcessAncestry = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
+);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessAncestry,
+}));
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -25,6 +37,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  readProcessAncestry.mockReset().mockReturnValue(null);
   spawnSyncMock.mockReset();
   vi.useFakeTimers();
 });
@@ -35,26 +48,20 @@ afterEach(() => {
 });
 
 describe("managed handoff Windows process identities", () => {
-  it.each([
-    { option: "--profile", args: ["--profile", "handoff-fixture"] },
-    { option: "--dev", args: ["--dev"] },
-  ])(
-    "keeps original launcher attribution after $option normalization in a real child",
-    async ({ args }) => {
-      vi.useRealTimers();
-      const root = dirs.make("handoff-original-argv-");
-      const fixturePath = path.join(root, "profile-identity.mjs");
-      const profileUrl = new URL("../cli/profile.ts", import.meta.url).href;
-      const identityUrl = new URL("./update-managed-service-handoff-process.ts", import.meta.url)
-        .href;
-      fs.writeFileSync(
-        fixturePath,
-        `
+  it("keeps original launcher attribution after profile normalization in a real child", async () => {
+    vi.useRealTimers();
+    const root = dirs.make("handoff-original-argv-");
+    const fixturePath = path.join(root, "profile-identity.mjs");
+    const profileUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.cliProfile);
+    const identityUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.handoffProcess);
+    fs.writeFileSync(
+      fixturePath,
+      `
       import assert from "node:assert/strict";
       import childProcess from "node:child_process";
       import {syncBuiltinESMExports} from "node:module";
-      import {parseCliProfileArgs} from ${JSON.stringify(profileUrl)};
-      import {createManagedHandoffProcessIdentityReader} from ${JSON.stringify(identityUrl)};
+      import {parseCliProfileArgs} from ${JSON.stringify(profileUrl.href)};
+      import {createManagedHandoffProcessIdentityReader} from ${JSON.stringify(identityUrl.href)};
       const originalArgv = process.report.getReport().header.commandLine;
       const parsed = parseCliProfileArgs(process.argv);
       assert(parsed.ok && parsed.profile);
@@ -71,26 +78,32 @@ describe("managed handoff Windows process identities", () => {
       assert.equal(receiver.isProcessIdentityCurrent(original), true);
       process.stdout.write("original launcher matched");
     `,
-      );
-      const child = spawn(
-        process.execPath,
-        ["--import", path.resolve("scripts/tsx.mjs"), fixturePath, ...args, "update", "--yes"],
-        { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
-      );
-      const closed = once(child, "close");
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-      try {
-        expect(await closed, stderr).toEqual([0, null]);
-        expect(stdout).toBe("original launcher matched");
-      } finally {
-        child.kill("SIGKILL");
-        await closed;
-      }
-    },
-  );
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(profileUrl).slice(0, -1),
+        fixturePath,
+        "--profile",
+        "handoff-fixture",
+        "update",
+        "--yes",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 },
+    );
+    const closed = once(child, "close");
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    try {
+      expect(await closed, stderr).toEqual([0, null]);
+      expect(stdout).toBe("original launcher matched");
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  });
 
   it("makes published strict readers refuse fallback leases without changing numeric identities", () => {
     // v2026.9.4's nested strict contract must reject an identity it could mistake for PID reuse.
@@ -184,76 +197,43 @@ describe("managed handoff Windows process identities", () => {
     });
   });
 
-  it("binds a spawned process when its InteractiveToken session cannot read a creation time", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: "" });
-    const onProcessIdentityWarning = vi.fn();
+  it("requires observed launcher attribution unless the caller retains live process custody", async () => {
+    const suffix = "%%^!";
+    const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    const argv = [
+      "C:\\Program Files\\nodejs\\node.exe",
+      `C:\\openclaw${suffix}\\dist\\entry.js`,
+      "gateway",
+      "install",
+      "--update-executor",
+      "check",
+      "--json",
+    ];
+    let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
+    spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
+      status: 0,
+      stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
+    }));
     const store = createManagedHandoffLeaseStore({
       databasePath: "unused-handoff-identity.sqlite",
       serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      onProcessIdentityWarning,
     });
 
     await withMockedPlatform("win32", async () => {
-      const identity = store.processIdentity(42, [
-        "C:\\Program Files\\nodejs\\node.exe",
-        "C:\\openclaw\\dist\\entry.js",
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ]);
-      expect(identity).toEqual({
-        pid: 42,
-        startIdentity: expect.stringMatching(/^win32-argv-sha256:[a-f0-9]{64}$/),
-        startIdentitySource: "argv-sha256",
-      });
-      expect(onProcessIdentityWarning).toHaveBeenCalledWith(
-        42,
-        expect.stringContaining("launcher attribution"),
-      );
+      const identity = store.processIdentity(42, argv);
+      expect(store.isProcessIdentityCurrent(identity)).toBe(true);
+
+      commandLine = commandLine.replace(" check ", " run ");
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
+
+      commandLine = "";
+      expect(store.isProcessIdentityCurrent(identity)).toBe(false);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
+
+      dead.mockReturnValue(true);
+      expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
     });
   });
-
-  it.each(["plain", "%%", "^!"])(
-    "requires observed launcher attribution with literal %s unless the caller retains live process custody",
-    async (suffix) => {
-      const dead = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
-      const argv = [
-        "C:\\Program Files\\nodejs\\node.exe",
-        `C:\\openclaw${suffix}\\dist\\entry.js`,
-        "gateway",
-        "install",
-        "--update-executor",
-        "check",
-        "--json",
-      ];
-      let commandLine = `"c:/program files/nodejs/node.exe" "C:\\openclaw${suffix}\\dist\\entry.js" gateway install --update-executor check --json`;
-      spawnSyncMock.mockImplementation((_command: string, args: string[]) => ({
-        status: 0,
-        stdout: args.some((arg) => arg.includes("CommandLine")) ? commandLine : "",
-      }));
-      const store = createManagedHandoffLeaseStore({
-        databasePath: "unused-handoff-identity.sqlite",
-        serviceManagerEnv: { SystemRoot: "C:\\Windows" },
-      });
-
-      await withMockedPlatform("win32", async () => {
-        const identity = store.processIdentity(42, argv);
-        expect(store.isProcessIdentityCurrent(identity)).toBe(true);
-
-        commandLine = commandLine.replace(" check ", " run ");
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-
-        commandLine = "";
-        expect(store.isProcessIdentityCurrent(identity)).toBe(false);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(true);
-
-        dead.mockReturnValue(true);
-        expect(store.isProcessIdentityCurrent(identity, true)).toBe(false);
-      });
-    },
-  );
 
   it("keeps known creation-time mismatches authoritative", async () => {
     vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
@@ -299,7 +279,6 @@ describe("managed handoff Windows process identities", () => {
   });
 
   it.each([
-    { name: "a prompt probe", probeMs: 25, available: true, acquired: true },
     { name: "a probe slower than one second", probeMs: 2_000, available: true, acquired: true },
     { name: "an unavailable creation time", probeMs: 25, available: false, acquired: false },
     { name: "an exhausted identity budget", probeMs: 10_000, available: true, acquired: false },
@@ -329,5 +308,168 @@ describe("managed handoff Windows process identities", () => {
         );
       }
     });
+  });
+});
+
+// These Darwin facts run through the real Unix lease store; Windows keeps its own VFS tests above.
+describe.skipIf(process.platform === "win32")("managed handoff Darwin legacy validation", () => {
+  function fixture(transitiveEdges = 1, helperIsInit = false) {
+    const root = dirs.make("handoff-darwin-ancestry-");
+    const databasePath = path.join(root, "handoff.sqlite");
+    const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+    const chain = Array.from({ length: transitiveEdges + 1 }, (_, i) => process.pid + 10_000 + i);
+    if (helperIsInit) {
+      chain[chain.length - 1] = 1;
+    }
+    const executorPid = chain[0]!;
+    const helperPid = chain.at(-1)!;
+    const startedAt = "Thu Sep 24 00:00:00 2026";
+    const startIdentity = String(Date.parse(`${startedAt} UTC`) / 1000);
+    const executor = { pid: executorPid, startIdentity };
+    const database = createManagedHandoffLeaseDatabase(databasePath);
+    database(true, (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .insertInto("managed_update_handoffs")
+          .values({
+            install_root: root,
+            owner: "original-v1-helper",
+            payload_json: JSON.stringify({ version: 1, pid: helperPid, startIdentity }),
+            updated_at: 100,
+          }),
+      ),
+    );
+    const parent = store.readLegacyParent(root, executor);
+    if (!parent) {
+      throw new Error("expected the seeded v1 parent");
+    }
+    const identities = [process.pid, ...chain.filter((pid) => pid !== 1)].map((pid, index) => ({
+      pid,
+      parentPid: chain[index] ?? 1,
+      startTimeMicros: Number(startIdentity) * 1_000_000,
+      startTimeResolutionMicros: 1,
+      exited: false,
+    }));
+    const probes: {
+      failure?: "access-denied" | "layout-mismatch";
+      complete?: boolean;
+      stoppedBy?: ProcessAncestry["stoppedBy"];
+      afterRead?: () => void;
+    } = {};
+    readProcessAncestry.mockImplementation(() => {
+      if (probes.failure) {
+        throw new ProcSafeError(probes.failure, "synthetic process inspection failure");
+      }
+      probes.afterRead?.();
+      return {
+        chain: identities,
+        complete: probes.complete ?? true,
+        stoppedBy: probes.stoppedBy ?? (helperIsInit ? "root" : "through-pid"),
+      };
+    });
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const hostPlatform = process.platform;
+    const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
+    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
+      existingUri(pathname, hostPlatform),
+    );
+    return {
+      identities,
+      probes,
+      helperPid,
+      executorPid,
+      parent,
+      kill,
+      current() {
+        const descriptor = Object.getOwnPropertyDescriptor(process, "ppid");
+        Object.defineProperty(process, "ppid", { configurable: true, value: executorPid });
+        try {
+          return withMockedPlatform("darwin", () => store.current(parent));
+        } finally {
+          if (descriptor) {
+            Object.defineProperty(process, "ppid", descriptor);
+          }
+        }
+      },
+      storedParent: () => store.readLegacyParent(root, executor),
+      replaceRow() {
+        database(true, (db) =>
+          executeSqliteQuerySync(
+            db,
+            leaseQueries(db)
+              .updateTable("managed_update_handoffs")
+              .set({ owner: "replacement" })
+              .where("install_root", "=", root),
+          ),
+        );
+      },
+    };
+  }
+
+  it.each([
+    { name: "direct helper birth", edges: 0, change: "helper" },
+    { name: "ancestor helper birth", edges: 3, change: "helper" },
+    { name: "executor birth", edges: 3, change: "executor" },
+    { name: "executor parent", edges: 1, change: "parent" },
+  ] as const)("refreshes $name on the next validation", ({ edges, change }) => {
+    const test = fixture(edges);
+    expect(test.current()).toBe(true);
+    const pid = change === "helper" ? test.helperPid : test.executorPid;
+    const identity = test.identities.find((value) => value.pid === pid)!;
+    if (change === "parent") {
+      test.identities.splice(2);
+      identity.parentPid = 1;
+      test.probes.stoppedBy = "root";
+    } else {
+      identity.startTimeMicros += 1_000_000;
+    }
+    expect(test.current()).toBe(false);
+    expect(test.storedParent()).toEqual(test.parent);
+  });
+
+  it.each([
+    "replaced row",
+    "denied inspection",
+    "malformed metadata",
+    "dead process",
+    "cycle",
+  ] as const)("refuses %s without clearing the retained legacy row", (failure) => {
+    const test = fixture(failure === "cycle" ? 3 : 1);
+    switch (failure) {
+      case "replaced row":
+        test.probes.afterRead = () => {
+          test.probes.afterRead = undefined;
+          test.replaceRow();
+        };
+        break;
+      case "denied inspection":
+        test.probes.failure = "access-denied";
+        break;
+      case "malformed metadata":
+        test.probes.failure = "layout-mismatch";
+        break;
+      case "dead process":
+        test.kill.mockImplementation(() => {
+          throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+        });
+        break;
+      case "cycle":
+        test.probes.complete = false;
+        test.probes.stoppedBy = "cycle";
+        break;
+    }
+    expect(test.current()).toBe(false);
+    if (failure === "replaced row") {
+      expect(test.storedParent()?.owner).toBe("replacement");
+    } else {
+      expect(test.storedParent()).toEqual(test.parent);
+    }
+  });
+
+  it("does not authorize PID 1 as a borrowed helper", () => {
+    const test = fixture(2, true);
+    expect(test.current()).toBe(false);
+    expect(test.storedParent()).toEqual(test.parent);
   });
 });

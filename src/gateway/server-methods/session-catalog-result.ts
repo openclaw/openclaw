@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionCatalogShareRoute,
@@ -34,5 +35,15 @@ export function catalogResult(
     ...(shareRoute ? { shareRoute } : {}),
     hosts,
     ...(error ? { error } : {}),
+  };
+}
+
+export function catalogError(error: unknown): { code: string; message: string } {
+  const record = asOptionalObjectRecord(error);
+  const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
+  const fallbackMessage = typeof error === "string" ? error.trim() : "";
+  return {
+    code: typeof record?.code === "string" && record.code ? record.code : "catalog_error",
+    message: recordMessage || fallbackMessage || "session catalog provider failed",
   };
 }

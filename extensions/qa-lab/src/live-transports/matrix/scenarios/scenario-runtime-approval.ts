@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatApprovalResultValue } from "../../shared/live-approval-result.js";
+import {
+  resolveLiveQaApprovalDecision,
+  waitForLiveQaApprovalDecision,
+} from "../../shared/live-approval-request.js";
+import {
+  assertApprovalDecisionResult,
+  formatApprovalResultValue,
+  readAcceptedApprovalRequest,
+} from "../../shared/live-approval-result.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -63,26 +71,11 @@ function isApprovalOptionReaction(
   );
 }
 
-function hasObservedApprovalOptionReaction(params: MatrixQaApprovalOptionReactionParams) {
-  return params.context.observedEvents.some((event) => isApprovalOptionReaction(event, params));
-}
-
 function assertApprovalMetadata(params: {
-  event: { approval?: unknown; eventId: string };
+  event: Pick<MatrixQaObservedEvent, "approval" | "eventId">;
   expectedKind: ChannelApprovalKind;
 }) {
-  const approval =
-    typeof params.event.approval === "object" && params.event.approval !== null
-      ? (params.event.approval as {
-          allowedDecisions?: string[];
-          hasCommandText?: boolean;
-          id?: string;
-          kind?: string;
-          state?: string;
-          type?: string;
-          version?: number;
-        })
-      : null;
+  const approval = params.event.approval;
   if (!approval) {
     throw new Error(`approval event ${params.event.eventId} did not expose metadata`);
   }
@@ -145,27 +138,18 @@ async function waitForApprovalEvent(params: {
   const observedMatch = params.context.observedEvents.find((event) =>
     isExpectedApprovalEvent(event, params),
   );
-  if (observedMatch) {
-    assertApprovalMetadata({
-      event: observedMatch,
-      expectedKind: params.expectedKind,
-    });
-    return {
-      event: observedMatch,
-      since: params.since,
-    };
-  }
-  const client = createMatrixQaScenarioClient({
-    accessToken: params.context.driverAccessToken,
-    baseUrl: params.context.baseUrl,
-  });
-  const matched = await client.waitForRoomEvent({
-    observedEvents: params.context.observedEvents,
-    predicate: (event) => isExpectedApprovalEvent(event, params),
-    roomId: params.roomId,
-    since: params.since,
-    timeoutMs: params.context.timeoutMs,
-  });
+  const matched = observedMatch
+    ? { event: observedMatch, since: params.since }
+    : await createMatrixQaScenarioClient({
+        accessToken: params.context.driverAccessToken,
+        baseUrl: params.context.baseUrl,
+      }).waitForRoomEvent({
+        observedEvents: params.context.observedEvents,
+        predicate: (event) => isExpectedApprovalEvent(event, params),
+        roomId: params.roomId,
+        since: params.since,
+        timeoutMs: params.context.timeoutMs,
+      });
   assertApprovalMetadata({
     event: matched.event,
     expectedKind: params.expectedKind,
@@ -255,23 +239,12 @@ async function reactToApproval(params: {
     params.decision === "allow-once"
       ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
       : MATRIX_QA_APPROVAL_DENY_REACTION;
-  if (
-    !hasObservedApprovalOptionReaction({
-      context: params.context,
-      emoji,
-      roomId: params.roomId,
-      targetEventId: params.targetEventId,
-    })
-  ) {
+  const isOptionReaction = (event: MatrixQaObservedEvent) =>
+    isApprovalOptionReaction(event, { ...params, emoji });
+  if (!params.context.observedEvents.some(isOptionReaction)) {
     await client.waitForRoomEvent({
       observedEvents: params.context.observedEvents,
-      predicate: (event) =>
-        isApprovalOptionReaction(event, {
-          context: params.context,
-          emoji,
-          roomId: params.roomId,
-          targetEventId: params.targetEventId,
-        }),
+      predicate: isOptionReaction,
       roomId: params.roomId,
       timeoutMs: params.context.timeoutMs,
     });
@@ -307,78 +280,43 @@ async function reactToApproval(params: {
   };
 }
 
-function assertApprovalDecisionResult(params: {
-  approvalId: string;
-  decision: MatrixQaApprovalDecision;
-  result: unknown;
-}) {
-  const result =
-    typeof params.result === "object" && params.result !== null
-      ? (params.result as { decision?: unknown; id?: unknown })
-      : null;
-  if (result?.id !== params.approvalId) {
-    throw new Error(
-      `approval decision result id was ${formatApprovalResultValue(result?.id)} instead of ${params.approvalId}`,
-    );
-  }
-  if (result?.decision !== params.decision) {
-    throw new Error(
-      `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
-    );
-  }
+async function requestApproval(
+  context: MatrixQaScenarioContext,
+  kind: ChannelApprovalKind,
+  request: Record<string, unknown>,
+) {
+  const gatewayCall = requireMatrixQaGatewayCall(context);
+  return await gatewayCall(
+    `${kind}.approval.request`,
+    {
+      ...request,
+      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS,
+      twoPhase: true,
+      turnSourceAccountId: context.sutAccountId,
+      turnSourceChannel: "matrix",
+      turnSourceTo: `room:${context.roomId}`,
+    },
+    {
+      expectFinal: false,
+      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+    },
+  );
 }
 
-async function requestExecApproval(params: {
+function requestExecApproval(params: {
   context: MatrixQaScenarioContext;
   command: string;
   id?: string;
   threadRootEventId?: string;
 }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  return await gatewayCall(
-    "exec.approval.request",
-    {
-      ...(params.id ? { id: params.id } : {}),
-      ask: "always",
-      command: params.command,
-      host: "gateway",
-      security: "full",
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS,
-      twoPhase: true,
-      turnSourceAccountId: params.context.sutAccountId,
-      turnSourceChannel: "matrix",
-      turnSourceTo: `room:${params.context.roomId}`,
-      ...(params.threadRootEventId ? { turnSourceThreadId: params.threadRootEventId } : {}),
-    },
-    {
-      expectFinal: false,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
-
-async function requestPluginApproval(params: { context: MatrixQaScenarioContext; token: string }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  return await gatewayCall(
-    "plugin.approval.request",
-    {
-      agentId: "qa",
-      description: `Matrix plugin approval QA request ${params.token}`,
-      pluginId: "matrix-qa-plugin",
-      severity: "warning",
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS,
-      title: "Matrix plugin approval QA",
-      toolName: "matrix_qa_tool",
-      twoPhase: true,
-      turnSourceAccountId: params.context.sutAccountId,
-      turnSourceChannel: "matrix",
-      turnSourceTo: `room:${params.context.roomId}`,
-    },
-    {
-      expectFinal: false,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
+  return requestApproval(params.context, "exec", {
+    ...(params.id ? { id: params.id } : {}),
+    ask: "always",
+    command: params.command,
+    host: "gateway",
+    security: "full",
+    ...(params.threadRootEventId ? { turnSourceThreadId: params.threadRootEventId } : {}),
+  });
 }
 
 async function waitForApprovalDecision(params: {
@@ -386,17 +324,12 @@ async function waitForApprovalDecision(params: {
   context: MatrixQaScenarioContext;
   kind: ChannelApprovalKind;
 }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  const method =
-    params.kind === "exec" ? "exec.approval.waitDecision" : "plugin.approval.waitDecision";
-  return await gatewayCall(
-    method,
-    { id: params.approvalId },
-    {
-      expectFinal: true,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
+  return waitForLiveQaApprovalDecision({
+    approvalId: params.approvalId,
+    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    kind: params.kind,
+    timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+  });
 }
 
 async function resolveApprovalDecision(params: {
@@ -405,29 +338,13 @@ async function resolveApprovalDecision(params: {
   decision: MatrixQaApprovalDecision;
   kind: ChannelApprovalKind;
 }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await gatewayCall(
-    method,
-    { decision: params.decision, id: params.approvalId },
-    {
-      expectFinal: false,
-      timeoutMs: 5_000,
-    },
-  );
-}
-
-function readAcceptedApprovalRequest(result: unknown) {
-  const accepted =
-    typeof result === "object" && result !== null
-      ? (result as { id?: unknown; status?: unknown })
-      : null;
-  if (accepted?.status !== "accepted") {
-    throw new Error(
-      `approval request status was ${formatApprovalResultValue(accepted?.status)} instead of accepted`,
-    );
-  }
-  return accepted;
+  return resolveLiveQaApprovalDecision({
+    approvalId: params.approvalId,
+    decision: params.decision,
+    gateway: { call: requireMatrixQaGatewayCall(params.context) },
+    kind: params.kind,
+    timeoutMs: 5_000,
+  });
 }
 
 function assertAcceptedApprovalRequest(params: { approvalId: string; result: unknown }) {
@@ -454,32 +371,60 @@ function buildExecApprovalCommand(params: { expectChunk?: boolean; token: string
   return `printf '${params.token} ${MATRIX_QA_APPROVAL_LONG_COMMAND_TEXT}'`;
 }
 
-async function runExecApprovalScenario(params: {
+async function runApprovalReactionScenario(params: {
   context: MatrixQaScenarioContext;
   decision: MatrixQaApprovalDecision;
   expectChunk?: boolean;
+  kind?: "exec" | "plugin";
   tokenPrefix: string;
   threadRootEventId?: string;
 }) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(params.context);
   const token = buildMatrixQaToken(params.tokenPrefix);
-  const command = buildExecApprovalCommand({ expectChunk: params.expectChunk, token });
-  const approvalId = `qa-${token.toLowerCase()}-${randomUUID().slice(0, 8)}`;
-  const accepted = await requestExecApproval({
-    context: params.context,
-    command,
-    id: approvalId,
-    threadRootEventId: params.threadRootEventId,
-  });
-  assertAcceptedApprovalRequest({ approvalId, result: accepted });
+  const kind = params.kind ?? "exec";
+  let approvalId: string;
+  if (kind === "plugin") {
+    const accepted = await requestApproval(params.context, "plugin", {
+      agentId: "qa",
+      description: `Matrix plugin approval QA request ${token}`,
+      pluginId: "matrix-qa-plugin",
+      severity: "warning",
+      title: "Matrix plugin approval QA",
+      toolName: "matrix_qa_tool",
+    });
+    approvalId = readAcceptedApprovalRequestId(accepted);
+  } else {
+    const command = buildExecApprovalCommand({ expectChunk: params.expectChunk, token });
+    approvalId = `qa-${token.toLowerCase()}-${randomUUID().slice(0, 8)}`;
+    const accepted = await requestExecApproval({
+      context: params.context,
+      command,
+      id: approvalId,
+      threadRootEventId: params.threadRootEventId,
+    });
+    assertAcceptedApprovalRequest({ approvalId, result: accepted });
+  }
   const approval = await waitForApprovalEvent({
     context: params.context,
     expectedApprovalId: approvalId,
-    expectedKind: "exec",
+    expectedKind: kind,
     roomId: params.context.roomId,
     since: startSince,
     threadRootEventId: params.threadRootEventId,
   });
+  const approvalMetadata = approval.event.approval;
+  if (kind === "plugin") {
+    if (
+      approvalMetadata?.pluginId !== "matrix-qa-plugin" ||
+      approvalMetadata.toolName !== "matrix_qa_tool" ||
+      approvalMetadata.severity !== "warning" ||
+      approvalMetadata.agentId !== "qa"
+    ) {
+      throw new Error(
+        `plugin approval event ${approval.event.eventId} did not expose plugin fields`,
+      );
+    }
+  }
   if (params.expectChunk) {
     const chunk = await client.waitForRoomEvent({
       observedEvents: params.context.observedEvents,
@@ -506,19 +451,21 @@ async function runExecApprovalScenario(params: {
   const result = await waitForApprovalDecision({
     approvalId,
     context: params.context,
-    kind: "exec",
+    kind,
   });
   assertApprovalDecisionResult({
     approvalId,
     decision: params.decision,
     result,
   });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: params.context.syncState,
-    nextSince: approval.since,
-    startSince,
-  });
+  if (kind === "exec") {
+    advanceMatrixQaActorCursor({
+      actorId: "driver",
+      syncState: params.context.syncState,
+      nextSince: approval.since,
+      startSince,
+    });
+  }
   return {
     artifacts: {
       approval: buildMatrixApprovalArtifact(approval.event),
@@ -527,19 +474,28 @@ async function runExecApprovalScenario(params: {
       reactionTargetEventId: reaction.reaction?.eventId,
       token,
     },
-    details: [
-      `approval event: ${approval.event.eventId}`,
-      `approval id: ${approvalId}`,
-      `approval kind: ${approval.event.approval?.kind ?? "<missing>"}`,
-      `decision: ${params.decision}`,
-      `reaction event: ${reaction.eventId}`,
-      `reaction target: ${reaction.reaction?.eventId ?? "<missing>"}`,
-    ].join("\n"),
+    details: (kind === "plugin"
+      ? [
+          `approval event: ${approval.event.eventId}`,
+          `approval id: ${approvalMetadata?.id}`,
+          `plugin id: ${approvalMetadata?.pluginId ?? "<missing>"}`,
+          `tool name: ${approvalMetadata?.toolName ?? "<missing>"}`,
+          `decision: allow-once`,
+        ]
+      : [
+          `approval event: ${approval.event.eventId}`,
+          `approval id: ${approvalId}`,
+          `approval kind: ${approval.event.approval?.kind ?? "<missing>"}`,
+          `decision: ${params.decision}`,
+          `reaction event: ${reaction.eventId}`,
+          `reaction target: ${reaction.reaction?.eventId ?? "<missing>"}`,
+        ]
+    ).join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
 
 export async function runApprovalExecMetadataSingleEventScenario(context: MatrixQaScenarioContext) {
-  return await runExecApprovalScenario({
+  return await runApprovalReactionScenario({
     context,
     decision: "allow-once",
     tokenPrefix: "MATRIX_QA_APPROVAL_EXEC",
@@ -547,7 +503,7 @@ export async function runApprovalExecMetadataSingleEventScenario(context: Matrix
 }
 
 export async function runApprovalExecMetadataChunkedScenario(context: MatrixQaScenarioContext) {
-  return await runExecApprovalScenario({
+  return await runApprovalReactionScenario({
     context,
     decision: "allow-once",
     expectChunk: true,
@@ -556,7 +512,7 @@ export async function runApprovalExecMetadataChunkedScenario(context: MatrixQaSc
 }
 
 export async function runApprovalDenyReactionScenario(context: MatrixQaScenarioContext) {
-  return await runExecApprovalScenario({
+  return await runApprovalReactionScenario({
     context,
     decision: "deny",
     tokenPrefix: "MATRIX_QA_APPROVAL_DENY",
@@ -570,7 +526,7 @@ export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioC
     body: `Matrix approval thread root ${token}`,
     roomId: context.roomId,
   });
-  const result = await runExecApprovalScenario({
+  const result = await runApprovalReactionScenario({
     context,
     decision: "allow-once",
     threadRootEventId: rootEventId,
@@ -593,58 +549,12 @@ export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioC
 export async function runApprovalPluginMetadataSingleEventScenario(
   context: MatrixQaScenarioContext,
 ) {
-  const { startSince } = await primeMatrixQaDriverScenarioClient(context);
-  const token = buildMatrixQaToken("MATRIX_QA_PLUGIN_APPROVAL");
-  const accepted = await requestPluginApproval({ context, token });
-  const approvalId = readAcceptedApprovalRequestId(accepted);
-  const approval = await waitForApprovalEvent({
-    context,
-    expectedApprovalId: approvalId,
-    expectedKind: "plugin",
-    roomId: context.roomId,
-    since: startSince,
-  });
-  const approvalMetadata = approval.event.approval;
-  if (
-    approvalMetadata?.pluginId !== "matrix-qa-plugin" ||
-    approvalMetadata.toolName !== "matrix_qa_tool" ||
-    approvalMetadata.severity !== "warning" ||
-    approvalMetadata.agentId !== "qa"
-  ) {
-    throw new Error(`plugin approval event ${approval.event.eventId} did not expose plugin fields`);
-  }
-  const reaction = await reactToApproval({
+  return await runApprovalReactionScenario({
     context,
     decision: "allow-once",
-    roomId: context.roomId,
-    targetEventId: approval.event.eventId,
-  });
-  const result = await waitForApprovalDecision({
-    approvalId,
-    context,
     kind: "plugin",
+    tokenPrefix: "MATRIX_QA_PLUGIN_APPROVAL",
   });
-  assertApprovalDecisionResult({
-    approvalId,
-    decision: "allow-once",
-    result,
-  });
-  return {
-    artifacts: {
-      approval: buildMatrixApprovalArtifact(approval.event),
-      reactionEmoji: reaction.reaction?.key,
-      reactionEventId: reaction.eventId,
-      reactionTargetEventId: reaction.reaction?.eventId,
-      token,
-    },
-    details: [
-      `approval event: ${approval.event.eventId}`,
-      `approval id: ${approvalMetadata.id}`,
-      `plugin id: ${approvalMetadata.pluginId ?? "<missing>"}`,
-      `tool name: ${approvalMetadata.toolName ?? "<missing>"}`,
-      `decision: allow-once`,
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
 }
 
 export async function runApprovalChannelTargetBothScenario(context: MatrixQaScenarioContext) {

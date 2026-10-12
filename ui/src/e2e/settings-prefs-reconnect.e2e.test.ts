@@ -1,6 +1,7 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -133,7 +134,7 @@ async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): P
 }
 
 function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
-  return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
+  return page.locator(`input.settings-segmented__input[value="${mode}"]`);
 }
 
 suite.define(() => {
@@ -243,11 +244,11 @@ suite.define(() => {
         .toMatchObject({ theme: "claw", themeMode: "light" });
 
       await gateway.setOnline(false);
-      await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
-      await page
-        .locator(".agent-chat__composer-status-band")
-        .filter({ hasText: "You can keep writing." })
-        .waitFor();
+      const identity = page.locator("openclaw-app-sidebar .sidebar-identity-card");
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("reconnecting");
+      expect(await identity.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
+      await page.locator(".agent-chat__input--offline").waitFor();
 
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
       await expect
@@ -293,8 +294,19 @@ suite.define(() => {
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector<
+              HTMLElement & { runtime?: { context: ApplicationContext } }
+            >("openclaw-app");
+            return app?.runtime?.context.runtimeConfig.state.configSnapshot;
+          }),
+        )
+        .toMatchObject({ config: committed.config, hash: committed.hash });
+      await expect.poll(() => readPendingPrefStorage(page)).toEqual([]);
       await expectThemeActive(page, "knot");
+      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit + 1);
     } finally {
       await context.close();
     }

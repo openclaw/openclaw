@@ -125,14 +125,13 @@ openclaw-multi-select {
   height: 12px;
 }
 
-.multi-select__chip .chip-remove:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+.multi-select__chip .chip-remove:hover:not(:disabled),
+.multi-select__chip .chip-remove:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 
 .multi-select__chip .chip-remove:focus-visible:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

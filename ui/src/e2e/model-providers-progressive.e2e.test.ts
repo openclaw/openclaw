@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -497,8 +498,11 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
         );
       }
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
-      expect(await defaults.locator(".picker-select__trigger:enabled").count()).toBe(0);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      await trigger.click();
       expect(await pickerValue(picker)).toBe("");
       expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
         "Auto · Current connection model",
@@ -545,7 +549,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await trigger.click();
       const configReads = (await gateway.getRequests("config.get")).length;
       await page.locator(".model-providers__refresh-button").click();
       await gateway.waitForRequest("config.get", { after: configReads });
@@ -571,7 +580,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   });
 
   it.each(["snapshot", "ordinary"] as const)(
-    "opens the Models route from %s catalog publication while auth is pending",
+    "opens the Models route from %s catalog publication and refreshes after overlapping reads",
     async (publicationKind) => {
       const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -604,7 +613,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await page.locator('a[href="/settings/model-providers"]').first().click();
         }
-        await gateway.waitForRequest("models.list");
+        // Appearance can start a prepared-only read before navigation. Release the
+        // held catalog only after the Models page has admitted its own projection.
+        const routeCatalogRequests = async () =>
+          (await gateway.getRequests("models.list")).filter(
+            (request) => asNullableRecord(request.params)?.preparedOnly !== true,
+          );
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(1);
         const publication = {
           target: {},
           scope: { agentId: "main" },
@@ -626,7 +641,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
         await expect.poll(() => preparedRow.textContent()).toContain("Prepared model");
         expect(await preparedRow.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("models.list")).toHaveLength(1);
+        expect(await routeCatalogRequests()).toHaveLength(1);
 
         await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
@@ -636,19 +651,25 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await gateway.resolveDeferred("models.list", { models: [older] });
         }
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
-        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
 
-        await gateway.deferNext("models.list");
-        await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
-        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        const beforeRefresh = await gateway.deferNext("models.list", { refresh: true });
+        await page.locator(".model-providers__refresh-button").click();
+        const refreshed = await gateway.waitForRequest("models.list", {
+          after: beforeRefresh,
+          match: { refresh: true },
+        });
+        expect(refreshed.params).toMatchObject({ agentId: "main", refresh: true });
         await gateway.resolveDeferred("models.list", {
           models: [prepared, added],
           defaultModels: { automaticUtilityModel: "fixture/added" },
         });
+        if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+          await trigger.click();
+        }
         await expect
           .poll(() => picker.locator('[role="option"][data-value="fixture/added"]').isVisible())
           .toBe(true);
+        expect(await picker.locator('[data-value="fixture/older"]').count()).toBe(0);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
       } finally {
         await context.close();

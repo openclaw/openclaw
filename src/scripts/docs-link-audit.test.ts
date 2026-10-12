@@ -3,13 +3,15 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
-import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
-const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
+const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir } =
   await import("../../scripts/docs-link-audit.mts");
 
 type AuditCliCase = {
@@ -440,13 +442,21 @@ describe("docs-link-audit", () => {
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-              OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
+                ],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+                OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+              },
+            ),
             timeout: 30_000,
           },
         );
@@ -500,21 +510,6 @@ describe("docs-link-audit", () => {
       return docsRoot;
     };
 
-    it("accepts declared mirrored routes in anchors mode when the source is absent", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing"),
-          allowExternalClawHubRoutes: true,
-          anchors: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    });
-
     it("reports fragments into mirrored routes as unverified rather than missing", () => {
       const tempDirs: string[] = [];
       try {
@@ -532,50 +527,56 @@ describe("docs-link-audit", () => {
       }
     });
 
-    it("leaves fragments into mirrored routes alone in plain mode", () => {
-      const tempDirs: string[] = [];
-      try {
-        // Plain mode has never inspected fragments; the declared route is proof
-        // enough, so the unverifiable fragment must not become a broken link.
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
-          allowExternalClawHubRoutes: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    });
-
     it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
       const tempDirs: string[] = [];
       try {
-        // Nest the fixture so `<root>/../clawhub` cannot accidentally resolve and
-        // turn the allowance off: this run must be the source-absent shape.
+        // Resolve source discovery from an owned module root, not the caller's checkout.
         const fixtureRoot = path.join(makeTempDir(tempDirs, "docs-clawhub-mirror-cli-"), "repo");
         const home = path.join(fixtureRoot, "home");
+        const auditSource = new URL("../../scripts/docs-link-audit.mts", import.meta.url);
+        const auditRuntime = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit);
+        const syncSource = new URL("../../scripts/docs-sync-publish.mjs", import.meta.url);
+        const syncRuntime =
+          auditRuntime.href === auditSource.href
+            ? syncSource
+            : new URL("./docs-sync-publish.js", auditRuntime);
+        const fixtureSync = path.join(fixtureRoot, "scripts", "docs-sync-publish.mjs");
         buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source", {
           root: fixtureRoot,
         });
         fs.mkdirSync(home, { recursive: true });
+        fs.mkdirSync(path.dirname(fixtureSync), { recursive: true });
+        fs.copyFileSync(syncSource, fixtureSync);
+        fs.writeFileSync(
+          path.join(fixtureRoot, "package.json"),
+          '{"private":true,"type":"module"}\n',
+        );
+        fs.writeFileSync(path.join(fixtureRoot, "pnpm-workspace.yaml"), "packages: []\n");
         const result = spawnSync(
           process.execPath,
           [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
           {
             cwd: fixtureRoot,
             encoding: "utf8",
-            env: {
-              PATH: process.env.PATH,
-              HOME: home,
-              USERPROFILE: home,
-              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-            },
+            env: preparedScriptWrapperEnv(
+              [
+                [auditSource, auditRuntime],
+                [syncSource, syncRuntime],
+              ],
+              {
+                PATH: process.env.PATH,
+                HOME: home,
+                USERPROFILE: home,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              },
+              [[pathToFileURL(fixtureSync), syncRuntime]],
+            ),
             timeout: 30_000,
           },
         );
         expect(result.error).toBeUndefined();
         expect(result.stdout).toContain("broken_links=0\n");
+        expect(result.stdout).not.toContain("Synced ");
         expect(result.stdout).not.toContain("fragment unverified");
         expect(result.status).toBe(0);
       } finally {
@@ -660,13 +661,6 @@ describe("docs-link-audit", () => {
         cleanupTempDirs(tempDirs);
       }
     });
-  });
-
-  it("normalizes route fragments away", () => {
-    expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
-      "/plugins/building-plugins",
-    );
-    expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
   });
 
   it("prepares every external-link input without exposing code literals", () => {
@@ -811,18 +805,6 @@ describe("docs-link-audit", () => {
     } finally {
       cleanupTempDirs(tempDirs);
     }
-  });
-
-  it("resolves redirects that land on anchored sections", () => {
-    const redirects = new Map([
-      ["/plugins/agent-tools", "/plugins/building-plugins#registering-agent-tools"],
-    ]);
-    const routes = new Set(["/plugins/building-plugins"]);
-
-    expect(resolveRoute("/plugins/agent-tools", { redirects, routes })).toEqual({
-      ok: true,
-      terminal: "/plugins/building-plugins",
-    });
   });
 
   it("does not create mirrored docs copies for non-root docs trees", () => {

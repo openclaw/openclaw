@@ -1,4 +1,3 @@
-// Deepinfra plugin module implements media models behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -26,20 +25,26 @@ export interface DeepInfraSurfaceModel {
 
 export const DEEPINFRA_BASE_URL = manifest.modelCatalog.providers.deepinfra.baseUrl;
 
-// Structural capability shapes — not model IDs.
 export const DEFAULT_DEEPINFRA_IMAGE_SIZE = "1024x1024";
 export const DEFAULT_DEEPINFRA_TTS_VOICE = "af_bella";
 export const DEEPINFRA_VIDEO_ASPECT_RATIOS = ["16:9", "4:3", "1:1", "3:4", "9:16"] as const;
 export const DEEPINFRA_VIDEO_DURATIONS = [5, 8] as const;
 
-// Per-surface fallback lists — used when no discovered/static catalog is
-// supplied. First entry is the default. Prefer discoverDeepInfraSurfaces().
-export const DEEPINFRA_IMAGE_FALLBACK_MODELS = [
-  "black-forest-labs/FLUX-1-schnell",
-  "black-forest-labs/FLUX-1-dev",
-  "Qwen/Qwen-Image-Max",
-  "stabilityai/sdxl-turbo",
-] as const;
+export const DEEPINFRA_IMAGE_FALLBACK_CATALOG: DeepInfraSurfaceModel[] = [
+  { id: "black-forest-labs/FLUX-1-schnell", price: 0.003, iterations: 4 },
+  { id: "black-forest-labs/FLUX-1-dev", price: 0.025, iterations: 28 },
+  { id: "Qwen/Qwen-Image-Max", price: 0.075, iterations: 28 },
+  { id: "stabilityai/sdxl-turbo", price: 0.0002, iterations: 4 },
+].map(({ id, price, iterations }) => ({
+  id,
+  name: id,
+  tags: ["image-gen"],
+  pricing: { per_image_unit: price },
+  defaultWidth: 1024,
+  defaultHeight: 1024,
+  defaultIterations: iterations,
+}));
+export const DEEPINFRA_IMAGE_FALLBACK_MODELS = DEEPINFRA_IMAGE_FALLBACK_CATALOG.map(({ id }) => id);
 
 // tts — Kokoro first so the shipped default voice (af_bella) pairs with
 // the chosen default model; the rest are alternative TTS providers

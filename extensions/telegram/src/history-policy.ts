@@ -1,11 +1,12 @@
 import type { Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
-import { firstDefined, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import { getTelegramTextParts } from "./bot/helpers.js";
 import {
   evaluateTelegramGroupBaseAccess,
@@ -28,18 +29,19 @@ type TelegramHistoryScope = {
   assertCurrent?: () => void;
 };
 
-function createTelegramHistoryPolicyAssertion(
-  params: TelegramHistoryScope,
-  cfg: OpenClawConfig,
-  getConfig: () => OpenClawConfig,
-) {
-  return () => {
-    params.assertCurrent?.();
-    if (getConfig() !== cfg) {
-      throw new Error(
-        "Telegram history policy changed during the read; retry with current permissions.",
-      );
-    }
+function resolveTelegramHistoryPolicy(params: TelegramHistoryScope) {
+  const getConfig = createRuntimeConfigReader(params.cfg);
+  const cfg = getConfig();
+  return {
+    cfg,
+    assertCurrent: () => {
+      params.assertCurrent?.();
+      if (getConfig() !== cfg) {
+        throw new Error(
+          "Telegram history policy changed during the read; retry with current permissions.",
+        );
+      }
+    },
   };
 }
 
@@ -70,9 +72,7 @@ export async function isTelegramHistorySenderAllowed(
   params: TelegramHistoryScope & { senderId: string; message?: Message },
 ): Promise<boolean> {
   params.assertCurrent?.();
-  const getConfig = createRuntimeConfigReader(params.cfg);
-  const cfg = getConfig();
-  const assertCurrent = createTelegramHistoryPolicyAssertion(params, cfg, getConfig);
+  const { cfg, assertCurrent } = resolveTelegramHistoryPolicy(params);
   const telegramCfg = mergeTelegramAccountConfig(cfg, params.accountId);
   if (
     !cfg.channels?.telegram ||
@@ -103,7 +103,6 @@ export async function isTelegramHistorySenderAllowed(
   assertCurrent();
   if (
     !evaluateTelegramGroupBaseAccess({
-      isGroup: true,
       groupConfig,
       topicConfig,
       hasGroupAllowOverride: groupAllowOverride !== undefined,
@@ -158,11 +157,8 @@ export async function isTelegramHistorySenderAllowed(
         accountId: params.accountId,
         groupId: String(chatId),
       }),
-    enforcePolicy: true,
     enforceAllowlistAuthorization: !ownBot && !commandAccess?.authorizedByConfig,
     allowEmptyAllowlistEntries: false,
-    requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: true,
   }).allowed;
 }
 
@@ -176,9 +172,7 @@ export async function readTelegramHistoryWindow(
   if (!Number.isSafeInteger(params.limit) || params.limit <= 0) {
     return [];
   }
-  const getConfig = createRuntimeConfigReader(params.cfg);
-  const cfg = getConfig();
-  const assertCurrent = createTelegramHistoryPolicyAssertion(params, cfg, getConfig);
+  const { cfg, assertCurrent } = resolveTelegramHistoryPolicy(params);
   assertCurrent();
   // Automatic turns inspect a physical window; only explicit reads page deeper for matches.
   const candidates = await params.cache.readHistoryWindow({
@@ -213,9 +207,7 @@ export async function readTelegramHistory(
   if (params.limit <= 0) {
     return { messages: [], hasMore: false };
   }
-  const getConfig = createRuntimeConfigReader(params.cfg);
-  const cfg = getConfig();
-  const assertCurrent = createTelegramHistoryPolicyAssertion(params, cfg, getConfig);
+  const { cfg, assertCurrent } = resolveTelegramHistoryPolicy(params);
   const ascending = params.after !== undefined && params.before === undefined;
   let before = params.before;
   let after = params.after;

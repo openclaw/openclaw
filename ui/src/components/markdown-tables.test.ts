@@ -59,6 +59,22 @@ class TestResizeObserver {
   }
 }
 
+function deliverTableResize(target: HTMLElement): void {
+  const observer = TestResizeObserver.instances.at(-1);
+  observer?.callback(
+    [
+      {
+        target,
+        contentRect: target.getBoundingClientRect(),
+        borderBoxSize: [],
+        contentBoxSize: [],
+        devicePixelContentBoxSize: [],
+      },
+    ],
+    observer,
+  );
+}
+
 function interactiveOwner(content = markdown): {
   owner: HTMLElement;
   shell: HTMLElement;
@@ -81,6 +97,7 @@ function interactiveOwner(content = markdown): {
   });
   owner.addEventListener("click", handleMarkdownTableInteraction);
   enhanceMarkdownTables(owner);
+  deliverTableResize(viewport);
   return { owner, shell, viewport };
 }
 
@@ -153,6 +170,50 @@ describe("Markdown table interactions", () => {
   });
 
   it.each([true, false])(
+    "updates retained table overflow without mutation-time layout when observed (ResizeObserver: %s)",
+    async (observed) => {
+      restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+      if (!observed) {
+        Reflect.deleteProperty(globalThis, "ResizeObserver");
+      }
+      const { owner, shell, viewport } = interactiveOwner(`${markdown}\n\n${markdown}`);
+      const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
+      const otherWidth = vi.fn(() => 300);
+      const changedWidth = vi.fn(() => 100);
+      Object.defineProperty(otherViewport, "scrollWidth", {
+        configurable: true,
+        get: otherWidth,
+      });
+      Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
+
+      try {
+        shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+        await Promise.resolve();
+        await Promise.resolve();
+        if (observed) {
+          expect(changedWidth).not.toHaveBeenCalled();
+          expect(otherWidth).not.toHaveBeenCalled();
+          deliverTableResize(viewport);
+        }
+        expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+        expect(changedWidth).toHaveBeenCalled();
+        expect(otherWidth).not.toHaveBeenCalled();
+
+        changedWidth.mockClear();
+        shell
+          .querySelector(".markdown-table__copy")!
+          .replaceChildren(document.createElement("span"));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(changedWidth).not.toHaveBeenCalled();
+        expect(otherWidth).not.toHaveBeenCalled();
+      } finally {
+        releaseMarkdownTables(owner);
+      }
+    },
+  );
+
+  it.each([true])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {
       vi.useFakeTimers();
@@ -237,6 +298,7 @@ describe("Markdown table interactions", () => {
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    await Promise.resolve();
     expect(document.activeElement).toBe(second);
   });
 

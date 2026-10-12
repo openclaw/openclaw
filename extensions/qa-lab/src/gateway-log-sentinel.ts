@@ -2,11 +2,17 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  extractQaMessageText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 
 type GatewayLogSentinelKind =
   | "plugin-hook-failure"
   | "plugin-contract-error"
   | "direct-reply-self-message"
+  | "final-reply-delivery-failure"
   | "codex-app-server-timeout"
   | "stalled-agent-run"
   | "cron-model-allowlist"
@@ -41,17 +47,8 @@ type GatewayLogSentinelScanOptions = {
   ignoreKinds?: readonly GatewayLogSentinelKind[];
 };
 
-type GatewayLogSentinelAssertOptions = GatewayLogSentinelScanOptions & {
-  allowEnvironmentBlocked?: boolean;
-};
-
-type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
+type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text" | "qaImpact"> & {
   test: (line: string) => boolean;
-};
-
-type GatewayLogSentinelToolCall = {
-  name: string;
-  args: unknown;
 };
 
 const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
@@ -60,7 +57,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bbefore_(?:prompt_build|tool_call)\b/iu.test(line) &&
       /\b(?:crash(?:ed)?|exception|failed|failure|error)\b/iu.test(line),
@@ -70,7 +66,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcontracts\.tools\b/iu.test(line) &&
       /\b(?:missing|invalid|registration|register|manifest|contract|schema|declare|error)\b/iu.test(
@@ -78,11 +73,20 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
       ),
   },
   {
+    // Channel reply dispatchers log `<channel> final reply failed: <error>` when
+    // the final answer never reached the chat; the channel may only show a
+    // generic notice, so the log line is the actionable evidence.
+    kind: "final-reply-delivery-failure",
+    verdict: "product-bug",
+    owner: "openclaw-routing",
+    productImpact: "P1",
+    test: (line) => /\bfinal reply failed\b/iu.test(line),
+  },
+  {
     kind: "codex-app-server-timeout",
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex app-server\b.*\btimed out\b|\btimed out\b.*\bcodex app-server\b/iu.test(line),
   },
@@ -91,7 +95,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex_app_server\b.*\b(?:stalled|no progress|progress stalled)\b|\b(?:stalled|no progress|progress stalled)\b.*\bcodex_app_server\b/iu.test(
         line,
@@ -102,7 +105,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "openclaw-cron",
     productImpact: "P2",
-    qaImpact: "P0",
     test: (line) =>
       /\bcron\b/iu.test(line) &&
       (/\bmodel allowlist\b/iu.test(line) ||
@@ -114,7 +116,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "environment-blocked",
     owner: "environment",
     productImpact: "P4",
-    qaImpact: "P0",
     test: (line) =>
       /\b(?:quota exceeded|insufficient_quota|subscription exhausted|no active subscription|billing hard limit|usage limit)\b/iu.test(
         line,
@@ -136,50 +137,16 @@ function filterGatewayLogSentinelFindings(
   });
 }
 
-function lineNumberForOffset(logs: string, offset: number) {
-  if (offset <= 0) {
-    return 1;
-  }
-  return logs.slice(0, offset).split(/\r?\n/u).length;
-}
-
 export function extractGatewayMessageText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    const normalizedType = readNonEmptyString(block.type)?.toLowerCase().replace(/_/g, "");
-    if (
-      nestedText &&
-      (normalizedType === "outputtext" ||
-        normalizedType === "text" ||
-        normalizedType === "message" ||
-        normalizedType === "toolresult")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaMessageText(message, (type) => {
+    const normalized = readNonEmptyString(type)?.toLowerCase().replace(/_/g, "");
+    return (
+      normalized === "outputtext" ||
+      normalized === "text" ||
+      normalized === "message" ||
+      normalized === "toolresult"
+    );
+  });
 }
 
 function parseJsonArguments(value: unknown): unknown {
@@ -193,8 +160,7 @@ function parseJsonArguments(value: unknown): unknown {
   }
 }
 
-function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLogSentinelToolCall[] {
-  const calls: GatewayLogSentinelToolCall[] = [];
+function hasCurrentChatMessageSend(message: Record<string, unknown>) {
   const rawContent = message.content;
   if (Array.isArray(rawContent)) {
     for (const block of rawContent) {
@@ -210,68 +176,44 @@ function extractAssistantToolCalls(message: Record<string, unknown>): GatewayLog
       ) {
         continue;
       }
-      calls.push({
-        name: readNonEmptyString(block.name) ?? "unknown",
-        args: parseJsonArguments(block.input ?? block.arguments ?? block.args ?? null),
-      });
+      if (
+        isCurrentChatMessageSend(block.name, block.input ?? block.arguments ?? block.args ?? null)
+      ) {
+        return true;
+      }
     }
   }
 
-  const rawToolCalls =
-    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
-  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
-  for (const call of toolCalls) {
-    if (!isRecord(call)) {
-      continue;
+  for (const call of readQaMessageFunctionCalls(message)) {
+    if (isCurrentChatMessageSend(call.tool, call.args)) {
+      return true;
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    calls.push({
-      name: readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name) ?? "unknown",
-      args: parseJsonArguments(
-        call.arguments ?? functionRecord?.arguments ?? call.input ?? functionRecord?.input ?? null,
-      ),
-    });
   }
-  return calls;
+  return false;
 }
 
-function isCurrentChatMessageSend(call: GatewayLogSentinelToolCall) {
-  if (call.name !== "message") {
+function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
+  if (readNonEmptyString(name) !== "message") {
     return false;
   }
-  if (!isRecord(call.args) || readNonEmptyString(call.args.action)?.toLowerCase() !== "send") {
+  const args = parseJsonArguments(rawArgs);
+  if (!isRecord(args) || readNonEmptyString(args.action)?.toLowerCase() !== "send") {
     return false;
   }
   const explicitTarget =
-    readNonEmptyString(call.args.conversationId) ??
-    readNonEmptyString(call.args.conversation) ??
-    readNonEmptyString(call.args.to) ??
-    readNonEmptyString(call.args.target);
+    readNonEmptyString(args.conversationId) ??
+    readNonEmptyString(args.conversation) ??
+    readNonEmptyString(args.to) ??
+    readNonEmptyString(args.target);
   if (!explicitTarget) {
     return true;
   }
   return /\b(?:current|same-chat|qa-operator|dm:qa-operator)\b/iu.test(explicitTarget);
 }
 
-function normalizeTranscriptText(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
-}
-
-function createDirectReplyFinding(): GatewayLogSentinelFinding {
-  return {
-    kind: "direct-reply-self-message",
-    verdict: "product-bug",
-    owner: "openclaw-routing",
-    productImpact: "P1",
-    qaImpact: "P0",
-    line: 1,
-    text: "assistant called message(action=send) and then produced final text Sent.",
-  };
-}
-
 export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
-  const toolCalls: GatewayLogSentinelToolCall[] = [];
+  let sentToCurrentChat = false;
   return {
     recordMessage(message: Record<string, unknown>) {
       if (message.role !== "assistant") {
@@ -281,36 +223,35 @@ export function createDirectReplyTranscriptSentinelScanner() {
       if (text) {
         lastAssistantText = text;
       }
-      toolCalls.push(...extractAssistantToolCalls(message));
+      sentToCurrentChat ||= hasCurrentChatMessageSend(message);
     },
     findings(): GatewayLogSentinelFinding[] {
-      const hasDirectReply =
-        toolCalls.some(isCurrentChatMessageSend) &&
-        normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
-      return hasDirectReply ? [createDirectReplyFinding()] : [];
+      if (!sentToCurrentChat || lastAssistantText.toLowerCase() !== "sent.") {
+        return [];
+      }
+      return [
+        {
+          kind: "direct-reply-self-message",
+          verdict: "product-bug",
+          owner: "openclaw-routing",
+          productImpact: "P1",
+          qaImpact: "P0",
+          line: 1,
+          text: "assistant called message(action=send) and then produced final text Sent.",
+        },
+      ];
     },
   };
 }
 
-function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
+export function scanDirectReplyTranscriptSentinels(
+  transcriptBytes: string,
+): GatewayLogSentinelFinding[] {
   const scanner = createDirectReplyTranscriptSentinelScanner();
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
-      }
-      scanner.recordMessage(message);
-    } catch {
-      // Ignore malformed QA transcript rows and keep sentinel scans deterministic.
-    }
+  for (const message of readQaTranscriptMessages(transcriptBytes)) {
+    scanner.recordMessage(message);
   }
-  return scanner.findings().length > 0;
+  return scanner.findings();
 }
 
 export function scanGatewayLogSentinels(
@@ -321,38 +262,26 @@ export function scanGatewayLogSentinels(
     return [];
   }
   const startOffset = Math.max(0, Math.min(logs.length, Math.floor(options?.since ?? 0)));
-  const lineOffset = lineNumberForOffset(logs, startOffset) - 1;
+  const lineOffset = logs.slice(0, startOffset).split(/\r?\n/u).length - 1;
   const findings: GatewayLogSentinelFinding[] = [];
   for (const [index, rawLine] of logs.slice(startOffset).split(/\r?\n/u).entries()) {
     const text = rawLine.trim();
     if (!text) {
       continue;
     }
-    for (const rule of GATEWAY_LOG_SENTINEL_RULES) {
-      if (!rule.test(text)) {
+    for (const { test, ...finding } of GATEWAY_LOG_SENTINEL_RULES) {
+      if (!test(text)) {
         continue;
       }
       findings.push({
-        kind: rule.kind,
-        verdict: rule.verdict,
-        owner: rule.owner,
-        productImpact: rule.productImpact,
-        qaImpact: rule.qaImpact,
+        ...finding,
+        qaImpact: "P0",
         line: lineOffset + index + 1,
         text,
       });
     }
   }
   return filterGatewayLogSentinelFindings(findings, options);
-}
-
-export function scanDirectReplyTranscriptSentinels(
-  transcriptBytes: string,
-): GatewayLogSentinelFinding[] {
-  if (!transcriptHasDirectReplySelfMessage(transcriptBytes)) {
-    return [];
-  }
-  return [createDirectReplyFinding()];
 }
 
 export function formatGatewayLogSentinelSummary(findings: readonly GatewayLogSentinelFinding[]) {
@@ -369,16 +298,10 @@ export function formatGatewayLogSentinelSummary(findings: readonly GatewayLogSen
 
 export function assertNoGatewayLogSentinels(
   logs: string | undefined,
-  options?: GatewayLogSentinelAssertOptions,
+  options?: GatewayLogSentinelScanOptions,
 ) {
   const findings = scanGatewayLogSentinels(logs, options);
   if (findings.length === 0) {
-    return findings;
-  }
-  if (
-    options?.allowEnvironmentBlocked === true &&
-    findings.every((finding) => finding.verdict === "environment-blocked")
-  ) {
     return findings;
   }
   throw new Error(

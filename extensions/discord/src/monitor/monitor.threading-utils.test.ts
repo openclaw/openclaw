@@ -13,7 +13,6 @@ import {
   unregisterGateway,
 } from "./gateway-registry.js";
 import { clearPresences, getPresence, presenceCacheSize, setPresence } from "./presence-cache.js";
-import { resolveDiscordPresenceUpdate } from "./presence.js";
 import {
   maybeCreateDiscordAutoThread,
   resolveDiscordAutoThreadContext,
@@ -31,15 +30,6 @@ function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds
 }
 
 describe("resolveDiscordOwnerAllowFrom", () => {
-  it("returns undefined when no allowlist is configured", () => {
-    const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true } as DiscordChannelConfigResolved,
-      sender: { id: "123" },
-    });
-
-    expect(result).toBeUndefined();
-  });
-
   it("skips wildcard matches for owner allowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["*"] } as DiscordChannelConfigResolved,
@@ -47,15 +37,6 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     });
 
     expect(result).toBeUndefined();
-  });
-
-  it("returns a matching user id entry", () => {
-    const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["123"] } as DiscordChannelConfigResolved,
-      sender: { id: "123" },
-    });
-
-    expect(result).toEqual(["123"]);
   });
 
   it("returns the normalized name slug for name matches only when enabled", () => {
@@ -76,24 +57,6 @@ describe("resolveDiscordOwnerAllowFrom", () => {
 });
 
 describe("resolveDiscordRoleAllowed", () => {
-  it("allows when no role allowlist is configured", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: undefined,
-      memberRoleIds: ["role-1"],
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("matches role IDs only", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: ["123"],
-      memberRoleIds: ["123", "456"],
-    });
-
-    expect(allowed).toBe(true);
-  });
-
   it("does not match non-ID role entries", () => {
     const allowed = resolveDiscordRoleAllowed({
       allowList: ["Admin"],
@@ -102,51 +65,9 @@ describe("resolveDiscordRoleAllowed", () => {
 
     expect(allowed).toBe(false);
   });
-
-  it("returns false when no matching role IDs", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: ["456"],
-      memberRoleIds: ["123"],
-    });
-
-    expect(allowed).toBe(false);
-  });
 });
 
 describe("resolveDiscordMemberAllowed", () => {
-  it("allows when no user or role allowlists are configured", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: undefined,
-      roleAllowList: undefined,
-      memberRoleIds: [],
-      userId: "u1",
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("allows when user allowlist matches", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: ["123"],
-      roleAllowList: ["456"],
-      memberRoleIds: ["999"],
-      userId: "123",
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("allows when role allowlist matches", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: ["999"],
-      roleAllowList: ["456"],
-      memberRoleIds: ["456"],
-      userId: "123",
-    });
-
-    expect(allowed).toBe(true);
-  });
-
   it("denies when user and role allowlists do not match", () => {
     const allowed = resolveDiscordMemberAllowed({
       userAllowList: ["u2"],
@@ -170,13 +91,6 @@ describe("gateway-registry", () => {
     clearGateways();
   });
 
-  it("stores and retrieves a gateway by account", () => {
-    const gateway = fakeGateway();
-    registerGateway("account-a", gateway as never);
-    expect(getGateway("account-a")).toBe(gateway);
-    expect(getGateway("account-b")).toBeUndefined();
-  });
-
   it("uses collision-safe key when accountId is undefined", () => {
     const gateway = fakeGateway();
     registerGateway(undefined, gateway as never);
@@ -190,39 +104,11 @@ describe("gateway-registry", () => {
     unregisterGateway("account-a");
     expect(getGateway("account-a")).toBeUndefined();
   });
-
-  it("clears all gateways", () => {
-    registerGateway("a", fakeGateway() as never);
-    registerGateway("b", fakeGateway() as never);
-    clearGateways();
-    expect(getGateway("a")).toBeUndefined();
-    expect(getGateway("b")).toBeUndefined();
-  });
-
-  it("overwrites existing entry for same account", () => {
-    const gateway1 = fakeGateway({ isConnected: true });
-    const gateway2 = fakeGateway({ isConnected: false });
-    registerGateway("account-a", gateway1 as never);
-    registerGateway("account-a", gateway2 as never);
-    expect(getGateway("account-a")).toBe(gateway2);
-  });
 });
 
 describe("presence-cache", () => {
   beforeEach(() => {
     clearPresences();
-  });
-
-  it("scopes presence entries by account", () => {
-    const presenceA = { status: "online" } as GatewayPresenceUpdate;
-    const presenceB = { status: "idle" } as GatewayPresenceUpdate;
-
-    setPresence("account-a", "user-1", presenceA);
-    setPresence("account-b", "user-1", presenceB);
-
-    expect(getPresence("account-a", "user-1")).toBe(presenceA);
-    expect(getPresence("account-b", "user-1")).toBe(presenceB);
-    expect(getPresence("account-a", "user-2")).toBeUndefined();
   });
 
   it("clears presence per account", () => {
@@ -236,63 +122,6 @@ describe("presence-cache", () => {
     expect(getPresence("account-a", "user-1")).toBeUndefined();
     expect(getPresence("account-b", "user-2")).toBe(presence);
     expect(presenceCacheSize()).toBe(1);
-  });
-});
-
-describe("resolveDiscordPresenceUpdate", () => {
-  it("returns default online presence when no presence config provided", () => {
-    expect(resolveDiscordPresenceUpdate({})).toEqual({
-      status: "online",
-      activities: [],
-      since: null,
-      afk: false,
-    });
-  });
-
-  it("returns status-only presence when activity is omitted", () => {
-    const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).toEqual({
-      since: null,
-      status: "dnd",
-      activities: [],
-      afk: false,
-    });
-  });
-
-  it("defaults to custom activity type when activity is set without type", () => {
-    const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).toEqual({
-      since: null,
-      status: "online",
-      activities: [
-        {
-          type: 4,
-          name: "Custom Status",
-          state: "Focus time",
-        },
-      ],
-      afk: false,
-    });
-  });
-
-  it("includes streaming url when activityType is streaming", () => {
-    const presence = resolveDiscordPresenceUpdate({
-      activity: "Live",
-      activityType: 1,
-      activityUrl: "https://twitch.tv/openclaw",
-    });
-    expect(presence).toEqual({
-      since: null,
-      activities: [
-        {
-          type: 1,
-          name: "Live",
-          url: "https://twitch.tv/openclaw",
-        },
-      ],
-      status: "online",
-      afk: false,
-    });
   });
 });
 

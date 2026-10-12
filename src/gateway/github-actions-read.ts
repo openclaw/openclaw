@@ -2,9 +2,10 @@ import { z } from "zod";
 import { GitHubIdentityError, prepareGitHubReadIdentity } from "../agents/github-tool-identity.js";
 import { BoardValidationError } from "../boards/board-layout.js";
 import { resolveGitHubActionsRequest } from "../boards/github-actions-capability.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
+import { logWarn } from "../logger.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { BoardCapabilityAuthority } from "./board-host-tools.js";
 import { BoardGatewayUnavailableError } from "./board-view-ticket.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
@@ -44,8 +45,7 @@ const runsSchema = z.object({
 type ActionsResult = z.infer<typeof runsSchema>;
 type ActionsCache = {
   active: number;
-  values: Map<string, { value: ActionsResult; expiresAt: number }>;
-  pending: Map<string, Promise<ActionsResult>>;
+  results: ReturnType<typeof createStaleWhileRevalidateCache<ActionsResult>>;
 };
 const gatewayCaches = new WeakMap<GatewayRequestContext, ActionsCache>();
 
@@ -86,16 +86,16 @@ export async function prepareBoardGitHubIdentity(
 ) {
   try {
     const config = context.getRuntimeConfig();
-    const identity = await prepareGitHubReadIdentity({
+    return await prepareGitHubReadIdentity({
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: authority.boardSession.agentId,
+      issuer: "github.com",
       getCurrentConfig: () => context.getRuntimeConfig(),
       assertActive: authority.assertActive,
       startActive: authority.useCurrent,
       refresh: () => requestCurrentGitHubOAuthRefresh(authority.boardSession.agentId),
     });
-    return identity;
   } catch (error) {
     if (
       error instanceof GitHubIdentityError ||
@@ -118,8 +118,12 @@ export async function readBoardGitHubActions(
   const cache = await authority.useCurrent(() => {
     const admitted: ActionsCache = gatewayCaches.get(context) ?? {
       active: 0,
-      values: new Map(),
-      pending: new Map(),
+      results: createStaleWhileRevalidateCache<ActionsResult>({
+        maxEntries: CACHE_LIMIT,
+        maxPending: MAX_CONCURRENT_READS,
+        ttlMs: CACHE_TTL_MS,
+        onBackgroundError: (error) => logWarn(`board: ${actionsFailure(error).message}`),
+      }),
     };
     gatewayCaches.set(context, admitted);
     if (admitted.active >= MAX_CONCURRENT_READS) {
@@ -132,17 +136,10 @@ export async function readBoardGitHubActions(
     const identity = await prepareBoardGitHubIdentity(context, authority);
     const key = JSON.stringify([authority.boardSession, identity.cacheScope, request.url]);
     const result = await identity.start(() => {
-      const cached = cache.values.get(key);
-      if (cached && cached.expiresAt > Date.now()) {
-        return structuredClone(cached.value);
-      }
-      cache.values.delete(key);
       // Creation is synchronous, so the checked caller admits the fetch. Shared transport
       // must not inherit that widget's lifetime; every caller gates delivery below.
-      return getOrCreatePromise(
-        cache.pending,
-        key,
-        async () => {
+      return cache.results.read(key, () =>
+        context.trackExecution(async () => {
           const response = await gitHubPublicApi.fetchGitHubApi(
             request.url,
             fetch,
@@ -154,6 +151,11 @@ export async function readBoardGitHubActions(
                 "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
               );
             },
+            undefined,
+            undefined,
+            getAsyncWorkSignal(),
+            undefined,
+            gitHubPublicApi.GITHUB_API_ORIGIN,
           );
           const raw = await gitHubPublicApi.readGitHubJsonResponse(
             response,
@@ -182,14 +184,13 @@ export async function readBoardGitHubActions(
           }
           // Internal, credential-scoped cache population is not delivery. No widget owns
           // this transport result; every caller must validate its own authority below.
-          cache.values.set(key, { value: parsed.data, expiresAt: Date.now() + CACHE_TTL_MS });
-          pruneMapToMaxSize(cache.values, CACHE_LIMIT);
           return parsed.data;
-        },
-        { evictOnSettled: true },
+        }),
       );
     });
-    await identity.start(() => publish(true, structuredClone(result)));
+    await identity.start(() =>
+      publish(true, structuredClone({ ...result.value, ...(result.stale ? { stale: true } : {}) })),
+    );
   } catch (error) {
     throw actionsFailure(error);
   } finally {

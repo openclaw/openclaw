@@ -1,13 +1,31 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-manager.js";
-import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+  projectSubagentRunForSessionList,
+} from "./subagents/registry/subagent-delivery-state.js";
+import type { PendingFinalDeliveryPayload } from "./subagents/registry/subagent-registry-read.types.js";
+import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
+import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+
+/** Worker commands use a closed discriminant; generic execute callers retain correlated inputs. */
+export function isSubagentRegistryWriteCommand(
+  command: Parameters<DomainScope["execute"]>[0],
+): command is Extract<
+  SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+  { type: "subagents.persistChanges" }
+> {
+  return command.type === "subagents.persistChanges";
+}
 
 type GatewayRequest = { method?: string };
 type GatewayResponse<TRequest, TResult> =
@@ -47,25 +65,105 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
   mock.mockImplementation(createGatewayMethodMock(responses, fallback));
 }
 
-export function createSubagentPersistenceMock(
-  methods: Pick<
-    typeof RegistryPersistence,
-    "persistSubagentRunsToDisk" | "persistSubagentRunsToDiskOrThrow" | "restoreSubagentRunsFromDisk"
-  >,
+export type MockSubagentRegistryRows = (
+  rows: Map<string, SubagentRunRecord>,
+  runIds: readonly string[],
+) => void | Promise<void>;
+
+/** Policy fixtures retain the real row owner and stub only the worker transport ACK. */
+export async function configureMockSubagentRegistryPersistence(methods: {
+  persistRegistryRows: MockSubagentRegistryRows;
+}) {
+  const worker = await import("../state/openclaw-state-worker-store.js");
+  const { rowToSubagentRunRecord } =
+    await import("./subagents/registry/subagent-registry.store.codec.js");
+  const { subagentRunRowVersion } =
+    await import("./subagents/registry/subagent-registry.store.row.js");
+  const original = worker.runOpenClawStateWorkerOperation;
+  const spy = vi
+    .spyOn(worker, "runOpenClawStateWorkerOperation")
+    .mockImplementation(async (context, operation, options) => {
+      context.admission.assertCurrent();
+      options?.assertCurrent?.();
+      return operation({
+        execute: vi
+          .fn()
+          .mockImplementation(
+            async (
+              command: import("../infra/sqlite-worker-contract.js").SqliteWorkerCommand<
+                import("../state/openclaw-state-worker-contract.js").OpenClawStateWorkerOperations
+              >,
+            ) => {
+              if (command.type !== "subagents.persistChanges") {
+                return original(context, (scope) => scope.execute(command), options);
+              }
+              const write = command.input;
+              const values = write.values.map((row) => {
+                if (typeof row.payload_json !== "string") {
+                  throw new Error("Registry fixture write is missing its payload");
+                }
+                return {
+                  ...row,
+                  payload_json: row.payload_json,
+                  controller_session_key: row.controller_session_key ?? null,
+                  controller_store_path: row.controller_store_path ?? null,
+                  requester_store_path: row.requester_store_path ?? null,
+                };
+              });
+              const rows = new Map(
+                values.map((row) => {
+                  const entry = rowToSubagentRunRecord(row);
+                  if (!entry) {
+                    throw new Error("Registry fixture write has an invalid payload");
+                  }
+                  return [row.run_id, entry] as const;
+                }),
+              );
+              await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
+              options?.assertCurrent?.();
+              return {
+                writeId: write.writeId,
+                versions: new Map([
+                  ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
+                  ...write.deleteRunIds.map((id) => [id, null] as const),
+                ]),
+                notices: [],
+              };
+            },
+          ),
+      });
+    });
+  onTestFinished(() => spy.mockRestore());
+  return spy;
+}
+
+export function createSubagentStateMock(
+  publishCommittedRows: typeof RegistryState.publishSubagentRunsAfterAtomicStore,
 ) {
-  const listeners = new Set<() => void>();
-  const publishAfter =
-    <Args extends unknown[], Result>(operation: (...args: Args) => Result) =>
-    (...args: Args): Result => {
-      const result = operation(...args);
-      notifyListeners(listeners, undefined);
-      return result;
-    };
   return {
-    onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
-    persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
-    persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
-    restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+    // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
+    getSubagentSessionListRunsSnapshotForRead: (runs: Map<string, SubagentRunRecord>) =>
+      new Map([...runs].map(([id, entry]) => [id, projectSubagentRunForSessionList(entry)])),
+    withSubagentRunReadSnapshot: (async (runs, select, consume) => {
+      await Promise.resolve();
+      const selected = select(new Map(runs));
+      const runIds = new Set(selected.runIds);
+      const sessionKeys = new Set(selected.sessionKeys);
+      return consume(
+        selected,
+        new Map(
+          [...runs].filter(
+            ([runId, entry]) =>
+              runIds.has(runId) ||
+              sessionKeys.has(entry.requesterSessionKey.trim()) ||
+              Boolean(
+                entry.controllerSessionKey && sessionKeys.has(entry.controllerSessionKey.trim()),
+              ),
+          ),
+        ),
+      );
+    }) satisfies typeof RegistryState.withSubagentRunReadSnapshot,
+    publishSubagentRunsAfterAtomicStore: publishCommittedRows,
   };
 }
 
@@ -138,6 +236,8 @@ export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): 
     task: overrides.runId,
     cleanup: "keep",
     createdAt: Date.now(),
+    completion: { required: overrides.expectsCompletionMessage === true },
+    delivery: { status: overrides.expectsCompletionMessage === false ? "not_required" : "pending" },
     ...record,
     execution:
       execution ??
@@ -243,7 +343,9 @@ export function mockCallArg(
 type SubagentRegistryModule =
   typeof import("./subagents/registry/subagent-registry.test-helpers.js");
 export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSubagentRun"> & {
-  registerSubagentRun(params: SubagentRunParamsOverrides): void;
+  registerSubagentRun(
+    params: SubagentRunParamsOverrides,
+  ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
 
 export function createSubagentRegistryHarness(
@@ -251,18 +353,19 @@ export function createSubagentRegistryHarness(
 ): SubagentRegistryHarness {
   return {
     ...registry,
-    registerSubagentRun: (params) => {
-      const registration = createSubagentRunParams(params);
-      if (registration.taskRowOwnership !== "required") {
-        return registry.registerSubagentRun({
-          ...registration,
-          taskRowOwnership: registration.taskRowOwnership,
-        });
-      }
-      if (registration.queued) {
-        throw new Error("Required queued registration belongs in awaited fixtures");
-      }
-      return registry.registerSubagentRun({ ...registration, queued: false });
-    },
+    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
   };
 }
+
+export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const now = Date.now();
+  const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
+
+  const delivery = ensureDeliveryState(args.entry);
+  delivery.status = "pending";
+  delivery.createdAt ??= now;
+  delivery.lastAttemptAt = now;
+  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+  delivery.lastError = args.error ?? null;
+  delivery.payload = payload;
+};

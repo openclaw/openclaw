@@ -1,10 +1,8 @@
-// Memory Core tests cover dreaming phases plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   listMemoryArtifactProvenance,
@@ -15,26 +13,20 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
-  filterRecallEntriesWithinLookback,
   previewRemDreaming,
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
-import {
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-} from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
-import { appendSessionCorpusLines, writeSessionIngestionState } from "./session-ingestion.js";
+import { appendSessionCorpusLines } from "./session-ingestion.js";
+import { makeMessage, withSessionAdmissionReadBudget } from "./session-ingestion.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import {
   createMemoryCoreTestHarness,
@@ -45,65 +37,39 @@ import {
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
-const DREAMING_TEST_DAY = "2026-04-05";
-const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
-const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-const originalDreamingTestFast = process.env.OPENCLAW_TEST_FAST;
-const originalDreamingStateDir = process.env.OPENCLAW_STATE_DIR;
-const memoryArtifactProvenanceMock = vi.mocked(listMemoryArtifactProvenance);
-memoryArtifactProvenanceMock.mockResolvedValue([]);
-const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
-  plugins: {
-    entries: {
-      "memory-core": {
-        config: {
-          dreaming: {
-            enabled: true,
-            timezone: "UTC",
-            // The existing tests in this file were written when "inline" was the
-            // default storage mode and assert against `memory/<day>.md` directly.
-            // Pin the storage mode explicitly so they keep covering inline mode
-            // after the default flipped to "separate" in #66328.
-            storage: { mode: "inline", separateReports: false },
-            phases: {
-              light: {
-                enabled: true,
-                limit: 20,
-                lookbackDays: 2,
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-};
-
-function setDreamingTestEnv(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_TEST_FAST", "1");
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-  clearRuntimeConfigSnapshot();
+const BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
+const DAY = "2026-04-05";
+const provenanceMock = vi.mocked(listMemoryArtifactProvenance);
+provenanceMock.mockResolvedValue([]);
+function dreamingConfig(dreaming: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { "memory-core": { config: { dreaming } } } } };
 }
 
-function restoreDreamingTestEnv(): void {
-  if (originalDreamingTestFast === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_TEST_FAST");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_TEST_FAST", originalDreamingTestFast);
-  }
-  if (originalDreamingStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalDreamingStateDir);
-  }
+const INLINE_CONFIG: OpenClawConfig = dreamingConfig({
+  enabled: true,
+  timezone: "UTC",
+  // Exercise inline output explicitly; separate storage is the product default.
+  storage: { mode: "inline", separateReports: false },
+  phases: {
+    light: {
+      enabled: true,
+      limit: 20,
+      lookbackDays: 2,
+    },
+  },
+});
+
+function setStateDir(stateDir: string): void {
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   clearRuntimeConfigSnapshot();
 }
 
 afterEach(() => {
-  restoreDreamingTestEnv();
-  memoryArtifactProvenanceMock.mockReset();
-  memoryArtifactProvenanceMock.mockResolvedValue([]);
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+  provenanceMock.mockReset();
+  provenanceMock.mockResolvedValue([]);
 });
 
 function mockUntrustedMemoryArtifact(params: {
@@ -111,7 +77,7 @@ function mockUntrustedMemoryArtifact(params: {
   content: string;
   observedAt: number;
 }): void {
-  memoryArtifactProvenanceMock.mockResolvedValue([
+  provenanceMock.mockResolvedValue([
     {
       relativePath: params.relativePath,
       provenance: {
@@ -123,72 +89,27 @@ function mockUntrustedMemoryArtifact(params: {
   ]);
 }
 
-function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
-  const candidate = candidates.find((entry) => entry.key === key);
-  if (!candidate) {
-    throw new Error(`expected promotion candidate ${key}`);
-  }
-  return candidate;
+function candidateKey(candidates: Array<{ key: string; path: string }>, sourcePath: string) {
+  return expectDefined(
+    candidates.find((entry) => entry.path === sourcePath),
+    sourcePath,
+  ).key;
 }
 
-function requireCandidateKeyByPath(
-  candidates: Array<{ key: string; path: string }>,
-  predicate: (path: string) => boolean,
-  label: string,
-): string {
-  const key = candidates.find((candidate) => predicate(candidate.path))?.key;
-  if (!key) {
-    throw new Error(`expected promotion candidate key for ${label}`);
-  }
-  return key;
-}
-
-function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-  return mock.mock.calls.map((call) => {
-    const message = call[0];
-    return typeof message === "string" ? message : "";
-  });
-}
-
-function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.join("\n")).toContain(expected);
-}
-
-function expectNotIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.join("\n")).not.toContain(expected);
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error) {
-      expect(error.code).toBe("ENOENT");
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
-}
-
-async function seedDreamingSessionTranscript(params: {
-  agentId?: string;
+async function seedTranscript(params: {
   messages: Array<{
     role: "assistant" | "user";
     content: unknown;
     owner?: boolean;
-    provenance?: { kind: "internal_system"; sourceTool: "heartbeat" };
     timestamp: number | string;
   }>;
   sessionId: string;
-  sessionKey?: string;
-  spawnedBy?: string;
   hookExternalContentSource?: "gmail" | "webhook";
 }): Promise<void> {
-  const agentId = params.agentId ?? "main";
+  const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = params.sessionKey ?? `agent:${agentId}:chat:${params.sessionId}`;
+  const sessionKey = `agent:${agentId}:chat:${params.sessionId}`;
   const timestamps = params.messages
     .map((message) =>
       typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
@@ -198,19 +119,19 @@ async function seedDreamingSessionTranscript(params: {
   // retaining per-message timestamps as the dreaming corpus clock.
   const updatedAt = Math.max(Date.now(), ...timestamps);
   await fs.mkdir(sessionsDir, { recursive: true });
-  await upsertSessionEntry({
+  const registration = {
     agentId,
     sessionKey,
     storePath,
     entry: {
       sessionId: params.sessionId,
       updatedAt,
-      ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
       ...(params.hookExternalContentSource
         ? { hookExternalContentSource: params.hookExternalContentSource }
         : {}),
     },
-  });
+  };
+  await upsertSessionEntry(registration);
   for (const message of params.messages) {
     await appendSessionTranscriptMessageByIdentity({
       agentId,
@@ -221,138 +142,57 @@ async function seedDreamingSessionTranscript(params: {
         role: message.role,
         content: message.content,
         ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-        ...(message.provenance ? { provenance: message.provenance } : {}),
         timestamp: message.timestamp,
       },
     });
   }
-  await upsertSessionEntry({
-    agentId,
-    sessionKey,
-    storePath,
-    entry: {
-      sessionId: params.sessionId,
-      updatedAt,
-      ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
-      ...(params.hookExternalContentSource
-        ? { hookExternalContentSource: params.hookExternalContentSource }
-        : {}),
-    },
-  });
+  await upsertSessionEntry(registration);
 }
 
-function createHarness(
-  config: OpenClawConfig,
-  workspaceDir?: string,
-  subagent?: Parameters<typeof runDreamingSweepPhases>[0]["subagent"],
-) {
-  const logger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+function corpusPath(workspaceDir: string, day = DAY) {
+  return path.join(workspaceDir, "memory", ".dreams", "session-corpus", `${day}.txt`);
+}
 
-  const resolvedConfig = workspaceDir
-    ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            workspace: workspaceDir,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      }
-    : {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            userTimezone: config.agents?.defaults?.userTimezone ?? "UTC",
-          },
-        },
-      };
-  const pluginConfig = resolveMemoryDreamingPluginConfig(resolvedConfig) ?? {};
-  const beforeAgentReply = async (
-    event: { cleanedBody: string },
-    ctx: { trigger?: string; workspaceDir?: string },
-  ) => {
-    if (ctx.trigger !== "heartbeat") {
-      return undefined;
-    }
-    const selectedPhase = event.cleanedBody.includes(LIGHT_SLEEP_EVENT_TEXT)
-      ? "light"
-      : event.cleanedBody.includes(REM_SLEEP_EVENT_TEXT)
-        ? "rem"
-        : undefined;
-    if (!selectedPhase) {
-      return undefined;
-    }
-    const activeWorkspace = ctx.workspaceDir ?? workspaceDir;
-    if (!activeWorkspace) {
-      logger.warn(
-        `memory-core: ${selectedPhase} dreaming skipped because no memory workspace is available.`,
-      );
-      return { handled: true, reason: `memory-core: ${selectedPhase} dreaming missing workspace` };
-    }
-    const dreamingConfig = (pluginConfig.dreaming ?? {}) as Record<string, unknown>;
-    const phaseConfigs = (dreamingConfig.phases ?? {}) as Record<string, unknown>;
-    const lightConfig = (phaseConfigs.light ?? {}) as Record<string, unknown>;
-    const remConfig = (phaseConfigs.rem ?? {}) as Record<string, unknown>;
-    const selectedPluginConfig = {
-      ...pluginConfig,
-      dreaming: {
-        ...dreamingConfig,
-        phases: {
-          ...phaseConfigs,
-          light: {
-            ...lightConfig,
-            enabled: selectedPhase === "light" && lightConfig.enabled !== false,
-          },
-          rem: {
-            ...remConfig,
-            enabled: selectedPhase === "rem" && remConfig.enabled !== false,
+function createHarness(config: OpenClawConfig, workspaceDir: string) {
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const cfg = {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, workspace: workspaceDir, userTimezone: "UTC" },
+    },
+  };
+  const pluginConfig = resolveMemoryDreamingPluginConfig(cfg) ?? {};
+  const dreaming = (pluginConfig.dreaming ?? {}) as Record<string, unknown>;
+  const phases = (dreaming.phases ?? {}) as Record<string, unknown>;
+  const light = (phases.light ?? {}) as Record<string, unknown>;
+  const rem = (phases.rem ?? {}) as Record<string, unknown>;
+  const sweep = (phase: "light" | "rem" = "light") =>
+    runDreamingSweepPhases({
+      agentId: "main",
+      workspaceDir,
+      cfg,
+      logger,
+      pluginConfig: {
+        ...pluginConfig,
+        dreaming: {
+          ...dreaming,
+          phases: {
+            ...phases,
+            light: { ...light, enabled: phase === "light" && light.enabled !== false },
+            rem: { ...rem, enabled: phase === "rem" && rem.enabled !== false },
           },
         },
       },
-    };
-    await runDreamingSweepPhases({
-      agentId: "main",
-      workspaceDir: activeWorkspace,
-      pluginConfig: selectedPluginConfig,
-      cfg: resolvedConfig,
-      logger,
-      subagent,
-      detachNarratives: false,
     });
-    return { handled: true, reason: `memory-core: ${selectedPhase} dreaming processed` };
-  };
-  return { beforeAgentReply, logger };
+  return { sweep, logger };
 }
 
-function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  return {
-    complete: vi.fn(async (_params: { agentId: string; message: string; model?: string }) => ({
-      text: response,
-    })),
-  };
+function setTime(offsetMinutes = 0) {
+  vi.setSystemTime(new Date(BASE_TIME.getTime() + offsetMinutes * 60_000));
 }
 
-function firstNarrativeRun(subagent: ReturnType<typeof createMockNarrativeSubagent>) {
-  const firstRun = subagent.complete.mock.calls[0]?.[0];
-  if (!firstRun) {
-    throw new Error("expected narrative subagent run");
-  }
-  return firstRun;
-}
-
-function setDreamingTestTime(offsetMinutes = 0) {
-  vi.setSystemTime(new Date(DREAMING_TEST_BASE_TIME.getTime() + offsetMinutes * 60_000));
-}
-
-async function withDreamingTestClock(run: () => Promise<void>) {
+async function withClock(run: () => Promise<void>) {
   // Worker lifecycle deadlines share real monotonic time; only dreaming's wall clock is synthetic.
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
@@ -363,11 +203,7 @@ async function withDreamingTestClock(run: () => Promise<void>) {
 }
 
 async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<void> {
-  await fs.writeFile(
-    path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-    lines.join("\n"),
-    "utf-8",
-  );
+  await fs.writeFile(path.join(workspaceDir, "memory", `${DAY}.md`), lines.join("\n"), "utf-8");
 }
 
 function dailyCapStressLines(label: string): string[] {
@@ -377,17 +213,13 @@ function dailyCapStressLines(label: string): string[] {
   ]);
 }
 
-async function createDreamingWorkspace(): Promise<string> {
+async function createWorkspace(): Promise<string> {
   const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
   await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   return workspaceDir;
 }
 
-function createLightDreamingHarness(workspaceDir: string) {
-  return createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
-}
-
-function createDefaultStorageLightDreamingHarness(
+function createDailyHarness(
   workspaceDir: string,
   options: {
     includeMainAgent?: boolean;
@@ -398,82 +230,91 @@ function createDefaultStorageLightDreamingHarness(
 ) {
   return createHarness(
     {
-      ...(options.includeMainAgent
-        ? { agents: { list: [{ id: "main", workspace: workspaceDir }] } }
-        : {}),
-      ...(options.memorySearchEnabled === false ? { memory: { search: { enabled: false } } } : {}),
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: options.limit ?? 20,
-                    lookbackDays: options.lookbackDays ?? 7,
-                  },
-                },
-              },
-            },
+      ...dreamingConfig({
+        enabled: true,
+        phases: {
+          light: {
+            enabled: true,
+            limit: options.limit ?? 20,
+            lookbackDays: options.lookbackDays ?? 7,
           },
         },
-      },
+      }),
+      ...(options.includeMainAgent
+        ? { agents: { entries: { main: { workspace: workspaceDir } } } }
+        : {}),
+      ...(options.memorySearchEnabled === false ? { memory: { search: { enabled: false } } } : {}),
     },
     workspaceDir,
   );
 }
 
-function createNarrativeDreamingSweepConfig(workspaceDir: string): OpenClawConfig {
-  return {
-    ...LIGHT_DREAMING_TEST_CONFIG,
-    agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
-    plugins: {
-      entries: {
-        "memory-core": {
-          config: {
-            dreaming: {
-              enabled: true,
-              timezone: "UTC",
-              phases: {
-                light: { enabled: true, limit: 20, lookbackDays: 2 },
-                rem: { enabled: false, limit: 0, lookbackDays: 2 },
-              },
-            },
-          },
-        },
-      },
-    },
-  };
+async function sweepLight(sweep: ReturnType<typeof createHarness>["sweep"], offsetMinutes: number) {
+  setTime(offsetMinutes);
+  await sweep();
 }
 
-async function triggerLightDreaming(
-  beforeAgentReply: NonNullable<ReturnType<typeof createHarness>["beforeAgentReply"]>,
-  workspaceDir: string,
-  offsetMinutes: number,
-): Promise<void> {
-  setDreamingTestTime(offsetMinutes);
-  await beforeAgentReply(
-    { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-    { trigger: "heartbeat", workspaceDir },
-  );
+async function runLight(sweep: ReturnType<typeof createHarness>["sweep"], minute = 5) {
+  await withClock(async () => {
+    await sweepLight(sweep, minute);
+  });
 }
 
-async function readCandidateSnippets(workspaceDir: string, nowIso: string): Promise<string[]> {
-  const candidates = await rankShortTermPromotionCandidates({
+function rankCandidates(workspaceDir: string, nowMs: number) {
+  return rankShortTermPromotionCandidates({
     workspaceDir,
     minScore: 0,
     minRecallCount: 0,
     minUniqueQueries: 0,
-    nowMs: Date.parse(nowIso),
+    nowMs,
   });
+}
+
+async function readCandidateSnippets(workspaceDir: string, nowIso: string): Promise<string[]> {
+  const candidates = await rankCandidates(workspaceDir, Date.parse(nowIso));
   return candidates.map((candidate) => candidate.snippet);
+}
+
+async function seedRemRecallSources(
+  workspaceDir: string,
+  noteDay: string,
+  nowMs: number,
+  staleSnippet = "Documented Ollama provider setup.",
+): Promise<void> {
+  const livePath = `memory/${noteDay}.md`;
+  const liveSnippet = "Move backups to S3 Glacier.";
+  await fs.writeFile(path.join(workspaceDir, livePath), `${liveSnippet}\n`, "utf-8");
+  for (const source of [
+    { query: "live backup", path: livePath, line: 1, score: 0.91, snippet: liveSnippet },
+    {
+      query: "stale provider setup",
+      path: "memory/.dreams/session-corpus/2026-04-16.txt",
+      line: 2,
+      score: 0.88,
+      snippet: staleSnippet,
+    },
+  ]) {
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: source.query,
+      nowMs,
+      results: [
+        {
+          path: source.path,
+          startLine: source.line,
+          endLine: source.line,
+          score: source.score,
+          snippet: source.snippet,
+          source: "memory",
+        },
+      ],
+    });
+  }
 }
 
 describe("memory-core dreaming phases", () => {
   it("ranks a valid duplicate ahead of an invalid dreaming timestamp", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const now = new Date("2026-04-15T12:00:00.000Z");
     const snippet = "Use bounded retries for provider requests.";
     const sourcePath = "memory/.dreams/session-corpus/2026-04-14.txt";
@@ -508,35 +349,22 @@ describe("memory-core dreaming phases", () => {
         (await shortTermTesting.readRecallStore(workspaceDir, now.toISOString())).entries,
       ),
     ).toEqual(["invalid", "valid"]);
-    const { beforeAgentReply, logger } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "UTC",
-                  storage: { mode: "inline", separateReports: false },
-                  phases: {
-                    light: { enabled: true, limit: 1, lookbackDays: 3, dedupeSimilarity: 0.9 },
-                  },
-                },
-              },
-            },
-          },
+    const { sweep, logger } = createHarness(
+      dreamingConfig({
+        enabled: true,
+        timezone: "UTC",
+        storage: { mode: "inline", separateReports: false },
+        phases: {
+          light: { enabled: true, limit: 1, lookbackDays: 3, dedupeSimilarity: 0.9 },
         },
-      },
+      }),
       workspaceDir,
     );
 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(now);
     try {
-      await beforeAgentReply(
-        { cleanedBody: LIGHT_SLEEP_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir },
-      );
+      await sweep();
     } finally {
       vi.useRealTimers();
     }
@@ -549,58 +377,21 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(phaseSignals.entries)).toEqual(["valid"]);
   });
 
-  it("leaves a generic diary trace when completion is unavailable", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await writeDailyNote(workspaceDir, [
-      `# ${DREAMING_TEST_DAY}`,
-      "",
-      "- Move backups to S3 Glacier.",
-      "- Keep retention at 365 days.",
-    ]);
-    const testConfig = createNarrativeDreamingSweepConfig(workspaceDir);
-    const subagent = createMockNarrativeSubagent();
-    subagent.complete.mockRejectedValue(new RequestScopedSubagentRuntimeError());
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    await expect(
-      runDreamingSweepPhases({
-        agentId: "main",
-        workspaceDir,
-        cfg: testConfig,
-        pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
-        logger,
-        subagent,
-        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-      }),
-    ).resolves.toEqual({ degradedPhases: 1, pendingNarratives: 0 });
-
-    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
-    expect(dreams).not.toContain("Move backups to S3 Glacier.");
-    expect(logger.error).not.toHaveBeenCalled();
-    expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
-    expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
-  });
-
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
+    const workspaceDir = await createWorkspace();
+    await withClock(async () => {
       await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
+        `# ${DAY}`,
         "",
         "- Move backups to S3 Glacier.",
         "- Keep retention at 365 days.",
       ]);
 
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
       const candidateCounts: number[] = [];
       const candidateSnippets: string[][] = [];
       for (let run = 0; run < 3; run += 1) {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, run + 1);
+        await sweepLight(sweep, run + 1);
         candidateSnippets.push(
           await readCandidateSnippets(workspaceDir, `2026-04-05T10:0${run + 1}:00.000Z`),
         );
@@ -615,82 +406,56 @@ describe("memory-core dreaming phases", () => {
       }
 
       const dailyContent = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        path.join(workspaceDir, "memory", `${DAY}.md`),
         "utf-8",
       );
       expect(dailyContent).toContain("## Light Sleep");
       expect(dailyContent).toContain("- No notable updates.");
       expect(dailyContent.match(/^- Candidate:/gm) ?? []).toHaveLength(0);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
+      const dailyPath = path.join(workspaceDir, "memory", `${DAY}.md`);
+      await fs.appendFile(dailyPath, "\n## Ops\n- Rotate access keys.\n");
+      await sweepLight(sweep, 61);
+      expect(await fs.readFile(dailyPath, "utf-8")).toContain(
+        "- Candidate: Ops: Rotate access keys.",
+      );
     });
   });
 
-  it("does not restage unchanged light candidates in later cycles", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
+  it.each(["## Ops"])("does not ingest nested REM output before boundary %s", async (boundary) => {
+    const workspaceDir = await createWorkspace();
+    await withClock(async () => {
       await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
+        `# ${DAY}`,
+        "- Move backups to S3 Glacier.",
         "",
-        "- Added primary issue extraction for pain notifications.",
-        "- Updated signals cron notification style.",
+        "## REM Sleep",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "### Reflections",
+        "- Theme: `across` kept surfacing across 26 memories.",
+        "#### Unexpected nested heading",
+        "- Old generated dream text must not become a daily memory.",
+        "### Possible Lasting Truths",
+        "- Old generated lasting truth must not become a daily memory.",
+        boundary,
+        "### User follow-up",
+        "- Rotate access keys.",
       ]);
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
-
-      const firstCycle = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-        "utf-8",
+      const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
+      await sweepLight(sweep, 1);
+      const store = await shortTermTesting.readRecallStore(
+        workspaceDir,
+        "2026-04-05T10:01:00.000Z",
       );
-      expect(firstCycle).toContain(
-        "- Candidate: Added primary issue extraction for pain notifications.",
-      );
-      expect(firstCycle).toContain("- Candidate: Updated signals cron notification style.");
-
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 61);
-
-      const secondCycle = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-        "utf-8",
-      );
-      expect(secondCycle).toContain("- No notable updates.");
-      expect(secondCycle).not.toContain("- Candidate: Added primary issue extraction");
-      expect(secondCycle).not.toContain("- Candidate: Updated signals cron notification style.");
-    });
-  });
-
-  it("restages same-day light candidates after daily note content changes", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Added primary issue extraction for pain notifications.",
-        "- Updated signals cron notification style.",
+      expect(Object.values(store.entries).map((entry) => entry.snippet)).toEqual([
+        "Move backups to S3 Glacier.",
+        "User follow-up: Rotate access keys.",
       ]);
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
-
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Added primary issue extraction for pain notifications.",
-        "- Updated signals cron notification style.",
-        "- Documented the shared pain notification issue.",
-      ]);
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 61);
-
-      const secondCycle = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-        "utf-8",
-      );
-      expect(secondCycle).toContain("- Candidate: Documented the shared pain notification issue.");
     });
   });
 
   it("prefers a fresh light snippet outside the top diary-covered candidates", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const stalePath = path.join(workspaceDir, "memory", "2026-04-03.md");
     const freshPath = path.join(workspaceDir, "memory", "2026-04-04.md");
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
@@ -706,18 +471,21 @@ describe("memory-core dreaming phases", () => {
       "Later routing notes: queue hydration changed after plugin reload.\n",
       "utf-8",
     );
-    for (const [index, snippet] of staleSnippets.entries()) {
-      for (let recall = 0; recall < staleSnippets.length - index; recall += 1) {
+    const freshSnippet = "Later routing notes: queue hydration changed after plugin reload.";
+    for (const [index, snippet] of [...staleSnippets, freshSnippet].entries()) {
+      const fresh = index === staleSnippets.length;
+      const line = fresh ? 1 : index + 1;
+      for (let recall = 0; recall < (fresh ? 1 : staleSnippets.length - index); recall += 1) {
         await recordShortTermRecalls({
           workspaceDir,
-          query: `first-day-${index}-${recall}`,
           nowMs,
+          query: `diary-${index}-${recall}`,
           results: [
             {
-              path: "memory/2026-04-03.md",
-              startLine: index + 1,
-              endLine: index + 1,
-              score: 0.93,
+              path: `memory/${fresh ? "2026-04-04" : "2026-04-03"}.md`,
+              startLine: line,
+              endLine: line,
+              score: fresh ? 0.91 : 0.93,
               snippet,
               source: "memory",
             },
@@ -725,21 +493,6 @@ describe("memory-core dreaming phases", () => {
         });
       }
     }
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "routing queue reload",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-04.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Later routing notes: queue hydration changed after plugin reload.",
-          source: "memory",
-        },
-      ],
-    });
     await fs.writeFile(
       path.join(workspaceDir, "DREAMS.md"),
       [
@@ -759,308 +512,35 @@ describe("memory-core dreaming phases", () => {
       ].join("\n"),
       "utf-8",
     );
-    const subagent = createMockNarrativeSubagent("A later routing note finally took the page.");
-    const testConfig: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          userTimezone: "UTC",
+    let prepared: Awaited<ReturnType<typeof runDreamingSweepPhases>> | undefined;
+    const { sweep } = createHarness(
+      dreamingConfig({
+        enabled: true,
+        timezone: "UTC",
+        model: "anthropic/claude-sonnet-4-6",
+        storage: { mode: "inline", separateReports: false },
+        phases: {
+          light: { enabled: true, limit: 1, lookbackDays: 7 },
+          rem: { enabled: false, limit: 0, lookbackDays: 7 },
         },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                timezone: "UTC",
-                storage: { mode: "inline", separateReports: false },
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 1,
-                    lookbackDays: 7,
-                  },
-                  rem: {
-                    enabled: false,
-                    limit: 0,
-                    lookbackDays: 7,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    await runDreamingSweepPhases({
-      agentId: "main",
+      }),
       workspaceDir,
-      cfg: testConfig,
-      pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
-      logger,
-      subagent,
-      nowMs,
-    });
-
-    const message = firstNarrativeRun(subagent).message;
-    expect(message).toContain("Later routing notes: queue hydration changed after plugin reload.");
-    expect(message).toContain("Recent diary entries already written");
-    expect(message).not.toContain("\n- 初次见面时，我第一次醒来并认识了主人。");
-  });
-
-  it("triggers light dreaming when the token is embedded in a reminder body", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Move backups to S3 Glacier.",
-        "- Keep retention at 365 days.",
-      ]);
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      setDreamingTestTime(1);
-      await beforeAgentReply(
-        {
-          cleanedBody: [
-            "System: rotate logs",
-            "System: __openclaw_memory_core_light_sleep__",
-            "",
-            "A scheduled reminder has been triggered. The reminder content is:",
-            "",
-            "rotate logs",
-            "__openclaw_memory_core_light_sleep__",
-            "",
-            "Handle this reminder internally. Do not relay it to the user unless explicitly requested.",
-          ].join("\n"),
-        },
-        { trigger: "heartbeat", workspaceDir },
-      );
-
-      const dailyContent = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-        "utf-8",
-      );
-      expect(dailyContent).toContain("## Light Sleep");
-      expect(dailyContent).toContain("Move backups to S3 Glacier.");
-    });
-  });
-
-  it("stops stripping a malformed managed block at the next section boundary", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Move backups to S3 Glacier.",
-        "",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: Old staged summary.",
-        "",
-        "## Ops",
-        "- Rotate access keys.",
-        "",
-        "## Light Sleep",
-        "<!-- openclaw:dreaming:light:start -->",
-        "- Candidate: Fresh staged summary.",
-        "<!-- openclaw:dreaming:light:end -->",
-      ]);
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
-
-      expect(await readCandidateSnippets(workspaceDir, "2026-04-05T10:01:00.000Z")).toContain(
-        "Ops: Rotate access keys.",
-      );
-    });
-  });
-
-  it("checkpoints daily ingestion without recounting unchanged daily files", async () => {
-    await withDreamingTestClock(async () => {
-      setDreamingTestTime();
-      const workspaceDir = await createDreamingWorkspace();
-      await writeDailyNote(workspaceDir, ["# Backups", "", "- Move backups to S3 Glacier."]);
-      const { beforeAgentReply } = createHarness(
-        {
-          plugins: {
-            entries: {
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: true,
-                    timezone: "UTC",
-                    storage: { mode: "separate", separateReports: false },
-                    phases: { light: { enabled: true, limit: 20, lookbackDays: 2 } },
-                  },
-                },
-              },
-            },
-          },
-        },
-        workspaceDir,
-      );
-
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 0);
-      const first = await shortTermTesting.readRecallStore(
-        workspaceDir,
-        DREAMING_TEST_BASE_TIME.toISOString(),
-      );
-      expect(Object.values(first.entries)).toEqual([
-        expect.objectContaining({ dailyCount: 1, snippet: expect.stringContaining("S3 Glacier") }),
-      ]);
-      const checkpoint = await dreamingTestState.readDailyIngestionState(workspaceDir);
-      expect(Object.keys(checkpoint.files)).toEqual([`memory/${DREAMING_TEST_DAY}.md`]);
-
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
-      const repeated = await shortTermTesting.readRecallStore(
-        workspaceDir,
-        new Date(DREAMING_TEST_BASE_TIME.getTime() + 60_000).toISOString(),
-      );
-      expect(Object.values(repeated.entries)).toEqual([
-        expect.objectContaining({ dailyCount: 1, snippet: expect.stringContaining("S3 Glacier") }),
-      ]);
-      expect(await dreamingTestState.readDailyIngestionState(workspaceDir)).toEqual(checkpoint);
-    });
-  });
-
-  it("ingests recent daily memory files even before recall traffic exists", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      ["# 2026-04-05", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
-        "\n",
-      ),
-      "utf-8",
     );
-
-    const before = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
-    });
-    expect(before).toHaveLength(0);
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      lookbackDays: 2,
+    await withClock(async () => {
+      vi.setSystemTime(nowMs);
+      prepared = await sweep();
     });
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after).toHaveLength(2);
-    expect(after.every((candidate) => (candidate.dailyCount ?? 0) > 0)).toBe(true);
-    expect(after.map((candidate) => [candidate.startLine, candidate.endLine])).toEqual(
-      expect.arrayContaining([
-        [3, 3],
-        [4, 4],
-      ]),
+    const data = expectDefined(prepared?.narratives[0]?.data, "prepared light narrative");
+    expect(data.snippets).toContain(
+      "Later routing notes: queue hydration changed after plugin reload.",
     );
-    expect(after.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining(["Move backups to S3 Glacier.", "Keep retention at 365 days."]),
-    );
-  });
-
-  it("ingests slugged daily memory files (YYYY-MM-DD-slug.md) alongside date-only files (#69536)", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05-vendor-pitch.md"),
-      [
-        "# 2026-04-05 vendor pitch",
-        "",
-        "- Vendor pitch: prefer the multi-year SLA.",
-        "- Quoted price assumes annual prepay.",
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05-api-notes.md"),
-      ["# 2026-04-05 api notes", "", "- API notes: keep the webhook contract stable."].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      lookbackDays: 2,
-    });
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after).toHaveLength(3);
-    expect(after.map((entry) => entry.path)).toEqual(
-      expect.arrayContaining([
-        "memory/2026-04-05-api-notes.md",
-        "memory/2026-04-05-vendor-pitch.md",
-      ]),
-    );
-    expect(after.every((entry) => (entry.dailyCount ?? 0) > 0)).toBe(true);
-    expect(
-      after.some((entry) => entry.snippet.includes("Vendor pitch: prefer the multi-year SLA.")),
-    ).toBe(true);
-  });
-
-  it("prioritizes the date-only daily file before same-day slugged files when ingestion is capped", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      dailyCapStressLines("Canonical daily note").join("\n"),
-      "utf-8",
-    );
-    for (const slug of ["alpha", "beta", "gamma", "delta"]) {
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", `2026-04-05-${slug}.md`),
-        dailyCapStressLines(`Slugged ${slug}`).join("\n"),
-        "utf-8",
-      );
-    }
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      limit: 1,
-      lookbackDays: 2,
-    });
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
-    expect(after.some((entry) => entry.snippet.includes("Canonical daily note"))).toBe(true);
+    expect(data.recentDiaryEntries).toEqual(staleSnippets.toReversed());
+    expect(data.snippets).not.toContain("初次见面时，我第一次醒来并认识了主人。");
   });
 
   it("retains current unvisited daily checkpoints and prunes notes outside lookback", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const files = [
       "2026-04-05.md",
       "2026-04-05-alpha.md",
@@ -1082,17 +562,17 @@ describe("memory-core dreaming phases", () => {
       "- Historical kiln inspection records belong in the blue archive.\n",
       "utf-8",
     );
-    const initialHarness = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const initialHarness = createDailyHarness(workspaceDir, {
       limit: 1,
       lookbackDays: 30,
     });
-    const narrowedHarness = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const narrowedHarness = createDailyHarness(workspaceDir, {
       limit: 1,
       lookbackDays: 2,
     });
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(initialHarness.beforeAgentReply, workspaceDir, 0);
+    await withClock(async () => {
+      await sweepLight(initialHarness.sweep, 0);
       const initial = await dreamingTestState.readDailyIngestionState(workspaceDir);
       expect(initial.files[oldRelativePath]).toBeDefined();
       expect(initial.files[gammaRelativePath]).toBeDefined();
@@ -1105,15 +585,15 @@ describe("memory-core dreaming phases", () => {
         );
       }
 
-      await triggerLightDreaming(narrowedHarness.beforeAgentReply, workspaceDir, 1);
+      await sweepLight(narrowedHarness.sweep, 1);
       const capped = await dreamingTestState.readDailyIngestionState(workspaceDir);
       expect(capped.files[oldRelativePath]).toBeUndefined();
       expect(capped.files[gammaRelativePath]).toEqual(initial.files[gammaRelativePath]);
 
-      await triggerLightDreaming(narrowedHarness.beforeAgentReply, workspaceDir, 2);
+      await sweepLight(narrowedHarness.sweep, 2);
       const recalls = await shortTermTesting.readRecallStore(
         workspaceDir,
-        new Date(DREAMING_TEST_BASE_TIME.getTime() + 2 * 60_000).toISOString(),
+        new Date(BASE_TIME.getTime() + 2 * 60_000).toISOString(),
       );
       expect(
         Object.values(recalls.entries).find((entry) => entry.path === gammaRelativePath),
@@ -1129,7 +609,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("drops a daily checkpoint when its file disappears before stat", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const removedRelativePath = "memory/2026-04-05-alpha.md";
     const keptRelativePath = "memory/2026-04-05-beta.md";
     const removedPath = path.join(workspaceDir, removedRelativePath);
@@ -1139,13 +619,13 @@ describe("memory-core dreaming phases", () => {
       "- Beta workshop stores the copper gauge in cabinet seven.\n",
       "utf-8",
     );
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const { sweep } = createDailyHarness(workspaceDir, {
       limit: 1,
       lookbackDays: 2,
     });
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 0);
+    await withClock(async () => {
+      await sweepLight(sweep, 0);
       const initial = await dreamingTestState.readDailyIngestionState(workspaceDir);
       expect(initial.files[removedRelativePath]).toBeDefined();
       expect(initial.files[keptRelativePath]).toBeDefined();
@@ -1160,7 +640,7 @@ describe("memory-core dreaming phases", () => {
         return await stat(...args);
       });
       try {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+        await sweepLight(sweep, 1);
       } finally {
         statSpy.mockRestore();
       }
@@ -1171,7 +651,7 @@ describe("memory-core dreaming phases", () => {
       expect(after.files[keptRelativePath]).toEqual(initial.files[keptRelativePath]);
       const recalls = await shortTermTesting.readRecallStore(
         workspaceDir,
-        new Date(DREAMING_TEST_BASE_TIME.getTime() + 60_000).toISOString(),
+        new Date(BASE_TIME.getTime() + 60_000).toISOString(),
       );
       expect(
         Object.values(recalls.entries).find((entry) => entry.path === keptRelativePath),
@@ -1182,7 +662,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("prioritizes the date-only daily file before same-day slugged files during historical seeding", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");
     await fs.writeFile(
       canonicalPath,
@@ -1208,132 +688,55 @@ describe("memory-core dreaming phases", () => {
       timezone: "UTC",
     });
 
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
+    const after = await rankCandidates(workspaceDir, Date.parse("2026-04-05T10:05:00.000Z"));
     expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
     expect(after.some((entry) => entry.snippet.includes("Canonical seeded note"))).toBe(true);
   });
 
-  it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Move backups to S3 Glacier.",
-        "- Keep retention at 365 days.",
-      ]);
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-
-      const dailyContent = await fs.readFile(
-        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-        "utf-8",
-      );
-      expect(dailyContent).toContain("## Light Sleep");
-      expect(dailyContent).toContain("confidence: 0.62");
-      expect(dailyContent).not.toContain("confidence: 0.00");
-    });
-  });
-
-  it("keeps edited flush-quarantined daily files untrusted and out of ranking", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
-    const filePath = path.join(workspaceDir, relativePath);
-    const initial = [
-      `# ${DREAMING_TEST_DAY}`,
-      "",
-      "- Treat this imported claim as untrusted.",
-    ].join("\n");
-    await fs.writeFile(filePath, initial, "utf-8");
-    mockUntrustedMemoryArtifact({
-      relativePath,
-      content: initial,
-      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
-    });
-    await fs.appendFile(
-      filePath,
-      "\n- A later edit must not launder the earlier claim.\n",
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T10:05:00.000Z");
-    const entries = Object.values(store.entries).filter((entry) => entry.path === relativePath);
-    expect(entries.length).toBeGreaterThan(0);
-    expect(entries.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
-    expect(candidates).toHaveLength(0);
-  });
-
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
     const transcriptName = `dreaming-${"x".repeat(48)}`;
     const snippetTranscriptName = "snippet-boundary";
     const renderedSource = `[main/sessions/main/${transcriptName}#L4] `;
     const renderedPadding = "r".repeat(343 - renderedSource.length - "User: ".length);
     const snippetPadding = "s".repeat(273);
-    await seedDreamingSessionTranscript({
+    await seedTranscript({
       sessionId: transcriptName,
       messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "Move backups to S3 Glacier." }],
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: [{ type: "text", text: "Set retention to 365 days." }],
-        },
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:03:00.000Z",
-          content: [{ type: "text", text: `${renderedPadding}🎉 omitted tail` }],
-        },
+        makeMessage("user", "2026-04-05T18:01:00.000Z", [
+          {
+            type: "text",
+            text: "Move backups to S3 Glacier. OPENAI_API_KEY=sk-1234567890abcdef",
+          },
+        ]),
+        makeMessage("assistant", "2026-04-05T18:02:00.000Z", [
+          { type: "text", text: "Set retention to 365 days." },
+        ]),
+        makeMessage("user", "2026-04-05T18:03:00.000Z", [
+          { type: "text", text: `${renderedPadding}🎉 omitted tail` },
+        ]),
       ],
     });
-    await seedDreamingSessionTranscript({
+    await seedTranscript({
       sessionId: snippetTranscriptName,
       messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:04:00.000Z",
-          content: [{ type: "text", text: `${snippetPadding}🌍 omitted tail` }],
-        },
+        makeMessage("user", "2026-04-05T18:04:00.000Z", [
+          { type: "text", text: `${snippetPadding}🌍 omitted tail` },
+        ]),
       ],
     });
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const { sweep } = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
+      memorySearchEnabled: false,
     });
 
     let firstSessionIngestion;
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-        firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
+    await withClock(async () => {
+      await sweepLight(sweep, 5);
+      firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
+      await sweepLight(sweep, 6);
+    });
 
     const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(firstSessionIngestion).toStrictEqual(sessionIngestion);
@@ -1341,15 +744,11 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(sessionIngestion.seenMessages)).toContain(
       `main:sessions/main/${transcriptName}`,
     );
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
-    );
-    const corpus = await fs.readFile(corpusPath, "utf-8");
+    const corpusFile = corpusPath(workspaceDir);
+    const corpus = await fs.readFile(corpusFile, "utf-8");
     expect(corpus).toContain("Move backups to S3 Glacier.");
+    expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
+    expect(corpus).toContain("OPENAI_API_KEY=***");
     expect(corpus).toContain("Set retention to 365 days.");
     expect(corpus).toContain(`${renderedSource}User: ${renderedPadding}\n`);
     expect(corpus).toContain(
@@ -1358,8 +757,7 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("🎉");
     expect(corpus).not.toContain("🌍");
 
-    // These messages have no owner marker, so ingestion keeps them untrusted.
-    // Check stored recall content independently of promotion eligibility.
+    // Unmarked messages remain untrusted even though they enter the recall store.
     const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T19:00:00.000Z");
     const recalled = Object.values(store.entries).filter((entry) =>
       entry.path.includes("session-corpus"),
@@ -1374,45 +772,31 @@ describe("memory-core dreaming phases", () => {
       });
     }
     const snippets = recalled.map((entry) => entry.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
-    });
+    expect(snippets.join("\n")).toContain("Move backups to S3 Glacier.");
+    expect(snippets.join("\n")).toContain("Set retention to 365 days.");
+    const ranked = await rankCandidates(workspaceDir, Date.parse("2026-04-05T19:00:00.000Z"));
     expect(ranked).toHaveLength(0);
   });
 
   it("records policy exclusions and keeps forgotten sessions excluded after policy removal and resweeps", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
+    await seedTranscript({
       sessionId: "gmail-session",
       hookExternalContentSource: "gmail",
       messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: "Never retain this imported Gmail claim.",
-        },
+        makeMessage("user", "2026-04-05T18:01:00.000Z", "Never retain this imported Gmail claim."),
       ],
     });
-    await seedDreamingSessionTranscript({
+    await seedTranscript({
       sessionId: "trusted-session",
       messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: "Keep this trusted interactive claim.",
-        },
+        makeMessage("user", "2026-04-05T18:02:00.000Z", "Keep this trusted interactive claim."),
       ],
     });
 
     const excludedConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+      agents: { entries: { main: { workspace: workspaceDir } } },
       plugins: {
         entries: {
           "memory-core": {
@@ -1428,93 +812,77 @@ describe("memory-core dreaming phases", () => {
       },
     };
     const excludedHarness = createHarness(excludedConfig, workspaceDir);
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
+    const corpusFile = corpusPath(workspaceDir);
+
+    await withSessionAdmissionReadBudget(() => runLight(excludedHarness.sweep), 1);
+    const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
+      contentHash: "",
+      lineCount: 0,
+      excludedReason: "hookExternalContentSource:gmail",
+    });
+    expect(excludedState.seenMessages).not.toHaveProperty("main:sessions/main/gmail-session");
+    expect(await fs.readFile(corpusFile, "utf-8")).toContain(
+      "Keep this trusted interactive claim.",
+    );
+    expect(await fs.readFile(corpusFile, "utf-8")).not.toContain(
+      "Never retain this imported Gmail claim.",
     );
 
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(excludedHarness.beforeAgentReply, workspaceDir, 5);
-      });
-      const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
-        contentHash: "",
-        lineCount: 0,
-        excludedReason: "hookExternalContentSource:gmail",
-      });
-      expect(excludedState.seenMessages).not.toHaveProperty("main:sessions/main/gmail-session");
-      expect(await fs.readFile(corpusPath, "utf-8")).toContain(
-        "Keep this trusted interactive claim.",
-      );
-      expect(await fs.readFile(corpusPath, "utf-8")).not.toContain(
-        "Never retain this imported Gmail claim.",
-      );
+    const admittedHarness = createDailyHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
+    await withSessionAdmissionReadBudget(() => runLight(admittedHarness.sweep, 6), 0);
+    const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
+      "excludedReason",
+    );
+    expect(await fs.readFile(corpusFile, "utf-8")).toContain(
+      "Never retain this imported Gmail claim.",
+    );
 
-      const admittedHarness = createDefaultStorageLightDreamingHarness(workspaceDir, {
-        includeMainAgent: true,
-      });
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(admittedHarness.beforeAgentReply, workspaceDir, 6);
-      });
-      const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
-        "excludedReason",
-      );
-      expect(await fs.readFile(corpusPath, "utf-8")).toContain(
-        "Never retain this imported Gmail claim.",
-      );
-
-      await forgetMemoryEntries({
-        cfg: excludedConfig,
-        agentId: "main",
-        sessionIds: ["gmail-session"],
-      });
-      expect(await fs.readFile(corpusPath, "utf-8")).not.toContain(
-        "Never retain this imported Gmail claim.",
-      );
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(admittedHarness.beforeAgentReply, workspaceDir, 7);
-      });
-      const forgottenState = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(forgottenState.files["main:sessions/main/gmail-session"]).toMatchObject({
-        contentHash: "",
-        lineCount: 0,
-        excludedReason: "forgotten",
-      });
-      expect(forgottenState.seenMessages).not.toHaveProperty("main:sessions/main/gmail-session");
-      expect(await fs.readFile(corpusPath, "utf-8")).not.toContain(
-        "Never retain this imported Gmail claim.",
-      );
-      expect(await fs.readFile(corpusPath, "utf-8")).toContain(
-        "Keep this trusted interactive claim.",
-      );
-    } finally {
-      restoreDreamingTestEnv();
-    }
+    await forgetMemoryEntries({
+      cfg: excludedConfig,
+      agentId: "main",
+      sessionIds: ["gmail-session"],
+    });
+    expect(await fs.readFile(corpusFile, "utf-8")).not.toContain(
+      "Never retain this imported Gmail claim.",
+    );
+    await runLight(admittedHarness.sweep, 7);
+    const forgottenState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(forgottenState.files["main:sessions/main/gmail-session"]).toMatchObject({
+      contentHash: "",
+      lineCount: 0,
+      excludedReason: "forgotten",
+    });
+    expect(forgottenState.seenMessages).not.toHaveProperty("main:sessions/main/gmail-session");
+    expect(await fs.readFile(corpusFile, "utf-8")).not.toContain(
+      "Never retain this imported Gmail claim.",
+    );
+    expect(await fs.readFile(corpusFile, "utf-8")).toContain(
+      "Keep this trusted interactive claim.",
+    );
   });
 
   it.each(["light", "rem"] as const)(
     "does not restore forgotten session quotes when %s publication is already prepared",
     async (phase) => {
-      const workspaceDir = await createDreamingWorkspace();
-      setDreamingTestEnv(path.join(workspaceDir, ".state"));
+      const workspaceDir = await createWorkspace();
+      setStateDir(path.join(workspaceDir, ".state"));
       const sessionId = "phase-publication";
       const claim = "Keep the cobalt archive phrase only until deletion.";
       const nowMs = Date.parse("2026-04-05T19:00:00.000Z");
-      await seedDreamingSessionTranscript({
+      await seedTranscript({
         sessionId,
         messages: [{ role: "user", content: claim, timestamp: nowMs, owner: true }],
       });
       const results = await appendSessionCorpusLines({
         workspaceDir,
-        day: DREAMING_TEST_DAY,
+        day: DAY,
         lines: [
           {
-            day: DREAMING_TEST_DAY,
+            day: DAY,
             snippet: `User: ${claim}`,
             rendered: `[main/sessions/main/${sessionId}#L2] User: ${claim}`,
             provenance: { originClass: "owner", sessionKind: "interactive", observedAt: nowMs },
@@ -1529,28 +897,20 @@ describe("memory-core dreaming phases", () => {
         `User: ${claim}`,
       );
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "UTC",
-                  storage: { mode: "both", separateReports: true },
-                  phases: {
-                    light: { enabled: phase === "light", limit: 20, lookbackDays: 7 },
-                    rem: { enabled: phase === "rem", limit: 20, lookbackDays: 7 },
-                  },
-                },
-              },
-            },
+        ...dreamingConfig({
+          enabled: true,
+          timezone: "UTC",
+          storage: { mode: "both", separateReports: true },
+          phases: {
+            light: { enabled: phase === "light", limit: 20, lookbackDays: 7 },
+            rem: { enabled: phase === "rem", limit: 20, lookbackDays: 7 },
           },
-        },
+        }),
+        agents: { entries: { main: { workspace: workspaceDir } } },
       };
       const prepared = createDeferred<string>();
       const publish = createDeferred<void>();
-      const dailyPath = path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`);
+      const dailyPath = path.join(workspaceDir, "memory", `${DAY}.md`);
       const originalRename = fs.rename;
       let paused = false;
       const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
@@ -1578,21 +938,12 @@ describe("memory-core dreaming phases", () => {
           }),
         ]);
         expect(pendingContent).toContain(claim);
-        const publisherOwnsLock = await openMemoryCoreStateStore({
-          namespace: SHORT_TERM_LOCK_NAMESPACE,
-          maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-        }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
         forgotten = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
-        // Finish deletion before a writer without a lease resumes. A serialized
-        // writer must finish first; this exercises both orders without sleeps.
-        if (!publisherOwnsLock) {
-          await forgotten;
-        }
         publish.resolve();
         await Promise.all([sweep, forgotten]);
         for (const file of [
           dailyPath,
-          path.join(workspaceDir, "memory", "dreaming", phase, `${DREAMING_TEST_DAY}.md`),
+          path.join(workspaceDir, "memory", "dreaming", phase, `${DAY}.md`),
         ]) {
           expect(await fs.readFile(file, "utf8")).not.toContain(claim);
         }
@@ -1607,334 +958,17 @@ describe("memory-core dreaming phases", () => {
     },
   );
 
-  it("redacts sensitive session content before writing session corpus", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-main",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "OPENAI_API_KEY=sk-1234567890abcdef" }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
-    );
-    const corpus = await fs.readFile(corpusPath, "utf-8");
-    expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
-    expect(corpus).toContain("OPENAI_API_KEY=***");
-  });
-
-  it("skips dreaming-generated narrative transcripts during session ingestion", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-narrative",
-      sessionKey: "agent:main:dreaming-narrative-light-1775894400455",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [
-            { type: "text", text: "Write a dream diary entry from these memory fragments." },
-          ],
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: [{ type: "text", text: "I drift through the same archive again." }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
-
-    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
-  });
-
-  it("skips isolated cron run transcripts during session ingestion", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "cron-run",
-      sessionKey: "agent:main:cron:job-1:run:run-1",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content:
-            "[cron:job-1 Codex Sessions Sync] Run Codex sessions sync: 1. Convert sessions 2. Update index",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: "Running Codex sessions sync...",
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
-
-    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
-  });
-
-  it("skips subagent transcripts during session ingestion", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "subagent-run",
-      sessionKey: "agent:main:subagent:child-1",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: "Research the external report.",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: "The report claims a new preference.",
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
-    try {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
-    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
-  });
-
-  it("drops generated system wrapper text without suppressing paired assistant replies", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "ordinary-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-16T18:01:00.000Z",
-          content:
-            "System: [2026-04-16 11:01:00 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-16T18:01:30.000Z",
-          content: "Handled internally.",
-        },
-        {
-          role: "user",
-          timestamp: "2026-04-16T18:02:00.000Z",
-          content: "What changed in the sync?",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-16T18:03:00.000Z",
-          content: "One new session was converted.",
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      vi.useRealTimers();
-      restoreDreamingTestEnv();
-    }
-
-    const corpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
-      "utf-8",
-    );
-    expect(corpus).toContain("User: What changed in the sync?");
-    expect(corpus).toContain("Assistant: One new session was converted.");
-    expect(corpus).not.toContain("System: [2026-04-16 11:01:00 PDT]");
-    expect(corpus).toContain("Assistant: Handled internally.");
-  });
-
-  it("drops archive, cron, and heartbeat chatter from fresh session corpus output", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    await fs.writeFile(
-      path.join(sessionsDir, "archived.jsonl.deleted.2026-04-16T18-06-16.529Z"),
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-16T18:01:00.000Z",
-            content: "[cron:job-1 Example] Run the nightly sync",
-          },
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-16T18:02:00.000Z",
-            content: "Running the nightly sync now.",
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          timestamp: "2026-04-16T18:03:00.000Z",
-          content: "Checkpoint chatter should stay out.",
-        },
-      }) + "\n",
-      "utf-8",
-    );
-    await seedDreamingSessionTranscript({
-      sessionId: "ordinary",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-16T18:04:00.000Z",
-          content:
-            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-16T18:05:00.000Z",
-          content: "HEARTBEAT_OK",
-        },
-        {
-          role: "user",
-          timestamp: "2026-04-16T18:06:00.000Z",
-          content: "[cron:job-2 Example] Run the memory sync",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-16T18:07:00.000Z",
-          content: "Running the memory sync now.",
-        },
-        {
-          role: "user",
-          timestamp: "2026-04-16T18:08:00.000Z",
-          content: "Document the Ollama provider setup.",
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-16T18:09:00.000Z",
-          content: "I documented the Ollama provider setup in the workspace notes.",
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      vi.useRealTimers();
-      restoreDreamingTestEnv();
-    }
-
-    const corpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
-      "utf-8",
-    );
-    expect(corpus).toContain("User: Document the Ollama provider setup.");
-    expect(corpus).toContain(
-      "Assistant: I documented the Ollama provider setup in the workspace notes.",
-    );
-    expect(corpus).not.toContain("Run the nightly sync");
-    expect(corpus).not.toContain("Checkpoint chatter should stay out.");
-    expect(corpus).not.toContain("Read HEARTBEAT.md");
-    expect(corpus).not.toContain("HEARTBEAT_OK");
-    expect(corpus).not.toContain("Run the memory sync");
-  });
-
-  it.each([
-    ["assistant", "the"],
-    ["1.00", "51-54"],
-    ["１.００", "５１-５４"],
-    ["2026-04-16", "2026-04-16.txt"],
-  ])("normalizes stored concept tags and rejects %s / %s in rem reflections", (...noise) => {
+  it("normalizes and deduplicates stored concept tags before REM reflections", () => {
+    const noise = [
+      "assistant",
+      "the",
+      "1.00",
+      "51-54",
+      "１.００",
+      "５１-５４",
+      "2026-04-16",
+      "2026-04-16.txt",
+    ];
     const preview = previewRemDreaming({
       entries: [
         {
@@ -1967,195 +1001,26 @@ describe("memory-core dreaming phases", () => {
     );
   });
 
-  it("does not reread unchanged dreaming-generated transcripts after checkpointing skip state", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-narrative",
-      sessionKey: "agent:main:dreaming-narrative-light-1775894400455",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [
-            { type: "text", text: "Write a dream diary entry from these memory fragments." },
-          ],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      includeMainAgent: true,
-    });
-
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-      const firstSessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-      const secondSessionIngestion =
-        await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(secondSessionIngestion).toStrictEqual(firstSessionIngestion);
-    } finally {
-      restoreDreamingTestEnv();
-    }
-  });
-
-  it("dedupes reset/deleted session archives instead of double-ingesting", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const oldMessage = "Move backups to S3 Glacier.";
-    const oldArchiveContent =
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-05T18:01:00.000Z",
-            content: [{ type: "text", text: oldMessage }],
-          },
-        }),
-      ].join("\n") + "\n";
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-main",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: oldMessage }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-
-      const resetPath = path.join(
-        sessionsDir,
-        "dreaming-main.jsonl.reset.2026-04-06T01-00-00.000Z",
-      );
-      await fs.writeFile(resetPath, oldArchiveContent, "utf-8");
-      const newMessage = "Keep retention at 365 days.";
-      await seedDreamingSessionTranscript({
-        sessionId: "dreaming-main",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-06T01:02:00.000Z",
-            content: [{ type: "text", text: newMessage }],
-          },
-        ],
-      });
-      const dayTwo = new Date("2026-04-06T01:05:00.000Z");
-      await fs.utimes(resetPath, dayTwo, dayTwo);
-
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 910);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
-      name.endsWith(".txt"),
-    );
-    let combinedCorpus = "";
-    for (const fileName of corpusFiles) {
-      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
-    }
-    const oldOccurrences = combinedCorpus.match(/Move backups to S3 Glacier\./g)?.length ?? 0;
-    const newOccurrences = combinedCorpus.match(/Keep retention at 365 days\./g)?.length ?? 0;
-    expect(oldOccurrences).toBe(1);
-    expect(newOccurrences).toBe(1);
-  });
-
-  it("skips reset/deleted archive artifacts without active transcripts during session ingestion", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const archivePath = path.join(
-      sessionsDir,
-      "archived-only.jsonl.deleted.2026-04-06T01-00-00.000Z",
-    );
-    await fs.writeFile(
-      archivePath,
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-05T18:01:00.000Z",
-            content: [{ type: "text", text: "Archived session should not be dreamed." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-    const mtime = new Date("2026-04-06T01:05:00.000Z");
-    await fs.utimes(archivePath, mtime, mtime);
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
-
-    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
-  });
-
   it("buckets session snippets by per-message day rather than file mtime", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
+    await seedTranscript({
       sessionId: "dreaming-main",
       messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-01T12:00:00.000Z",
-          content: [{ type: "text", text: "Old planning note that should stay out of lookback." }],
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: [{ type: "text", text: "Current reminder that should be in today corpus." }],
-        },
+        makeMessage("user", "2026-04-01T12:00:00.000Z", [
+          { type: "text", text: "Old planning note that should stay out of lookback." },
+        ]),
+        makeMessage("assistant", "2026-04-05T18:02:00.000Z", [
+          { type: "text", text: "Current reminder that should be in today corpus." },
+        ]),
       ],
     });
 
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const { sweep } = createDailyHarness(workspaceDir, {
       lookbackDays: 2,
     });
 
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
+    await runLight(sweep);
 
     const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     const corpusFiles = (await fs.readdir(corpusDir))
@@ -2168,9 +1033,9 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("drains >80 unseen transcript messages across multiple unchanged sweeps", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
+    await seedTranscript({
       sessionId: "dreaming-main",
       messages: Array.from({ length: 160 }, (_, index) => ({
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
@@ -2179,26 +1044,16 @@ describe("memory-core dreaming phases", () => {
       })),
     });
 
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
+    const { sweep } = createDailyHarness(workspaceDir);
 
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 7);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
+    await withClock(async () => {
+      await sweepLight(sweep, 5);
+      await sweepLight(sweep, 6);
+      await sweepLight(sweep, 7);
+    });
 
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
-    );
-    const corpus = await fs.readFile(corpusPath, "utf-8");
+    const corpusFile = corpusPath(workspaceDir);
+    const corpus = await fs.readFile(corpusFile, "utf-8");
     const persistedLines = corpus
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -2209,14 +1064,14 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("preserves checkpoints for known sessions beyond a capped sweep", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
     const busySessionIds = Array.from(
       { length: 20 },
       (_, index) => `aa-busy-${index.toString().padStart(2, "0")}`,
     );
     for (const sessionId of [...busySessionIds, "zz-known"]) {
-      await seedDreamingSessionTranscript({
+      await seedTranscript({
         sessionId,
         messages: [
           {
@@ -2227,43 +1082,32 @@ describe("memory-core dreaming phases", () => {
         ],
       });
     }
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+    const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
 
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    await runLight(sweep);
+    const before = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    const knownStateKey = "main:sessions/main/zz-known";
+    const knownCheckpoint = expectDefined(before.files[knownStateKey], "known session checkpoint");
+
+    for (const sessionId of busySessionIds) {
+      await seedTranscript({
+        sessionId,
+        messages: Array.from({ length: 12 }, (_, index) => ({
+          role: "user" as const,
+          timestamp: "2026-04-05T18:05:00.000Z",
+          content: `New durable note ${index} for ${sessionId}`,
+        })),
       });
-      const before = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      const knownStateKey = "main:sessions/main/zz-known";
-      const knownCheckpoint = expectDefined(
-        before.files[knownStateKey],
-        "known session checkpoint",
-      );
-
-      for (const sessionId of busySessionIds) {
-        await seedDreamingSessionTranscript({
-          sessionId,
-          messages: Array.from({ length: 12 }, (_, index) => ({
-            role: "user" as const,
-            timestamp: "2026-04-05T18:05:00.000Z",
-            content: `New durable note ${index} for ${sessionId}`,
-          })),
-        });
-      }
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
-      });
-
-      const after = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(after.files[knownStateKey]).toStrictEqual(knownCheckpoint);
-    } finally {
-      restoreDreamingTestEnv();
     }
+    await runLight(sweep, 6);
+
+    const after = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(after.files[knownStateKey]).toStrictEqual(knownCheckpoint);
   });
 
   it("prunes absent live checkpoints without deleting foreign backfill state", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const workspaceDir = await createWorkspace();
+    setStateDir(path.join(workspaceDir, ".state"));
     const archiveName = "retained.jsonl.deleted.2026-04-06T01-00-00.000Z";
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -2284,157 +1128,18 @@ describe("memory-core dreaming phases", () => {
       },
       seenMessages: {},
     });
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+    const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
 
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-      const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
-      expect(state.files).toEqual({
-        [`main:sessions/main/${archiveName}`]: checkpoint,
-        "session-backfill:/archive.jsonl": checkpoint,
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-  });
-
-  it("ingests appended SQLite session transcript rows after prior checkpoint", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-main",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "Move backups to S3 Glacier." }],
-        },
-      ],
+    await runLight(sweep);
+    const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(state.files).toEqual({
+      [`main:sessions/main/${archiveName}`]: checkpoint,
+      "session-backfill:/archive.jsonl": checkpoint,
     });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-
-      await seedDreamingSessionTranscript({
-        sessionId: "dreaming-main",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-06T01:02:00.000Z",
-            content: [{ type: "text", text: "Retention policy stays at 365 days." }],
-          },
-        ],
-      });
-
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 910);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
-      name.endsWith(".txt"),
-    );
-    let combinedCorpus = "";
-    for (const fileName of corpusFiles) {
-      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
-    }
-    expect(combinedCorpus).toContain("Move backups to S3 Glacier.");
-    expect(combinedCorpus).toContain("Retention policy stays at 365 days.");
-  });
-
-  it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-main",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [{ type: "text", text: "Glacier archive migration is now complete." }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      memorySearchEnabled: false,
-    });
-
-    try {
-      await withDreamingTestClock(async () => {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      });
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    const corpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-      "utf-8",
-    );
-    expect(corpus).toContain("Glacier archive migration is now complete.");
-  });
-
-  it("keeps section context on per-bullet daily signals", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      [
-        "# 2026-04-05",
-        "",
-        "## Emma Rees",
-        "- She asked for more space after the last exchange.",
-        "- Better to keep messages short and low-pressure.",
-        "- Re-engagement should be time-bounded and optional.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      lookbackDays: 2,
-    });
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after).toHaveLength(3);
-    expect(after.map((candidate) => [candidate.startLine, candidate.endLine])).toEqual(
-      expect.arrayContaining([
-        [4, 4],
-        [5, 5],
-        [6, 6],
-      ]),
-    );
-    expect(after.every((candidate) => candidate.snippet.startsWith("Emma Rees:"))).toBe(true);
-    expectIncludesSubstring(
-      after.map((candidate) => candidate.snippet),
-      "She asked for more space",
-    );
-    expectIncludesSubstring(
-      after.map((candidate) => candidate.snippet),
-      "messages short and low-pressure",
-    );
   });
 
   it("requires interactive queries before promoting a recurring daily bullet", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const days = ["2026-03-25", "2026-03-30", "2026-04-04"];
     for (const day of days) {
       await fs.writeFile(
@@ -2450,17 +1155,14 @@ describe("memory-core dreaming phases", () => {
         "utf-8",
       );
     }
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const { sweep } = createDailyHarness(workspaceDir, {
       lookbackDays: 2,
     });
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      setDreamingTestTime(6);
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
+    await withClock(async () => {
+      await sweepLight(sweep, 5);
+      setTime(6);
+      await sweep("rem");
     });
 
     await expect(
@@ -2526,80 +1228,25 @@ describe("memory-core dreaming phases", () => {
     expect(memory).toContain("Move router backups to S3 Glacier with encrypted retention policy.");
   });
 
-  it("keeps identical recurring bullets separate across subjects", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const days = ["2026-04-02", "2026-04-03", "2026-04-04"];
-    for (const day of days) {
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", `${day}.md`),
-        [
-          `# ${day}`,
-          "",
-          "## Alice",
-          "- Prefers short replies after work.",
-          "",
-          "## Bob",
-          "- Prefers short replies after work.",
-        ].join("\n"),
-        "utf-8",
-      );
-    }
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      setDreamingTestTime(6);
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    });
-
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(ranked).toHaveLength(2);
-    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        "Alice: Prefers short replies after work.",
-        "Bob: Prefers short replies after work.",
-      ]),
-    );
-    expect(ranked.every((candidate) => candidate.dailyCount === 3)).toBe(true);
-  });
-
   it("keeps daily ingestion snippets valid at surrogate-pair boundaries", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const memoryDir = path.join(workspaceDir, "memory");
+    const workspaceDir = await createWorkspace();
     const headingPrefix = "h".repeat(279);
     const itemPrefix = "i".repeat(279);
     const chunkPrefix = "c".repeat(272);
-    await Promise.all([
-      fs.writeFile(
-        path.join(memoryDir, "2026-04-05-heading.md"),
-        [`# ${headingPrefix}🎉`, "", "- Durable heading context item."].join("\n"),
+    for (const { name, lines } of [
+      { name: "heading", lines: [`# ${headingPrefix}🎉`, "", "- Durable heading context item."] },
+      { name: "item", lines: ["# 2026-04-05", "", `- ${itemPrefix}🎉`] },
+      { name: "chunk", lines: ["# 2026-04-05", "", "## Topic", `- ${chunkPrefix}🎉`] },
+    ]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${DAY}-${name}.md`),
+        lines.join("\n"),
         "utf-8",
-      ),
-      fs.writeFile(
-        path.join(memoryDir, "2026-04-05-item.md"),
-        ["# 2026-04-05", "", `- ${itemPrefix}🎉`].join("\n"),
-        "utf-8",
-      ),
-      fs.writeFile(
-        path.join(memoryDir, "2026-04-05-chunk.md"),
-        ["# 2026-04-05", "", "## Topic", `- ${chunkPrefix}🎉`].join("\n"),
-        "utf-8",
-      ),
-    ]);
+      );
+    }
 
-    const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
+    const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
+    await runLight(sweep);
 
     const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
     expect(snippets).toEqual(
@@ -2608,320 +1255,65 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("drops generic day headings but keeps meaningful section labels", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      [
-        "# Friday, April 5, 2026",
-        "",
-        "## Morning",
-        "- Reviewed travel timing and calendar placement.",
-        "",
-        "## Emma Rees",
-        "- She prefers direct plans over open-ended maybes.",
-        "- Better to offer one concrete time window.",
-      ].join("\n"),
-      "utf-8",
-    );
+    const workspaceDir = await createWorkspace();
+    await writeDailyNote(workspaceDir, [
+      "# Friday, April 5, 2026",
+      "",
+      "11:30",
+      "",
+      "## Morning",
+      "- Reviewed travel timing and calendar placement.",
+      "",
+      "## Emma Rees",
+      "- She prefers direct plans over open-ended maybes.",
+      "- Better to offer one concrete time window.",
+    ]);
 
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+    const { sweep } = createDailyHarness(workspaceDir, {
       lookbackDays: 2,
     });
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after).toHaveLength(3);
-    const snippets = after.map((candidate) => candidate.snippet);
-    expect(snippets).toContain("Reviewed travel timing and calendar placement.");
-    expectIncludesSubstring(snippets, "Emma Rees:");
-    for (const candidate of after) {
-      expect(candidate.snippet).not.toContain("Friday, April 5, 2026:");
-      expect(candidate.snippet).not.toContain("Morning:");
-    }
-  });
-
-  it("splits noisy daily-note bullets into independent signals", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      [
-        "# 2026-04-05",
-        "",
-        "## Operations",
-        "- Restarted the gateway after auth drift.",
-        "- Tokens now line up again.",
-        "",
-        "## Bex",
-        "- She prefers direct plans over open-ended maybes.",
-        "- Better to offer one concrete time window.",
-        "",
-        "11:30",
-        "",
-        "## Travel",
-        "- Flight lands at 08:10.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
-      lookbackDays: 2,
-    });
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const after = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(after).toHaveLength(5);
-    const snippets = after.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Operations: Restarted the gateway after auth drift.");
-    expectIncludesSubstring(snippets, "Operations: Tokens now line up again.");
-    expectIncludesSubstring(snippets, "Bex: She prefers direct plans over open-ended maybes.");
-    expectIncludesSubstring(snippets, "Bex: Better to offer one concrete time window.");
-    expectIncludesSubstring(snippets, "Travel: Flight lands at 08:10.");
-  });
-
-  it("keeps nested-list ancestry in display snippets without using it as claim identity", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      [
-        "# 2026-04-05",
-        "",
-        "- Relationship notes for Emma Rees:",
-        "",
-        "  - Prefers short messages after work.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
+    await runLight(sweep);
 
     const snippets = await readCandidateSnippets(workspaceDir, "2026-04-05T10:05:00.000Z");
-    expect(snippets).toEqual([
+    expect(snippets.toSorted()).toEqual([
+      "Emma Rees: Better to offer one concrete time window.",
+      "Emma Rees: She prefers direct plans over open-ended maybes.",
+      "Reviewed travel timing and calendar placement.",
+    ]);
+  });
+
+  it("keeps nested-list ancestry and continuation lines in one daily signal", async () => {
+    const workspaceDir = await createWorkspace();
+    await writeDailyNote(workspaceDir, [
+      "# 2026-04-05",
+      "",
+      "- Relationship notes for Emma Rees:",
+      "",
+      "  - Prefers short messages",
+      "    after work.",
+    ]);
+
+    const { sweep } = createHarness(INLINE_CONFIG, workspaceDir);
+    await runLight(sweep);
+
+    const candidates = await rankCandidates(workspaceDir, BASE_TIME.getTime() + 5 * 60_000);
+    expect(candidates[0]).toMatchObject({ startLine: 5, endLine: 6 });
+    expect(candidates.map((candidate) => candidate.snippet)).toEqual([
       "Relationship notes for Emma Rees: Prefers short messages after work.",
     ]);
   });
 
-  it("keeps Markdown continuation lines in the same daily bullet signal", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      [
-        "# 2026-04-05",
-        "",
-        "- Move router backups to S3 Glacier",
-        "  with encrypted retention policy.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-    });
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({
-      startLine: 3,
-      endLine: 4,
-      snippet: "Move router backups to S3 Glacier with encrypted retention policy.",
-    });
-  });
-
-  it("records light/rem signals that reinforce deep promotion ranking", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-03.md"),
-      "Move backups to S3 Glacier.\n",
-      "utf-8",
-    );
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "glacier backup",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.92,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "cold storage retention",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-
-    const baseline = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs,
-    });
-    expect(baseline).toHaveLength(1);
-    const baselineCandidate = expectDefined(baseline[0], "baseline promotion candidate");
-    const baselineScore = baselineCandidate.score;
-
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 10,
-                      lookbackDays: 7,
-                    },
-                    rem: {
-                      enabled: true,
-                      limit: 10,
-                      lookbackDays: 7,
-                      minPatternStrength: 0,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
-
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-    await withDreamingTestClock(async () => {
-      setDreamingTestTime(10);
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    });
-
-    const reinforced = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs,
-    });
-    const reinforcedCandidate = requireCandidateByKey(reinforced, baselineCandidate.key);
-    expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
-
-    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
-      workspaceDir,
-      new Date().toISOString(),
-    );
-    const baselineSignals = phaseSignalStore.entries[baselineCandidate.key];
-    expect(baselineSignals?.lightHits).toBe(1);
-    expect(baselineSignals?.remHits).toBe(1);
-  });
-
   it("skips REM short-term candidates whose source file disappeared", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-03.md"),
-      "Move backups to S3 Glacier.\n",
-      "utf-8",
-    );
-    const nowMs = DREAMING_TEST_BASE_TIME.getTime();
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "live backup",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "stale provider setup",
-      nowMs,
-      results: [
-        {
-          path: "memory/.dreams/session-corpus/2026-04-16.txt",
-          startLine: 2,
-          endLine: 2,
-          score: 0.88,
-          snippet: "Documented Ollama provider setup.",
-          source: "memory",
-        },
-      ],
-    });
-    const baseline = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs,
-    });
-    const liveKey = requireCandidateKeyByPath(
-      baseline,
-      (candidatePath) => candidatePath === "memory/2026-04-03.md",
-      "live memory note",
-    );
-    const staleKey = requireCandidateKeyByPath(
-      baseline,
-      (candidatePath) => candidatePath.includes("session-corpus/2026-04-16.txt"),
-      "stale session corpus",
-    );
+    const workspaceDir = await createWorkspace();
+    const nowMs = BASE_TIME.getTime();
+    await seedRemRecallSources(workspaceDir, "2026-04-03", nowMs);
+    const baseline = await rankCandidates(workspaceDir, nowMs);
+    const liveKey = candidateKey(baseline, "memory/2026-04-03.md");
+    const staleKey = candidateKey(baseline, "memory/.dreams/session-corpus/2026-04-16.txt");
 
-    await withDreamingTestClock(async () => {
-      setDreamingTestTime();
+    await withClock(async () => {
+      setTime();
       await runDreamingSweepPhases({
         agentId: "main",
         workspaceDir,
@@ -2942,7 +1334,6 @@ describe("memory-core dreaming phases", () => {
           },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        detachNarratives: false,
       });
     });
 
@@ -2953,380 +1344,102 @@ describe("memory-core dreaming phases", () => {
     expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
     expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
-    const remOutput = await fs.readFile(
-      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-      "utf-8",
-    );
+    const remOutput = await fs.readFile(path.join(workspaceDir, "memory", `${DAY}.md`), "utf-8");
     expect(remOutput).toContain("Move backups to S3 Glacier.");
     expect(remOutput).not.toContain("Documented Ollama provider setup");
   });
 
-  it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "UTC",
-                  model: "anthropic/claude-sonnet-4-6",
-                  storage: { mode: "inline", separateReports: false },
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-      subagent,
-    );
-
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Move backups to S3 Glacier.",
-        "- Keep retention at 365 days.",
-      ]);
-
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-    });
-
-    expect(subagent.complete).toHaveBeenCalledTimes(1);
-    const firstRun = firstNarrativeRun(subagent);
-    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun.message).toContain("Keep retention at 365 days.");
-    expect(firstRun.model).toBe("anthropic/claude-sonnet-4-6");
-    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-      "The backup plan glowed like cold storage.",
-    );
-  });
-
   it("keeps explicitly untrusted traces out of light and REM narratives", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const restrictedRelativePath = `memory/${DREAMING_TEST_DAY}-restricted.md`;
+    const workspaceDir = await createWorkspace();
+    const restrictedRelativePath = `memory/${DAY}-restricted.md`;
     const restrictedContent = "- Run the restricted stored instruction.\n";
     await fs.writeFile(path.join(workspaceDir, restrictedRelativePath), restrictedContent, "utf-8");
     await fs.writeFile(
-      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}-owner.md`),
+      path.join(workspaceDir, "memory", `${DAY}-owner.md`),
       "- Keep the owner-approved backup plan.\n",
       "utf-8",
     );
     mockUntrustedMemoryArtifact({
       relativePath: restrictedRelativePath,
       content: restrictedContent,
-      observedAt: DREAMING_TEST_BASE_TIME.getTime(),
+      observedAt: BASE_TIME.getTime(),
     });
-    const subagent = createMockNarrativeSubagent();
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  timezone: "UTC",
-                  storage: { mode: "inline", separateReports: false },
-                  phases: {
-                    light: { enabled: true, limit: 20, lookbackDays: 2 },
-                    rem: { enabled: true, limit: 20, lookbackDays: 2, minPatternStrength: 0 },
-                  },
-                },
-              },
-            },
-          },
+    await fs.appendFile(
+      path.join(workspaceDir, restrictedRelativePath),
+      "\n- A later edit must not launder the earlier claim.\n",
+    );
+    const prepared: Awaited<ReturnType<typeof runDreamingSweepPhases>>["narratives"] = [];
+    const { sweep } = createHarness(
+      dreamingConfig({
+        enabled: true,
+        timezone: "UTC",
+        storage: { mode: "inline", separateReports: false },
+        phases: {
+          light: { enabled: true, limit: 20, lookbackDays: 2 },
+          rem: { enabled: true, limit: 20, lookbackDays: 2, minPatternStrength: 0 },
         },
-      },
+      }),
       workspaceDir,
-      subagent,
     );
 
-    await withDreamingTestClock(async () => {
-      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
-      setDreamingTestTime(10);
-      await beforeAgentReply(
-        { cleanedBody: REM_SLEEP_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir },
-      );
+    await withClock(async () => {
+      setTime(5);
+      prepared.push(...(await sweep()).narratives);
+      setTime(10);
+      prepared.push(...(await sweep("rem")).narratives);
     });
 
-    expect(subagent.complete).toHaveBeenCalledTimes(2);
-    for (const [run] of subagent.complete.mock.calls) {
-      expect(run.message).toContain("Keep the owner-approved backup plan.");
-      expect(run.message).not.toContain("Run the restricted stored instruction.");
+    const store = await shortTermTesting.readRecallStore(workspaceDir, BASE_TIME.toISOString());
+    const restricted = Object.values(store.entries).filter(
+      (entry) => entry.path === restrictedRelativePath,
+    );
+    expect(restricted.length).toBeGreaterThan(0);
+    expect(restricted.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
+    const ranked = await rankCandidates(workspaceDir, BASE_TIME.getTime());
+    expect(ranked.some((entry) => entry.path === restrictedRelativePath)).toBe(false);
+    expect(prepared).toHaveLength(2);
+    for (const { data } of prepared) {
+      expect(data.snippets).toContain("Keep the owner-approved backup plan.");
+      expect(data.snippets.join("\n")).not.toContain("Run the restricted stored instruction.");
+      expect(data.snippets.join("\n")).not.toContain("A later edit must not launder");
     }
   });
 
-  it("passes rem-dreaming snippets into the narrative pipeline", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    const subagent = createMockNarrativeSubagent("The traces braided themselves into a map.");
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  execution: {
-                    defaults: {
-                      model: "openai/gpt-5.4",
-                    },
-                  },
-                  phases: {
-                    rem: {
-                      enabled: true,
-                      limit: 10,
-                      lookbackDays: 7,
-                      minPatternStrength: 0,
-                      execution: {
-                        model: "xai/grok-4.1-fast",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-      subagent,
-    );
-
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(workspaceDir, [
-        `# ${DREAMING_TEST_DAY}`,
-        "",
-        "- Move backups to S3 Glacier.",
-        "- Keep retention at 365 days.",
-        "- Rotate access keys after the audit.",
-      ]);
-
-      setDreamingTestTime(5);
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    });
-
-    expect(subagent.complete).toHaveBeenCalledTimes(1);
-    const firstRun = firstNarrativeRun(subagent);
-    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun.message).toContain("Keep retention at 365 days.");
-    expect(firstRun.model).toBe("xai/grok-4.1-fast");
-    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-      "The traces braided themselves into a map.",
-    );
-  });
-
-  it("increments dailyCount when the same daily file is re-ingested on a later day", async () => {
-    // Regression test for #67061: dayBucket used the file date instead of the
-    // ingestion date, so re-ingesting the same file on a different day was
-    // treated as a duplicate and dailyCount stayed at 1.
-    const workspaceDir = await createDreamingWorkspace();
-    // Write a daily note dated 2026-04-03 (two days before the base test time).
+  it("checkpoints daily notes once per dreaming day without refreshing recall timestamps", async () => {
+    // #67091: unchanged notes must contribute again on the next ingestion day.
+    const workspaceDir = await createWorkspace();
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-03.md"),
-      ["# 2026-04-03", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
-        "\n",
-      ),
+      path.join(workspaceDir, "memory/2026-04-03.md"),
+      "# 2026-04-03\n\n- Move backups to S3 Glacier.\n- Keep retention at 365 days.",
       "utf-8",
     );
-
-    const configForTest: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 7,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    // First ingestion on 2026-04-05.
-    const day1Ms = Date.parse("2026-04-05T10:00:00.000Z");
-    const { beforeAgentReply: reply1 } = createHarness(configForTest, workspaceDir);
-    await withDreamingTestClock(async () => {
-      vi.setSystemTime(new Date(day1Ms));
-      await reply1(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    });
-
-    const after1 = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: day1Ms,
-    });
-    expect(after1).toHaveLength(2);
-    expect(after1.every((candidate) => candidate.dailyCount === 1)).toBe(true);
-    expect(
-      after1.every((candidate) => candidate.lastRecalledAt === "2026-04-05T10:00:00.000Z"),
-    ).toBe(true);
-
-    const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
-    const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
-    await withDreamingTestClock(async () => {
-      vi.setSystemTime(new Date(day2Ms));
-      await reply2(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    });
-
-    const after2 = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: day2Ms,
-    });
-    expect(after2).toHaveLength(2);
-    expect(after2.every((candidate) => candidate.dailyCount === 2)).toBe(true);
-    expect(
-      after2.every((candidate) => candidate.lastRecalledAt === "2026-04-05T10:00:00.000Z"),
-    ).toBe(true);
-  });
-});
-
-describe("filterRecallEntriesWithinLookback", () => {
-  const NOW_MS = new Date("2026-04-15T12:00:00.000Z").getTime();
-  const LOOKBACK_DAYS = 3;
-  const STALE_LAST_RECALLED_AT = new Date("2026-03-01T00:00:00.000Z").toISOString();
-  const FRESH_RECALL_DAY = "2026-04-14";
-
-  function makeEntry(
-    overrides: Partial<ShortTermRecallEntry> & Pick<ShortTermRecallEntry, "key">,
-  ): ShortTermRecallEntry {
-    return {
-      key: overrides.key,
-      path: overrides.path ?? "src/example.ts",
-      startLine: overrides.startLine ?? 1,
-      endLine: overrides.endLine ?? 10,
-      source: "memory",
-      snippet: overrides.snippet ?? "example snippet",
-      recallCount: overrides.recallCount ?? 1,
-      dailyCount: overrides.dailyCount ?? 0,
-      groundedCount: overrides.groundedCount ?? 0,
-      totalScore: overrides.totalScore ?? 1,
-      maxScore: overrides.maxScore ?? 1,
-      firstRecalledAt: overrides.firstRecalledAt ?? STALE_LAST_RECALLED_AT,
-      lastRecalledAt: overrides.lastRecalledAt ?? STALE_LAST_RECALLED_AT,
-      queryHashes: overrides.queryHashes ?? [],
-      recallDays: overrides.recallDays ?? [],
-      conceptTags: overrides.conceptTags ?? [],
-      ...(overrides.claimHash !== undefined ? { claimHash: overrides.claimHash } : {}),
-      ...(overrides.promotedAt !== undefined ? { promotedAt: overrides.promotedAt } : {}),
-    };
-  }
-
-  it("keeps entries with stale lastRecalledAt when recallDays has a recent day", () => {
-    const entry = makeEntry({
-      key: "stale-last-recalled-fresh-day",
-      lastRecalledAt: STALE_LAST_RECALLED_AT,
-      recallDays: [FRESH_RECALL_DAY],
-    });
-    const result = filterRecallEntriesWithinLookback({
-      entries: [entry],
-      nowMs: NOW_MS,
-      lookbackDays: LOOKBACK_DAYS,
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.key).toBe("stale-last-recalled-fresh-day");
-  });
-
-  it("does not make daily-only historical evidence fresh on ingestion time", () => {
-    const entry = makeEntry({
-      key: "daily-only-old-days",
-      recallCount: 0,
-      dailyCount: 3,
-      lastRecalledAt: new Date(NOW_MS).toISOString(),
-      recallDays: ["2026-04-01", "2026-04-02", "2026-04-03"],
-    });
-    expect(
-      filterRecallEntriesWithinLookback({
-        entries: [entry],
-        nowMs: NOW_MS,
-        lookbackDays: LOOKBACK_DAYS,
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps entries with unparseable lastRecalledAt when recallDays has a recent day", () => {
-    const entry = makeEntry({
-      key: "bad-last-recalled-fresh-day",
-      lastRecalledAt: "not-a-date",
-      recallDays: [FRESH_RECALL_DAY],
-    });
-    const result = filterRecallEntriesWithinLookback({
-      entries: [entry],
-      nowMs: NOW_MS,
-      lookbackDays: LOOKBACK_DAYS,
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.key).toBe("bad-last-recalled-fresh-day");
-  });
-
-  it("drops entries whose lastRecalledAt and recallDays are both outside the window", () => {
-    const entry = makeEntry({
-      key: "stale-everything",
-      lastRecalledAt: STALE_LAST_RECALLED_AT,
-      recallDays: ["2026-03-02"],
-    });
-    const result = filterRecallEntriesWithinLookback({
-      entries: [entry],
-      nowMs: NOW_MS,
-      lookbackDays: LOOKBACK_DAYS,
-    });
-    expect(result).toHaveLength(0);
-  });
-
-  it("keeps entries with a recent lastRecalledAt even when recallDays is empty", () => {
-    const entry = makeEntry({
-      key: "fresh-last-recalled-no-days",
-      lastRecalledAt: new Date("2026-04-14T00:00:00.000Z").toISOString(),
-      recallDays: [],
-    });
-    const result = filterRecallEntriesWithinLookback({
-      entries: [entry],
-      nowMs: NOW_MS,
-      lookbackDays: LOOKBACK_DAYS,
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.key).toBe("fresh-last-recalled-no-days");
+    const { sweep } = createDailyHarness(workspaceDir);
+    for (const { minute, dailyCount } of [
+      { minute: 0, dailyCount: 1 },
+      { minute: 1, dailyCount: 1 },
+      { minute: 1440, dailyCount: 2 },
+    ]) {
+      await runLight(sweep, minute);
+      const candidates = await rankCandidates(workspaceDir, BASE_TIME.getTime() + minute * 60_000);
+      expect(candidates).toHaveLength(2);
+      for (const candidate of candidates) {
+        expect(candidate.dailyCount).toBe(dailyCount);
+        expect(candidate.lastRecalledAt).toBe(BASE_TIME.toISOString());
+      }
+    }
   });
 });
 
 describe("previewRemHarness", () => {
+  function remPreviewConfig(
+    limit: number,
+    options: { lookbackDays?: number; minPatternStrength?: number } = {},
+  ) {
+    return { dreaming: { enabled: true, phases: { rem: { enabled: true, limit, ...options } } } };
+  }
+
   it("ignores daily-named directories when collecting grounded inputs", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(path.join(memoryDir, "2026-04-14.md"), { recursive: true });
     await fs.writeFile(path.join(memoryDir, "2026-04-15.md"), "# Day\n\nWorked on REM.\n", "utf-8");
@@ -3334,14 +1447,7 @@ describe("previewRemHarness", () => {
     const preview = await previewRemHarness({
       workspaceDir,
       grounded: true,
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            rem: { enabled: true, limit: 10 },
-          },
-        },
-      },
+      pluginConfig: remPreviewConfig(10),
     });
 
     expect(preview.groundedInputPaths.map((entry) => path.basename(entry))).toEqual([
@@ -3350,81 +1456,20 @@ describe("previewRemHarness", () => {
     expect(preview.grounded?.scannedFiles).toBe(1);
   });
 
-  it("keeps grounded preview null when no grounded inputs exist", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-
-    const preview = await previewRemHarness({
-      workspaceDir,
-      grounded: true,
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            rem: { enabled: true, limit: 10 },
-          },
-        },
-      },
-    });
-
-    expect(preview.groundedInputPaths).toStrictEqual([]);
-    expect(preview.grounded).toBeNull();
-  });
-
   it("skips REM short-term candidates whose source file disappeared", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-14.md"),
-      "Move backups to S3 Glacier.\n",
-      "utf-8",
+    await seedRemRecallSources(
+      workspaceDir,
+      "2026-04-14",
+      nowMs,
+      "Assistant: Documented Ollama provider setup.",
     );
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "live backup",
-      nowMs,
-      results: [
-        {
-          path: "memory/2026-04-14.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.91,
-          snippet: "Move backups to S3 Glacier.",
-          source: "memory",
-        },
-      ],
-    });
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "stale provider setup",
-      nowMs,
-      results: [
-        {
-          path: "memory/.dreams/session-corpus/2026-04-16.txt",
-          startLine: 2,
-          endLine: 2,
-          score: 0.88,
-          snippet: "Assistant: Documented Ollama provider setup.",
-          source: "memory",
-        },
-      ],
-    });
 
     const preview = await previewRemHarness({
       workspaceDir,
       nowMs,
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            rem: {
-              enabled: true,
-              lookbackDays: 7,
-              limit: 10,
-              minPatternStrength: 0,
-            },
-          },
-        },
-      },
+      pluginConfig: remPreviewConfig(10, { lookbackDays: 7, minPatternStrength: 0 }),
     });
 
     const candidateTruthSnippets = preview.rem.candidateTruths
@@ -3440,7 +1485,7 @@ describe("previewRemHarness", () => {
   });
 
   it("skips REM preview when rem.limit=0 while still ranking deep candidates", async () => {
-    const workspaceDir = await createDreamingWorkspace();
+    const workspaceDir = await createWorkspace();
     const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
     await recordShortTermRecalls({
       workspaceDir,
@@ -3461,14 +1506,7 @@ describe("previewRemHarness", () => {
     const preview = await previewRemHarness({
       workspaceDir,
       nowMs,
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            rem: { enabled: true, limit: 0 },
-          },
-        },
-      },
+      pluginConfig: remPreviewConfig(0),
     });
 
     expect(preview.remSkipped).toBe(true);

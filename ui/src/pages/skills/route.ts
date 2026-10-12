@@ -4,7 +4,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
-import type { SkillsRouteData } from "./skills-page.ts";
+import type { SkillsRouteData } from "./skills-page.tsx";
 
 async function loadSkillsRouteData(
   context: ApplicationContext,
@@ -21,47 +21,32 @@ async function loadSkillsRouteData(
   const selection = selectionOwner.state;
   const selectionIntentRevision = selectionOwner.intentRevision;
   const client = gatewaySnapshot.client;
-  if (gatewaySnapshot.phase !== "connected" || !client) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      agents,
-      agentsList: null,
-      selectedAgentId: null,
-      selectionIntentRevision,
-      report: null,
-      error: null,
-      clawhubRef,
-    };
-  }
-
   let error: string | null = null;
-  let agentsList: SkillsRouteData["agentsList"] = null;
   let selectedAgentId: string | null = null;
   let report: SkillsRouteData["report"] = null;
-  try {
-    const loadedAgentsList = await agents.ensureList();
-    agentsList = loadedAgentsList;
-    const requestedAgentId =
-      search.get("agent") ?? selection.selectedId ?? loadedAgentsList?.defaultId;
-    selectedAgentId = loadedAgentsList?.agents.some((agent) => agent.id === requestedAgentId)
-      ? (requestedAgentId ?? null)
-      : null;
-  } catch (err) {
-    error = formatUiError(err);
-  }
-  if (selectedAgentId) {
+  if (gatewaySnapshot.phase === "connected" && client) {
     try {
-      report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
+      const loadedAgentsList = await agents.ensureList();
+      const requestedAgentId =
+        search.get("agent") ?? selection.selectedId ?? loadedAgentsList?.defaultId;
+      selectedAgentId = loadedAgentsList?.agents.some((agent) => agent.id === requestedAgentId)
+        ? (requestedAgentId ?? null)
+        : null;
     } catch (err) {
-      error ??= formatUiError(err);
+      error = formatUiError(err);
+    }
+    if (selectedAgentId) {
+      try {
+        report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
+      } catch (err) {
+        error ??= formatUiError(err);
+      }
     }
   }
   return {
     gateway,
     gatewaySnapshot,
     agents,
-    agentsList,
     selectedAgentId,
     selectionIntentRevision,
     report,
@@ -77,7 +62,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
     loader: (context: ApplicationContext, options) =>
       loadSkillsRouteData(context, options, surface),
     component: () =>
-      import("./skills-page.ts").then(() => ({
+      import("./skills-page.tsx").then(() => ({
         header: true,
         render: (data: SkillsRouteData | undefined) =>
           data

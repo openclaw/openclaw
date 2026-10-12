@@ -31,12 +31,14 @@ export {
 export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperation,
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
@@ -81,7 +83,7 @@ export type {
   ProviderRequestProxyOverride,
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
-} from "../agents/provider-request-config.js";
+} from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,

@@ -19,8 +19,8 @@ export const buildInfo = {
 };
 const authority = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
 const entitlements = "<plist><dict/></plist>\n";
-export const workerRoot = "Contents/Resources/node-worker";
-export const workerDist = "lib/node_modules/openclaw/dist";
+export const runtimeRoot = "Contents/Resources/runtime";
+export const runtimeDist = "lib/node_modules/openclaw/dist";
 export const addon = "lib/node_modules/native [fixture]/addon.node";
 // Universal file output repeats the path; names must not choose the binary format.
 export const library = "lib/node_modules/native [fixture]/library ERROR COFF.dylib";
@@ -63,7 +63,7 @@ export async function artifactFixture(mac: MacScriptFixture) {
 <key>OpenClawGitCommit</key><string>${sourceCommit}</string>
 <key>PeekabooSourceCommit</key><string>${peekabooCommit}</string>
 <key>OpenClawBuildTimestamp</key><string>${buildInfo.builtAt}</string>
-<key>OpenClawWorkerBuildID</key><string>${buildInfo.buildId}</string>
+<key>OpenClawRuntimeBuildID</key><string>${buildInfo.buildId}</string>
 </dict></plist>`,
   );
   await write(app + "/Contents/MacOS/OpenClaw", binaries.universal, 0o755);
@@ -73,22 +73,27 @@ export async function artifactFixture(mac: MacScriptFixture) {
     binaries.universalLibrary,
     0o755,
   );
+  const runtime = path.join(app, runtimeRoot);
+  await write(path.join(runtime, "bin/bun"), binaries.universal, 0o755);
+  await write(path.join(runtime, "lib/libsqlite3.dylib"), binaries.universalLibrary);
+  await write(path.join(runtime, "lib/node_modules/openclaw/openclaw.mjs"), "// inert CLI entry\n");
+  await write(path.join(runtime, runtimeDist, "mac-node-worker.js"), "// inert worker entry\n");
+  await write(
+    path.join(runtime, runtimeDist, "extensions/browser/setup-entry.js"),
+    "// inert browser entry\n",
+  );
+  await write(path.join(runtime, runtimeDist, "control-ui/index.html"), "<!doctype html>\n");
+  await write(path.join(runtime, runtimeDist, "build-info.json"), JSON.stringify(buildInfo));
+  await write(path.join(runtime, addon), binaries.universalLibrary);
+  await write(path.join(runtime, library), binaries.universalLibrary);
+  await write(path.join(runtime, "lib/native.a"), binaries.universalArchive);
   for (const arch of ["arm64", "x86_64"] as const) {
-    const worker = path.join(app, workerRoot, arch);
-    await write(path.join(worker, "bin/node"), binaries[arch], 0o755);
-    await write(path.join(worker, workerDist, "mac-node-worker.js"), "// inert worker entry\n");
-    await write(path.join(worker, workerDist, "build-info.json"), JSON.stringify(buildInfo));
     await write(
-      path.join(worker, addon),
+      path.join(runtime, `lib/node_modules/native-darwin-${arch}/addon.node`),
       binaries[arch === "arm64" ? "armLibrary" : "intelLibrary"],
     );
-    await write(path.join(worker, library), binaries.universalLibrary);
-    await write(
-      path.join(worker, "lib/native.a"),
-      binaries[arch === "arm64" ? "armArchive" : "intelArchive"],
-    );
-    await symlink("native [fixture]", path.join(worker, "lib/node_modules/native-alias"));
   }
+  await symlink("native [fixture]", path.join(runtime, "lib/node_modules/native-alias"));
   const jq = await mac.run("/bin/sh", ["-c", "command -v jq"], {
     encoding: "utf8",
     env: { PATH: process.env.PATH },
@@ -108,14 +113,14 @@ shasum() {
   if [[ -n "\${WORK_ROOT:-}" && "\${1:-}" == "$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw" ]]; then record candidate-helper-hash; fi
   /usr/bin/openssl dgst -sha256 -r "$@"
 }
-for tool in launchctl open kill pkill killall pgrep lsof defaults diskutil sqlite3 security osascript openclaw node python python3 curl ssh; do
+for tool in launchctl open kill pkill killall pgrep lsof defaults diskutil sqlite3 security osascript openclaw node bun python python3 curl ssh; do
   eval "$tool() { deny $tool; }"
 done
 codesign() (
   record codesign "$@"
   target="\${!#}"
   if [[ "$*" == *--entitlements* ]]; then
-    if [[ "$TEST_FAULT" == apple-events && "$target" == *'/arm64/${addon}' ||
+    if [[ "$TEST_FAULT" == apple-events && "$target" == *'/${addon}' ||
           "$TEST_FAULT" == bundle-events && "$target" == *'/fixture.xpc' ]]; then
       printf '%s\\n' '<plist><dict><key>com.apple.security.automation.apple-events</key><true/></dict></plist>'
     elif [[ "$TEST_FAULT" == mlx && "$target" == */openclaw-mlx-tts ]]; then
@@ -141,9 +146,9 @@ codesign() (
     if [[ -f "$target" ]]; then LC_ALL=C IFS= read -r -d '' -n 8 prefix <"$target" || true; fi
     [[ "$prefix" != $'!<arch>\\n' && "$target" != *'/lib/universal.a' && "$target" != *'/lib/archive64 [*]' ]] || exit 1
     [[ "\${prefix:0:4}" != $'\\xca\\xfe\\xba\\xbf' ]] || format=generic
-    [[ "$TEST_FAULT" != archive-node || "$target" != */arm64/bin/node ]] || exit 1
+    [[ "$TEST_FAULT" != archive-bun || "$target" != */runtime/bin/bun ]] || exit 1
     # These fixture resource kinds have no native signature, even when executable.
-    if [[ "$target" == *'/lib/object-resource '* || "$TEST_FAULT" == *-node && "$target" == */arm64/bin/node ]]; then format=generic; fi
+    if [[ "$target" == *'/lib/object-resource '* || "$TEST_FAULT" == *-bun && "$target" == */runtime/bin/bun ]]; then format=generic; fi
     for arch in arm64 x86_64; do
       if [[ "$*" == *"--arch $arch"* ]]; then
         [[ "$TEST_FAULT" != "team-$arch" ]] || team=WRONGTEAM
@@ -153,7 +158,7 @@ codesign() (
     done
     [[ "$*" != *'--arch x86_64'* || "$hash" == WRONGHASH ]] || hash=FIXTUREX8664
     for arch in arm64 x86_64; do
-      if [[ "$target" == *"/$arch/${addon}" ]]; then
+      if [[ "$target" == *"/${addon}" && "$*" == *"--arch $arch"* ]]; then
         [[ "$TEST_FAULT" != "generic-native-$arch" ]] || format=generic
         [[ "$TEST_FAULT" != "missing-native-format-$arch" ]] || format=''
       fi
@@ -213,6 +218,7 @@ plutil() {
     "security",
     "openclaw",
     "node",
+    "bun",
     "python3",
     "curl",
     "ssh",

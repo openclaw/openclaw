@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Native session bindings, the OpenClaw transcript mirror, tool and media result delivery, terminal tool outcomes, and settled-turn finalization"
 read_when:
   - You are storing a native session, thread, or resume token
@@ -47,6 +48,15 @@ session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the
 same key is a transfer, not deletion; preserve any compaction adoption path.
 
+Core logs reset-hook failures once per harness ID per process, including across
+plugin reloads. Later resets still invoke the hook so it can recover.
+
+ACPX automatically migrates sessions from its former `<workspace>/state` default
+to `<OPENCLAW_STATE_DIR>/acpx` when the new default is empty. Set
+`plugins.entries.acpx.config.stateDir` only to keep a different location; explicit
+values are never relocated. Failed adoption warns and retains the old location
+for the process so an update does not silently hide existing sessions.
+
 `withSessionDeletion` acquires the native owner's lease before calling
 `run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
 session row deletion boundary and `rollback()` if the transaction fails.
@@ -59,40 +69,68 @@ mutating native state. The callback belongs to one registered harness lifetime;
 retaining it after the operation closes does not retain authority. Post-delete
 hooks are notifications, not the owner of durable binding removal.
 
-## Subagent task history
+Implement `withSessionContextReset(params, run)` when a native binding must be
+invalidated by a successful same-key rewind or branch switch. This optional hook
+uses the same prepared `commit`/`rollback` contract, but keeps the session key and
+retained history. Core commits invalidation only after validating the requested
+cut and restores it if the transcript transaction fails. Release subscriptions
+after the committed mutation settles. The optional `previousSessionId` is the
+recorded predecessor, allowing retirement of a binding not yet transferred after
+compaction without adopting it during preparation. Ordinary compaction does not
+invoke this hook and continues to preserve native thread continuity.
 
-Native subagents can expose the shared task transcript view through the optional
-`taskHistory` harness capability. Declare the owned `taskKinds` and implement
-`read({ task, cfg, cursor, limit, assertCurrent })`. Return chronological chat
-`messages` with a stable `messageId` (or canonical `__openclaw.id`) and an optional
-`nextCursor` for older history. Internal runtime-only IDs are insufficient: the
-shared viewer must recognize the identity across pages and refreshes. Rows that
-share a transcript entry ID remain one display group.
-Preserve typed thinking, tool-call, and tool-result content so the normal chat
-renderer can display it. Bound native reads and response sizes.
+## Shared native binding lifecycle
 
-The Gateway's `tasks.history` method authorizes the task's requester session and
-routes history to its existing OpenClaw child session or the owning harness.
-It accepts a task ID, an optional opaque cursor, and a limit from 1 to 200
-(default 100). The harness must verify native parent/child lineage and the
-bound connection, and call `assertCurrent()` after awaited work. The Gateway
-rechecks access before returning a page and caps the response at 4 MiB.
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-session-runtime`; it is not a third-party
+Plugin SDK contract. Binding mutations use action-bound plugin-state observations
+and conditional writes in the shared-state worker. Durable bundled session
+deletion and conditional rollback settle in the executing agent worker.
+Synchronous reads still serve native lease assertions; opaque released deletion
+callbacks, incognito sessions, and message-cut transactions keep their existing
+native ownership.
+`createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
+renewal, mutation fences, and transactional deletion/rollback. The backend
+supplies matching synchronous and asynchronous views of the same plugin-state
+namespace, its record codec, acquisition/retention policy, errors, and timing.
+Pass host authority through `assertCurrent` and validate the expected generation
+in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
+authority. Keep native cleanup after the host transaction commits.
 
-Record immutable native history routing facts in task detail when creating the
-task. A later parent turn can replace its current native thread without changing
-the child's source. Preserve the original parent and connection identity across
-progress, completion, and recovery; never reconstruct them from a replacement
-binding. Preserve authorized compaction transfers within the same session
-lifecycle, while rejecting resets and account or connection changes.
-Runtime task detail participates in the Gateway's cursor and
-after-await identity checks.
+Inside `withLease`, call `captureLeaseAssertion(key)` to capture the exact owner
+and recheck its live, unexpired lease before native requests or transcript writes.
+Combine it with host authority for normal work. Cleanup may use retained lease
+ownership after host retirement, but must reject an expired, replaced, or closed
+lease even while the harness remains alive.
 
-Keep `childSessionKey` absent for native children: it describes an OpenClaw
-session and also determines lifecycle ownership. Reading history must not adopt
-the child, create another transcript store, or change cancellation and recovery.
-`TaskSummary.hasTranscript` advertises readable history to the shared viewer.
+`captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
+and `resolveNativeSessionBinding` preserve the host generation and predecessor
+across waits, adopting a verified predecessor before stale reclamation. A missing
+host entry permits an ephemeral session; a failed read cannot authorize a binding.
+
+`createNativeSessionInitializationOwner` associates binding and upstream-link
+writes with the exact host creation handle. Rollback requires the matching
+store, identity, binding, and live authority, removes only the exact upstream
+link, then invokes backend cleanup. Queue selection, native protocol/policy,
+and resource cleanup remain with the backend; core owns host session lifecycle.
 
 ## Tool and media results
+
+### Same-turn retry context
+
+The optional `params.continuation` carries host-owned recovery context when a
+transient failure retries the same task. Its `prompt` is the original current
+request; its `messages` contains settled attempt snapshots in order, including
+completed assistant/tool messages and tool results. Keep the request visible
+outside bounded history projections and retain completed tool evidence when
+rendering the snapshots. These facts describe completed work; they do not grant
+execution authority or ask the harness to execute those tools again.
+
+Codex consumes this carrier even when the admission-fenced transcript ends
+before the current request, using its existing bounded context projection.
+The continuation instruction stays model-only and is not persisted as another
+user turn. Harnesses that ignore the optional field retain their existing
+transcript-based recovery behavior.
 
 `inferToolMetaFromArgs` from `openclaw/plugin-sdk/agent-harness-runtime` returns
 compact, lossy display metadata. Array values deeper than 64 levels are omitted;
@@ -151,6 +189,18 @@ also appear in `toolMediaUrls`. Never include model-selected dynamic-tool or
 OpenClaw-tool media. On `message_tool_only` routes, this narrow provenance lets
 native runtime artifacts survive source-reply suppression; normal send policy
 and ambient-room admission still apply.
+
+## Harness delivery defaults
+
+Set `deliveryDefaults.visibleReplies` to `"automatic"` or `"message_tool"`
+when a harness needs a default visible-reply policy. Explicit message config
+still takes precedence.
+
+The deprecated `sourceVisibleReplies` field remains supported for published
+harness plugins, including July 2026 versions of `@openclaw/codex`. When both
+fields are present, `visibleReplies` takes precedence. Plugin authors should
+migrate to that field. The October 1 removal date does not retire a contract
+while supported published plugins still produce it.
 
 ## Terminal tool outcomes
 

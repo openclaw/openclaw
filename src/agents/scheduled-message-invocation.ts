@@ -12,7 +12,7 @@ import {
   resolveConversationToolPolicies,
 } from "./conversation-tool-policy-pipeline.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
-import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
+import { applyToolPolicyPipeline, type ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import type { DeclaredToolAllowlistContext, ToolPolicyLike } from "./tool-policy.js";
 
 /** Admit each new invocation against published policy without changing an accepted invocation. */
@@ -54,20 +54,19 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   };
   isAvailable: () => boolean;
 }) {
-  const policies = resolveConversationToolPolicies({
-    capabilityProfile: params.capabilityProfile,
-    additionalProfileAllow: params.runtimeProfileAlsoAllow,
-    additionalPolicyAllow: params.toolSearchControlAllowlist,
-  });
-  const filter = (currentProfile = params.capabilityProfile): AnyAgentTool[] => {
+  const resolvePolicies = (capabilityProfile: ResolvedConversationCapabilityProfile) =>
+    resolveConversationToolPolicies({
+      capabilityProfile,
+      additionalProfileAllow: params.runtimeProfileAlsoAllow,
+      additionalPolicyAllow: params.toolSearchControlAllowlist,
+    });
+  const policies = resolvePolicies(params.capabilityProfile);
+  const filter = (
+    currentProfile = params.capabilityProfile,
+    onFilter?: (event: ToolPolicyFilterEvent) => void,
+  ): AnyAgentTool[] => {
     const currentPolicies =
-      currentProfile === params.capabilityProfile
-        ? policies
-        : resolveConversationToolPolicies({
-            capabilityProfile: currentProfile,
-            additionalProfileAllow: params.runtimeProfileAlsoAllow,
-            additionalPolicyAllow: params.toolSearchControlAllowlist,
-          });
+      currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
     const { tools, declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
     return applyToolPolicyPipeline({
       tools,
@@ -88,6 +87,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
         additionalStepsAfterSandbox: [
           {
             policy: params.ownerOnlyCoreToolPolicy,
+            source: { kind: "session" },
             label: "gateway sender owner-only tools",
             unavailableCoreToolReason,
           },
@@ -96,6 +96,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
         unavailableCoreToolReason,
       }),
       declaredToolAllowlist,
+      onFilter,
     });
   };
   return {

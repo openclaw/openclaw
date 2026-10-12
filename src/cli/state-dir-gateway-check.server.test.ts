@@ -51,6 +51,7 @@ describe("state-dir guard with a real token Gateway", () => {
         OPENCLAW_GATEWAY_PORT: String(port),
         OPENCLAW_TEST_GATEWAY_TOKEN: token,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_CHANNELS: "1",

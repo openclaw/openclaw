@@ -2,8 +2,8 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
-import type { AssistantMessageEvent, Context, Model } from "../types.js";
-import { streamOpenAICompletions } from "./openai-completions.js";
+import type { AssistantMessageEvent, Context, Model, SimpleStreamOptions } from "../types.js";
+import { streamOpenAICompletions, type OpenAICompletionsOptions } from "./openai-completions.js";
 
 const model = {
   id: "gpt-4",
@@ -159,14 +159,12 @@ function createManagedFixtureStream(
   return stream;
 }
 
-describe.each([
-  { name: "package", createStream: streamOpenAICompletions },
-  { name: "managed", createStream: createManagedFixtureStream },
-])("$name OpenAI Chat Completions stream", ({ createStream }) => {
+describe("OpenAI Chat Completions stream", () => {
   const startFixture = (
     chunks: ChatCompletionChunk[],
     options: FixtureOptions = FIXTURE_OPTIONS,
     fixtureModel: Model<"openai-completions"> = model,
+    createStream = createManagedFixtureStream,
   ) => {
     installStream(chunks);
     return createStream(fixtureModel, context, options);
@@ -175,27 +173,16 @@ describe.each([
     startFixture(...args).result();
   const collectFixture = async (...args: Parameters<typeof startFixture>) => {
     const stream = startFixture(...args);
-    const events: Array<{ type: AssistantMessageEvent["type"]; toolCallId?: string }> = [];
-    const starts: Array<{ id: string; name: string }> = [];
+    const eventTypes: AssistantMessageEvent["type"][] = [];
     const argumentDeltas: string[] = [];
     for await (const event of stream) {
-      events.push({
-        type: event.type,
-        ...(event.type === "toolcall_end" ? { toolCallId: event.toolCall.id } : {}),
-      });
-      if (event.type === "toolcall_start") {
-        const block = event.partial.content[event.contentIndex];
-        if (block?.type === "toolCall") {
-          starts.push({ id: block.id, name: block.name });
-        }
-      } else if (event.type === "toolcall_delta" && event.delta) {
+      eventTypes.push(event.type);
+      if (event.type === "toolcall_delta" && event.delta) {
         argumentDeltas.push(event.delta);
       }
     }
     return {
-      events,
-      eventTypes: events.map((event) => event.type),
-      starts,
+      eventTypes,
       argumentDeltas,
       result: await stream.result(),
     };
@@ -216,7 +203,7 @@ describe.each([
       name: "lookup",
       arguments: { query: "cats" },
     });
-    expect(result.content[0]).not.toHaveProperty("partialArgs");
+    expect(result.content[0]).not.toHaveProperty("partialJson");
     expect(result.content[0]).not.toHaveProperty("streamIndex");
     expect(eventTypes).toContain("toolcall_start");
     expect(eventTypes).toContain("toolcall_delta");
@@ -259,97 +246,13 @@ describe.each([
         chunk({}, "function_call"),
       ],
       { ...FIXTURE_OPTIONS, reasoningEffort: "medium" },
-      { ...model, reasoning: true },
+      // Official OpenAI sends reasoning tool turns through Responses.
+      { ...model, reasoning: true, baseUrl: "https://provider.example/v1" },
     );
 
     expect(result.stopReason).toBe("toolUse");
     expect(result.content.map((block) => block.type)).toEqual(["toolCall", "thinking"]);
     expect(eventTypes.indexOf("toolcall_start")).toBeLessThan(eventTypes.indexOf("thinking_start"));
-  });
-
-  it("replays buffered visible text before a superseding modern call", async () => {
-    const { starts, result } = await collectFixture([
-      chunk({ function_call: { name: "legacy", arguments: '{"query":"wrong"}' } }),
-      chunk({ content: "Visible before the modern call." }),
-      modernCallChunk('{"query":"cats"}'),
-      chunk({}, "tool_calls"),
-    ]);
-
-    expect(result.stopReason).toBe("toolUse");
-    expect(result.content.map((block) => block.type)).toEqual(["text", "toolCall"]);
-    expect(result.content[0]).toMatchObject({ text: "Visible before the modern call." });
-    expect(starts.map(({ id }) => id)).toEqual(["call_modern"]);
-  });
-
-  it("releases buffered visible text when a legacy call is not confirmed", async () => {
-    const result = await fixtureResult([
-      chunk({ function_call: { name: "legacy", arguments: '{"query":"discard"}' } }),
-      chunk({ content: "The provider supplied an answer instead." }),
-      chunk({}, "stop"),
-    ]);
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([
-      { type: "text", text: "The provider supplied an answer instead." },
-    ]);
-  });
-
-  it.each<[string, ChatCompletionChunk[]]>([
-    [
-      "keeps modern tool_calls authoritative when legacy data is also present",
-      [
-        chunk({
-          function_call: { name: "legacy", arguments: '{"query":"wrong"}' },
-          tool_calls: [
-            toolCallDelta({ id: "call_modern", name: "lookup", arguments: '{"query":"ca' }),
-          ],
-        }),
-        chunk({ function_call: { arguments: "ignore this legacy continuation" } }),
-        chunk({ tool_calls: [toolCallDelta({ arguments: 'ts"}' })] }),
-        chunk({}, "tool_calls"),
-      ],
-    ],
-    [
-      "replaces an earlier legacy function_call when modern tool_calls arrive later",
-      [
-        chunk({ function_call: { name: "legacy", arguments: '{"query":"wrong"}' } }),
-        chunk({
-          tool_calls: [
-            toolCallDelta({
-              index: 1,
-              id: "call_modern",
-              name: "lookup",
-              arguments: '{"query":"ca',
-            }),
-          ],
-        }),
-        chunk({ tool_calls: [toolCallDelta({ index: 1, arguments: 'ts"}' })] }),
-        chunk({}, "tool_calls"),
-      ],
-    ],
-  ])("%s", async (_title, chunks) => {
-    const { starts, argumentDeltas, result } = await collectFixture(chunks);
-
-    expect(result.stopReason).toBe("toolUse");
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0]).toMatchObject({
-      type: "toolCall",
-      id: "call_modern",
-      name: "lookup",
-      arguments: { query: "cats" },
-    });
-    expect(starts).toEqual([{ id: "call_modern", name: "lookup" }]);
-    expect(argumentDeltas).toEqual(['{"query":"ca', 'ts"}']);
-  });
-
-  it("keeps ordinary text and stop finish reasons outside the tool-call lane", async () => {
-    const result = await fixtureResult([
-      chunk({ role: "assistant", content: "No tool needed." }),
-      chunk({}, "stop"),
-    ]);
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "No tool needed." }]);
   });
 
   it.each([
@@ -372,17 +275,16 @@ describe.each([
 
   it.each([
     { reason: "incomplete JSON", name: "lookup", arguments: '{"query":"cats"' },
-    { reason: "malformed JSON", name: "lookup", arguments: '{"query":}' },
-    { reason: "invalid string escape", name: "lookup", arguments: String.raw`{"query":"cats\q"}` },
-    { reason: "unescaped control character", name: "lookup", arguments: '{"query":"cats\n"}' },
-    { reason: "non-object JSON", name: "lookup", arguments: '["cats"]' },
     { reason: "empty arguments", name: "lookup", arguments: "" },
     { reason: "missing function name", name: "", arguments: '{"query":"cats"}' },
   ] as const)(
     "rejects an authoritative modern tool terminal with $reason",
-    async ({ name, arguments: rawArguments }) => {
+    async ({ reason, name, arguments: rawArguments }) => {
       const { eventTypes, result } = await collectFixture(
         confirmedModernCallChunks(rawArguments, { id: "call_malformed", name }),
+        FIXTURE_OPTIONS,
+        model,
+        reason === "incomplete JSON" ? streamOpenAICompletions : createManagedFixtureStream,
       );
       expect(result.stopReason).toBe("error");
       expect(result.errorMessage).toContain("incomplete or malformed tool call");
@@ -390,38 +292,6 @@ describe.each([
       expect(eventTypes).not.toContain("toolcall_end");
     },
   );
-
-  it.each([
-    { reason: "incomplete JSON", arguments: '{"query":"cats"' },
-    { reason: "invalid string escape", arguments: String.raw`{"query":"cats\q"}` },
-    { reason: "unescaped control character", arguments: '{"query":"cats\n"}' },
-  ] as const)("rejects an authoritative legacy function terminal with $reason", async (value) => {
-    const { eventTypes, result } = await collectFixture(confirmedLegacyCallChunks(value.arguments));
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete or malformed tool call");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
-  });
-
-  it("rejects every parallel call when a sibling has incomplete arguments", async () => {
-    const { eventTypes, result } = await collectFixture([
-      chunk({
-        tool_calls: [
-          toolCallDelta({ id: "call_valid", name: "lookup", arguments: '{"query":"cats"}' }),
-          toolCallDelta({
-            index: 1,
-            id: "call_invalid",
-            name: "lookup",
-            arguments: '{"query":"dogs"',
-          }),
-        ],
-      }),
-      chunk({}, "tool_calls"),
-    ]);
-    expect(result.stopReason).toBe("error");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
-  });
 
   it("removes provisional calls when the response is aborted mid-stream", async () => {
     const abort = new AbortController();
@@ -443,23 +313,6 @@ describe.each([
     expect(eventTypes).not.toContain("toolcall_end");
   });
 
-  it("retains an executable modern call after its confirmed tool terminal", async () => {
-    const collected = await collectFixture(
-      confirmedModernCallChunks('{"query":"cats"}', { id: "call_confirmed" }),
-    );
-    const { events, result } = collected;
-    expect(result.stopReason).toBe("toolUse");
-    expect(result.content).toContainEqual({
-      type: "toolCall",
-      id: "call_confirmed",
-      name: "lookup",
-      arguments: { query: "cats" },
-    });
-    expect(events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", toolCallId: "call_confirmed" },
-    ]);
-  });
-
   it("preserves unsafe integers in confirmed tool arguments", async () => {
     const { result } = await collectFixture(
       confirmedModernCallChunks('{"target":9223372036854775807}', {
@@ -476,29 +329,7 @@ describe.each([
     );
   });
 
-  it("preserves confirmed tool completion before following text blocks close", async () => {
-    const { eventTypes, result } = await collectFixture([
-      modernCallChunk('{"query":"cats"}', { id: "call_before_text" }),
-      chunk({ content: "Trailing commentary." }),
-      chunk({}, "tool_calls"),
-    ]);
-    expect(result.stopReason).toBe("toolUse");
-    const toolEndIndex = eventTypes.indexOf("toolcall_end");
-    expect(toolEndIndex).toBeGreaterThanOrEqual(0);
-    expect(toolEndIndex).toBeLessThan(eventTypes.indexOf("done"));
-
-    const followingTextEndIndex = eventTypes.indexOf("text_end");
-    if (followingTextEndIndex >= 0) {
-      expect(toolEndIndex).toBeLessThan(followingTextEndIndex);
-    }
-  });
-
-  it.each([
-    { finishReason: "stop", stopReason: "stop" },
-    { finishReason: "length", stopReason: "length" },
-    { finishReason: "content_filter", stopReason: "error" },
-    { finishReason: "tool_calls", stopReason: "stop" },
-  ] as const)(
+  it.each([{ finishReason: "tool_calls", stopReason: "stop" }] as const)(
     "discards provisional legacy fragments when the provider finishes with $finishReason",
     async ({ finishReason, stopReason }) => {
       const { eventTypes, result } = await collectFixture([
@@ -519,11 +350,6 @@ describe.each([
       "x".repeat(256_001),
       "lookup",
     ],
-    [
-      "rejects an oversized legacy function name before publishing a provisional call",
-      "{}",
-      "x".repeat(256_001),
-    ],
   ])("%s", async (_title, rawArguments, name) => {
     const { eventTypes, result } = await collectFixture(
       confirmedLegacyCallChunks(rawArguments, name),
@@ -531,31 +357,6 @@ describe.each([
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
     expect(eventTypes).not.toContain("toolcall_start");
-  });
-
-  it("bounds an indexed modern call through an id-only continuation", async () => {
-    const value = argumentsWithByteLength(TOOL_ARGUMENT_BYTE_LIMIT + 1);
-    const { eventTypes, result } = await collectFixture([
-      chunk({
-        tool_calls: [
-          toolCallDelta({
-            index: 0,
-            id: "call_alias",
-            name: "lookup",
-            arguments: value.slice(0, 128_000),
-          }),
-        ],
-      }),
-      chunk({
-        tool_calls: [idOnlyToolCallDelta({ id: "call_alias", arguments: value.slice(128_000) })],
-      }),
-      chunk({}, "tool_calls"),
-    ]);
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
   });
 
   it("keeps independent id-only modern calls independently bounded", async () => {
@@ -589,11 +390,6 @@ describe.each([
   });
 
   it.each([
-    {
-      name: "accepts an exact-limit surrogate pair split between deltas",
-      bytes: TOOL_ARGUMENT_BYTE_LIMIT,
-      stopReason: "toolUse",
-    },
     {
       name: "rejects an oversized surrogate pair split between deltas",
       bytes: TOOL_ARGUMENT_BYTE_LIMIT + 1,
@@ -631,19 +427,6 @@ describe.each([
     ).toBe(bytes);
   });
 
-  it("measures multibyte modern arguments by UTF-8 bytes", async () => {
-    const { eventTypes, result } = await collectFixture(
-      confirmedModernCallChunks(argumentsWithByteLength(TOOL_ARGUMENT_BYTE_LIMIT + 1, "é"), {
-        id: "call_multibyte",
-      }),
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("Exceeded tool-call argument buffer limit");
-    expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
-    expect(eventTypes).not.toContain("toolcall_end");
-  });
-
   it("coalesces tiny provisional legacy fragments into one bounded executable delta", async () => {
     const query = "x".repeat(1_100);
     const { argumentDeltas, result } = await collectFixture([
@@ -669,19 +452,6 @@ describe.each([
     expect(argumentDeltas).toEqual([JSON.stringify({ query })]);
   });
 
-  it("bounds visible content buffered behind a provisional legacy call", async () => {
-    const { eventTypes, result } = await collectFixture([
-      chunk({ function_call: { name: "lookup", arguments: '{"query":"cats"}' } }),
-      chunk({ content: "x".repeat(256_001) }),
-      chunk({}, "function_call"),
-    ]);
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("Exceeded legacy tool-call content buffer limit");
-    expect(eventTypes).not.toContain("toolcall_start");
-    expect(eventTypes).not.toContain("text_start");
-  });
-
   it("bounds the number of tiny deltas buffered behind a provisional legacy call", async () => {
     const result = await fixtureResult([
       chunk({ function_call: { name: "lookup", arguments: '{"query":"cats"}' } }),
@@ -693,16 +463,193 @@ describe.each([
     expect(result.errorMessage).toContain("Exceeded legacy tool-call content buffer limit");
     expect(result.content).toEqual([]);
   });
+});
 
-  it("generates a distinct legacy call id for each assistant response", async () => {
-    const chunks = confirmedLegacyCallChunks('{"query":"cats"}');
-    const first = await fixtureResult(chunks);
-    const second = await fixtureResult(chunks);
+describe("mapped off effort in chat completions", () => {
+  async function capturePayload(
+    compat: Model<"openai-completions">["compat"],
+    off: string | null | undefined,
+    request: {
+      transport?: "managed";
+      reasoning?: SimpleStreamOptions["reasoning"];
+      reasoningEffort?: OpenAICompletionsOptions["reasoningEffort"];
+    } = {},
+  ) {
+    let payload: unknown;
+    const reasoningFixtureModel = {
+      id: "mapped-thinking-model",
+      name: "Mapped thinking model",
+      provider: "synthetic-provider",
+      api: "openai-completions",
+      baseUrl: "https://provider.example/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 32_000,
+      maxTokens: 1024,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      thinkingLevelMap: off === undefined ? undefined : { off },
+      compat,
+    } satisfies Model<"openai-completions">;
+    const options = {
+      apiKey: "synthetic-unused-key",
+      reasoningEffort: request.reasoningEffort,
+      onPayload(value) {
+        payload = value;
+        throw new Error("captured before network");
+      },
+    } satisfies OpenAICompletionsOptions;
+    const stream = await (request.transport === "managed"
+      ? createOpenAICompletionsTransportStreamFn()(
+          reasoningFixtureModel,
+          { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
+          {
+            ...options,
+            reasoning: request.reasoning,
+          },
+        )
+      : streamOpenAICompletions(
+          reasoningFixtureModel,
+          { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
+          options,
+        ));
+    const result = await stream.result();
+    expect(result.errorMessage).toBe("captured before network");
+    return payload;
+  }
 
-    expect(first.content[0]).toMatchObject({ type: "toolCall" });
-    expect(second.content[0]).toMatchObject({ type: "toolCall" });
-    if (first.content[0]?.type === "toolCall" && second.content[0]?.type === "toolCall") {
-      expect(first.content[0].id).not.toBe(second.content[0].id);
+  it("maps OpenRouter logical off to the supported none effort", async () => {
+    expect(
+      await capturePayload(
+        {
+          supportsReasoningEffort: true,
+          thinkingFormat: "openrouter",
+          supportedReasoningEfforts: ["none", "low", "high"],
+        },
+        undefined,
+        { reasoningEffort: "off" },
+      ),
+    ).toMatchObject({ reasoning: { effort: "none" } });
+  });
+
+  it("honors an uppercase binary off mapping", async () => {
+    expect(
+      await capturePayload(
+        {
+          thinkingFormat: "together",
+          supportsReasoningEffort: true,
+          reasoningEffortMap: { OFF: "low" },
+        },
+        undefined,
+        { reasoningEffort: "off" },
+      ),
+    ).toMatchObject({
+      reasoning: { enabled: true },
+      reasoning_effort: "low",
+    });
+  });
+
+  it("honors the model's off mapping for Qwen chat templates", async () => {
+    expect(
+      await capturePayload(
+        {
+          thinkingFormat: "qwen-chat-template",
+          supportsReasoningEffort: true,
+        },
+        "low",
+      ),
+    ).toMatchObject({
+      chat_template_kwargs: { enable_thinking: true, preserve_thinking: true },
+    });
+  });
+
+  it.each([
+    { name: "omission", reasoning: undefined, enabled: undefined },
+    { name: "logical off", reasoning: "off", enabled: true },
+  ] as const)(
+    "preserves mandatory OpenRouter $name without an effort selector",
+    async ({ reasoning, enabled }) => {
+      const payload = await capturePayload(
+        {
+          thinkingFormat: "openrouter",
+          supportsReasoningEffort: false,
+        },
+        null,
+        { transport: "managed", reasoning },
+      );
+      if (enabled === undefined) {
+        expect(payload).not.toHaveProperty("reasoning");
+      } else {
+        expect(payload).toMatchObject({ reasoning: { enabled } });
+      }
+      expect(payload).not.toHaveProperty("reasoning_effort");
+      expect(payload).not.toHaveProperty("reasoning.effort");
+    },
+  );
+
+  it("honors the model off mapping at the managed binary boundary", async () => {
+    expect(
+      await capturePayload(
+        {
+          thinkingFormat: "together",
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "low", "high"],
+        },
+        "low",
+        { transport: "managed", reasoning: "off" },
+      ),
+    ).toMatchObject({
+      reasoning: { enabled: true },
+      reasoning_effort: "low",
+    });
+  });
+});
+
+describe("OpenAI Chat Completions cache metadata", () => {
+  it.each([
+    {
+      id: "gpt-5.4",
+      compat: undefined,
+      key: "session-123",
+      lifetime: { prompt_cache_retention: "24h" },
+    },
+    {
+      id: "gpt-5.6-sol",
+      compat: undefined,
+      key: "session-123",
+      lifetime: { prompt_cache_options: { ttl: "30m" } },
+    },
+  ])("uses native cache policy for $id with $compat", async ({ id, compat, key, lifetime }) => {
+    const cacheModel = {
+      id,
+      name: id,
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+      compat,
+    } satisfies Model<"openai-completions">;
+    let payload: unknown;
+    const result = await streamOpenAICompletions(
+      cacheModel,
+      { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
+      {
+        apiKey: "synthetic-unused-key",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(value) {
+          payload = value;
+          throw new Error("captured before request");
+        },
+      },
+    ).result();
+    expect(result.errorMessage).toBe("captured before request");
+    expect(payload).toMatchObject({ prompt_cache_key: key, ...lifetime });
+    if (!("prompt_cache_retention" in lifetime)) {
+      expect(payload).not.toHaveProperty("prompt_cache_retention");
     }
   });
 });

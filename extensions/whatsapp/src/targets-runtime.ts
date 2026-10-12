@@ -54,23 +54,13 @@ export function isSelfChatMode(
   selfE164: string | null | undefined,
   allowFrom?: Array<string | number> | null,
 ): boolean {
-  if (!selfE164) {
-    return false;
-  }
-  if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
+  if (!selfE164 || !Array.isArray(allowFrom) || allowFrom.length === 0) {
     return false;
   }
   const normalizedSelf = normalizeE164(selfE164);
-  return allowFrom.some((n) => {
-    if (n === "*") {
-      return false;
-    }
-    try {
-      return normalizeE164(String(n)) === normalizedSelf;
-    } catch {
-      return false;
-    }
-  });
+  return allowFrom.some(
+    (entry) => entry !== "*" && normalizeE164(String(entry)) === normalizedSelf,
+  );
 }
 
 export function toWhatsappJid(number: string): string {
@@ -118,16 +108,14 @@ function addUniqueString(target: string[], value: string | null | undefined): vo
 }
 
 async function tryLookupMappedJid(
-  lookup: (() => Promise<string | null> | undefined) | undefined,
+  lookup: () => Promise<string | null> | undefined,
+  failureContext = "",
 ): Promise<string | null> {
-  if (!lookup) {
-    return null;
-  }
   try {
     return (await lookup()) ?? null;
   } catch (err) {
     if (shouldLogVerbose()) {
-      logVerbose(`LID mapping lookup failed: ${String(err)}`);
+      logVerbose(`LID mapping lookup failed${failureContext}: ${String(err)}`);
     }
     return null;
   }
@@ -138,14 +126,9 @@ const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
 
 function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
   addUniqueString(target, jid);
-  const pnMatch = jid?.match(DIRECT_PN_JID_RE);
-  if (pnMatch) {
-    addUniqueString(target, `${pnMatch[1]}@${pnMatch[2]}`);
-    return;
-  }
-  const lidMatch = jid?.match(DIRECT_LID_JID_RE);
-  if (lidMatch) {
-    addUniqueString(target, `${lidMatch[1]}@${lidMatch[2]}`);
+  const match = jid?.match(DIRECT_PN_JID_RE) ?? jid?.match(DIRECT_LID_JID_RE);
+  if (match) {
+    addUniqueString(target, `${match[1]}@${match[2]}`);
   }
 }
 
@@ -161,33 +144,30 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
   const candidates: string[] = [];
   addEquivalentDirectChatCandidate(candidates, normalized);
   const pnMatch = normalized.match(DIRECT_PN_JID_RE);
-  if (pnMatch) {
-    const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(normalized));
-    addEquivalentDirectChatCandidate(candidates, mappedLid);
-
-    const phoneDigits = pnMatch[1];
-    const pnDomain = pnMatch[2];
-    if (!phoneDigits || !pnDomain) {
-      return candidates;
-    }
-    const mappedLocalLid = readLidForwardMapping({ phoneDigits, opts });
-    const localLidDomain = pnDomain.toLowerCase() === "hosted" ? "hosted.lid" : "lid";
-    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
+  const match = pnMatch ?? normalized.match(DIRECT_LID_JID_RE);
+  if (!match) {
     return candidates;
   }
+  const mappedJid = await tryLookupMappedJid(() =>
+    pnMatch
+      ? opts?.lidLookup?.getLIDForPN?.(normalized)
+      : opts?.lidLookup?.getPNForLID?.(normalized),
+  );
+  addEquivalentDirectChatCandidate(candidates, mappedJid);
 
-  const lidMatch = normalized.match(DIRECT_LID_JID_RE);
-  if (lidMatch) {
-    const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(normalized));
-    addEquivalentDirectChatCandidate(candidates, mappedPn);
-
-    const lidDomain = lidMatch[2];
-    if (!lidMatch[1] || !lidDomain) {
-      return candidates;
-    }
+  const digits = match[1];
+  const domain = match[2];
+  if (!digits || !domain) {
+    return candidates;
+  }
+  if (pnMatch) {
+    const mappedLocalLid = readLidForwardMapping({ phoneDigits: digits, opts });
+    const localLidDomain = domain.toLowerCase() === "hosted" ? "hosted.lid" : "lid";
+    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
+  } else {
     const e164 = jidToE164(normalized, { ...opts, logMissing: false });
     const localPnJid =
-      e164 && lidDomain.toLowerCase() === "hosted.lid"
+      e164 && domain.toLowerCase() === "hosted.lid"
         ? `${e164.replace(/\D/g, "")}@hosted`
         : e164
           ? toWhatsappJid(e164)
@@ -214,18 +194,23 @@ function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   return [...dirs];
 }
 
-function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options }): string | null {
-  const mappingFilename = `lid-mapping-${params.lid}_reverse.json`;
-  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
-  for (const dir of mappingDirs) {
+function readLidMapping(
+  mappingFilename: string,
+  opts: JidToE164Options | undefined,
+  normalize: (value: string) => string | null,
+): string | null {
+  for (const dir of resolveLidMappingDirs({ opts })) {
     const mappingPath = path.join(dir, mappingFilename);
     try {
       const data = fs.readFileSync(mappingPath, "utf8");
-      const phone = JSON.parse(data) as string | number | null;
-      if (phone === null || phone === undefined) {
+      const value = JSON.parse(data) as string | number | null;
+      if (value === null || value === undefined) {
         continue;
       }
-      return normalizeE164(String(phone));
+      const normalized = normalize(String(value));
+      if (normalized !== null) {
+        return normalized;
+      }
     } catch {
       // next location
     }
@@ -237,25 +222,11 @@ function readLidForwardMapping(params: {
   phoneDigits: string;
   opts?: JidToE164Options;
 }): string | null {
-  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
-  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
-  for (const dir of mappingDirs) {
-    const mappingPath = path.join(dir, mappingFilename);
-    try {
-      const data = fs.readFileSync(mappingPath, "utf8");
-      const lid = JSON.parse(data) as string | number | null;
-      if (lid === null || lid === undefined) {
-        continue;
-      }
-      const digits = String(lid).replace(/\D/g, "");
-      if (digits) {
-        return digits;
-      }
-    } catch {
-      // next location
-    }
-  }
-  return null;
+  return readLidMapping(
+    `lid-mapping-${params.phoneDigits}.json`,
+    params.opts,
+    (value) => value.replace(/\D/g, "") || null,
+  );
 }
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
@@ -273,10 +244,7 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (!lid) {
     return null;
   }
-  const phone = readLidReverseMapping({
-    lid,
-    opts,
-  });
+  const phone = readLidMapping(`lid-mapping-${lid}_reverse.json`, opts, normalizeE164);
   if (phone) {
     return phone;
   }
@@ -301,18 +269,10 @@ export async function resolveJidToE164(
   if (!/(@lid|@hosted\.lid)$/.test(jid) || !opts?.lidLookup?.getPNForLID) {
     return null;
   }
-  try {
-    const pnJid = await opts.lidLookup.getPNForLID(jid);
-    if (!pnJid) {
-      return null;
-    }
-    return jidToE164(pnJid, opts);
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`LID mapping lookup failed for ${jid}: ${String(err)}`);
-    }
-    return null;
-  }
+  return await tryLookupMappedJid(async () => {
+    const pnJid = await opts.lidLookup?.getPNForLID?.(jid);
+    return pnJid ? jidToE164(pnJid, opts) : null;
+  }, ` for ${jid}`);
 }
 
 function protectWhatsAppEscapedMarkers(text: string): {

@@ -1,7 +1,6 @@
 // Shared mocks and harness for the non-interactive gateway onboarding suites.
 // vi.mock calls live here so sibling suites share one config-write/daemon/health surface.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
@@ -35,11 +34,19 @@ type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemon
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
-const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommandMock = vi.hoisted(() =>
+  vi.fn<typeof import("./health.js").healthCommandNonExiting>(async () => {}),
+);
+const waitForGatewayReachableMock = vi.hoisted(() =>
+  vi.fn<NonNullable<WaitForGatewayReachableMock>>(
+    (params) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+  ),
+);
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
   isLoaded: vi.fn(async () => true),
+  readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({
     status: "running",
     state: "active",
@@ -56,7 +63,8 @@ gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
   onboardTestConfigStore.readSnapshot(),
 );
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
@@ -64,29 +72,19 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: gatewayOnboardConfigSnapshotMock,
 }));
 
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (
-    _options: unknown,
-    run: (lease: {
-      databasePath: string;
-      signal: AbortSignal;
-      assertOwned: () => void;
-      assertOwnedInTransaction: () => void;
-    }) => Promise<unknown>,
-  ) => {
-    pluginLifecycleLeaseState.depth += 1;
-    try {
-      return await run({
-        databasePath: path.join(path.dirname(resolveTestConfigPath()), "openclaw.sqlite"),
-        signal: new AbortController().signal,
-        assertOwned: () => {},
-        assertOwnedInTransaction: () => {},
-      });
-    } finally {
-      pluginLifecycleLeaseState.depth -= 1;
-    }
-  },
-}));
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>();
+  const withPluginLifecycleLease: typeof actual.withPluginLifecycleLease = (options, run) =>
+    actual.withPluginLifecycleLease(options, async (lease) => {
+      pluginLifecycleLeaseState.depth += 1;
+      try {
+        return await run(lease);
+      } finally {
+        pluginLifecycleLeaseState.depth -= 1;
+      }
+    });
+  return { ...actual, withPluginLifecycleLease };
+});
 
 export const capturedReplaceConfigFileCalls: Array<{
   nextConfig: OpenClawConfig;
@@ -96,6 +94,7 @@ export const capturedReplaceConfigFileCalls: Array<{
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     replaceConfigFile: async ({
       nextConfig,
       writeOptions,
@@ -159,13 +158,9 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
-    waitForGatewayReachable: (params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    probeGatewayReachable: (params: { url: string; token?: string; password?: string }) =>
+      gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    waitForGatewayReachable: waitForGatewayReachableMock,
   };
 });
 
@@ -245,4 +240,5 @@ export {
   installGatewayDaemonNonInteractiveMock,
   gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
+  waitForGatewayReachableMock,
 };

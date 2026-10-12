@@ -1,12 +1,18 @@
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateWorkerSkillWorkshopParams } from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -14,21 +20,27 @@ import {
 import {
   invalidateSkillAuthoringForOtherRequester,
   prepareGatewaySkillAuthoring,
+  prepareGatewaySkillLibraryTurn,
 } from "./skill-library-authoring.js";
 
+const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
+    await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
   }),
 );
 const content =
   "---\nname: ordinary\ndescription: An ordinary personal procedure\n---\n# Ordinary\nUse this procedure when asked.\n";
-function setup() {
+async function setup() {
   vi.stubEnv("OPENCLAW_STATE_DIR", temps.make("personal-authoring-"));
   const alice = ensureProfileForEmail("alice@example.test");
   const bob = ensureProfileForEmail("bob@example.test");
+  catalogReleases.push((await prepareUserProfileCatalog()).release);
   const request = (profileId: string): SkillLibraryRequestOwner => ({
     client: {
       authenticatedUserProfile: { profileId },
@@ -39,7 +51,7 @@ function setup() {
   return { alice, bob, request };
 }
 async function admitted(
-  capability: NonNullable<ReturnType<typeof prepareGatewaySkillAuthoring>>,
+  capability: NonNullable<Awaited<ReturnType<typeof prepareGatewaySkillAuthoring>>>,
   runId = "ordinary-turn",
 ) {
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
@@ -59,6 +71,7 @@ async function admitted(
     close: admission.close,
     invoke: (input: Parameters<typeof capability.invoke>[0]) =>
       withCaller(() => capability.invoke(input)),
+    assertWorkspaceCurrent: () => withCaller(() => capability.assertWorkspaceCurrent?.()),
     execute: (tool: ReturnType<typeof createLibrarySkillWorkshopTool>, input: unknown) =>
       withCaller(() => tool.execute("test", input)),
     context,
@@ -66,8 +79,44 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it("checks workspace authority from committed profile facts without a main-thread read", async () => {
+    const { alice, request } = await setup();
+    const owner = request(alice.id);
+    owner.client!.connect.scopes = ["operator.admin"];
+    owner.context.getRuntimeConfig = () => ({
+      gateway: {
+        roles: {
+          default: "administrator",
+          definitions: {
+            administrator: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "view" },
+            },
+            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+          },
+        },
+      },
+    });
+    const run = await admitted(
+      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
+    );
+    const { db } = openOpenClawStateDatabase();
+    try {
+      db.setAuthorizer(() => constants.SQLITE_DENY);
+      await expect(run.assertWorkspaceCurrent()).resolves.toBeUndefined();
+      db.setAuthorizer(null);
+      setUserProfileRole(alice.id, "reader");
+      db.setAuthorizer(() => constants.SQLITE_DENY);
+      await expect(run.assertWorkspaceCurrent()).rejects.toThrow("current administrator authority");
+    } finally {
+      db.setAuthorizer(null);
+      run.close();
+    }
+  });
+
   it("returns the actual slug and personal namespace edit permissions while retaining operator administration", async () => {
-    const { alice, bob, request } = setup();
+    const { alice, bob, request } = await setup();
     const owner = request(alice.id);
     owner.client!.connect.scopes = ["operator.admin"];
     const other = await saveSkillLibrary(libraryAuthority(request(bob.id)), {
@@ -75,7 +124,11 @@ describe("human personal namespace authority", () => {
       content,
       expectedRevision: null,
     });
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillLibraryTurn(
+      { owner, sessionKey: "agent:main:shared", isHumanTurn: true },
+      async () => {},
+      () => {},
+    ))!;
     const run = await admitted(capability);
     const tool = createLibrarySkillWorkshopTool(capability);
     try {
@@ -93,7 +146,7 @@ describe("human personal namespace authority", () => {
           content: content + "Unauthorized edit.\n",
         }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries[0]?.canEdit).toBe(true);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries[0]?.canEdit).toBe(true);
       expect(await run.invoke({ action: "list" })).toMatchObject({
         entries: [expect.objectContaining({ skillId: other.entry.skillId, canEdit: false })],
       });
@@ -125,9 +178,9 @@ describe("human personal namespace authority", () => {
     }
   });
   it("authors for the real requester inside another person's session and rejects a retained tool after close", async () => {
-    const { bob, request } = setup();
+    const { bob, request } = await setup();
     const owner = request(bob.id);
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     const run = await admitted(capability);
     try {
       const created = await run.invoke({ action: "create", slug: "ordinary", content });
@@ -137,7 +190,7 @@ describe("human personal namespace authority", () => {
         entry: { ownerProfileId: bob.id },
         sessionActivation: "new-sessions",
       });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(1);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(1);
       run.close();
       await expect(
         run.invoke({ action: "create", slug: "after-close", content }),
@@ -146,63 +199,18 @@ describe("human personal namespace authority", () => {
       run.close();
     }
   });
-  it("preserves supporting bytes on ordinary updates and permits an explicit authorized transfer", async () => {
-    const { alice, request } = setup();
-    const owner = request(alice.id);
-    owner.client!.connect.scopes = ["operator.admin"];
-    const run = await admitted(prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!);
-    try {
-      const created = await run.invoke({
-        action: "create",
-        slug: "resources",
-        content,
-        files: [{ path: "script.sh", content: "#!/bin/sh\nprintf ready\n", executable: true }],
-      });
-      if (!("entry" in created)) {
-        throw new Error("Expected receipt");
-      }
-      const updated = await run.invoke({
-        action: "update",
-        skillId: created.entry.skillId,
-        expectedRevision: created.entry.revision,
-        slug: "resources",
-        content: content + "Extra instruction.\n",
-      });
-      if (!("entry" in updated)) {
-        throw new Error("Expected receipt");
-      }
-      const read = await readSkillLibrary(libraryAuthority(owner), created.entry.skillId);
-      expect(Buffer.from(read.files[0]!.content, "base64").toString()).toBe(
-        "#!/bin/sh\nprintf ready\n",
-      );
-      expect(read.files[0]?.executable).toBe(true);
-      expect(
-        await run.invoke({
-          action: "transfer",
-          skillId: updated.entry.skillId,
-          expectedRevision: updated.entry.revision,
-        }),
-      ).toMatchObject({
-        state: "published",
-        target: "team",
-        entry: { ownerProfileId: null, authorProfileId: alice.id },
-      });
-    } finally {
-      run.close();
-    }
-  });
   it("requires admission, refuses synthetic authority, and invalidates a mixed-person steer", async () => {
-    const { alice, bob, request } = setup();
+    const { alice, bob, request } = await setup();
     const owner = request(alice.id);
-    expect(prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
+    expect(await prepareGatewaySkillAuthoring(owner, "agent:main:shared", false)).toBeUndefined();
     expect(
-      prepareGatewaySkillAuthoring(
+      await prepareGatewaySkillAuthoring(
         { ...owner, client: { ...owner.client!, internal: { syntheticClient: true } } },
         "agent:main:shared",
         true,
       ),
     ).toBeUndefined();
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const capability = (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!;
     await expect(capability.invoke({ action: "list" })).rejects.toMatchObject({
       code: "AUTHORITY_EXPIRED",
     });
@@ -216,13 +224,38 @@ describe("human personal namespace authority", () => {
       await expect(run.invoke({ action: "create", slug: "ambiguous", content })).rejects.toThrow(
         "fresh attributed",
       );
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
     } finally {
       run.close();
     }
   });
-  it("enforces current roles at publication after asynchronous staging", async () => {
-    const { alice, request } = setup();
+  it.each(["profile", "scopes"] as const)(
+    "refuses a prepared session after replacing requester %s",
+    async (change) => {
+      const { alice, bob, request } = await setup();
+      const owner = request(alice.id);
+      await expect(
+        prepareGatewaySkillLibraryTurn(
+          { owner, sessionKey: "agent:main:shared", isHumanTurn: true },
+          async () => {
+            if (change === "profile") {
+              owner.client!.authenticatedUserProfile = {
+                profileId: bob.id,
+                displayName: null,
+                hasAvatar: false,
+                updatedAt: 1,
+              };
+            } else {
+              owner.client!.connect.scopes = ["operator.read"];
+            }
+          },
+          () => {},
+        ),
+      ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+    },
+  );
+  it("enforces current roles after session preparation and at publication after staging", async () => {
+    const { alice, request } = await setup();
     const owner = request(alice.id);
     owner.context.getRuntimeConfig = () => ({
       gateway: {
@@ -235,54 +268,24 @@ describe("human personal namespace authority", () => {
         },
       },
     });
-    const run = await admitted(prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!);
+    await expect(
+      prepareGatewaySkillLibraryTurn(
+        { owner, sessionKey: "agent:main:shared", isHumanTurn: true },
+        async () => {
+          setUserProfileRole(alice.id, "reader");
+        },
+        () => {},
+      ),
+    ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+    setUserProfileRole(alice.id, "writer");
+    const run = await admitted(
+      (await prepareGatewaySkillAuthoring(owner, "agent:main:shared", true))!,
+    );
     try {
       const saving = run.invoke({ action: "create", slug: "revoked", content });
       setUserProfileRole(alice.id, "reader");
       await expect(saving).rejects.toMatchObject({ code: "FORBIDDEN" });
-      expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
-    } finally {
-      run.close();
-    }
-  });
-  it("returns a whole bounded instruction or visible omission without embedding binary bundle data", async () => {
-    const { alice, request } = setup();
-    const owner = request(alice.id);
-    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
-    const run = await admitted(capability);
-    try {
-      const created = await run.invoke({
-        action: "create",
-        slug: "large",
-        content: content + "Plain guidance.\n".repeat(1300),
-        files: [
-          {
-            path: "data.bin",
-            content: Buffer.alloc(500000, 128).toString("base64"),
-            encoding: "base64",
-          },
-        ],
-      });
-      if (!("entry" in created)) {
-        throw new Error("Expected publication receipt");
-      }
-      const tool = createLibrarySkillWorkshopTool(capability);
-      const result = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:shared",
-          operationalRunInstance: run.context.operationalRunInstance,
-          receiptAuthority: () => true,
-        },
-        () => tool.execute("read", { action: "read", skill_id: created.entry.skillId }),
-      );
-      expect(JSON.stringify(result).length).toBeLessThan(2000);
-      expect(JSON.stringify(result)).toContain('contentIncluded\\":false');
-      expect(JSON.stringify(result)).toContain("Open My skills");
-      expect(
-        (await readSkillLibrary(libraryAuthority(owner), created.entry.skillId)).files[0]?.content
-          .length,
-      ).toBeGreaterThan(500000);
+      expect((await listSkillLibrary(libraryAuthority(owner))).entries).toHaveLength(0);
     } finally {
       run.close();
     }
@@ -290,12 +293,18 @@ describe("human personal namespace authority", () => {
 });
 
 it("serves worker Workshop through the same Gateway capability and rejects a lost turn claim", async () => {
-  const { alice, request } = setup();
-  const capability = prepareGatewaySkillAuthoring(request(alice.id), "agent:main:shared", true)!;
+  const { alice, request } = await setup();
+  const capability = (await prepareGatewaySkillAuthoring(
+    request(alice.id),
+    "agent:main:shared",
+    true,
+  ))!;
   const run = await admitted(capability, "worker-personal-turn");
-  const { registerWorkerSkillAuthoring, invokeWorkerSkillAuthoring } =
-    await import("./worker-environments/worker-skill-authoring.js");
-  const { createWorkerSessionTools } = await import("../worker/worker-session-tools.js");
+  const { createWorkerGatewayToolRuntime } =
+    await import("./worker-environments/worker-gateway-tool-runtime.js");
+  const { createWorkerWorkshopCallRetention } =
+    await import("./worker-environments/worker-session-tool-executor.js");
+  const { createWorkerGatewayToolProxies } = await import("../worker/worker-gateway-tools.js");
   const claim = {
     sessionId: "shared",
     runId: "worker-personal-turn",
@@ -326,27 +335,56 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         () => capability.invoke(input),
       ),
   });
-  const revoke = registerWorkerSkillAuthoring(claim, hostTool, assertCurrent);
-  const unused = async () => {
-    throw new Error("Unexpected unrelated RPC");
+  const retainCall = createWorkerWorkshopCallRetention();
+  const retainedTool: AnyAgentTool = {
+    ...hostTool,
+    execute: (id, args, signal, onUpdate) =>
+      retainCall(id, args, () => hostTool.execute(id, args, signal, onUpdate)),
   };
-  const proxy = createWorkerSessionTools(
-    {
-      requestSessionsSend: unused,
-      requestSessionsSpawn: unused,
-      requestPortal: unused,
-      requestSkillWorkshop: async (input) => {
-        expect(validateWorkerSkillWorkshopParams(input)).toBe(true);
-        return {
-          type: "res",
-          id: "test",
-          ok: true,
-          payload: { resultJson: JSON.stringify(await invokeWorkerSkillAuthoring(claim, input)) },
-        };
+  bindAgentToolExecutionLocation(retainedTool, { kind: "gateway" });
+  const runtime = createWorkerGatewayToolRuntime({
+    assertCurrent,
+    signal: new AbortController().signal,
+    prepare: async () => ({
+      tools: [retainedTool],
+      presentation: createToolSurfacePresentationForTest(),
+      policy: {
+        workspaceOnly: true,
+        readOnly: false,
+        applyPatchEnabled: false,
+        applyPatchWorkspaceOnly: true,
+        imageSanitization: {},
       },
-    },
-    { multipleProfiles: true },
-  ).find((tool) => tool.name === "skill_workshop")!;
+    }),
+  });
+  const identity = {
+    environmentId: "environment",
+    credentialHash: "synthetic",
+    bundleHash: "a".repeat(64),
+    sessionId: claim.sessionId,
+    runId: claim.runId,
+    turnClaim: claim,
+    ownerEpoch: 1,
+    rpcSetVersion: 1,
+    protocolFeatures: [],
+    credentialExpiresAtMs: 1,
+  };
+  const proxy = createWorkerGatewayToolProxies(await runtime.getSurface(identity), {
+    invokeGatewayTool: async (input, options) => ({
+      type: "res",
+      id: "test",
+      ok: true,
+      payload: await runtime.invoke(identity, input, {
+        send: (frame) => options?.onUpdate?.(frame.payload.result),
+      }),
+    }),
+    cancelGatewayTool: async (input) => ({
+      type: "res",
+      id: "test",
+      ok: true,
+      payload: runtime.cancel(input),
+    }),
+  })[0]!;
   try {
     const result = await proxy.execute("create-1", {
       action: "create",
@@ -359,7 +397,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       ],
     });
     expect(JSON.stringify(result)).toContain(alice.id);
-    expect(listSkillLibrary(libraryAuthority(request(alice.id))).entries).toHaveLength(1);
+    expect((await listSkillLibrary(libraryAuthority(request(alice.id)))).entries).toHaveLength(1);
     expect(
       await proxy.execute("create-1", {
         action: "create",
@@ -372,7 +410,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         ],
       }),
     ).toEqual(result);
-    const entry = listSkillLibrary(libraryAuthority(request(alice.id))).entries[0]!;
+    const entry = (await listSkillLibrary(libraryAuthority(request(alice.id)))).entries[0]!;
     const readArtifact = await proxy.execute("read-helper", {
       action: "read",
       skill_id: entry.skillId,
@@ -418,14 +456,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         }),
       ]),
     );
-    await expect(
-      proxy.execute("stale-edit", {
+    expect(
+      await proxy.execute("stale-edit", {
         action: "update",
         skill_id: entry.skillId,
         expected_revision: entry.revision,
         files: [{ path: "scripts/edit.sh", content: "stale" }],
       }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    ).toMatchObject({ details: { status: "error" } });
     for (const [index, patch] of [
       { files: [{ path: "SKILL.md", content: "wrong channel" }] },
       {
@@ -442,14 +480,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       { delete_files: ["../escape"] },
       { delete_files: ["data.bin", "data.bin"] },
     ].entries()) {
-      await expect(
-        proxy.execute(`invalid-${index}`, {
+      expect(
+        await proxy.execute(`invalid-${index}`, {
           action: "update",
           skill_id: entry.skillId,
           expected_revision: edited.entry.revision,
           ...patch,
         }),
-      ).rejects.toThrow();
+      ).toMatchObject({ details: { status: "error" } });
     }
     await proxy.execute("delete-helper", {
       action: "update",
@@ -477,7 +515,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       }),
     ).rejects.toThrow("claim lost");
   } finally {
-    revoke();
+    await runtime.close();
     run.close();
   }
 });

@@ -73,6 +73,11 @@ other behavior, use the clearest appropriate boundary proof; a video and a
 screenshot set are not mandatory when assertions already demonstrate the change.
 
 - Keep the Vitest E2E assertions deterministic; do not commit generated screenshots or videos.
+- The shared suite disables Chromium partial rasterization and GPU rasterization to avoid observed paint-history-dependent edge pixels. Exact repeat comparisons are still required before claiming reproducibility.
+- For transient states such as **Saved**, install `page.clock` before the fixture, pause it with `pauseVirtualClock`, and advance only the fixture work needed to enter that state. `setFixedTime` alone does not pause timers. Capture readiness uses native layout delivery without advancing the fixture clock.
+- For stills, use `takeControlUiScreenshotFrame` from `ui/src/test-helpers/control-ui-e2e-screenshot.ts` with explicit semantic content and `animations: "disabled"`. Pass viewport changes and the intended scroll target through its `viewport`/`scrollTo` options; it verifies retained centering, viewport/scroll-clip intersection, and settled layout, fonts, and visible images.
+- Pass all related element locators in `elements`, then save the returned page PNG and crops from that single frame. Crops enclose fractional bounds in measured PNG pixels; dimensions and unchanged bounds are asserted. Do not combine separate page and locator screenshots as same-frame evidence.
+- The default current-frame mode and existing viewport/element helpers preserve recording and sampled animation behavior. Static preparation stays active through bounds measurement and the unclipped capture; full-page proofs must fit the viewport-frame dimensions.
 - After or alongside the focused E2E test, run the mocked Control UI app when available, for example `pnpm dev:ui:mock -- --port <port>`.
 - Drive Chromium with Playwright against the local mock URL. Capture the states
   needed to demonstrate the change, using screenshots or a short video.
@@ -106,6 +111,26 @@ await page.getByText("Done.").waitFor();
 ```
 
 Extend `installMockGateway` with typed scenario options or method responses when a new flow needs more Gateway surface.
+
+## Run Inspector evidence
+
+Use `withControlUiRunInspector` from `ui/src/test-helpers/control-ui-run-inspector.ts`
+for collection. It owns a separate page, closes it on success or failure, and leaves
+the caller's Chat page and unsent draft in place. Use `preparePage` for a mock
+Gateway or the campaign's existing per-tab authentication setup; a shared browser
+context does not copy another tab's session-storage token.
+The helper uses `RunInspectorSelector` and `activityRunInspectorSelectorHref` from
+the rendered component's model, including a selected receipt's decision cursor.
+
+The rendered panel's `data-run-id` and `data-execution-id` identify the returned
+present identity, not just the requested URL. The selected detail's
+`data-receipt-selector-id` is `DecisionReceiptDisplayV1.selectorId`. Missing or
+ambiguous identity and missing selected receipts must not be treated as matches.
+These decision selectors are separate from the optional terminal transcript key
+`agent.wait.terminalReceipt.assistantTranscriptIdempotencyKey`; never manufacture
+that key from a DOM selector or history row, or claim its absence is repaired by
+Inspector evidence. For sidebar run state, the current accessible label is
+`Active run`, not `Running`.
 
 ## Standalone Recording
 

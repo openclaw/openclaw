@@ -15,12 +15,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
-import {
-  sidebarInboxTabCounts,
-  type SidebarAttentionItem,
-  type SidebarInboxEntry,
-} from "./sidebar-attention-entries.ts";
+import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
@@ -49,7 +44,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @state() private overflowBelow = false;
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private panelTrigger: HTMLElement | null = null;
@@ -61,22 +56,10 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelGeneration = 0;
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.sidebarAttention,
-      (attention, notify) => attention.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    );
+    .watchStore(() => this.context?.sidebarAttention)
+    .watchStore(() => this.context?.sessions)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentIdentity);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -87,11 +70,13 @@ class SidebarAttention extends OpenClawLightDomElement {
     // Dismissal belongs to the connected Inbox, including while its panel imports.
     document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.addEventListener("keydown", this.handleOutsideInteraction, true);
+    window.addEventListener("blur", this.handleWindowBlur);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.removeEventListener("keydown", this.handleOutsideInteraction, true);
+    window.removeEventListener("blur", this.handleWindowBlur);
     this.panelLoad.dispose();
     this.closePanel(false);
     this.subscriptions.clear();
@@ -111,14 +96,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     }
   }
 
-  private dismiss(dismissal: SidebarAttentionDismissal) {
-    this.context?.sidebarAttention.dismiss(dismissal);
-  }
-
-  private currentInboxEntries(): SidebarInboxEntry[] {
-    return [...(this.context?.sidebarAttention.entries ?? [])];
-  }
-
   private readonly handleOutsideInteraction = (event: PointerEvent | KeyboardEvent) => {
     const dismiss =
       event instanceof KeyboardEvent
@@ -129,6 +106,21 @@ class SidebarAttention extends OpenClawLightDomElement {
         event.preventDefault();
         event.stopPropagation();
       }
+      this.closePanel(false);
+    }
+  };
+
+  private readonly handleWindowBlur = () => {
+    // Pointer and keyboard events inside dashboard frames never reach our document.
+    // Follow shadow-root focus (MCP Apps) without reading the cross-origin document.
+    let active = document.activeElement;
+    if (this.contains(active)) {
+      return;
+    }
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    if (active instanceof HTMLIFrameElement) {
       this.closePanel(false);
     }
   };
@@ -188,14 +180,10 @@ class SidebarAttention extends OpenClawLightDomElement {
 
   private readonly syncOverflowCue = () => {
     const list = this.querySelector<HTMLElement>(".sidebar-issues-panel__list");
-    const above = Boolean(list && list.scrollTop > 2);
-    const below = Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2);
-    if (above !== this.overflowAbove) {
-      this.overflowAbove = above;
-    }
-    if (below !== this.overflowBelow) {
-      this.overflowBelow = below;
-    }
+    this.overflowAbove = Boolean(list && list.scrollTop > 2);
+    this.overflowBelow = Boolean(
+      list && list.scrollHeight - list.scrollTop - list.clientHeight > 2,
+    );
   };
 
   private selectTab(tab: IssueTab) {
@@ -295,7 +283,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (!this.context) {
       return nothing;
     }
-    const entries = this.currentInboxEntries();
+    const entries = this.context.sidebarAttention.entries;
     if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
       return nothing;
     }
@@ -344,12 +332,12 @@ class SidebarAttention extends OpenClawLightDomElement {
               entries,
               onApprovalDecision: (event, approvalId, decision) =>
                 void this.decideApproval(event, approvalId, decision),
-              onClose: (restoreFocus) => this.closePanel(restoreFocus),
-              onDismiss: (dismissal) => this.dismiss(dismissal),
+              onClose: () => this.closePanel(true),
+              onDismiss: (dismissal) => this.context?.sidebarAttention.dismiss(dismissal),
               onKeydown: this.handlePanelKeydown,
-              onNavigate: (routeId) => {
+              onNavigate: (routeId, options) => {
                 this.closePanel(false);
-                (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+                (this.onNavigate ?? this.context?.navigate)?.(routeId, options);
               },
               onOpen: (item) => void this.open(item),
               onScroll: this.syncOverflowCue,

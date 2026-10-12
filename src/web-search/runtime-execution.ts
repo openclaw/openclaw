@@ -14,6 +14,7 @@ type ExecuteWebSearchCandidatesParams = {
   agentDir?: string;
   args: Record<string, unknown>;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   allowFallback: boolean;
 };
 
@@ -33,6 +34,7 @@ export async function executeWebSearchCandidates(
 
   for (const candidate of params.candidates) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     try {
       const definition = candidate.createTool({
         config: params.config,
@@ -46,10 +48,14 @@ export async function executeWebSearchCandidates(
         }
         continue;
       }
-      const executed = await definition.execute(params.args, { signal: params.signal });
+      const executed = await definition.execute(params.args, {
+        signal: params.signal,
+        ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
+      });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an
       // ignored signal could return stale work or trigger another provider fallback.
       params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (params.allowFallback && isStructuredAvailabilityError(executed)) {
         // Some providers report missing credentials as structured tool output.
         // Treat that like unavailable only during auto-detected fallback.
@@ -65,6 +71,7 @@ export async function executeWebSearchCandidates(
       };
     } catch (error) {
       params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (isTrustedToolExecutionPreflightError(error)) {
         throw error;
       }

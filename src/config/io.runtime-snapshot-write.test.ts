@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  projectConfigOntoRuntimeSourceSnapshot,
   registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -12,13 +11,13 @@ import {
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { replaceConfigFile, type ConfigMutationIO } from "./mutate.js";
+import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import {
   registerManagedRuntimeConfigWriteOwner,
   registerRuntimeConfigWriteListener,
   type RuntimeConfigWriteNotification,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
-import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
@@ -36,98 +35,18 @@ describe("runtime config snapshot writes", () => {
     resetRuntimeConfigState();
   });
 
-  it("skips source projection for non-runtime-derived configs", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      gateway: {
-        auth: {
-          mode: "token",
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...createProviderConfigFixture("sk-runtime-resolved"), // pragma: allowlist secret
-      gateway: {
-        auth: {
-          mode: "token",
-        },
-      },
-    };
-    const independentConfig = createProviderConfigFixture("sk-independent-config"); // pragma: allowlist secret
-
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const projected = projectConfigOntoRuntimeSourceSnapshot(independentConfig);
-    expect(projected).toBe(independentConfig);
-  });
-
-  it("isolates untouched source descendants when projecting runtime edits", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      gateway: { mode: "local", port: 19001 },
-      tools: { exec: { safeBins: ["jq"] } },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...sourceConfig,
-      ...createProviderConfigFixture("synthetic-runtime-value"),
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      ...runtimeConfig,
-      gateway: { ...runtimeConfig.gateway, port: 19002 },
-    });
-    const safeBins = projected.tools?.exec?.safeBins;
-    if (!safeBins) {
-      throw new Error("expected projected safe bins");
-    }
-    safeBins.push("cut");
-    expect(sourceConfig.tools?.exec?.safeBins).toEqual(["jq"]);
-    expect(projected.models).toEqual(sourceConfig.models);
-    expect(projected.gateway?.port).toBe(19002);
-  });
-
-  it("retains an empty object for a changed runtime subtree", () => {
-    const sourceConfig: OpenClawConfig = { gateway: { port: 18789 } };
-    const runtimeConfig: OpenClawConfig = {
-      gateway: { port: 18789, auth: { mode: "token", allowTailscale: true } },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      gateway: { port: 18789, auth: { mode: "token" } },
-    });
-
-    expect(projected).toStrictEqual({ gateway: { port: 18789, auth: {} } });
-  });
-
-  it("preserves literal nulls and omissions when projecting a runtime edit", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...createProviderConfigFixture("synthetic-runtime-value"),
-      agents: { defaults: { ...sourceConfig.agents?.defaults, maxConcurrent: 4 } },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const params = { temperature: null, nested: { value: null } };
-
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      ...runtimeConfig,
-      agents: { defaults: { ...runtimeConfig.agents?.defaults, params } },
-    });
-
-    expect(projected).toStrictEqual({
-      ...sourceConfig,
-      agents: { defaults: { params } },
-    });
-  });
-
-  it("preserves auth-store refresh scope through managed preflight and notification", async () => {
+  it("publishes canonical include snapshots with managed auth-store refresh scope", async () => {
     const initialConfig = {
+      env: { vars: { CONFIG_PUBLICATION_BIN: "jq" } },
       gateway: { mode: "local" as const },
       logging: { level: "info" as const },
+      tools: { exec: { safeBins: ["jq"] } },
     } satisfies OpenClawConfig;
-    await withTempHomeConfig(initialConfig, async ({ configPath }) => {
+    const authoredRoot = { ...initialConfig, tools: { $include: "./tools.json5" } };
+    await withTempHomeConfig(authoredRoot, async ({ configPath }) => {
+      const toolsPath = path.join(path.dirname(configPath), "tools.json5");
+      const authoredTools = { exec: { safeBins: ["${CONFIG_PUBLICATION_BIN}"] } };
+      await fs.writeFile(toolsPath, JSON.stringify(authoredTools), "utf-8");
       const overlayCalls: Array<{
         kind: string;
         receiver: RuntimeConfigWritePreparedCandidate;
@@ -176,6 +95,32 @@ describe("runtime config snapshot writes", () => {
       expect(notifications).toHaveLength(1);
       const [notification] = notifications;
       expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
+      expect(notification?.snapshot).toMatchObject({
+        path: configPath,
+        exists: true,
+        valid: true,
+        parsed: { tools: { $include: "./tools.json5" } },
+        authoredConfig: { tools: authoredTools },
+        sourceConfig: { logging: { level: "debug" }, tools: initialConfig.tools },
+        includedPaths: expect.arrayContaining([toolsPath]),
+        includeProvenance: expect.arrayContaining([
+          expect.objectContaining({ path: ["tools"], kind: "single", targetPath: toolsPath }),
+        ]),
+        hash: notification?.persistedHash,
+      });
+      expect(notification?.snapshot.raw).toBe(await fs.readFile(configPath, "utf-8"));
+      expect(serializeConfigResolutionFacts(notification?.snapshot.sourceConfig)).toEqual({
+        unresolvedPaths: [],
+        envSecretRefs: [
+          [
+            "tools.exec.safeBins[0]",
+            {
+              ref: { source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" },
+              state: "resolved",
+            },
+          ],
+        ],
+      });
       expect(overlayCalls.map(({ kind }) => kind)).toEqual(["runtime", "compare"]);
       expect(overlayCalls.map(({ config }) => config)).toEqual([
         notification?.runtimeConfig,
@@ -189,46 +134,6 @@ describe("runtime config snapshot writes", () => {
       expect(notification?.preparedCandidate?.compareConfig.logging?.level).toBe("error");
       expect(prepared?.runtimeConfig.logging?.level).toBe("debug");
       expect(prepared?.compareConfig.logging?.level).toBe("debug");
-    });
-  });
-
-  it("rolls back a managed root write when a notification overlay throws", async () => {
-    const initialConfig = {
-      gateway: { mode: "local" as const },
-      logging: { level: "info" as const },
-    };
-    await withTempHomeConfig(initialConfig, async ({ configPath }) => {
-      const originalRaw = await fs.readFile(configPath, "utf-8");
-      const failure = new Error("synthetic overlay failure");
-      const listener = vi.fn();
-      const compareOverlay = vi.fn((config: OpenClawConfig) => config);
-      const unsubscribe = registerConfigWriteListener(listener, {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: compareOverlay,
-        }),
-      });
-      try {
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
-        const pending = writeConfigFile({ ...initialConfig, logging: { level: "debug" } });
-        await expect(pending).rejects.toMatchObject({
-          name: "ConfigWritePostCommitError",
-          rollbackStatus: "restored",
-          cause: failure,
-        });
-        const error = await pending.catch((caught: unknown) => caught);
-        expect(error instanceof Error ? error.cause : undefined).toBe(failure);
-      } finally {
-        unsubscribe();
-      }
-      expect(listener).not.toHaveBeenCalled();
-      expect(compareOverlay).not.toHaveBeenCalled();
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
     });
   });
 
@@ -336,6 +241,13 @@ describe("runtime config snapshot writes", () => {
       expect(notifications).toHaveLength(1);
       const [notification] = notifications;
       expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
+      expect(notification?.snapshot).toMatchObject({
+        path: configPath,
+        raw,
+        parsed: authoredRoot,
+        sourceConfig: nextConfig,
+        runtimeConfig: nextRuntimeConfig,
+      });
       const candidates = notification?.preparedCandidatesByOwner;
       expect([...(candidates?.keys() ?? [])]).toEqual([
         releaseOwner.ownerId,

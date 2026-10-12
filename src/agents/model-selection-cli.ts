@@ -27,17 +27,18 @@ export function prepareCliProviderClassifier(cfg?: OpenClawConfig): CliProviderC
 export function isCliProvider(
   provider: string,
   cfg?: OpenClawConfig,
-  metadataSnapshot?: PluginMetadataSnapshot,
+  metadataSnapshot?: PluginMetadataSnapshot | null,
 ): boolean {
   const normalized = normalizeProviderId(provider);
   const cliBackends = resolveRuntimeCliBackends("metadata");
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
-  if (
-    resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg, metadataSnapshot })
-  ) {
-    return true;
+  // An admitted projection's missing metadata cannot trigger setup discovery.
+  if (metadataSnapshot === null) {
+    return false;
   }
-  return false;
+  return Boolean(
+    resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg, metadataSnapshot }),
+  );
 }

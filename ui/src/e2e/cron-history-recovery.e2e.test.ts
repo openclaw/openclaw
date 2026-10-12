@@ -77,6 +77,8 @@ async function capture(page: Page, gateway: MockGatewayControls, stage: string) 
     title: await page.locator(".cron-detail-title").allTextContents(),
     rows: await page.locator(".cron-run-entry").allTextContents(),
     errors: await page.locator(".cron-error-banner").allTextContents(),
+    empty: await page.locator(".cron-empty-state").allTextContents(),
+    loading: await page.locator('[data-test-id="cron-runs-loading"]').count(),
     requests: await gateway.getRequests("cron.runs"),
   };
   await page.locator("openclaw-cron-page").scrollIntoViewIfNeeded();
@@ -86,7 +88,7 @@ async function capture(page: Page, gateway: MockGatewayControls, stage: string) 
 }
 
 suite.define(() => {
-  it("does not present previous automation runs while the selected history is pending or failed", async () => {
+  it("distinguishes pending, failed, and confirmed empty history after selecting another automation", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installScenario(page);
       await page.goto(`${suite.server.baseUrl}cron`);
@@ -109,6 +111,24 @@ suite.define(() => {
       // Preserve both diagnostic states before evaluating either outcome.
       expect(pending.rows.join(" ")).not.toContain(alphaSummary);
       expect(failed.rows.join(" ")).not.toContain(alphaSummary);
+      expect(pending.empty.join(" ")).not.toContain("No runs yet");
+      expect(pending.loading).toBe(1);
+      expect(failed.empty.join(" ")).not.toContain("No runs yet");
+      expect(failed.loading).toBe(0);
+
+      await gateway.setMethodResponse("cron.runs", {
+        entries: [],
+        total: 0,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        nextOffset: null,
+      });
+      await page.getByRole("button", { name: "Retry", exact: true }).click();
+      await page.getByText("No runs yet", { exact: true }).waitFor();
+      const empty = await capture(page, gateway, "beta-history-confirmed-empty");
+      expect(empty.errors).toEqual([]);
+      expect(empty.loading).toBe(0);
     });
   });
 

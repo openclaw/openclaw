@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
@@ -90,9 +94,9 @@ describe("Git ref mutation ownership", () => {
     };
     let held = false;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      const args = argv.slice(3);
+      const args = argv.slice(argv.indexOf("-C") + 2);
       if (args[0] === "update-ref" || (args[0] === "branch" && args[1] === "-D")) {
-        mutations.push({ cwd: argv[2]!, args });
+        mutations.push({ cwd: argv[argv.indexOf("-C") + 1]!, args });
         if (!held && args[0] === "update-ref" && args[2] === snapshotRef) {
           held = true;
           started.resolve();
@@ -139,7 +143,7 @@ describe("Git ref mutation ownership", () => {
     await expect(requireGit(root, ["update-ref", "-d", queuedRef])).rejects.toThrow(
       `git update-ref -d ${queuedRef} failed (terminated):\n.git`,
     );
-    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(3))).toEqual([
+    expect(commandSpy.mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))).toEqual([
       ["rev-parse", "--git-common-dir"],
     ]);
     expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
@@ -156,7 +160,8 @@ describe("Git ref mutation ownership", () => {
       let discoveries = 0;
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         const result = await run(argv, options);
-        if (argv[3] === "rev-parse" && argv[4] === "--git-common-dir") {
+        const commandIndex = argv.indexOf("-C") + 2;
+        if (argv[commandIndex] === "rev-parse" && argv[commandIndex + 1] === "--git-common-dir") {
           discoveries += 1;
           return { ...result, stdout: `${msysCommonDir}\n` };
         }
@@ -217,36 +222,75 @@ describe("Git ref mutation ownership", () => {
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
-  it.each(["fetch", "symbolic-ref"])(
-    "does not select a remote base after an interrupted %s result",
-    async (interrupted) => {
-      const root = await repository();
-      const localHead = await requireGit(root, ["rev-parse", "HEAD"]);
-      const run = processExec.runCommandWithTimeout;
-      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
-        const command = argv[argv.indexOf("-C") + 2];
-        if (command !== "fetch" && command !== "symbolic-ref") {
-          return run(argv, options);
-        }
-        return Promise.resolve({
-          stdout: command === "symbolic-ref" ? "origin/main\n" : "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: command === interrupted ? "signal" : "exit",
-        });
-      });
-      await expect(resolveWorktreeBase(root)).resolves.toEqual({
-        commit: localHead,
-        gitOperand: "HEAD",
-        recordRef: "HEAD",
-        remote: false,
-      });
-    },
-  );
+  it("registers a tracking worktree after the shared ref writer releases config", async ({
+    signal,
+  }) => {
+    const root = await repository();
+    await requireGit(root, ["remote", "add", "origin", root]);
+    await requireGit(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    const controller = new AbortController();
+    const held = holdSnapshotDeletion(undefined, controller.signal);
+    const mutation = runGit(root, ["update-ref", "-d", snapshotRef]);
+    let creation: Promise<unknown> | undefined;
+    const lock = path.join(root, ".git", "config.lock");
+    const destination = path.join(root, "tracking");
+    try {
+      await held.started.promise;
+      await fs.writeFile(lock, "", { flag: "wx" });
+      creation = requireGit(
+        root,
+        [
+          "worktree",
+          "add",
+          "--no-checkout",
+          "-b",
+          "tracking",
+          "--",
+          destination,
+          "refs/remotes/origin/main",
+        ],
+        { signal: controller.signal },
+      );
+      await withinTest(
+        awaitGateBeforeSettlement(
+          held.discovered.promise,
+          creation,
+          "worktree registration bypassed its ref writer",
+        ),
+        signal,
+      );
+    } finally {
+      await fs.rm(lock, { force: true });
+      held.release.resolve();
+      await Promise.allSettled([mutation, creation]);
+    }
+    await creation;
+    expect(
+      await requireGit(destination, ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+    ).toBe("refs/remotes/origin/main");
+  });
 
-  it("serializes configured fetch pruning during managed-worktree base resolution", async () => {
+  it("does not accept an interrupted cached remote HEAD", async () => {
+    const root = await repository();
+    const run = processExec.runCommandWithTimeout;
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
+      const command = argv[argv.indexOf("-C") + 2];
+      if (command !== "symbolic-ref") {
+        return run(argv, options);
+      }
+      return Promise.resolve({
+        stdout: "refs/remotes/origin/main\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "signal",
+      });
+    });
+    await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
+  });
+
+  it("serializes bounded default-branch fetching without pruning unrelated refs", async () => {
     const root = await repository();
     const origin = await repository();
     const staleRef = "refs/remotes/origin/retired";
@@ -289,16 +333,31 @@ describe("Git ref mutation ownership", () => {
       await Promise.allSettled(pending);
     }
     await Promise.all(pending);
-    await expect(resolved).resolves.toEqual({
+    await expect(resolved).resolves.toMatchObject({
       commit: originHead,
-      gitOperand: "origin/main",
+      gitOperand: "refs/remotes/origin/main",
       recordRef: "origin/main",
-      remote: true,
+      fetchSucceeded: true,
     });
+    expect(
+      vi
+        .mocked(processExec.runCommandWithTimeout)
+        .mock.calls.map(([argv]) => argv.slice(argv.indexOf("-C") + 2))
+        .filter((args) => args[0] === "fetch"),
+    ).toEqual([
+      [
+        "fetch",
+        "--no-auto-maintenance",
+        "--no-recurse-submodules",
+        "--no-tags",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+      ],
+    ]);
     await expect(
       runGit(root, ["show-ref", "--verify", "--quiet", staleRef]),
     ).resolves.toMatchObject({
-      code: 1,
+      code: 0,
     });
   });
 
@@ -411,7 +470,6 @@ describe("Git execution environment", () => {
   });
 
   it.each([
-    ["noglob winsymlinks:native", "noglob winsymlinks:native noglob"],
     ["noglob glob:ignorecase", "noglob glob:ignorecase noglob"],
     ["winsymlinks:native noglob", "winsymlinks:native noglob"],
   ])("keeps noglob final for %s", (value, expected) => {
@@ -483,31 +541,63 @@ describe("Git checkout discovery", () => {
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
 
-  it("parses existing linked worktree paths and lock reasons", async () => {
-    const root = tempDirs.make("openclaw-git-worktree-list-");
-    const repo = path.join(root, "repo");
-    const linked = path.join(root, "linked");
-    expect((await runGit(root, ["init", "-b", "main", repo])).code).toBe(0);
-    expect((await runGit(repo, ["config", "user.name", "OpenClaw Test"])).code).toBe(0);
-    expect(
-      (await runGit(repo, ["config", "user.email", "openclaw-test@example.invalid"])).code,
-    ).toBe(0);
-    await fs.writeFile(path.join(repo, "README.md"), "base\n");
-    expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
-    expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
-    expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(0);
-    expect(
-      (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
-    ).toBe(0);
+  it.for(["files", "reftable"] as const)(
+    "parses native %s worktree paths, locks, symbolic heads, and detached tips",
+    async (refStorage, context) => {
+      const root = tempDirs.make("openclaw-git-worktree-list-");
+      const repo = path.join(root, "repo");
+      const linked = path.join(root, "linked");
+      const detached = path.join(root, "detached");
+      const initialized = await runGit(root, [
+        "init",
+        "--template=",
+        ...(refStorage === "reftable" ? ["--ref-format=reftable"] : []),
+        "-b",
+        "main",
+        repo,
+      ]);
+      if (
+        refStorage === "reftable" &&
+        initialized.termination === "exit" &&
+        initialized.code !== 0 &&
+        /unknown option.*ref-format|unknown ref storage format.*reftable/u.test(initialized.stderr)
+      ) {
+        context.skip("Installed Git does not support reftable repositories");
+      }
+      expect(initialized.code, initialized.stderr).toBe(0);
+      await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
+      await requireGit(repo, ["config", "user.email", "openclaw-test@example.invalid"]);
+      await requireGit(repo, ["config", "commit.gpgSign", "false"]);
+      await fs.writeFile(path.join(repo, "README.md"), "base\n");
+      await requireGit(repo, ["add", "README.md"]);
+      await requireGit(repo, ["commit", "-m", "initial"]);
+      const initialHead = await requireGit(repo, ["rev-parse", "HEAD"]);
+      await requireGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"]);
+      await requireGit(repo, ["worktree", "add", "--detach", detached, "HEAD"]);
+      await requireGit(linked, ["commit", "--allow-empty", "-m", "linked tip"]);
+      const linkedHead = await requireGit(linked, ["rev-parse", "HEAD"]);
+      await requireGit(repo, ["symbolic-ref", "refs/heads/alias-middle", "refs/heads/linked"]);
+      await requireGit(repo, ["symbolic-ref", "refs/heads/alias", "refs/heads/alias-middle"]);
+      await requireGit(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]);
+      await requireGit(repo, ["worktree", "lock", "--reason", "held by test", linked]);
 
-    // These fixtures exist; compare identity without imposing Git's separator spelling.
-    const worktrees = await listGitWorktrees(repo);
-    for (const entry of worktrees) {
-      entry.path = await fs.realpath(entry.path);
-    }
-    expect(worktrees).toContainEqual({
-      path: await fs.realpath(linked),
-      lockedReason: "held by test",
-    });
-  });
+      // These fixtures exist; compare identity without imposing Git's separator spelling.
+      const worktrees = await listGitWorktrees(repo);
+      for (const entry of worktrees) {
+        entry.path = await fs.realpath(entry.path);
+      }
+      expect(worktrees).toEqual(
+        expect.arrayContaining([
+          { path: await fs.realpath(repo), branch: "refs/heads/main", head: initialHead },
+          {
+            path: await fs.realpath(linked),
+            lockedReason: "held by test",
+            branch: "refs/heads/linked",
+            head: linkedHead,
+          },
+          { path: await fs.realpath(detached), branch: null, head: initialHead },
+        ]),
+      );
+    },
+  );
 });

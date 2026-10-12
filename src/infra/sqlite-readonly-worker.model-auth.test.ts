@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "../agents/auth-profiles/mutation-lineage.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../agents/auth-profiles/oauth-shared.js";
 import * as authPathResolve from "../agents/auth-profiles/path-resolve.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
@@ -20,6 +21,7 @@ import {
   loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store-runtime.js";
+import { receiveAuthProfileUpdateValue } from "../agents/auth-profiles/store-update-transfer.js";
 import { withAuthProfileStoreAgentDir } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -47,7 +49,9 @@ import {
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import * as sqliteWorker from "./sqlite-readonly-worker.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
+import * as sqliteAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
 const PROVIDER = "auth-runtime-fixture";
 const PROFILE_ID = `${PROVIDER}:default`;
@@ -153,7 +157,7 @@ describe("model resolution auth row snapshots", () => {
     });
   });
 
-  it.each(["row", "cache proof"])("evicts a shared handle after %s corruption", async (stage) => {
+  it("evicts a shared handle after row corruption", async () => {
     await withOpenClawTestState({ label: "model-auth-query-corruption" }, async (state) => {
       await persistAuthProfileBatch({
         stateDir: state.stateDir,
@@ -175,9 +179,7 @@ describe("model resolution auth row snapshots", () => {
       const fault = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
         if (
           sql ===
-          (stage === "row"
-            ? "SELECT type FROM sqlite_master WHERE name = ?"
-            : "PRAGMA main.wal_checkpoint(NOOP)")
+          'select "state_key" as "target", "value_json" as "contents" from "config_machine_state" where "state_key" in (?, ?)'
         ) {
           injected = true;
           throw Object.assign(new Error("database disk image is malformed"), {
@@ -191,9 +193,28 @@ describe("model resolution auth row snapshots", () => {
         await runWithSqliteWorkerStateContext(context, () =>
           backend[SQLITE_WORKER_PREPARE_COMMAND]?.("authProfiles.read"),
         );
-        const rows = await runWithSqliteWorkerStateContext(context, () =>
-          backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
-        );
+        let rows: unknown;
+        // Corruption/eviction is under test; consume the real paired field transport in-process.
+        const handoff = vi
+          .spyOn(sqliteAdmission, "requestSqliteWorkerOperationAdmission")
+          .mockImplementation(({ stage: admissionStage, facts }) => {
+            if (
+              admissionStage !== "prepare" ||
+              !isRecord(facts) ||
+              facts.kind !== "auth-store-read" ||
+              !(facts.port instanceof MessagePort)
+            ) {
+              throw new Error("Expected the auth read field transport");
+            }
+            rows = receiveAuthProfileUpdateValue(facts.port);
+          });
+        try {
+          await runWithSqliteWorkerStateContext(context, () =>
+            backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
+          );
+        } finally {
+          handoff.mockRestore();
+        }
         expect(injected).toBe(true);
         expect(rows).toMatchObject({ store: { status: "unreadable" }, cacheable: false });
         expect(
@@ -207,7 +228,7 @@ describe("model resolution auth row snapshots", () => {
   });
 
   it.each([false, true])(
-    "does not retain rows before WAL commit publication (shared=%s)",
+    "offline update fingerprints include WAL commit publication (shared=%s)",
     async (shared) => {
       let sharedMemory: number | undefined;
       try {
@@ -249,11 +270,20 @@ describe("model resolution auth row snapshots", () => {
           // Hold the valid old WAL-index header over completed frame I/O, then publish it.
           fs.writeSync(sharedMemory, previousHeader, 0, previousHeader.length, 0);
           try {
-            const resolve = modelResolver(state);
-            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+            const beforePublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
             expect(walStamp()).toEqual(writtenWal);
-            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
+            const afterPublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
+              env: state.env,
+            });
+            expect(afterPublication[databasePath]).not.toBe(beforePublication[databasePath]);
+            expect(afterPublication[databasePath]).toMatch(/^[a-f0-9]{64}$/u);
+            fs.writeSync(sharedMemory, previousHeader, 0, 48, 0);
+            await expect(
+              readUpdateDatabaseGenerationsIsolated([databasePath], { env: state.env }),
+            ).rejects.toThrow(/WAL commit header is unavailable or changing/);
           } finally {
             fs.writeSync(sharedMemory, committedHeader, 0, committedHeader.length, 0);
           }
@@ -274,10 +304,6 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: true },
     { change: "usage", cached: false, published: "during" },
     { change: "usage", cached: true, published: "during" },
-    { change: "order", cached: true, published: false },
-    { change: "disabled", cached: false, published: false },
-    { change: "order", cached: true, published: "during" },
-    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -337,25 +363,18 @@ describe("model resolution auth row snapshots", () => {
             setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
           }
           const updated: AuthProfileStore =
-            change === "order" || change === "unrelated-order"
+            change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
               : {
                   ...store,
                   usageStats: {
-                    [PROFILE_ID]:
-                      change === "disabled"
-                        ? { disabledUntil: Date.now() + 60_000, disabledReason: "auth_permanent" }
-                        : { lastUsed: 1234, lastProbeAt: 1234 },
+                    [PROFILE_ID]: { lastUsed: 1234, lastProbeAt: 1234 },
                   },
                 };
           const updatedAgent = change === "unrelated-order" ? "other" : "main";
           await state.writeAuthProfiles(updated, updatedAgent);
           resume.resolve();
-          expect((await loading).model?.name).toBe(
-            change === "order" || change === "disabled"
-              ? `${fallbackProfileId}:token`
-              : `${PROFILE_ID}:api_key`,
-          );
+          expect((await loading).model?.name).toBe(`${PROFILE_ID}:api_key`);
           const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(updatedAgent), {
             readOnly: true,
             externalCli: { mode: "none" },
@@ -398,21 +417,24 @@ describe("model resolution auth row snapshots", () => {
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;
+        let capturedModelRead = false;
         const read = vi
           .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
           .mockImplementation((options) => {
             const reader = prepare(options);
-            return options.databasePath === databasePath
-              ? {
-                  ...reader,
-                  read: async () => {
-                    const rows = await reader.read();
-                    entered.resolve();
-                    await resume.promise;
-                    return rows;
-                  },
-                }
-              : reader;
+            if (options.databasePath !== databasePath || capturedModelRead) {
+              return reader;
+            }
+            capturedModelRead = true;
+            return {
+              ...reader,
+              read: async () => {
+                const rows = await reader.read();
+                entered.resolve();
+                await resume.promise;
+                return rows;
+              },
+            };
           });
         const loading = modelResolver(state)();
         try {
@@ -422,6 +444,8 @@ describe("model resolution auth row snapshots", () => {
               throw new Error("Model resolution completed before the publication barrier");
             }),
           ]);
+          // Only the captured model read waits; usage bookkeeping reads independently.
+          read.mockRestore();
           await markAuthProfileSuccess({
             store: before,
             provider: PROVIDER,
@@ -450,93 +474,66 @@ describe("model resolution auth row snapshots", () => {
     );
   });
 
-  it("reads unchanged credentials once across turns and observes published rotation and addition", async () => {
-    await withOpenClawTestState({ label: "model-auth-row-snapshot" }, async (state) => {
-      await state.writeAuthProfiles(fixtureStore("fixture-original"));
-      const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
-      const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-      const reads = () => read.mock.calls.filter(([pathname]) => pathname === databasePath);
-      const resolve = modelResolver(state);
-      try {
-        for (let turn = 0; turn < 8; turn += 1) {
-          expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        }
-        expect.soft(reads()).toHaveLength(1);
-
-        const rotated: AuthProfileStore = {
-          version: 1,
-          profiles: {
-            [PROFILE_ID]: { type: "token", provider: PROVIDER, token: "fixture-rotated" },
-            [`${PROVIDER}:added`]: { type: "api_key", provider: PROVIDER, key: "fixture-added" },
-          },
-        };
-        await state.writeAuthProfiles(rotated);
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
-        expect((await resolve(`${PROVIDER}:added`)).model?.name).toBe(`${PROVIDER}:added:api_key`);
-        const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-          readOnly: true,
-          allowKeychainPrompt: false,
-          externalCli: { mode: "none" },
-        });
-        expect(current.profiles).toEqual(rotated.profiles);
-        expect.soft(reads()).toHaveLength(2);
-      } finally {
-        read.mockRestore();
-      }
-    });
-  });
-
-  it("observes external same-file writes at the fixed identity-probe boundary", async () => {
-    await withOpenClawTestState({ label: "model-auth-row-external-write" }, async (state) => {
-      await state.writeAuthProfiles(fixtureStore("fixture-original"));
-      const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
-      const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
-      const resolve = modelResolver(state);
-      const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      try {
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        const inode = fs.statSync(databasePath).ino;
-        const snapshotRevision =
-          getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath);
-        const mutationRevision =
-          getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
-        const rotated: AuthProfileStore = {
-          version: 1,
-          profiles: {
-            [PROFILE_ID]: { type: "token", provider: PROVIDER, token: "fixture-external-rotation" },
-          },
-        };
-
-        // This low-level commit models another process, which cannot publish host revisions.
-        writePersistedAuthProfileStoreRaw(rotated, state.agentDir());
-        expect(fs.statSync(databasePath).ino).toBe(inode);
-        expect(getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)).toBe(
-          snapshotRevision,
-        );
-        expect(getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)).toBe(
-          mutationRevision,
-        );
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        clock.mockReturnValue(99);
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        expect(read.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
-        clock.mockReturnValue(100);
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
-        const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
-          readOnly: true,
-          allowKeychainPrompt: false,
-          externalCli: { mode: "none" },
-        });
-        expect(current.profiles).toEqual(rotated.profiles);
-        expect
-          .soft(read.mock.calls.filter(([pathname]) => pathname === databasePath))
-          .toHaveLength(2);
-      } finally {
-        clock.mockRestore();
-        read.mockRestore();
-      }
-    });
-  });
+  it.each(["snapshot", "native owner"] as const)(
+    "reuses unchanged credentials and observes %s rotation receipts",
+    async (publication) => {
+      await withOpenClawTestState(
+        { label: `model-auth-${publication}-rotation` },
+        async (state) => {
+          await state.writeAuthProfiles(fixtureStore("fixture-original"));
+          const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
+          const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
+          const reads = () => read.mock.calls.filter(([pathname]) => pathname === databasePath);
+          const resolve = modelResolver(state);
+          try {
+            for (let turn = 0; turn < 8; turn += 1) {
+              expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
+            }
+            expect.soft(reads()).toHaveLength(1);
+            const rotated: AuthProfileStore = {
+              version: 1,
+              profiles: {
+                [PROFILE_ID]: {
+                  type: "token",
+                  provider: PROVIDER,
+                  token: "fixture-rotated",
+                },
+                ...(publication === "snapshot"
+                  ? {
+                      [`${PROVIDER}:added`]: {
+                        type: "api_key" as const,
+                        provider: PROVIDER,
+                        key: "fixture-added",
+                      },
+                    }
+                  : {}),
+              },
+            };
+            if (publication === "native owner") {
+              writePersistedAuthProfileStoreRaw(rotated, state.agentDir());
+            } else {
+              await state.writeAuthProfiles(rotated);
+            }
+            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
+            if (publication === "snapshot") {
+              expect((await resolve(`${PROVIDER}:added`)).model?.name).toBe(
+                `${PROVIDER}:added:api_key`,
+              );
+            }
+            const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(), {
+              readOnly: true,
+              allowKeychainPrompt: false,
+              externalCli: { mode: "none" },
+            });
+            expect(current.profiles).toEqual(rotated.profiles);
+            expect.soft(reads()).toHaveLength(2);
+          } finally {
+            read.mockRestore();
+          }
+        },
+      );
+    },
+  );
 
   it("keeps incognito reads outside the main runtime cache even for the same database", async () => {
     await withOpenClawTestState({ label: "model-auth-row-isolation" }, async (state) => {

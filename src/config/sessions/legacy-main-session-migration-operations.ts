@@ -1,5 +1,5 @@
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -11,13 +11,13 @@ import {
   type OpenClawAgentReadOnlyDatabaseHandle,
 } from "../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
 import {
   borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   claimFullyCopied,
   claimUnchanged,
@@ -30,6 +30,7 @@ import type {
   LegacyMainSessionMigrationOutcome,
   PhysicalStore,
   SessionClaim,
+  SessionComparisonClaim,
 } from "./legacy-main-session-migration.contract.js";
 import {
   runSqliteSessionDeletionTransaction,
@@ -77,7 +78,7 @@ function freshestClaim(claims: readonly SessionClaim[]): SessionClaim {
 export function warningForDivergence(
   kind: "divergent-aliases" | "divergent-canonical",
   canonicalKey: string,
-  claims: readonly SessionClaim[],
+  claims: readonly SessionComparisonClaim[],
 ): string {
   const claimsText = claims.map((claim) => `${claim.store.path}#${claim.key}`).join(", ");
   return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
@@ -202,165 +203,169 @@ async function copyClaimCrossStore(params: {
     destinationOptions,
     async () => {
       params.beforePersistentApply?.();
-      return runOpenClawAgentWriteTransaction((destinationDatabase) => {
-        const current = readClaim(
-          destinationDatabase,
-          params.destination,
-          params.canonicalKey,
-          params.canonicalKey,
-        );
-        if (
-          (params.expectedDestination &&
-            (!current || !claimUnchanged(current, params.expectedDestination))) ||
-          (current && !claimsMatch(params.source, current))
-        ) {
-          return undefined;
-        }
-        const source = withOpenClawAgentDatabaseReadOnly(
-          (sourceDatabase) =>
-            runSqliteDeferredTransactionSync(sourceDatabase.db, () => {
-              const fresh = readClaim(
-                sourceDatabase,
-                params.source.store,
-                params.source.key,
-                params.canonicalKey,
-              );
-              if (
-                !fresh ||
-                !claimUnchanged(fresh, params.source) ||
-                fresh.databaseIdentity ===
-                  readOpenClawAgentDatabaseIdentity(destinationDatabase).identity
-              ) {
-                return undefined;
-              }
-              const destinationWindows = new Map(
-                readSqliteSessionGenerationWindows(
-                  destinationDatabase,
-                  [],
-                  fresh.generations.map((generation) => generation.window.session_id),
-                ).map((window) => [window.session_id, window]),
-              );
-              const currentGenerations = new Map(
-                current?.generations.map((generation) => [
-                  generation.window.session_id,
-                  generation,
-                ]),
-              );
-              const missing: SqliteSessionGenerationClaim[] = [];
-              for (const generation of fresh.generations) {
-                assertSessionTranscriptHot(sourceDatabase.db, generation.window.session_id);
+      return runOpenClawAgentWriteTransaction(
+        (destinationDatabase) => {
+          const current = readClaim(
+            destinationDatabase,
+            params.destination,
+            params.canonicalKey,
+            params.canonicalKey,
+          );
+          if (
+            (params.expectedDestination &&
+              (!current || !claimUnchanged(current, params.expectedDestination))) ||
+            (current && !claimsMatch(params.source, current))
+          ) {
+            return undefined;
+          }
+          const source = withOpenClawAgentDatabaseReadOnly(
+            (sourceDatabase) =>
+              runSqliteDeferredTransactionSync(sourceDatabase.db, () => {
+                const fresh = readClaim(
+                  sourceDatabase,
+                  params.source.store,
+                  params.source.key,
+                  params.canonicalKey,
+                );
                 if (
-                  normalizeStoreSessionKey(generation.window.session_key.trim()) !==
-                  normalizeStoreSessionKey(params.source.key.trim())
+                  !fresh ||
+                  !claimUnchanged(fresh, params.source) ||
+                  fresh.databaseIdentity ===
+                    readOpenClawAgentDatabaseIdentity(destinationDatabase).identity
                 ) {
                   return undefined;
                 }
-                const existing = destinationWindows.get(generation.window.session_id);
-                if (!existing) {
-                  missing.push(generation);
-                } else if (
-                  existing.session_key !== params.canonicalKey ||
-                  !generationsMatch(
+                const destinationWindows = new Map(
+                  readSqliteSessionGenerationWindows(
+                    destinationDatabase,
+                    [],
+                    fresh.generations.map((generation) => generation.window.session_id),
+                  ).map((window) => [window.session_id, window]),
+                );
+                const currentGenerations = new Map(
+                  current?.generations.map((generation) => [
+                    generation.window.session_id,
                     generation,
-                    currentGenerations.get(existing.session_id) ??
-                      readSqliteSessionGenerationClaim(destinationDatabase, existing),
+                  ]),
+                );
+                const missing: SqliteSessionGenerationClaim[] = [];
+                for (const generation of fresh.generations) {
+                  assertSessionTranscriptHot(sourceDatabase.db, generation.window.session_id);
+                  if (
+                    normalizeStoreSessionKey(generation.window.session_key.trim()) !==
+                    normalizeStoreSessionKey(params.source.key.trim())
+                  ) {
+                    return undefined;
+                  }
+                  const existing = destinationWindows.get(generation.window.session_id);
+                  if (!existing) {
+                    missing.push(generation);
+                  } else if (
+                    existing.session_key !== params.canonicalKey ||
+                    !generationsMatch(
+                      generation,
+                      currentGenerations.get(existing.session_id) ??
+                        readSqliteSessionGenerationClaim(destinationDatabase, existing),
+                      params.canonicalKey,
+                    )
+                  ) {
+                    return undefined;
+                  }
+                }
+                if (!current) {
+                  if (readExactSessionEntryRow(destinationDatabase, params.canonicalKey)) {
+                    return undefined;
+                  }
+                  writeMigratedSessionClaim(destinationDatabase, params.canonicalKey, fresh.entry);
+                }
+                const sourceDb = getSessionKysely(sourceDatabase.db);
+                const destinationDb = getSessionKysely(destinationDatabase.db);
+                const sourceKeys = new Set([normalizeStoreSessionKey(params.source.key.trim())]);
+                for (const generation of missing) {
+                  const window = generation.window;
+                  const links = executeSqliteQuerySync(
+                    sourceDatabase.db,
+                    sourceDb
+                      .selectFrom("session_conversations")
+                      .selectAll()
+                      .where("session_id", "=", window.session_id),
+                  ).rows;
+                  const conversationIds = [
+                    ...(window.primary_conversation_id ? [window.primary_conversation_id] : []),
+                    ...links.map((link) => link.conversation_id),
+                  ];
+                  for (const conversation of executeSqliteQuerySync(
+                    sourceDatabase.db,
+                    sourceDb
+                      .selectFrom("conversations")
+                      .selectAll()
+                      .where("conversation_id", "in", sqliteStringSet(conversationIds)),
+                  ).rows) {
+                    executeSqliteQuerySync(
+                      destinationDatabase.db,
+                      destinationDb
+                        .insertInto("conversations")
+                        .values(conversation)
+                        .onConflict((conflict) => conflict.column("conversation_id").doNothing()),
+                    );
+                  }
+                  const mapped = rehomeSqliteSessionGenerationWindow(
+                    window,
                     params.canonicalKey,
-                  )
-                ) {
-                  return undefined;
-                }
-              }
-              if (!current) {
-                if (readExactSessionEntryRow(destinationDatabase, params.canonicalKey)) {
-                  return undefined;
-                }
-                writeMigratedSessionClaim(destinationDatabase, params.canonicalKey, fresh.entry);
-              }
-              const sourceDb = getSessionKysely(sourceDatabase.db);
-              const destinationDb = getSessionKysely(destinationDatabase.db);
-              const sourceKeys = new Set([normalizeStoreSessionKey(params.source.key.trim())]);
-              for (const generation of missing) {
-                const window = generation.window;
-                const links = executeSqliteQuerySync(
-                  sourceDatabase.db,
-                  sourceDb
-                    .selectFrom("session_conversations")
-                    .selectAll()
-                    .where("session_id", "=", window.session_id),
-                ).rows;
-                const conversationIds = [
-                  ...(window.primary_conversation_id ? [window.primary_conversation_id] : []),
-                  ...links.map((link) => link.conversation_id),
-                ];
-                for (const conversation of executeSqliteQuerySync(
-                  sourceDatabase.db,
-                  sourceDb
-                    .selectFrom("conversations")
-                    .selectAll()
-                    .where("conversation_id", "in", sqliteStringSet(conversationIds)),
-                ).rows) {
+                    sourceKeys,
+                  );
                   executeSqliteQuerySync(
                     destinationDatabase.db,
                     destinationDb
-                      .insertInto("conversations")
-                      .values(conversation)
-                      .onConflict((conflict) => conflict.column("conversation_id").doNothing()),
+                      .insertInto("session_windows")
+                      .values(mapped)
+                      // A new logical entry already created its current window in this transaction.
+                      .onConflict((conflict) => conflict.column("session_id").doUpdateSet(mapped)),
                   );
-                }
-                const mapped = rehomeSqliteSessionGenerationWindow(
-                  window,
-                  params.canonicalKey,
-                  sourceKeys,
-                );
-                executeSqliteQuerySync(
-                  destinationDatabase.db,
-                  destinationDb
-                    .insertInto("session_windows")
-                    .values(mapped)
-                    // A new logical entry already created its current window in this transaction.
-                    .onConflict((conflict) => conflict.column("session_id").doUpdateSet(mapped)),
-                );
-                copySqliteSessionGenerationRows({
-                  destination: destinationDatabase,
-                  source: sourceDatabase,
-                  sessionId: window.session_id,
-                  sourceWindowPresent: true,
-                });
-                executeSqliteQuerySync(
-                  destinationDatabase.db,
-                  destinationDb
-                    .deleteFrom("session_conversations")
-                    .where("session_id", "=", window.session_id),
-                );
-                for (const link of links) {
+                  copySqliteSessionGenerationRows({
+                    destination: destinationDatabase,
+                    source: sourceDatabase,
+                    sessionId: window.session_id,
+                    sourceWindowPresent: true,
+                  });
                   executeSqliteQuerySync(
                     destinationDatabase.db,
-                    destinationDb.insertInto("session_conversations").values(link),
+                    destinationDb
+                      .deleteFrom("session_conversations")
+                      .where("session_id", "=", window.session_id),
                   );
+                  for (const link of links) {
+                    executeSqliteQuerySync(
+                      destinationDatabase.db,
+                      destinationDb.insertInto("session_conversations").values(link),
+                    );
+                  }
                 }
-              }
-              copySessionNodeArtifactsForRepair(
-                sourceDatabase,
-                destinationDatabase,
-                [fresh.key],
-                params.canonicalKey,
-                { includeMembers: false },
-              );
-              return readClaim(
-                destinationDatabase,
-                params.destination,
-                params.canonicalKey,
-                params.canonicalKey,
-              );
-            }),
-          {
-            agentId: params.source.store.databaseAgentId,
-            env: params.env,
-            path: params.source.store.path,
-          },
-        );
-        return source.found ? source.value : undefined;
-      }, destinationOptions);
+                copySessionNodeArtifactsForRepair(
+                  sourceDatabase,
+                  destinationDatabase,
+                  [fresh.key],
+                  params.canonicalKey,
+                  { includeMembers: false },
+                );
+                return readClaim(
+                  destinationDatabase,
+                  params.destination,
+                  params.canonicalKey,
+                  params.canonicalKey,
+                );
+              }),
+            {
+              agentId: params.source.store.databaseAgentId,
+              env: params.env,
+              path: params.source.store.path,
+            },
+          );
+          return source.found ? source.value : undefined;
+        },
+        destinationOptions,
+        { operationLabel: "session.legacy-main.copy-claim" },
+      );
     },
     "session-migration.legacy-main-copy",
   );
@@ -438,8 +443,8 @@ async function deleteCopiedClaims(params: {
     const assertCopied = () => {
       params.beforePersistentApply?.();
       assertCurrent();
-      const version = readSqliteDataVersion(destinationReader.db);
-      if (version === verifiedVersion) {
+      const version = readSqliteDatabaseWriteRevision(destinationReader.db);
+      if (version !== undefined && version === verifiedVersion) {
         return;
       }
       if (!hasOpenClawAgentReadOnlySchema(destinationReader)) {
@@ -455,10 +460,10 @@ async function deleteCopiedClaims(params: {
         throw changed();
       }
       assertCurrent();
-      if (readSqliteDataVersion(destinationReader.db) !== version) {
+      if (readSqliteDatabaseWriteRevision(destinationReader.db) !== version) {
         throw changed();
       }
-      // Only this dedicated reader can reuse its counter; no snapshot survives the assertion.
+      // Only settled in-process writes can certify reuse; no snapshot survives the assertion.
       verifiedVersion = version;
     };
     assertCopied();
@@ -528,22 +533,11 @@ export async function processIdenticalClaims(params: {
   env: NodeJS.ProcessEnv;
   mode: LegacyMainSessionMigrationMode;
 }): Promise<LegacyMainSessionMigrationOutcome> {
-  const winner = params.canonical ?? freshestClaim(params.aliases);
-  const crossStore = params.aliases.some(
-    (claim) => !samePhysicalStore(claim.store, params.destination),
-  );
+  const completedOutcome = () => describeIdenticalClaims(params);
   if (params.mode !== "doctor-fix") {
-    return {
-      kind: params.canonical
-        ? "canonical-exists-identical"
-        : crossStore
-          ? "migrated-cross-store"
-          : "migrated-in-place",
-      canonicalKey: params.canonicalKey,
-      paths: [...new Set(params.aliases.map((claim) => claim.store.path))],
-      sourceKeys: params.aliases.map((claim) => claim.key),
-    };
+    return completedOutcome();
   }
+  const winner = params.canonical ?? freshestClaim(params.aliases);
 
   let canonical = params.canonical;
   const destinationAliases = params.aliases.filter((claim) =>
@@ -620,10 +614,19 @@ export async function processIdenticalClaims(params: {
       detail: `source changed before expected-entry cleanup: ${changedSource.store.path}#${changedSource.key}`,
     };
   }
+  return completedOutcome();
+}
+
+export function describeIdenticalClaims(params: {
+  aliases: readonly SessionComparisonClaim[];
+  canonical?: SessionComparisonClaim;
+  canonicalKey: string;
+  destination: PhysicalStore;
+}): LegacyMainSessionMigrationOutcome {
   return {
     kind: params.canonical
       ? "canonical-exists-identical"
-      : crossStore
+      : params.aliases.some((claim) => !samePhysicalStore(claim.store, params.destination))
         ? "migrated-cross-store"
         : "migrated-in-place",
     canonicalKey: params.canonicalKey,

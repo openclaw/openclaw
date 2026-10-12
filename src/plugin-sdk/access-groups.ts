@@ -1,4 +1,3 @@
-// Access group helpers resolve plugin allowlists that reference named config groups.
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
@@ -27,18 +26,9 @@ export type AccessGroupMembershipResolver = (params: {
 }) => boolean | Promise<boolean>;
 
 /** Resolves membership for one access group when the caller already selected the config group. */
-export type AccessGroupMembershipLookup = (params: {
-  /** Access group name referenced by `accessGroup:<name>`. */
-  name: string;
-  /** Access group config selected by name. */
-  group: AccessGroupConfig;
-  /** Channel where the inbound sender is being checked. */
-  channel: ChannelId;
-  /** Channel account id for account-scoped membership checks. */
-  accountId: string;
-  /** Inbound sender id or handle being authorized. */
-  senderId: string;
-}) => boolean | Promise<boolean>;
+export type AccessGroupMembershipLookup = (
+  params: Omit<Parameters<AccessGroupMembershipResolver>[0], "cfg">,
+) => boolean | Promise<boolean>;
 
 /** Reports how access-group allowlist entries resolved for a channel sender. */
 export type ResolvedAccessGroupAllowFromState = {
@@ -60,17 +50,6 @@ export type ResolvedAccessGroupAllowFromState = {
   hasMatch: boolean;
 };
 
-/** Resolve the concrete sender allowlist entries for static message-sender groups. */
-function resolveMessageSenderGroupEntries(params: {
-  group: AccessGroupConfig;
-  channel: ChannelId;
-}): string[] {
-  if (params.group.type !== "message.senders") {
-    return [];
-  }
-  return [...(params.group.members["*"] ?? []), ...(params.group.members[params.channel] ?? [])];
-}
-
 /** Resolves `accessGroup:<name>` allowlist entries without changing the original allowlist. */
 export async function resolveAccessGroupAllowFromState(params: {
   /** Configured access groups keyed by name. */
@@ -88,12 +67,10 @@ export async function resolveAccessGroupAllowFromState(params: {
   /** Optional resolver for non-static or integration-backed group types. */
   resolveMembership?: AccessGroupMembershipLookup;
 }): Promise<ResolvedAccessGroupAllowFromState> {
-  const names = Array.from(
-    new Set(
-      (params.allowFrom ?? [])
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
-        .filter((entry): entry is string => entry != null),
-    ),
+  const names = uniqueStrings(
+    (params.allowFrom ?? [])
+      .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+      .filter((entry): entry is string => entry != null),
   );
   const state: ResolvedAccessGroupAllowFromState = {
     referenced: names,
@@ -113,10 +90,10 @@ export async function resolveAccessGroupAllowFromState(params: {
       continue;
     }
 
-    const senderEntries = resolveMessageSenderGroupEntries({
-      group,
-      channel: params.channel,
-    });
+    const senderEntries =
+      group.type === "message.senders"
+        ? [...(group.members["*"] ?? []), ...(group.members[params.channel] ?? [])]
+        : [];
     if (
       senderEntries.length > 0 &&
       params.isSenderAllowed?.(params.senderId, senderEntries) === true
@@ -125,8 +102,7 @@ export async function resolveAccessGroupAllowFromState(params: {
       continue;
     }
 
-    // Static sender groups are fully decided above; resolver hooks cover future
-    // group types or integration-backed membership without rechecking static entries.
+    // Static matches short-circuit; the optional resolver can decide unmatched groups.
     if (!params.resolveMembership) {
       if (group.type !== "message.senders") {
         state.unsupported.push(name);
@@ -197,24 +173,12 @@ export async function resolveAccessGroupAllowFromMatches(params: {
 }
 
 /** Expands a matching access-group allowlist with the concrete sender entry. */
-export async function expandAllowFromWithAccessGroups(params: {
-  /** Full config containing `accessGroups`. */
-  cfg?: OpenClawConfig;
-  /** Raw allowlist entries that may include `accessGroup:<name>` references. */
-  allowFrom: Array<string | number> | null | undefined;
-  /** Channel where the inbound sender is being checked. */
-  channel: ChannelId;
-  /** Channel account id for account-scoped membership checks. */
-  accountId: string;
-  /** Inbound sender id or handle being authorized. */
-  senderId: string;
-  /** Concrete allowlist entry appended after a group match; defaults to `senderId`. */
-  senderAllowEntry?: string;
-  /** Static sender matcher used for `message.senders` groups. */
-  isSenderAllowed?: (senderId: string, allowFrom: string[]) => boolean;
-  /** Optional resolver for non-static or integration-backed group types. */
-  resolveMembership?: AccessGroupMembershipResolver;
-}): Promise<string[]> {
+export async function expandAllowFromWithAccessGroups(
+  params: Parameters<typeof resolveAccessGroupAllowFromMatches>[0] & {
+    /** Concrete allowlist entry appended after a group match; defaults to `senderId`. */
+    senderAllowEntry?: string;
+  },
+): Promise<string[]> {
   const allowFrom = (params.allowFrom ?? []).map(String);
   const matched = await resolveAccessGroupAllowFromMatches({
     cfg: params.cfg,

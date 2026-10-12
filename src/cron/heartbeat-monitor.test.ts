@@ -26,7 +26,7 @@ describe("heartbeat monitor desired-state planning", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "15m" } },
-        list: [{ id: "main" }, { id: "ops" }, { id: "new" }],
+        entries: { main: {}, ops: {}, new: {} },
       },
     } as OpenClawConfig;
     const options = { schedulerSeed: "test-seed" };

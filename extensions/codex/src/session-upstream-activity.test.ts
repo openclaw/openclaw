@@ -66,13 +66,15 @@ function createActivityChecker(params: {
     runtime: {
       agent: {
         session: {
-          getSessionEntry: () => (params.sessionId ? { sessionId: params.sessionId } : undefined),
+          resolveStorePath: () => "/activity-store",
+          getSessionEntryAsync: async () =>
+            params.sessionId ? { sessionId: params.sessionId } : undefined,
         },
       },
     },
   } as unknown as OpenClawPluginApi;
   const bindingStore = {
-    read: vi.fn(() => params.binding),
+    readAsync: vi.fn(async () => params.binding),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api,
@@ -120,10 +122,6 @@ describe("Codex upstream activity", () => {
         dedupeId: "turn-4:0",
       },
     ]);
-  });
-
-  it("keeps an existing thread linked when its turn page is empty", async () => {
-    await expect(checkTurns({ probe: probe(), turns: [] })).resolves.toEqual([]);
   });
 
   it("accepts an empty page for a thread with no materialized turn", async () => {
@@ -249,6 +247,7 @@ describe("Codex upstream activity", () => {
         probe({ marker: { turnId: null, userMessageCount: 0 } }),
       ]),
     ).resolves.toEqual([{ kind: "missing", sessionKey: "agent:main:adopted:codex" }]);
+    expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 
   it("isolates a stale thread from healthy probes", async () => {

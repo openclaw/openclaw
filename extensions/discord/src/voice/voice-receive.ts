@@ -7,11 +7,11 @@ import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import type { DiscordAudioFrame } from "./audio-worker-protocol.js";
 import {
-  beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
   waitForVoiceCaptureAdmission,
+  type VoiceCaptureEntry,
 } from "./capture-state.js";
 import {
   type DiscordVoiceIngressContext,
@@ -26,7 +26,6 @@ import {
   analyzeVoiceReceiveError,
   DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
   DECRYPT_FAILURE_WINDOW_MS,
-  finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
   resetVoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
@@ -81,7 +80,7 @@ export class DiscordVoiceReceive {
     },
   ) {}
 
-  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, _reason: string): void {
+  scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string): void {
     // Before admission there is no worker subscription. Main expires only its
     // reservation; subscribed stream deadlines are driven by the worker receiver.
     if (entry.capture.get(userId)?.stream) {
@@ -140,7 +139,8 @@ export class DiscordVoiceReceive {
     }
     // A recorder can promote this reservation while native conversation admission
     // waits, without repeating admission or subscribing before either authority exists.
-    const reservation = beginVoiceCapture(entry.capture, userId);
+    const reservation: VoiceCaptureEntry = {};
+    entry.capture.set(userId, reservation);
     try {
       let realtimeIngress: Promise<DiscordVoiceIngressContext | null> | undefined;
       if (realtime && !capture) {
@@ -182,21 +182,9 @@ export class DiscordVoiceReceive {
 
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
-      readPolicy: this.params.readPolicy,
+      ...this.params,
       entry,
       userId,
-      accountId: this.params.accountId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      runtime: this.params.runtime,
-      speakerContext: this.params.speakerContext,
-      fetchGuildName: async (guildId: string) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
         playbackEntry.playbackQueue = playbackEntry.playbackQueue
           .then(task)
@@ -210,7 +198,7 @@ export class DiscordVoiceReceive {
   private async receiveSpeaker(
     entry: VoiceSessionEntry,
     userId: string,
-    reservation: ReturnType<typeof beginVoiceCapture>,
+    reservation: VoiceCaptureEntry,
     conversationAllowed: boolean,
     admittedIngress?: Promise<DiscordVoiceIngressContext | null>,
   ): Promise<void> {
@@ -218,8 +206,7 @@ export class DiscordVoiceReceive {
       entry.realtimeLifecycle.status === "active" ? entry.realtimeLifecycle.instance : undefined;
     const protectedPlayback = () =>
       entry.audio.playerStatus === "playing" && !realtime?.canReceiveDuringPlayback();
-    this.enableDaveReceivePassthrough(
-      entry,
+    entry.audio.enablePassthrough(
       `speaker ${userId} start`,
       DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
     );
@@ -249,14 +236,13 @@ export class DiscordVoiceReceive {
     // Reserve packets before identity/decoder awaits. Normal socket close ends this owned input
     // without destroying packets already received under the source subscription.
     const input = new PassThrough({ objectMode: true });
-    const receipts = new WeakMap<Buffer, DiscordVoiceAudioReceipt>();
     let failed = false;
     let pendingPackets = 0;
     let pendingBytes = 0;
     let resetReceiveRecovery = false;
     const acceptPacket = (frame: DiscordAudioFrame) => {
-      const packet = Buffer.from(frame.packet);
-      if (failed || !packet.length || stream.destroyed) {
+      const packetBytes = frame.packet.byteLength;
+      if (failed || !packetBytes || stream.destroyed) {
         stream.acknowledge(frame);
         return;
       }
@@ -267,7 +253,7 @@ export class DiscordVoiceReceive {
       }
       if (
         pendingPackets >= MAX_PENDING_OPUS_PACKETS ||
-        packet.length > MAX_PENDING_OPUS_BYTES - pendingBytes
+        packetBytes > MAX_PENDING_OPUS_BYTES - pendingBytes
       ) {
         onError(new Error("Discord voice receive backlog exceeded; try speaking again."));
         input.destroy();
@@ -281,14 +267,13 @@ export class DiscordVoiceReceive {
         this.resetDecryptFailureState(entry);
       }
       pendingPackets += 1;
-      pendingBytes += packet.length;
-      const receivedPacket = Buffer.from(packet);
-      receipts.set(receivedPacket, {
+      pendingBytes += packetBytes;
+      const receipt: DiscordVoiceAudioReceipt = {
         capture,
         startedAt: frame.receivedAt,
         recordingEpoch: frame.recordingEpoch,
-      });
-      input.write({ pcm: Buffer.from(frame.pcm), packet: receivedPacket, frame });
+      };
+      input.write({ pcm: Buffer.from(frame.pcm), packetBytes, receipt, frame });
     };
     const endInput = () => input.end();
     let aborted = false;
@@ -366,37 +351,40 @@ export class DiscordVoiceReceive {
       if (!conversation && !entry.transcripts?.isCurrent()) {
         return;
       }
-      const processFrame = async (pcm: Buffer, packet: Buffer): Promise<void> => {
-        const receipt = receipts.get(packet);
-        if (!receipt || failed) {
-          return;
-        }
-        pendingPackets -= 1;
-        pendingBytes -= packet.length;
-        receipts.delete(packet);
-        if (!receipt.capture && conversation && !conversation.ingress) {
-          const admitted = await waitForVoiceCaptureAdmission({
-            capture: reservation,
-            conversationAuthorized: conversation.ready.then(() => conversation.ingress !== null),
-            isRecordingCurrent: () => entry.transcripts?.isCurrent() === true,
-          });
-          if (!admitted) {
-            stream.destroy();
-            return;
-          }
-        }
-        if (failed) {
-          return;
-        }
-        realtimeRecording?.noteReceipt(receipt);
-        conversation?.sendAudio(pcm, receipt);
-        await recording.append(pcm, receipt);
-      };
       try {
         for await (const decoded of input) {
-          const frame: { pcm: Buffer; packet: Buffer; frame: DiscordAudioFrame } = decoded;
+          const frame: {
+            pcm: Buffer;
+            packetBytes: number;
+            receipt: DiscordVoiceAudioReceipt;
+            frame: DiscordAudioFrame;
+          } = decoded;
           try {
-            await processFrame(frame.pcm, frame.packet);
+            if (failed) {
+              continue;
+            }
+            pendingPackets -= 1;
+            pendingBytes -= frame.packetBytes;
+            const { pcm, receipt } = frame;
+            if (!receipt.capture && conversation && !conversation.ingress) {
+              const admitted = await waitForVoiceCaptureAdmission({
+                capture: reservation,
+                conversationAuthorized: conversation.ready.then(
+                  () => conversation.ingress !== null,
+                ),
+                isRecordingCurrent: () => entry.transcripts?.isCurrent() === true,
+              });
+              if (!admitted) {
+                stream.destroy();
+                continue;
+              }
+            }
+            if (failed) {
+              continue;
+            }
+            realtimeRecording?.noteReceipt(receipt);
+            conversation?.sendAudio(pcm, receipt);
+            await recording.append(pcm, receipt);
           } finally {
             stream.acknowledge(frame.frame);
           }
@@ -436,7 +424,7 @@ export class DiscordVoiceReceive {
         }
       }
     } finally {
-      realtimeRecording?.sealBatch();
+      realtimeRecording?.seal("batch");
       if (conversationCompletion) {
         void conversationCompletion.catch((error: unknown) =>
           logger.warn(`discord voice: conversation failed: ${formatErrorMessage(error)}`),
@@ -487,35 +475,22 @@ export class DiscordVoiceReceive {
     this.startDecryptRecovery(entry);
   }
 
-  enableDaveReceivePassthrough(
-    entry: Pick<VoiceSessionEntry, "audio">,
-    reason: string,
-    expirySeconds: number,
-  ): void {
-    entry.audio.enablePassthrough(reason, expirySeconds);
-  }
-
   async resolveDiscordVoiceIngressContext(
     entry: VoiceSessionEntry,
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
-      readPolicy: this.params.readPolicy,
-      client: this.params.client,
+      ...this.params,
       entry,
       userId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
       botUserId: this.params.botUserId(),
-      speakerContext: this.params.speakerContext,
     });
   }
 
   async runDiscordRealtimeAgentTurn(
     params: VoiceRealtimeAgentTurnParams & { entry: VoiceSessionEntry },
   ): Promise<string> {
-    const { context, entry, message, toolsAllow, userId } = params;
+    const { context, entry, message, userId } = params;
     params.signal?.throwIfAborted();
     const currentContext = await this.resolveDiscordVoiceIngressContext(entry, userId);
     params.signal?.throwIfAborted();
@@ -534,37 +509,21 @@ export class DiscordVoiceReceive {
     logger.info(
       `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
     );
-    const turn = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: this.params.accountId,
-      userId,
-      message,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      runtime: this.params.runtime,
+    const text = await runDiscordVoiceAgentTurn({
+      ...this.params,
+      ...params,
       context: currentContext,
-      toolsAllow,
-      voiceSelection: params.voiceSelection,
-      ...(params.signal ? { signal: params.signal } : {}),
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      fetchGuildName: async (guildId) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
-      speakerContext: this.params.speakerContext,
     });
-    if (!turn) {
+    if (text === null) {
       logVoiceVerbose(
         `realtime agent unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${turn.text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(turn.text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
     );
-    return turn.text;
+    return text;
   }
 
   private startDecryptRecovery(entry: VoiceSessionEntry, force = false): void {
@@ -607,7 +566,7 @@ export class DiscordVoiceReceive {
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {
-        finishVoiceDecryptRecovery(entry.receiveRecovery);
+        entry.receiveRecovery.decryptRecoveryInFlight = false;
       });
   }
 

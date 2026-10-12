@@ -28,7 +28,7 @@ type CodexCatalogIndexEventOwner = {
   refresh(id: string, readThread: ReadThread, sourceOrder: number | undefined): Promise<boolean>;
   archive(id: string): void;
   remove(id: string): void;
-  report(error: unknown): void;
+  report(error: unknown, disposition?: "deferred"): void;
 };
 
 type PendingRefresh = {
@@ -39,7 +39,7 @@ type PendingRefresh = {
   promise: Promise<void>;
 };
 
-/** Event scheduling only; the index owns row publication and stale-read fencing. */
+/** Coalesces metadata refreshes while the index owns row publication. */
 export class CodexCatalogIndexEvents {
   private closed = false;
   private readonly pending = new Map<string, PendingRefresh>();
@@ -203,6 +203,7 @@ export class CodexCatalogIndexEvents {
                   "Codex catalog observation interrupted by client closure; metadata refresh deferred to the current catalog owner",
                   { cause: error },
                 ),
+                "deferred",
               );
             } else {
               this.owner.report(error);

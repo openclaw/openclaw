@@ -8,8 +8,9 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
 }));
 
+// mock-isolation: Turn-source tests supply surface availability without consulting live channel approvals.
 vi.mock("./exec-approval-surface.js", () => ({
-  resolveApprovalInitiatingSurfaceState: (...args: unknown[]) =>
+  resolveApprovalInitiatingSurfaceStateAsync: async (...args: unknown[]) =>
     resolveApprovalInitiatingSurfaceStateMock(...args),
 }));
 
@@ -22,11 +23,11 @@ describe("hasApprovalTurnSourceRoute", () => {
     loadConfigMock.mockReturnValue({ loaded: true });
   });
 
-  it("returns true when the initiating surface is enabled", () => {
+  it("returns true when the initiating surface is enabled", async () => {
     resolveApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "enabled" });
 
     expect(
-      hasApprovalTurnSourceRoute({
+      await hasApprovalTurnSourceRoute({
         turnSourceChannel: "slack",
         turnSourceAccountId: "work",
       }),
@@ -39,14 +40,25 @@ describe("hasApprovalTurnSourceRoute", () => {
     });
   });
 
-  it("passes plugin approval kind to the initiating surface check", () => {
+  it("passes plugin approval kind to the initiating surface check", async () => {
     resolveApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "disabled" });
+    const request = {
+      id: "plugin:calendar",
+      request: {
+        title: "Review",
+        description: "Calendar tool",
+        policySubject: { pluginKey: "calendar" },
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    };
 
     expect(
-      hasApprovalTurnSourceRoute({
+      await hasApprovalTurnSourceRoute({
         turnSourceChannel: "whatsapp",
         turnSourceAccountId: "default",
         approvalKind: "plugin",
+        request,
       }),
     ).toBe(false);
     expect(resolveApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
@@ -54,26 +66,27 @@ describe("hasApprovalTurnSourceRoute", () => {
       accountId: "default",
       cfg: { loaded: true },
       approvalKind: "plugin",
+      request,
     });
   });
 
-  it("returns false when the initiating surface is disabled or unsupported", () => {
+  it("returns false when the initiating surface is disabled or unsupported", async () => {
     resolveApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "disabled" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(false);
+    expect(await hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(false);
 
     resolveApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "unsupported" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "unknown-channel" })).toBe(false);
+    expect(await hasApprovalTurnSourceRoute({ turnSourceChannel: "unknown-channel" })).toBe(false);
   });
 
-  it("returns false when there is no turn-source channel", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
+  it("returns false when there is no turn-source channel", async () => {
+    expect(await hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
     expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
   });
 
   it.each(["webchat", "tui"])(
     "requires a live approval client for the %s turn source",
-    (turnSourceChannel) => {
-      expect(hasApprovalTurnSourceRoute({ turnSourceChannel })).toBe(false);
+    async (turnSourceChannel) => {
+      expect(await hasApprovalTurnSourceRoute({ turnSourceChannel })).toBe(false);
       expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
       expect(loadConfigMock).not.toHaveBeenCalled();
     },

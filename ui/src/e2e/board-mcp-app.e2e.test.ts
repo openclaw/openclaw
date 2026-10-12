@@ -5,9 +5,11 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-brid
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -30,6 +32,7 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 let sandboxServer: HttpServer;
 let sandboxPort: number;
+let sandboxPortClaim: TestPortClaim | undefined;
 const contexts = new Set<BrowserContext>();
 
 function widget(index: number) {
@@ -87,7 +90,7 @@ function appViewPayload() {
 
 async function waitForMountedApp(page: Page): Promise<void> {
   await page.waitForFunction(
-    () => Boolean(document.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe")),
+    () => Boolean(document.querySelector("mcp-app-view")?.querySelector("iframe")),
     undefined,
     { timeout: 15_000 },
   );
@@ -98,14 +101,20 @@ async function cycleBoardProviderConnection(page: Page): Promise<void> {
     const surface = document.querySelector(".board-session-surface");
     const pane = surface?.closest("openclaw-chat-pane");
     const lease = pane ? Reflect.get(pane, "boardProviderLease") : undefined;
-    const scopedProvider = lease?.provider;
-    const transport = scopedProvider ? Reflect.get(scopedProvider, "transport") : undefined;
-    const client = transport ? Reflect.get(transport, "client") : undefined;
-    if (!transport || !client || typeof transport.attachClient !== "function") {
+    const context = pane ? Reflect.get(pane, "context") : undefined;
+    const client = context?.gateway.snapshot.client;
+    const provider = lease?.provider;
+    if (!lease || !provider || !client) {
       throw new Error("Dashboard Gateway provider is unavailable");
     }
-    transport.attachClient(client, false);
-    transport.attachClient(client, true);
+    const capabilities = {
+      canPinWidgets: provider.canPinWidgets,
+      canPinMcpApps: provider.canPinMcpApps,
+      canMutate: provider.canMutate,
+      canGrant: provider.canGrant,
+    };
+    lease.update(client, false, capabilities);
+    lease.update(client, true, capabilities);
   });
 }
 
@@ -115,7 +124,7 @@ async function captureBoardIdentity(page: Page): Promise<void> {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     if (!surface || !board || !cell || !appView || !iframe) {
       throw new Error("Board MCP App identity is incomplete");
     }
@@ -136,7 +145,7 @@ async function readBoardIdentity(page: Page) {
     const board = surface?.querySelector("openclaw-board-view");
     const cell = board?.querySelector("openclaw-board-widget-cell");
     const appView = cell?.querySelector("mcp-app-view");
-    const iframe = appView?.shadowRoot?.querySelector("iframe");
+    const iframe = appView?.querySelector("iframe");
     return {
       connected: [stored.surface, stored.board, stored.cell, stored.appView, stored.iframe].every(
         (element) => element.isConnected,
@@ -175,7 +184,8 @@ async function expectRetainedBoardPresentation(
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getGatewayE2ePortBlock();
+    sandboxPortClaim = await acquireGatewayE2ePortBlock();
+    sandboxPort = sandboxPortClaim.port;
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -194,7 +204,52 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         sandboxServer.close(() => resolve());
       });
     }
+    await sandboxPortClaim?.release();
     await controlUi?.close();
+  });
+
+  it("closes Inbox when a dashboard frame receives an outside click without stealing focus", async () => {
+    const context = await browser.newContext({
+      permissions: ["local-network-access"],
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["board.get", "board.widget.appView", "mcp.app.view"],
+      methodResponses: {
+        "board.get": boardSnapshot(1),
+        "board.widget.appView": {
+          viewId: "inbox-focus-view",
+          expiresAtMs: Date.now() + 3_600_000,
+        },
+        "mcp.app.view": appViewPayload(),
+      },
+    });
+    await openDashboard(page);
+    const note = page
+      .frameLocator("mcp-app-view iframe")
+      .frameLocator("iframe")
+      .getByRole("textbox", { name: "Draft note" });
+    await note.waitFor();
+    const trigger = page.locator(".sidebar-issues-button:visible");
+    const panel = page.locator("#sidebar-issues-panel");
+    await trigger.click();
+    await panel.waitFor();
+    await clickBoardWidgetControl(page, note);
+    await panel.waitFor({ state: "hidden" });
+    // Type through actual keyboard focus, not fill(), which would refocus the input.
+    await page.keyboard.type("Keep this dashboard draft");
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
+    await page.keyboard.press("Escape");
+    expect(await panel.count()).toBe(0);
+
+    await trigger.click();
+    await panel.waitFor();
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "hidden" });
+    expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
+    expect(await note.inputValue()).toBe("Keep this dashboard draft");
   });
 
   it("renders a pinned app and proactively renews its board lease", async () => {
@@ -244,7 +299,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
       const frame = document
         .querySelector("mcp-app-view")
-        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+        ?.querySelector<HTMLIFrameElement>("iframe");
       if (!widgetElement || !frame) {
         throw new Error("dashboard MCP App frame is missing");
       }
@@ -401,7 +456,6 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             } });
           </script>`,
         },
-        "tasks.list": { tasks: [] },
       },
     });
 
@@ -435,7 +489,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       page.evaluate(() => {
         const board = document.querySelector("openclaw-board-view");
         const body = board?.querySelector(".board-widget__body");
-        const frame = board?.querySelector("mcp-app-view")?.shadowRoot?.querySelector("iframe");
+        const frame = board?.querySelector("mcp-app-view")?.querySelector("iframe");
         if (!board || !body || !frame) {
           throw new Error("Dashboard MCP App layout is unavailable");
         }
@@ -452,28 +506,34 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       await appContent.waitFor();
       await page.screenshot({ path: `${artifactDir}/fullscreen-dashboard.png` });
     }
+    // Measure the frame on every poll: a viewport resize settles the board
+    // layout asynchronously, so a size read before polling can be stale.
     const expectHostDimensions = async () => {
       const frame = page.locator("mcp-app-view iframe");
-      const dimensions = await frame.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return { width: Math.round(rect.width), height: Math.round(rect.height) };
-      });
       await expect
-        .poll(async () =>
-          JSON.parse(
+        .poll(async () => {
+          const size = await frame.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { width: Math.round(rect.width), height: Math.round(rect.height) };
+          });
+          const reported = JSON.parse(
             (await page
               .frameLocator("mcp-app-view iframe")
               .frameLocator("iframe")
               .locator("html")
               .getAttribute("data-host-dimensions")) ?? "null",
-          ),
-        )
-        .toEqual(dimensions);
+          ) as { width?: number; height?: number } | null;
+          return { size, reported };
+        })
+        .toSatisfy(
+          ({ size, reported }) =>
+            reported?.width === size.width && reported?.height === size.height,
+        );
     };
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await expectRetainedBoardPresentation(page, "expanded");
     if (artifactDir) {
@@ -486,7 +546,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
-    expect((await frameInsets()).bodyHeightGap).toBe(0);
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
     await restoreChatAsMain(page);
 
@@ -521,7 +581,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
 
     const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");
     await typeMenu.getByRole("button", { name: "Add side panel tab" }).click();
-    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Tasks" }).click();
+    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Files" }).click();
     await expect
       .poll(() => typeMenu.evaluate((element) => Reflect.get(element, "open")))
       .toBe(false);
@@ -529,9 +589,9 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
       await writeFile(
-        `${artifactDir}/02-tasks.png`,
+        `${artifactDir}/02-files.png`,
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          sidePanel.getByRole("tab", { name: "Tasks", exact: true }),
+          sidePanel.getByRole("tab", { name: "Files", exact: true }),
         ]),
       );
     }

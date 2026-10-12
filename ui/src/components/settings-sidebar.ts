@@ -1,16 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {
-  cancelRoutePreload,
   isSettingsNavigationRouteVisible,
   navigationIconForRoute,
-  scheduleRoutePreload,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
-  settingsNavigationOwnerRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -25,14 +19,23 @@ import { t } from "../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
+  settingsSearchTextMatches,
+} from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { renderGatewayStatus } from "./gateway-status.ts";
 import { icons } from "./icons.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
+import { renderKbd } from "./kbd.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 import "./agent-select-registration.ts";
-import "./settings-save-indicator.ts";
+import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
 import "./sidebar-build-chip.ts";
 
@@ -147,29 +150,25 @@ function filterSettingsNavigationGroups(
   }
   const pageRoutes = [...directRoutes, ...groupRoutes];
   return [
-    ...(pageRoutes.length > 0
-      ? [
-          {
-            labelKey: null,
-            items: pageRoutes.map((routeId) => ({
-              routeId,
-              blocks: (blocksByRoute.get(routeId) ?? []).filter(
-                (block) => !isRedundantRouteBlock(routeId, block),
-              ),
-            })),
-          },
-        ]
-      : []),
+    {
+      labelKey: null,
+      items: pageRoutes.map((routeId) => ({
+        routeId,
+        blocks: (blocksByRoute.get(routeId) ?? []).filter(
+          (block) => !isRedundantRouteBlock(routeId, block),
+        ),
+      })),
+    },
     ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
         items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
       })),
-  ];
+  ].filter((group) => group.items.length > 0);
 }
 
-function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
+function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
   const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
@@ -182,8 +181,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @pointerenter=${(event: Event) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
       @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
-      @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) =>
+          scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -193,10 +195,10 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       }}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true"
-        >${icons[navigationIconForRoute(routeId)]}</span
+        >${routeId === "custodian" ? renderThemeBrandIcon() : icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
+        >${settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
       ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
@@ -308,6 +310,18 @@ function renderSettingsAgentSelector(props: SettingsSidebarProps) {
   </div>`;
 }
 
+function renderSettingsConnectionStatus(props: SettingsSidebarProps) {
+  return props.connectionStatus !== null
+    ? renderGatewayStatus({
+        kind: props.connectionStatus,
+        lastError: props.lastError,
+        onRetry: props.onRetryConnect,
+      })
+    : html`<openclaw-settings-save-indicator
+        .props=${props.saveIndicator}
+      ></openclaw-settings-save-indicator>`;
+}
+
 function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
   return html`<header class="native-embed-header">
     ${
@@ -325,22 +339,7 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
     <h1 class="page-title">
       ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
-    ${
-      props.connectionStatus !== null
-        ? renderGatewayStatus({
-            kind: props.connectionStatus,
-            lastError: props.lastError,
-            onRetry: props.onRetryConnect,
-          })
-        : nothing
-    }
-    ${
-      props.connectionStatus === null
-        ? html`<openclaw-settings-save-indicator
-            .props=${props.saveIndicator}
-          ></openclaw-settings-save-indicator>`
-        : nothing
-    }
+    ${renderSettingsConnectionStatus(props)}
   </header>`;
 }
 
@@ -397,7 +396,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         <button type="button" class="settings-sidebar__back" @click=${() => props.onExit()}>
           <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
           ${t("nav.exitSettings")}
-          <kbd class="settings-sidebar__esc" aria-hidden="true">esc</kbd>
+          ${renderKbd("esc", { className: "settings-sidebar__esc", ariaHidden: true })}
         </button>
         <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
       </header>
@@ -415,7 +414,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape") {
+            if (event.key !== "Escape" || isComposingKeyboardEvent(event)) {
               return;
             }
             event.preventDefault();
@@ -449,22 +448,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </div>
       ${navigation}
       <footer class="settings-sidebar__footer">
-        ${
-          props.connectionStatus !== null
-            ? renderGatewayStatus({
-                kind: props.connectionStatus,
-                lastError: props.lastError,
-                onRetry: props.onRetryConnect,
-              })
-            : nothing
-        }
-        ${
-          props.connectionStatus === null
-            ? html`<openclaw-settings-save-indicator
-                .props=${props.saveIndicator}
-              ></openclaw-settings-save-indicator>`
-            : nothing
-        }
+        ${renderSettingsConnectionStatus(props)}
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

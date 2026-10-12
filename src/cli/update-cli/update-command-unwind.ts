@@ -1,12 +1,15 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
+  createUpdateCommandFailureResult,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -15,6 +18,7 @@ import {
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
 import {
+  deferUpdateCommandTerminalResult,
   hasDeferredUpdateCommandTerminalResult,
   prepareUnexpectedUpdateCommandFailure,
 } from "./update-command-terminal.js";
@@ -30,59 +34,77 @@ export async function withUpdateCommandRecoveryUnwind(
     error instanceof UpdateCommandFailure
       ? error.result
       : (recoveryState.triageTarget.failureResult ?? {
-          status: "error" as const,
-          mode: "unknown" as const,
-          reason: "update-failed",
+          ...createUpdateCommandFailureResult({
+            mode: "unknown",
+            root: recoveryState.triageTarget.root,
+            durationMs: 0,
+            failure: {
+              cause: error,
+              detail: createUpdateErrorFact("update", error, run.env).message,
+            },
+          }),
           runId: run.runId,
-          steps: [],
-          durationMs: 0,
         });
+  const pendingFailure = (cause: unknown, original: unknown) =>
+    new UpdateCommandPendingRecoveryFailure(primaryResult(original), formatErrorMessage(cause), {
+      cause,
+    });
+  const settlePending = async (error: UpdateCommandFailure) => {
+    if (opts.recovery) {
+      return error;
+    }
+    try {
+      // Pending database publication forbids compensation or ledger reads, but
+      // the locally owned suspension must release its process signal gate.
+      await recoveryState.windowsTaskAutoStartRecovery?.complete(false, { preserveState: true });
+      return error;
+    } catch (cause) {
+      return new UpdateCommandPendingRecoveryFailure(
+        error.result,
+        `${formatErrorMessage(error)}; Windows suspension settlement failed: ${formatErrorMessage(cause)}`,
+        {
+          cause: new AggregateError([error, cause], "Pending update cleanup failed", {
+            cause: error,
+          }),
+        },
+      );
+    }
+  };
   let failure: { error: unknown } | undefined;
   try {
     await withCommandProcessScope(operation);
     run.executorFence?.assertCurrent();
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
-      throw new UpdateCommandPendingRecoveryFailure(
-        primaryResult(error),
-        formatErrorMessage(error),
-        { cause: error },
-      );
+      throw await settlePending(pendingFailure(error, error));
     }
     try {
       run.executorFence?.assertCurrent();
     } catch (cause) {
-      throw new UpdateCommandPendingRecoveryFailure(
-        primaryResult(error),
-        formatErrorMessage(cause),
-        { cause: new AggregateError([error, cause], "Update executor was lost", { cause: error }) },
+      throw await settlePending(
+        new UpdateCommandPendingRecoveryFailure(primaryResult(error), formatErrorMessage(cause), {
+          cause: new AggregateError([error, cause], "Update executor was lost", { cause: error }),
+        }),
       );
     }
     if (
       error instanceof UpdateCommandPendingRecoveryFailure ||
       error instanceof UpdateCommandFinalizedRecoveryFailure
     ) {
-      throw error;
+      throw await settlePending(error);
     }
     if (
       error instanceof UpdateCommandRecoveryPendingError ||
       error instanceof UpdateRecoveryRequiredError ||
       opts.recovery
     ) {
-      throw new UpdateCommandPendingRecoveryFailure(
-        primaryResult(error),
-        formatErrorMessage(error),
-        { cause: error },
-      );
+      throw await settlePending(pendingFailure(error, error));
     }
     failure = { error };
   }
   if (opts.recovery) {
     // Durable finalization alone owns native/terminal effects. Never replay
     // legacy compensation, including after an already-finalized failure.
-    if (failure) {
-      throw failure.error;
-    }
     return;
   }
   if (recoveryState.ledgerHandoffOwned && !recoveryState.ledgerHandoffCompleted) {
@@ -96,16 +118,12 @@ export async function withUpdateCommandRecoveryUnwind(
         cause,
       });
     }
-    throw new UpdateCommandPendingRecoveryFailure(
-      primaryResult(failure?.error),
-      formatErrorMessage(cause),
-      { cause },
-    );
+    throw pendingFailure(cause, failure?.error ?? cause);
   }
   if (!recoveryState.ledgerHandoffOwned) {
     // The admitted newer runtime owns canonical history after handoff. The old
     // process must not reopen a database that it may no longer understand.
-    try {
+    const admitRecovery = async () => {
       // A lost live context or a successful callback is not fresh-install proof.
       // Reconcile all affected state roots read-only before native compensation.
       const paths = new Set<string>();
@@ -117,12 +135,42 @@ export async function withUpdateCommandRecoveryUnwind(
         paths.add(file);
         await assertUpdateRecoveryAdmission({ env });
       }
+    };
+    try {
+      await admitRecovery();
     } catch (error) {
-      throw new UpdateCommandPendingRecoveryFailure(
-        primaryResult(failure?.error),
-        formatErrorMessage(error),
-        { cause: error },
-      );
+      const pending = pendingFailure(error, failure?.error ?? error);
+      if (
+        failure &&
+        !(failure.error instanceof UpdateCommandFailure) &&
+        !run.executorFence &&
+        !recoveryState.windowsTaskAutoStartRecovery &&
+        !hasDeferredUpdateCommandTerminalResult(run)
+      ) {
+        const original = failure.error;
+        // Pre-staging has no native compensation. Let the terminal owner make
+        // one fresh admission after settlement before recording the initial failure.
+        deferUpdateCommandTerminalResult(run, async (settlementFailure, onTerminalRecord) => {
+          if (settlementFailure !== pending) {
+            throw settlementFailure;
+          }
+          try {
+            await admitRecovery();
+          } catch (cause) {
+            throw pendingFailure(cause, original);
+          }
+          const recorded = await prepareUnexpectedUpdateCommandFailure(
+            original,
+            opts,
+            onTerminalRecord,
+          );
+          if (recorded instanceof UpdateCommandPendingRecoveryFailure) {
+            throw recorded;
+          }
+          return recorded.result;
+        });
+      }
+      throw await settlePending(pending);
     }
   }
   try {
@@ -142,6 +190,10 @@ export async function withUpdateCommandRecoveryUnwind(
     failure = mergeWindowsTaskRecoveryFailure(failure, error);
   }
   if (failure) {
+    // Reported exits still unwind recovery above, but are not new update failures.
+    if (failure.error instanceof ExitError) {
+      throw failure.error;
+    }
     if (!recoveryState.ledgerHandoffOwned && !hasDeferredUpdateCommandTerminalResult(run)) {
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);

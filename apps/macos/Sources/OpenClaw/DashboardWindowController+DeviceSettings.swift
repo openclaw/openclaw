@@ -31,7 +31,8 @@ extension DashboardWindowController {
             replyHandler(NSNull(), nil)
             return
         }
-        guard Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else {
+        guard ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else {
             replyHandler(nil, "The device settings document is no longer available.")
             return
         }
@@ -39,13 +40,15 @@ extension DashboardWindowController {
             request, sourceID: self.notificationSourceID, replyHandler: replyHandler)
     }
 
-    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async {
+    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async throws {
+        // Publish even a failed transition: recovery may have changed the hosting state.
+        defer { NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil) }
         switch request {
         case .status:
             await self.publishDeviceSettings()
             await BrowserProfileImportModel.shared.refreshAvailability()
         case let .set(key, value):
-            await self.setDeviceSetting(key, value: value)
+            try await self.setDeviceSetting(key, value: value)
         case let .requestPermission(id):
             if let capability = id.capability {
                 _ = await PermissionManager.ensure([capability], interactive: true)
@@ -58,11 +61,9 @@ extension DashboardWindowController {
             await self.openDeviceSettingsPanel(panel)
         case .checkForUpdates:
             if self.updater?.isAvailable == true { self.updater?.checkForUpdates(nil) }
-        case .chromeExtensionStatus, .installChromeExtension:
-            break // The queued handler returns the extension result directly.
+        case .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
+            break // The queued handler returns the canonical setup result directly.
         }
-        // All Gateway windows show settings for this Mac; mutations must update each open view.
-        NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
     }
 
     private func requiredDeviceSettingConsent(
@@ -96,7 +97,7 @@ extension DashboardWindowController {
         .realtimeRelayEnabled: \.talkRealtimeRelayEnabled,
     ]
 
-    private func setDeviceSetting(_ key: DeviceSettingKey, value: DeviceSettingValue) async {
+    private func setDeviceSetting(_ key: DeviceSettingKey, value: DeviceSettingValue) async throws {
         let sourceID = self.notificationSourceID
         let consent = self.requiredDeviceSettingConsent(key, value: value)
         if let consent {
@@ -107,6 +108,10 @@ extension DashboardWindowController {
         guard self.canUseDeviceSettings(sourceID: sourceID),
               self.requiredDeviceSettingConsent(key, value: value) == consent else { return }
         switch (key, value) {
+        case let (.keepGatewayRunning, .boolean(enabled)):
+            try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled) {
+                self.canUseDeviceSettings(sourceID: sourceID)
+            }
         case let (.wakeEnabled, .boolean(enabled)):
             await AppStateStore.shared.setVoiceWakeEnabled(enabled) { self.canUseDeviceSettings(sourceID: sourceID) }
         case let (.locationMode, .string(value)):
@@ -192,9 +197,8 @@ extension DashboardWindowController {
             state.cookieSyncIntoProfile = value.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "imported"
         case .microphone:
             let devices = VoiceWakeDeviceOptions.microphones()
-            guard devices.contains(where: { $0.id == value }) else { return }
-            state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
-                selectedID: value, in: devices, uid: \.id, name: \.name)
+            guard let device = devices.first(where: { $0.id == value }) else { return }
+            state.voiceWakeMicName = value.isEmpty ? "" : device.name
             state.voiceWakeMicID = value
         case .localePrimary:
             guard VoiceWakeDeviceOptions.locales().contains(where: { $0.id == value }) else { return }

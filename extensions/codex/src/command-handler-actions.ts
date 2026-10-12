@@ -4,13 +4,17 @@ import {
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  captureSessionEntryCurrentCheck,
+  composeSessionEntryCommitGuards,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexComputerUseSetupParams } from "./app-server/computer-use.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
-  resolveCodexNativeExecutionBlock,
+  prepareCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
 import type {
@@ -20,6 +24,7 @@ import type {
 import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./app-server/thread-policy.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_FULL_PERMISSIONS_AUTH_ERROR,
   hasCodexAdminScope,
@@ -59,35 +64,63 @@ export const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   "stop",
 ]);
 
-export function resolveCodexNativeCommandSandboxBlock(
+export async function resolveCodexNativeCommandSandboxBlock(
   ctx: PluginCommandContext,
   subcommand: string,
   args: readonly string[],
-): string | undefined {
-  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
-    return undefined;
+): Promise<{ block: string | undefined; assertCurrent: () => void }> {
+  if (
+    isReadOnlyCodexGoalCommand(subcommand, args) ||
+    returnsBeforeNativeCodexExecution(subcommand, args)
+  ) {
+    return { block: undefined, assertCurrent() {} };
   }
+  const sessionKey = ctx.sessionTarget?.sessionKey ?? ctx.sessionKey;
+  const checksModelLock = ["bind", "resume", "detach", "unbind", "model"].includes(subcommand);
+  if (!checksModelLock && !CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
+    return { block: undefined, assertCurrent() {} };
+  }
+  const agentId = ctx.sessionTarget?.agentId ?? resolveCodexConversationControlScope(ctx).agentId;
+  const storePath =
+    ctx.sessionTarget?.storePath ?? resolveStorePath(ctx.config.session?.store, { agentId });
+  const modelCurrent =
+    checksModelLock && sessionKey
+      ? await captureSessionEntryCurrentCheck({
+          agentId,
+          storePath,
+          sessionKey,
+          fields: ["modelSelectionLocked"],
+        })
+      : undefined;
   if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
-    return undefined;
-  }
-  if (returnsBeforeNativeCodexExecution(subcommand, args)) {
-    return undefined;
+    return { block: undefined, assertCurrent: modelCurrent?.assertCurrent ?? (() => {}) };
   }
   if (isCodexCliNodeResumeBind(subcommand, args)) {
-    return resolveCodexNativeSandboxBlock({
-      config: ctx.config,
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      surface: `/${["codex", subcommand].join(" ")}`,
-    });
+    return {
+      block: resolveCodexNativeSandboxBlock({
+        config: ctx.config,
+        sessionKey: ctx.sessionKey,
+        sessionId: ctx.sessionId,
+        surface: `/${["codex", subcommand].join(" ")}`,
+      }),
+      assertCurrent: modelCurrent?.assertCurrent ?? (() => {}),
+    };
   }
-  return resolveCodexNativeExecutionBlock({
+  const execution = await prepareCodexNativeExecutionBlock({
     config: ctx.config,
     agentId: ctx.agentId,
-    sessionKey: ctx.sessionKey,
+    sessionKey,
     sessionId: ctx.sessionId,
+    storePath,
     surface: `/${["codex", subcommand].join(" ")}`,
   });
+  return {
+    block: execution.block,
+    assertCurrent: composeSessionEntryCommitGuards([
+      modelCurrent?.assertCurrent,
+      execution.assertCurrent,
+    ]),
+  };
 }
 
 export function isReadOnlyCodexGoalCommand(subcommand: string, args: readonly string[]): boolean {
@@ -138,14 +171,10 @@ function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): 
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
   const parsed = parseResumeArgs([...args]);
-  const normalizedThreadId = parsed.threadId?.trim();
-  if (parsed.help) {
+  if (parsed.help || !parsed.threadId) {
     return true;
   }
-  if (parsed.host) {
-    return !normalizedThreadId || parsed.bindHere !== true;
-  }
-  return !normalizedThreadId || args.length !== 1;
+  return parsed.host ? parsed.bindHere !== true : args.length !== 1;
 }
 
 export async function handleComputerUseCommand(
@@ -172,11 +201,16 @@ export async function handleComputerUseCommand(
     pluginConfig,
     config: ctx.config,
     agentDir,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    forceEnable: parsed.action === "install" || Object.keys(parsed.overrides).length > 0,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {
-    return formatComputerUseStatus(await deps.installCodexComputerUse(params));
+    return formatComputerUseStatus(
+      await deps.installCodexComputerUse({
+        ...params,
+        assertCurrent: () => assertCodexHostOwnerCurrent(ctx),
+      }),
+    );
   }
   return formatComputerUseStatus(await deps.readCodexComputerUseStatus(params));
 }
@@ -215,31 +249,25 @@ export async function handleNativeGoal(
     assertCurrent: authority.assertCurrent,
     ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
   };
-  if (action === "status" || action === "get") {
+  if (action === "status" || action === "get" || action === "clear") {
+    const clear = action === "clear";
     if (args.length > 1) {
-      return "Usage: /codex goal [status]";
+      return clear ? "Usage: /codex goal clear" : "Usage: /codex goal [status]";
     }
     const response = await deps.codexControlRequest(
       pluginConfig,
-      CODEX_CONTROL_METHODS.getThreadGoal,
+      clear ? CODEX_CONTROL_METHODS.clearThreadGoal : CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: binding.threadId },
-      goalRequestOptions,
+      clear
+        ? { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) }
+        : goalRequestOptions,
     );
+    if (clear) {
+      return isJsonObject(response) && response.cleared === true
+        ? "Cleared the Codex goal."
+        : "No Codex goal was active.";
+    }
     return formatNativeGoal(response);
-  }
-  if (action === "clear") {
-    if (args.length > 1) {
-      return "Usage: /codex goal clear";
-    }
-    const response = await deps.codexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.clearThreadGoal,
-      { threadId: binding.threadId },
-      goalRequestOptions,
-    );
-    return isJsonObject(response) && response.cleared === true
-      ? "Cleared the Codex goal."
-      : "No Codex goal was active.";
   }
   const requestedStatus =
     action === "pause"
@@ -271,6 +299,7 @@ export async function handleNativeGoal(
       },
       {
         ...goalRequestOptions,
+        assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
         ...((isObjectiveUpdate || requestedStatus === "active") &&
         connection.usesSupervisionConnection
           ? { beforeRequest: supervisedCommandGuard(deps, target.identity, binding) }
@@ -297,48 +326,32 @@ function formatNativeGoal(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
-export async function stopConversationTurn(
+export async function controlConversationTurn(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<string> {
-  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target, binding } = authority;
-  if (!target) {
-    return "Cannot stop Codex because this command did not include a stable binding identity.";
-  }
-  return (
-    await deps.stopCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      assertCurrent: authority.assertCurrent,
-    })
-  ).message;
-}
-
-export async function steerConversationTurn(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  command: "stop" | "steer",
   message: string,
 ): Promise<string> {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
   if (!target) {
-    return "Cannot steer Codex because this command did not include a stable binding identity.";
+    return `Cannot ${command} Codex because this command did not include a stable binding identity.`;
   }
-  return (
-    await deps.steerCodexConversationTurn({
-      identity: target.identity,
-      binding,
-      message,
-      assertCurrent: authority.assertCurrent,
-    })
-  ).message;
+  const params = {
+    identity: target.identity,
+    binding,
+    assertCurrent: authority.assertMutationCurrent,
+  };
+  const result =
+    command === "stop"
+      ? await deps.stopCodexConversationTurn(params)
+      : await deps.steerCodexConversationTurn({ ...params, message });
+  return result.message;
 }
 
 export async function setConversationModel(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
   if (args.length > 1) {
@@ -346,7 +359,7 @@ export async function setConversationModel(
   }
   const [model = ""] = args;
   const normalized = model.trim();
-  if (normalized && isCurrentSessionModelSelectionLocked(ctx)) {
+  if (normalized && (await isCurrentSessionModelSelectionLocked(ctx))) {
     return MODEL_SELECTION_LOCKED_MESSAGE;
   }
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
@@ -357,7 +370,7 @@ export async function setConversationModel(
   if (!normalized) {
     const currentSession =
       authority.sessionId && authority.sessionKey && authority.storePath
-        ? getSessionEntry({
+        ? await getSessionEntryAsync({
             storePath: authority.storePath,
             sessionKey: authority.sessionKey,
             hydrateSkillPromptRefs: false,
@@ -380,60 +393,53 @@ export async function setConversationModel(
   return await deps.setCodexConversationModel({
     identity: target.identity,
     bindingStore: deps.bindingStore,
-    pluginConfig,
     model: normalized,
     agentDir: target.agentDir,
     config: ctx.config,
     binding,
     storePath: authority.storePath,
     assertCurrent: authority.assertCurrent,
+    assertCommitAllowed: authority.assertMutationCurrent,
   });
 }
 
-export async function setConversationFastMode(
+export async function setConversationPreference(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   args: string[],
+  kind: "fast" | "permissions",
 ): Promise<string> {
+  const usage = `Usage: /codex ${kind} ${kind === "fast" ? "[on|off|status]" : "[default|yolo|status]"}`;
   if (args.length > 1) {
-    return "Usage: /codex fast [on|off|status]";
+    return usage;
   }
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
-  if (!target) {
-    return "Cannot set Codex fast mode because this command did not include a stable binding identity.";
+  if (kind === "fast") {
+    if (!target) {
+      return "Cannot set Codex fast mode because this command did not include a stable binding identity.";
+    }
+    const value = args[0];
+    const parsed = parseCodexFastModeArg(value);
+    if (value && parsed == null && value.trim().toLowerCase() !== "status") {
+      return usage;
+    }
+    return await deps.setCodexConversationFastMode({
+      identity: target.identity,
+      bindingStore: deps.bindingStore,
+      binding,
+      enabled: parsed,
+      assertCurrent:
+        parsed === undefined ? authority.assertCurrent : authority.assertMutationCurrent,
+    });
   }
-  const value = args[0];
-  const parsed = parseCodexFastModeArg(value);
-  if (value && parsed == null && value.trim().toLowerCase() !== "status") {
-    return "Usage: /codex fast [on|off|status]";
-  }
-  return await deps.setCodexConversationFastMode({
-    identity: target.identity,
-    bindingStore: deps.bindingStore,
-    binding,
-    enabled: parsed,
-    assertCurrent: authority.assertCurrent,
-  });
-}
-
-export async function setConversationPermissions(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  args: string[],
-): Promise<string> {
-  if (args.length > 1) {
-    return "Usage: /codex permissions [default|yolo|status]";
-  }
-  const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
-  const { target } = authority;
   if (!target || !ctx.sessionId || !ctx.sessionKey) {
     return "Cannot set Codex permissions because this command did not include a complete session identity.";
   }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
-    return "Usage: /codex permissions [default|yolo|status]";
+    return usage;
   }
   // Match sessions.create/sessions.patch: full access requires operator.admin,
   // even when the command sender is an owner.
@@ -444,7 +450,8 @@ export async function setConversationPermissions(
     mode: parsed,
     config: ctx.config,
     storePath: authority.storePath,
-    assertCurrent: authority.assertHostCurrent,
+    assertCurrent: parsed ? authority.assertHostMutationCurrent : authority.assertHostCurrent,
+    sourceAuthority: parsed ? authority.assertHostMutationCurrent : undefined,
     session: {
       agentId: target.agentId,
       sessionId: ctx.sessionId,
@@ -482,7 +489,7 @@ export async function startThreadAction(
     ) {
       return "Codex compaction is unavailable because this command is not bound to a complete session identity.";
     }
-    const currentSession = getSessionEntry({
+    const currentSession = await getSessionEntryAsync({
       storePath: authority.storePath ?? sessionTarget.storePath,
       sessionKey: ctx.sessionKey,
       hydrateSkillPromptRefs: false,
@@ -503,7 +510,7 @@ export async function startThreadAction(
     if (!compactCurrent) {
       return "Codex compaction is unavailable because this command is not bound to a session.";
     }
-    authority.assertCurrent();
+    authority.assertMutationCurrent();
     const result = await compactCurrent();
     return result.compacted
       ? `Compacted Codex session (${result.tokensAfter ?? "unknown"} tokens after).`
@@ -530,6 +537,7 @@ export async function startThreadAction(
         sessionKey: authority.sessionKey,
         storePath: authority.storePath,
         assertCurrent: authority.assertCurrent,
+        assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
         ...(connection.usesSupervisionConnection
           ? {
               startOptions: connection.appServer.start,

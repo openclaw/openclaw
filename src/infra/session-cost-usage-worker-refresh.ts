@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   parseSqliteSessionFileMarker,
@@ -12,45 +12,22 @@ import {
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import { sha256Base64Url } from "./crypto-digest.js";
 import {
   resolveUsageCostTranscriptFile,
-  type UsageCostTranscriptFile,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
-import {
-  applyCostBreakdown,
-  applyCostTotal,
-  applyUsageTotals,
-  parseUsageCostTranscriptRecord,
-  needsUsageCostEstimate,
-  applyUsageCostEstimate,
-} from "./session-cost-usage-pricing.js";
-import {
-  USAGE_COST_ROLLUP_VERSION,
-  type UsageCostJsonlCheckpoint,
-  type UsageCostSqliteCheckpoint,
-  type UsageCostRollupEntry,
-  type UsageCostStoredRollup,
-} from "./session-cost-usage-rollup-codec.js";
-import {
-  appendSessionUsageRollupContribution,
-  createSessionUsageRollupData,
-  type SessionUsageRollupData,
-} from "./session-cost-usage-rollup.js";
-import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
+import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
-
-function hashUsageCostCheckpoint(value: Buffer | string): string {
-  return createHash("sha256").update(value).digest("base64url");
-}
 
 async function readJsonlAnchorHash(filePath: string, offset: number): Promise<string | undefined> {
   const start = Math.max(0, offset - USAGE_COST_FILE_ANCHOR_BYTES);
   const length = offset - start;
   if (length === 0) {
-    return hashUsageCostCheckpoint("");
+    return sha256Base64Url("");
   }
   const handle = await fs.promises.open(filePath, "r").catch(() => null);
   if (!handle) {
@@ -59,23 +36,14 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   try {
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, start);
-    return bytesRead === length ? hashUsageCostCheckpoint(buffer) : undefined;
+    return bytesRead === length ? sha256Base64Url(buffer) : undefined;
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
 function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
-  const text = line.toString("utf8").trim();
-  if (!text) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeParseJsonRecord(line.toString("utf8").trim());
 }
 
 async function scanJsonlRange(params: {
@@ -146,38 +114,9 @@ async function scanJsonlRange(params: {
   }
 }
 
-function appendParsedEntryToRollup(
-  rollup: SessionUsageRollupData,
-  entry: ParsedTranscriptEntry,
-): { countedRecord: boolean; parsedRecord: boolean } {
-  let usageTotals: CostUsageTotals | undefined;
-  if (entry.usage) {
-    usageTotals = emptyTotals();
-    applyUsageTotals(usageTotals, entry.usage);
-    if (entry.costBreakdown?.total !== undefined) {
-      applyCostBreakdown(usageTotals, entry.costBreakdown);
-    } else {
-      applyCostTotal(usageTotals, entry.costTotal, entry.provider, entry.model);
-    }
-  }
-  const timestamp = entry.timestamp?.getTime();
-  appendSessionUsageRollupContribution(rollup, {
-    timestamp,
-    role: entry.role,
-    durationMs: entry.durationMs,
-    provider: entry.provider,
-    model: entry.model,
-    stopReason: entry.stopReason,
-    toolNames: entry.toolNames,
-    toolResultCounts: entry.toolResultCounts,
-    usageTotals,
-  });
-  return { parsedRecord: Boolean(entry.usage), countedRecord: Boolean(entry.usage && timestamp) };
-}
-
 type RollupScanInput = {
   file: UsageCostTranscriptFile;
-  previous?: UsageCostStoredRollup;
+  previous?: UsageCostRollupEntry;
   pricingFingerprint: string;
   resolveCosts: (
     pairs: Array<{ provider?: string; model?: string }>,
@@ -190,62 +129,9 @@ type RollupScanInput = {
   access: UsageCostCollectionAccess;
 };
 
-function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
-  const previous = params.appendOnly ? params.previous?.entry : undefined;
-  // This task exclusively owns the decoded row; the CAS comparison retains the original text.
-  const rollup = previous?.rollup ?? createSessionUsageRollupData();
-  let countedRecords = 0;
-  let parsedRecords = 0;
-  return {
-    async addRecords(records: Iterable<Record<string, unknown>>): Promise<void> {
-      let batch: ParsedTranscriptEntry[] = [];
-      const flush = async () => {
-        const estimated = batch.filter(needsUsageCostEstimate);
-        const costs = await params.resolveCosts(
-          estimated.map(({ provider, model }) => ({ provider, model })),
-        );
-        for (let i = 0; i < estimated.length; i++) {
-          applyUsageCostEstimate(estimated[i]!, () => costs[i]);
-        }
-        for (const entry of batch) {
-          const counted = appendParsedEntryToRollup(rollup, entry);
-          countedRecords += counted.countedRecord ? 1 : 0;
-          parsedRecords += counted.parsedRecord ? 1 : 0;
-        }
-        batch = [];
-      };
-      for (const record of records) {
-        const entry = parseUsageCostTranscriptRecord(record);
-        if (entry) {
-          batch.push(entry);
-        }
-        if (batch.length === 128) {
-          await flush();
-        }
-      }
-      if (batch.length > 0) {
-        await flush();
-      }
-    },
-    finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
-      return {
-        version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
-        checkpoint,
-        scannedAt: Date.now(),
-        parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
-        countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
-        rollup,
-      };
-    },
-  };
-}
-
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
-    params.previous?.entry.checkpoint.kind === "jsonl"
-      ? params.previous.entry.checkpoint
-      : undefined;
+    params.previous?.checkpoint.kind === "jsonl" ? params.previous.checkpoint : undefined;
   const identityMatches =
     previousCheckpoint &&
     previousCheckpoint.device === params.file.device &&
@@ -302,9 +188,8 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
 function selectIncrementalSqliteRecords(
   records: Record<string, unknown>[],
   previousLeafId: string | undefined,
-): { records: Record<string, unknown>[]; visibleLeafId?: string } | undefined {
+): { visibleLeafId?: string } | undefined {
   let visibleLeafId = previousLeafId;
-  const visible: Record<string, unknown>[] = [];
   for (const record of records) {
     if (isSessionTranscriptLeafControl(record) || record.appendMode === "side") {
       return undefined;
@@ -322,14 +207,13 @@ function selectIncrementalSqliteRecords(
         return undefined;
       }
     }
-    visible.push(record);
     visibleLeafId = id;
   }
-  return { records: visible, ...(visibleLeafId ? { visibleLeafId } : {}) };
+  return { visibleLeafId };
 }
 
 function sqliteCheckpointAnchorHash(event: unknown): string {
-  return hashUsageCostCheckpoint(JSON.stringify(event));
+  return sha256Base64Url(JSON.stringify(event));
 }
 
 async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
@@ -346,11 +230,9 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const snapshotAnchorHash = snapshotLastRow
     ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
-    : hashUsageCostCheckpoint("");
+    : sha256Base64Url("");
   const previousCheckpoint =
-    params.previous?.entry.checkpoint.kind === "sqlite"
-      ? params.previous.entry.checkpoint
-      : undefined;
+    params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
   const previousAnchor = previousCheckpoint?.maxSeq
     ? await readAtSeq(previousCheckpoint.maxSeq)
     : undefined;
@@ -366,18 +248,69 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     anchorMatches,
   );
   const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
-  const rows = await params.readRows(scope, afterSeq, maxSeq);
-  const rawRecords = rows.map((row) => row.event).filter(isRecord);
+  // Branch selection retains only navigation facts, never transcript bodies.
+  const readNavigation = async (startSeq: number) => {
+    let after = startSeq;
+    const records: Array<Record<string, unknown> & { seq: number }> = [];
+    while (after < maxSeq) {
+      const page = await params.readRows(scope, after, maxSeq);
+      if (page.length === 0) {
+        break;
+      }
+      for (const { seq, event } of page) {
+        const record: Record<string, unknown> & { seq: number } = { seq };
+        if (isRecord(event)) {
+          for (const key of [
+            "type",
+            "id",
+            "parentId",
+            "targetId",
+            "appendParentId",
+            "appendMode",
+          ]) {
+            if (Object.hasOwn(event, key)) {
+              record[key] = event[key];
+            }
+          }
+        }
+        records.push(record);
+      }
+      after = page.at(-1)!.seq;
+    }
+    return records;
+  };
+  let navigation = await readNavigation(afterSeq);
   const incremental = appendCandidate
-    ? selectIncrementalSqliteRecords(rawRecords, previousCheckpoint?.visibleLeafId)
+    ? selectIncrementalSqliteRecords(navigation, previousCheckpoint?.visibleLeafId)
     : undefined;
   const appendOnly = Boolean(incremental && params.previous);
-  const allRows = appendOnly || afterSeq === 0 ? rows : await params.readRows(scope, 0, maxSeq);
-  const allRecords = appendOnly
-    ? (incremental?.records ?? [])
-    : selectVisibleTranscriptEvents(allRows.map((row) => row.event)).filter(isRecord);
+  if (!appendOnly && afterSeq > 0) {
+    navigation = await readNavigation(0);
+  }
+  const selected = appendOnly
+    ? navigation.filter(isCanonicalSessionTranscriptEntry)
+    : selectVisibleTranscriptEvents(navigation);
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  await scan.addRecords(allRecords);
+  let page = new Map<number, unknown>();
+  let pending: Record<string, unknown>[] = [];
+  for (const record of selected) {
+    if (!page.has(record.seq)) {
+      await scan.addRecords(pending);
+      pending = [];
+      page.clear();
+      page = new Map(
+        (await params.readRows(scope, record.seq - 1, maxSeq)).map((row) => [row.seq, row.event]),
+      );
+      if (!page.has(record.seq)) {
+        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
+      }
+    }
+    const event = page.get(record.seq);
+    if (isRecord(event)) {
+      pending.push(event);
+    }
+  }
+  await scan.addRecords(pending);
   const postFile = await resolveUsageCostTranscriptFile(params.file.filePath, params.access);
   if (!postFile || (postFile.maxSeq ?? 0) < maxSeq || (postFile.eventCount ?? 0) < eventCount) {
     throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
@@ -391,7 +324,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
-    : (scanSessionTranscriptTree(allRows.map((row) => row.event)).leafId ?? undefined);
+    : (scanSessionTranscriptTree(navigation).leafId ?? undefined);
   return scan.finish({
     kind: "sqlite",
     maxSeq,

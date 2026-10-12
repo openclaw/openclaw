@@ -1,18 +1,26 @@
 // Msteams tests cover thread parent context plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 
+const { fetchChannelMessage } = vi.hoisted(() => ({
+  fetchChannelMessage: vi.fn<typeof import("./graph-thread.js").fetchChannelMessage>(),
+}));
+vi.mock("./graph-thread.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./graph-thread.js")>()),
+  fetchChannelMessage,
+}));
+
 let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
-let formatParentContextEvent: typeof import("./thread-parent-context.js").formatParentContextEvent;
 let markParentContextInjected: typeof import("./thread-parent-context.js").markParentContextInjected;
 let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
 let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
 
 async function loadParentContextModule() {
   vi.resetModules();
+  fetchChannelMessage.mockReset();
   ({
     fetchParentMessageCached,
-    formatParentContextEvent,
     markParentContextInjected,
     shouldInjectParentContext,
     summarizeParentMessage,
@@ -39,15 +47,6 @@ describe("summarizeParentMessage", () => {
       body: { content: "   ", contentType: "text" },
     };
     expect(summarizeParentMessage(msg)).toBeUndefined();
-  });
-
-  it("extracts sender + plain text", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Alice" } },
-      body: { content: "Hello world", contentType: "text" },
-    };
-    expect(summarizeParentMessage(msg)).toEqual({ sender: "Alice", text: "Hello world" });
   });
 
   it("strips HTML for html contentType", () => {
@@ -88,17 +87,6 @@ describe("summarizeParentMessage", () => {
     expect(summarizeParentMessage(msg)).toEqual({ sender: "unknown", text: "orphan" });
   });
 
-  it("truncates overly long parent text", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Dana" } },
-      body: { content: "x".repeat(1000), contentType: "text" },
-    };
-    const summary = summarizeParentMessage(msg);
-    expect(summary?.text.length).toBeLessThanOrEqual(400);
-    expect(summary?.text.endsWith("…")).toBe(true);
-  });
-
   it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
     const msg: GraphThreadMessage = {
       id: "p1",
@@ -114,14 +102,6 @@ describe("summarizeParentMessage", () => {
   });
 });
 
-describe("formatParentContextEvent", () => {
-  it("formats as Replying to @sender: body", () => {
-    expect(formatParentContextEvent({ sender: "Alice", text: "hello there" })).toBe(
-      "Replying to @Alice: hello there",
-    );
-  });
-});
-
 describe("fetchParentMessageCached", () => {
   beforeEach(loadParentContextModule);
 
@@ -134,26 +114,26 @@ describe("fetchParentMessageCached", () => {
       id: "p1",
       body: { content: "hi", contentType: "text" },
     };
-    const fetcher = vi.fn(async () => mockMsg);
+    const fetcher = fetchChannelMessage.mockImplementation(async () => mockMsg);
 
-    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(first).toEqual(mockMsg);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher).toHaveBeenCalledWith("tok", "g1", "c1", "p1");
+    expect(fetcher).toHaveBeenCalledWith("tok", "g1", "c1", "p1", undefined);
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
-    const third = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const third = await fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(third).toEqual(mockMsg);
   });
 
   it("caches undefined (Graph error) so failures do not re-fetch on burst", async () => {
-    const fetcher = vi.fn(async () => undefined);
+    const fetcher = fetchChannelMessage.mockImplementation(async () => undefined);
 
-    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
-    const second = await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const second = await fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(first).toBeUndefined();
     expect(second).toBeUndefined();
@@ -161,29 +141,29 @@ describe("fetchParentMessageCached", () => {
   });
 
   it("scopes cache by groupId/channelId/parentId", async () => {
-    const fetcher = vi.fn(async (_tok, _g, _c, parentId) => ({
+    const fetcher = fetchChannelMessage.mockImplementation(async (_tok, _g, _c, parentId) => ({
       id: parentId,
       body: { content: `content-${parentId}`, contentType: "text" },
     }));
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
-    await fetchParentMessageCached("tok", "g1", "c1", "p2", fetcher);
-    await fetchParentMessageCached("tok", "g2", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    await fetchParentMessageCached("tok", "g1", "c1", "p2");
+    await fetchParentMessageCached("tok", "g2", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("re-fetches after TTL expires", async () => {
     vi.useFakeTimers();
-    const fetcher = vi.fn(async () => ({
+    const fetcher = fetchChannelMessage.mockImplementation(async () => ({
       id: "p1",
       body: { content: "hi", contentType: "text" },
     }));
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
     // 5 min TTL: advance just beyond.
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
@@ -191,44 +171,44 @@ describe("fetchParentMessageCached", () => {
   it("does not cache parent fetches when the expiry would exceed Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const fetcher = vi.fn(async () => ({
+    const fetcher = fetchChannelMessage.mockImplementation(async () => ({
       id: "p1",
       body: { content: "hi", contentType: "text" },
     }));
 
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("evicts oldest entries when exceeding the 100-entry cap", async () => {
-    const fetcher = vi.fn(async (_tok, _g, _c, parentId) => ({
-      id: String(parentId),
+    const fetcher = fetchChannelMessage.mockImplementation(async (_tok, _g, _c, parentId) => ({
+      id: parentId,
       body: { content: `v-${parentId}`, contentType: "text" },
     }));
 
     // Fill cache with 100 distinct parents.
     for (let i = 0; i < 100; i += 1) {
-      await fetchParentMessageCached("tok", "g1", "c1", `p${i}`, fetcher);
+      await fetchParentMessageCached("tok", "g1", "c1", `p${i}`);
     }
     expect(fetcher).toHaveBeenCalledTimes(100);
 
     // First entry should still be cached (no evictions yet).
-    await fetchParentMessageCached("tok", "g1", "c1", "p0", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p0");
     expect(fetcher).toHaveBeenCalledTimes(100);
 
     // Push one more distinct parent to trigger an eviction.
     // The just-touched p0 is now the newest; the next-oldest (p1) should be evicted.
-    await fetchParentMessageCached("tok", "g1", "c1", "p100", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p100");
     expect(fetcher).toHaveBeenCalledTimes(101);
 
     // Fetching p1 again should miss the cache.
-    await fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p1");
     expect(fetcher).toHaveBeenCalledTimes(102);
 
     // p0 is still cached because we refreshed it.
-    await fetchParentMessageCached("tok", "g1", "c1", "p0", fetcher);
+    await fetchParentMessageCached("tok", "g1", "c1", "p0");
     expect(fetcher).toHaveBeenCalledTimes(102);
   });
 });

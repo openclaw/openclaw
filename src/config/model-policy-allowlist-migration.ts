@@ -4,15 +4,12 @@ import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
-  if (
+  return (
     isRecord(value) &&
     isRecord(value.meta) &&
     isRecord(value.meta.migrations) &&
     value.meta.migrations.modelPolicyAllowlist === true
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 /** A per-agent policy replaces inherited defaults only when it owns `allow`. */
@@ -94,7 +91,7 @@ export function materializeModelPolicyAllowlist(
 export function projectIncludeModelPolicyWrite(params: {
   config: OpenClawConfig;
   previousConfig: OpenClawConfig;
-  preserveMarker: boolean;
+  explicitSetPaths?: readonly (readonly string[])[];
 }): OpenClawConfig {
   const previous = params.previousConfig;
   if (hasModelPolicyAllowlistMigrationMarker(previous)) {
@@ -115,8 +112,12 @@ export function projectIncludeModelPolicyWrite(params: {
       agents: { ...config.agents, defaults: { ...defaults, modelPolicy: {} } },
     };
   }
+  const markerPath = ["meta", "migrations", "modelPolicyAllowlist"];
   if (
-    params.preserveMarker ||
+    params.explicitSetPaths?.some(
+      (segments) =>
+        segments.length <= markerPath.length && segments.every((part, i) => part === markerPath[i]),
+    ) ||
     !hasModelPolicyAllowlistMigrationMarker(config) ||
     !isRecord(config.agents?.defaults?.modelPolicy)
   ) {

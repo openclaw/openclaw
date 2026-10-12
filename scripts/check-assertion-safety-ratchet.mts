@@ -1,20 +1,18 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
-  compareRatchetCounts,
-  listRatchetRenames,
-  loadRatchetReference,
-  loadRatchetSnapshot,
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
+import {
   loadRatchetSources,
-  parseRatchetArgs,
   parseRatchetCounts,
-  reportRatchetFailures,
-  reportRatchetSuccess,
-  resolveRatchetBase,
-  type RatchetCountDelta,
+  runPerFileCountRatchet,
 } from "./lib/shrink-ratchet.mts";
 import {
   TYPE_ASSERTION_PRODUCTION_ROOTS,
@@ -33,6 +31,55 @@ const BASELINE_HEADER = [
 ].join("\n");
 
 type AssertionNode = ts.AsExpression | ts.TypeAssertion;
+type AssertionExemption = "const" | "unknown" | "safety-comment" | null;
+type AssertionSite = {
+  kind: "as" | "angle";
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+  exemption: AssertionExemption;
+  fingerprint: string;
+};
+type AssertionFileReport = {
+  path: string;
+  blob: string | null;
+  status: "unvisited" | "parsed" | "parse-error" | "excluded" | "missing";
+  exclusion: "declaration" | "test-support" | "outside-scope" | null;
+  allowance: number;
+  counted: number | null;
+  unusedAllowance: number | null;
+  sites: AssertionSite[];
+  diagnostics: Array<{ line: number; column: number; message: string }>;
+};
+type AssertionSafetyReport = {
+  version: 1;
+  source: Record<
+    "commit" | "tree" | "baselineBlob" | "packageBlob" | "lockfileBlob",
+    string | null
+  >;
+  tooling: { parserVersion: string | null; nodeVersion: string; sha256: Record<string, string> };
+  complete: boolean;
+  coverage: {
+    discovered: number | null;
+    parsed: number;
+    failed: number;
+    unvisited: number;
+    excluded: number;
+    missing: number;
+  };
+  totals: {
+    allowances: number | null;
+    counted: number | null;
+    exempt: number | null;
+    unusedAllowance: number | null;
+  };
+  fingerprintKind: "sha256-assertion-text";
+  matching: "not-performed";
+  ambiguousFingerprints: Array<{ fingerprint: string; occurrences: number }>;
+  files: AssertionFileReport[];
+  errors: string[];
+};
 
 const compareStrings = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -50,10 +97,6 @@ export function isGovernedAssertionSourcePath(filePath: string) {
     !isDeclarationFile(normalized) &&
     !isSkippedTypeAssertionTestPath(normalized)
   );
-}
-
-function scriptKindForPath(filePath: string) {
-  return filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 }
 
 function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
@@ -77,113 +120,85 @@ function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
 }
 
 function assertionOperatorPosition(sourceFile: ts.SourceFile, node: AssertionNode) {
-  const operatorKind = ts.isAsExpression(node)
-    ? ts.SyntaxKind.AsKeyword
-    : ts.SyntaxKind.LessThanToken;
-  return (
-    node
-      .getChildren(sourceFile)
-      .find((child) => child.kind === operatorKind)
-      ?.getStart(sourceFile) ?? node.getStart(sourceFile)
+  if (ts.isTypeAssertion(node)) {
+    return node.getStart(sourceFile);
+  }
+  const scanner = ts.createScanner(
+    true,
+    sourceFile.languageVariant,
+    sourceFile.text,
+    node.expression.end,
+    node.type.pos - node.expression.end,
   );
+  return scanner.scan() === ts.SyntaxKind.AsKeyword
+    ? scanner.getTokenStart()
+    : node.getStart(sourceFile);
 }
 
-function isUnknownAssertion(node: AssertionNode) {
-  // Casting exactly to unknown strengthens evidence; oxlint still rejects chained assertions such as `x as unknown as T`.
-  return node.type.kind === ts.SyntaxKind.UnknownKeyword;
-}
-
-export function countUnsafeAssertions(source: string, filePath = "src/source.ts") {
+export function countUnsafeAssertions(
+  source: string,
+  filePath: string,
+  sourceFile: ts.SourceFile,
+  parser: NativeTypeScriptParser,
+) {
   const repoPath = filePath.replaceAll("\\", "/");
   if (isDeclarationFile(repoPath)) {
     return 0;
   }
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindForPath(filePath),
-  );
-  const parseDiagnostics = (
-    sourceFile as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }
-  ).parseDiagnostics;
-  const diagnostic = parseDiagnostics[0];
+  const diagnostic = parser.getSyntacticDiagnostics(sourceFile.fileName)[0];
   if (diagnostic) {
-    const position = diagnostic.start ?? 0;
+    const position = diagnostic.pos;
     const line = sourceFile.getLineAndCharacterOfPosition(position).line + 1;
-    throw new Error(
-      `${filePath}:${line}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`,
-    );
+    throw new Error(`${filePath}:${line}: ${diagnostic.text}`);
   }
+  return scanAssertionNodes(source, sourceFile);
+}
 
+function scanAssertionNodes(
+  source: string,
+  sourceFile: ts.SourceFile,
+  observe?: (node: AssertionNode, exemption: AssertionExemption) => void,
+) {
   const safetyCommentLines = collectSafetyCommentLines(sourceFile, source);
   let count = 0;
   const visit = (node: ts.Node): void => {
-    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
-      if (!ts.isConstTypeReference(node.type) && !isUnknownAssertion(node)) {
+    if (ts.isAsExpression(node) || ts.isTypeAssertion(node)) {
+      const isConstAssertion =
+        ts.isTypeReferenceNode(node.type) &&
+        ts.isIdentifier(node.type.typeName) &&
+        node.type.typeName.text === "const" &&
+        !node.type.typeArguments;
+      let exemption: AssertionExemption = isConstAssertion ? "const" : null;
+      // Casting exactly to unknown strengthens evidence; oxlint rejects chained assertions.
+      if (!isConstAssertion && node.type.kind === ts.SyntaxKind.UnknownKeyword) {
+        exemption = "unknown";
+      } else if (!isConstAssertion) {
         const operatorLine = sourceFile.getLineAndCharacterOfPosition(
           assertionOperatorPosition(sourceFile, node),
         ).line;
         if (
-          !safetyCommentLines.sameLine.has(operatorLine) &&
-          !safetyCommentLines.standalone.has(operatorLine - 1)
+          safetyCommentLines.sameLine.has(operatorLine) ||
+          safetyCommentLines.standalone.has(operatorLine - 1)
         ) {
-          count += 1;
+          exemption = "safety-comment";
         }
       }
+      if (exemption === null) {
+        count += 1;
+      }
+      observe?.(node, exemption);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return count;
-}
-
-function parseAssertionBaseline(source: string) {
-  return parseRatchetCounts(source, BASELINE_PATH);
-}
-
-function formatBaseline(counts: ReadonlyMap<string, number>) {
-  const entries = [...counts]
-    .filter(([, count]) => count > 0)
-    .toSorted(([left], [right]) => compareStrings(left, right))
-    .map(([filePath, count]) => `${filePath}\t${count}`);
-  return BASELINE_HEADER + entries.join("\n") + (entries.length > 0 ? "\n" : "");
-}
-
-function baselineWithVerifiedRenames(
-  root: string,
-  baseRef: string,
-  staged: boolean,
-  baseline: ReadonlyMap<string, number>,
-  baseBaseline: ReadonlyMap<string, number>,
-) {
-  const allowed = new Map(baseBaseline);
-  for (const { from, to } of listRatchetRenames(
-    root,
-    baseRef,
-    staged,
-    TYPE_ASSERTION_PRODUCTION_ROOTS,
-  )) {
-    const oldCount = baseBaseline.get(from);
-    const newCount = baseline.get(to);
-    if (
-      oldCount !== undefined &&
-      newCount !== undefined &&
-      newCount <= oldCount &&
-      !baseline.has(from)
-    ) {
-      allowed.delete(from);
-      allowed.set(to, oldCount);
-    }
-  }
-  return allowed;
 }
 
 export function collectCurrentAssertionSafetyCounts(
   root = process.cwd(),
   options: { staged?: boolean } = {},
 ) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
   const staged = options.staged === true;
   const filePaths = execFileSync(
     "git",
@@ -209,161 +224,271 @@ export function collectCurrentAssertionSafetyCounts(
         fs.readFileSync(path.join(root, filePath), "utf8"),
       ]);
   const counts = new Map<string, number>();
-  for (const [filePath, source] of sources) {
-    const count = countUnsafeAssertions(source, filePath);
-    if (count > 0) {
-      counts.set(filePath, count);
+  const batchSize = 32;
+  for (let offset = 0; offset < sources.length;) {
+    const batch: Array<{ fileName: string; text: string }> = [];
+    const names = new Set<string>();
+    while (batch.length < batchSize && offset + batch.length < sources.length) {
+      const [filePath, text] = sources[offset + batch.length]!;
+      const fileName = path.resolve(root, filePath).split(path.sep).join("/");
+      // An unmerged index repeats paths; preserve each visit without duplicating a parser root.
+      if (names.has(fileName)) {
+        break;
+      }
+      names.add(fileName);
+      batch.push({ fileName, text });
     }
+    for (const [index, sourceFile] of parser.parseSourceFiles(batch).entries()) {
+      const [filePath, source] = sources[offset + index]!;
+      const count = countUnsafeAssertions(source, filePath, sourceFile, parser);
+      if (count > 0) {
+        counts.set(filePath, count);
+      }
+    }
+    offset += batch.length;
   }
   return counts;
 }
 
-function allowanceWithExistingBaseCounts(
-  root: string,
-  baseRef: string,
-  proposed: ReadonlyMap<string, number>,
-  allowed: ReadonlyMap<string, number>,
-) {
-  const effective = new Map(allowed);
-  for (const [filePath, count] of proposed) {
-    if (count <= (effective.get(filePath) ?? 0)) {
-      continue;
+function sha256(source: string | Buffer) {
+  return createHash("sha256").update(source).digest("hex");
+}
+
+/** Report one immutable source tree with the policy and parser executing this scan. */
+export function collectAssertionSafetyReport(root: string, ref: string) {
+  const report: AssertionSafetyReport = {
+    version: 1,
+    source: {
+      commit: null,
+      tree: null,
+      baselineBlob: null,
+      packageBlob: null,
+      lockfileBlob: null,
+    },
+    tooling: {
+      parserVersion: null,
+      nodeVersion: process.versions.node,
+      sha256: {},
+    },
+    complete: false,
+    coverage: { discovered: null, parsed: 0, failed: 0, unvisited: 0, excluded: 0, missing: 0 },
+    totals: { allowances: null, counted: null, exempt: null, unusedAllowance: null },
+    fingerprintKind: "sha256-assertion-text",
+    matching: "not-performed",
+    ambiguousFingerprints: [],
+    files: [],
+    errors: [],
+  };
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: GIT_MAX_BUFFER });
+  try {
+    for (const file of [
+      "check-assertion-safety-ratchet.mts",
+      "lib/native-typescript.mts",
+      "lib/shrink-ratchet.mts",
+      "lib/type-assertion-guard-scope.mjs",
+    ]) {
+      report.tooling.sha256[`scripts/${file}`] = sha256(
+        fs.readFileSync(new URL(file, import.meta.url)),
+      );
     }
-    try {
-      const source = execFileSync("git", ["show", `${baseRef}:${filePath}`], {
+    const require = createRequire(import.meta.url);
+    const manifest: unknown = JSON.parse(
+      fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
+    );
+    if (
+      typeof manifest !== "object" ||
+      manifest === null ||
+      !("version" in manifest) ||
+      typeof manifest.version !== "string"
+    ) {
+      throw new Error("Installed TypeScript package has no version");
+    }
+    report.tooling.parserVersion = manifest.version;
+    const commit = git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]).trim();
+    report.source.commit = commit;
+    report.source.tree = git(["rev-parse", `${commit}^{tree}`]).trim();
+    const entries = new Map<string, { mode: string; blob: string }>();
+    for (const entry of git(["ls-tree", "-r", "-z", commit]).split("\0").filter(Boolean)) {
+      const separator = entry.indexOf("\t");
+      const [mode, , blob] = entry.slice(0, separator).split(" ");
+      if (separator < 0 || !mode || !blob) {
+        throw new Error("Invalid git ls-tree source inventory");
+      }
+      entries.set(entry.slice(separator + 1), { mode, blob });
+    }
+    report.source.baselineBlob = entries.get(BASELINE_PATH)?.blob ?? null;
+    report.source.packageBlob = entries.get("package.json")?.blob ?? null;
+    report.source.lockfileBlob = entries.get("pnpm-lock.yaml")?.blob ?? null;
+    const baseline = parseRatchetCounts(git(["show", `${commit}:${BASELINE_PATH}`]), BASELINE_PATH);
+    report.totals.allowances = [...baseline.values()].reduce((total, count) => total + count, 0);
+    const paths = new Set([
+      ...[...entries.keys()].filter(
+        (file) =>
+          TYPE_ASSERTION_PRODUCTION_ROOTS.some((sourceRoot) =>
+            pathMatchesTypeAssertionRoot(file, sourceRoot),
+          ) && SOURCE_EXTENSIONS.has(path.posix.extname(file)),
+      ),
+      ...baseline.keys(),
+    ]);
+    report.files = [...paths].toSorted(compareStrings).map((file): AssertionFileReport => {
+      const entry = entries.get(file);
+      const governed = isGovernedAssertionSourcePath(file);
+      const allowance = baseline.get(file) ?? 0;
+      return {
+        path: file,
+        blob: entry?.blob ?? null,
+        status: !entry ? "missing" : governed ? "unvisited" : "excluded",
+        exclusion: governed
+          ? null
+          : isDeclarationFile(file)
+            ? "declaration"
+            : isSkippedTypeAssertionTestPath(file)
+              ? "test-support"
+              : "outside-scope",
+        allowance,
+        counted: !entry || !governed ? 0 : null,
+        unusedAllowance: !entry || !governed ? allowance : null,
+        sites: [],
+        diagnostics: [],
+      };
+    });
+    report.coverage.discovered = report.files.length;
+    const governed = report.files.filter((file) => file.status === "unvisited");
+    using parser = createNativeTypeScriptParser({ cwd: root });
+    for (let offset = 0; offset < governed.length; offset += 32) {
+      const batch = governed.slice(offset, offset + 32);
+      for (const file of batch) {
+        const mode = entries.get(file.path)?.mode;
+        if (mode !== "100644" && mode !== "100755") {
+          throw new Error(`Cannot inventory non-regular source: ${file.path}`);
+        }
+      }
+      const sources = loadRatchetSources(
+        root,
+        batch.map((file) => file.path),
+        commit,
+      );
+      const parsed = parser.parseSourceFiles(
+        batch.map((file) => {
+          const text = sources.get(file.path);
+          if (text === undefined) {
+            throw new Error(`Missing source: ${file.path}`);
+          }
+          return { fileName: file.path, text };
+        }),
+      );
+      for (const [index, sourceFile] of parsed.entries()) {
+        const file = batch[index]!;
+        file.diagnostics = parser.getSyntacticDiagnostics(sourceFile.fileName).map((diagnostic) => {
+          const position = sourceFile.getLineAndCharacterOfPosition(diagnostic.pos);
+          return {
+            line: position.line + 1,
+            column: position.character + 1,
+            message: diagnostic.text,
+          };
+        });
+        file.diagnostics.sort(
+          (left, right) =>
+            left.line - right.line ||
+            left.column - right.column ||
+            compareStrings(left.message, right.message),
+        );
+        if (file.diagnostics.length > 0) {
+          file.status = "parse-error";
+          continue;
+        }
+        file.counted = scanAssertionNodes(sourceFile.text, sourceFile, (node, exemption) => {
+          const start = node.getStart(sourceFile);
+          const position = sourceFile.getLineAndCharacterOfPosition(
+            assertionOperatorPosition(sourceFile, node),
+          );
+          file.sites.push({
+            kind: ts.isAsExpression(node) ? "as" : "angle",
+            start,
+            end: node.end,
+            line: position.line + 1,
+            column: position.character + 1,
+            exemption,
+            fingerprint: sha256(sourceFile.text.slice(start, node.end)),
+          });
+        });
+        file.sites.sort((left, right) => left.start - right.start || left.end - right.end);
+        file.unusedAllowance = Math.max(0, file.allowance - file.counted);
+        file.status = "parsed";
+      }
+    }
+  } catch (error) {
+    report.errors.push(error instanceof Error ? error.message : String(error));
+  }
+  const fingerprints = new Map<string, number>();
+  let counted = 0;
+  let exempt = 0;
+  let unusedAllowance = 0;
+  for (const file of report.files) {
+    report.coverage[file.status === "parse-error" ? "failed" : file.status] += 1;
+    counted += file.counted ?? 0;
+    unusedAllowance += file.unusedAllowance ?? 0;
+    for (const site of file.sites) {
+      exempt += site.exemption === null ? 0 : 1;
+      fingerprints.set(site.fingerprint, (fingerprints.get(site.fingerprint) ?? 0) + 1);
+    }
+  }
+  // Identical syntax is not a semantic match or evidence that debt was repaired.
+  // Keep duplicate hashes visible instead of arbitrarily pairing moved sites.
+  report.ambiguousFingerprints = [...fingerprints]
+    .filter(([, count]) => count > 1)
+    .toSorted(([left], [right]) => compareStrings(left, right))
+    .map(([fingerprint, occurrences]) => ({ fingerprint, occurrences }));
+  report.complete =
+    report.errors.length === 0 && report.coverage.failed === 0 && report.coverage.unvisited === 0;
+  if (report.complete) {
+    report.totals.counted = counted;
+    report.totals.exempt = exempt;
+    report.totals.unusedAllowance = unusedAllowance;
+  }
+  return report;
+}
+
+export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
+  if (argv[0] === "--report") {
+    if (argv.length !== 2 || !argv[1]) {
+      console.error("Usage: check:assertion-safety --report <commit-or-ref>");
+      return 1;
+    }
+    const report = collectAssertionSafetyReport(root, argv[1]);
+    console.log(JSON.stringify(report, null, 2));
+    return report.complete ? 0 : 1;
+  }
+  using parser = createNativeTypeScriptParser({ cwd: root });
+  return runPerFileCountRatchet(root, argv, {
+    baselinePath: BASELINE_PATH,
+    baselineHeader: BASELINE_HEADER,
+    renameSourceRoots: TYPE_ASSERTION_PRODUCTION_ROOTS,
+    collectCurrent: (options) => collectCurrentAssertionSafetyCounts(root, options),
+    countAtRef(ref, filePath) {
+      const source = execFileSync("git", ["show", `${ref}:${filePath}`], {
         cwd: root,
         encoding: "utf8",
         maxBuffer: GIT_MAX_BUFFER,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const baseCount = countUnsafeAssertions(source, filePath);
-      if (baseCount > (effective.get(filePath) ?? 0)) {
-        effective.set(filePath, baseCount);
-      }
-    } catch {
-      // Missing base paths are branch additions and receive no allowance.
-    }
-  }
-  return effective;
-}
-
-function writeBaseline(root: string, counts: ReadonlyMap<string, number>) {
-  fs.writeFileSync(path.join(root, BASELINE_PATH), formatBaseline(counts));
-}
-
-function formatDeltas(entries: RatchetCountDelta[], comparison: ">" | "<") {
-  return entries.map((entry) => `${entry.entry}: ${entry.current} ${comparison} ${entry.allowed}`);
-}
-
-function totalCount(counts: ReadonlyMap<string, number>) {
-  return [...counts.values()].reduce((total, count) => total + count, 0);
-}
-
-export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
-  try {
-    const args = parseRatchetArgs(argv);
-    if (args.staged && args.prune) {
-      throw new Error("--prune cannot be combined with --staged");
-    }
-
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
-    const baseBaseline = baseRef
-      ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseAssertionBaseline)
-      : null;
-    const current = collectCurrentAssertionSafetyCounts(root, { staged: args.staged });
-
-    let baselineSource;
-    try {
-      baselineSource = loadRatchetSnapshot(
-        root,
-        BASELINE_PATH,
-        args.staged,
-        parseAssertionBaseline,
+      return countUnsafeAssertions(
+        source,
+        filePath,
+        parser.parseSourceFile(filePath, source),
+        parser,
       );
-    } catch {
-      if (args.prune && !args.staged && baseBaseline === null) {
-        writeBaseline(root, current);
-        reportRatchetSuccess(
-          `Initialized ${BASELINE_PATH}: ${current.size} files, ${totalCount(current)} assertions.`,
-        );
-        return 0;
-      }
-      throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
-    }
-
-    const baseline = baselineSource;
-    if (args.prune && !args.staged && baseBaseline === null) {
-      writeBaseline(root, current);
-      reportRatchetSuccess(
-        `Refreshed initial ${BASELINE_PATH}: ${current.size} files, ${totalCount(current)} assertions.`,
-      );
-      return 0;
-    }
-    const allowedBaseline =
-      baseRef && baseBaseline
-        ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
-        : baseBaseline;
-    const currentAllowance =
-      baseRef && baseBaseline
-        ? allowanceWithExistingBaseCounts(root, baseRef, current, baseline)
-        : baseline;
-    const expansionAllowance =
-      baseRef && allowedBaseline
-        ? allowanceWithExistingBaseCounts(root, baseRef, baseline, allowedBaseline)
-        : allowedBaseline;
-    const increases = compareRatchetCounts(current, currentAllowance).increased;
-    const expanded = expansionAllowance
-      ? compareRatchetCounts(baseline, expansionAllowance).increased
-      : [];
-
-    if (
-      reportRatchetFailures(
-        [
-          {
-            entries: formatDeltas(increases, ">"),
-            title: "Uncommented type assertions exceed the grandfathered per-file baseline:",
-          },
-          {
-            entries: formatDeltas(expanded, ">"),
-            title: "The assertion SAFETY baseline may only shrink:",
-          },
-        ],
+    },
+    messages: {
+      increaseTitle: "Uncommented type assertions exceed the grandfathered per-file baseline:",
+      expansionTitle: "The assertion SAFETY baseline may only shrink:",
+      guidance:
         "Every new non-const type assertion needs // SAFETY: <invariant> above it or on the same line.",
-      )
-    ) {
-      return 1;
-    }
-
-    if (args.prune) {
-      const oldFiles = baseline.size;
-      const oldAssertions = totalCount(baseline);
-      writeBaseline(root, current);
-      reportRatchetSuccess(
-        `Pruned ${BASELINE_PATH}: ${oldFiles} -> ${current.size} files; ${oldAssertions} -> ${totalCount(current)} assertions.`,
-      );
-      return 0;
-    }
-
-    const stale = compareRatchetCounts(current, baseline).decreased;
-    if (
-      reportRatchetFailures([
-        {
-          entries: formatDeltas(stale, "<"),
-          title: `Shrink ${BASELINE_PATH} entries (or run with --prune):`,
-        },
-      ])
-    ) {
-      return 1;
-    }
-
-    reportRatchetSuccess(
-      `assertion SAFETY ratchet OK: ${current.size} files, ${totalCount(current)} grandfathered assertions.`,
-    );
-    return 0;
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
+      countNoun: "assertions",
+      successTitle: "assertion SAFETY ratchet OK",
+    },
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

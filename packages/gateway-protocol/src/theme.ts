@@ -1,4 +1,4 @@
-import type { ThemeId } from "./theme-ids.js";
+import type { ThemeId } from "./theme-ids.ts";
 export {
   BUILTIN_THEME_IDS,
   THEME_LOCAL_ID_MAX_LENGTH,
@@ -9,7 +9,7 @@ export {
   type BuiltinThemeId,
   type ThemeId,
   type ThemeMode,
-} from "./theme-ids.js";
+} from "./theme-ids.ts";
 
 /** Portable theme data shared by profile preferences, plugins, and the Control UI. */
 export type ThemeColorMode = "light" | "dark";
@@ -36,6 +36,25 @@ export const THEME_COLOR_KEYS = [
   "ring",
 ] as const;
 export const THEME_FONT_KEYS = ["font-sans", "font-mono"] as const;
+export const THEME_MASCOT_VALUES = ["claw", "none"] as const;
+export type ThemeMascot = (typeof THEME_MASCOT_VALUES)[number];
+export const THEME_BRAND_ICON_IDS = ["claw", "mark"] as const;
+export const THEME_WORKING_INDICATOR_VALUES = ["claw", "dots", "brand", "none"] as const;
+export type ThemeWorkingIndicator = (typeof THEME_WORKING_INDICATOR_VALUES)[number];
+export const THEME_BRAND_NAME_MAX_LENGTH = 80;
+export const THEME_CRITTER_IDS = ["penguin", "fedora"] as const;
+export type ThemeCritterId = (typeof THEME_CRITTER_IDS)[number];
+export function isThemeCritterId(value: unknown): value is ThemeCritterId {
+  return THEME_CRITTER_IDS.some((id) => id === value);
+}
+export const THEME_AVATAR_HAT_IDS = ["fedora", "crown", "santa", "party", "pumpkin"] as const;
+export type ThemeAvatarHatId = (typeof THEME_AVATAR_HAT_IDS)[number];
+export function isThemeAvatarHatId(value: unknown): value is ThemeAvatarHatId {
+  return THEME_AVATAR_HAT_IDS.some((id) => id === value);
+}
+export const THEME_ARTWORK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export const THEME_WORKING_PHRASES_MAX = 24;
+export const THEME_WORKING_PHRASE_MAX_LENGTH = 24;
 export const MAX_THEME_DEFINITION_BYTES = 4096;
 export const THEME_NAME_MAX_LENGTH = 80;
 export const THEME_DESCRIPTION_MAX_LENGTH = 320;
@@ -46,8 +65,22 @@ export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
 export type ThemeDefinition = {
   name: string;
   description: string;
+  mascot?: ThemeMascot;
+  brandName?: string;
+  brandIcon?: string;
+  workingIndicator?: ThemeWorkingIndicator;
+  lobsterdex?: boolean;
+  communityLinks?: boolean;
+  workingPhrases?: string[];
+  critters?: string[];
+  avatarHat?: string;
   light?: ThemePalette;
   dark?: ThemePalette;
+};
+export type ThemeArtwork = {
+  icons?: Record<string, { url: string }>;
+  hats?: Record<string, { url: string }>;
+  critters?: Record<string, { url: string; title?: string; crossMs?: number }>;
 };
 export type ThemeDescriptor = {
   id: ThemeId;
@@ -56,8 +89,64 @@ export type ThemeDescriptor = {
   source: "builtin" | "plugin" | "user";
   modes: ThemeColorMode[];
   pluginId?: string;
+  mascot?: ThemeMascot;
+  brandName?: string;
+  brandIcon?: string;
+  workingIndicator?: ThemeWorkingIndicator;
+  lobsterdex?: boolean;
+  communityLinks?: boolean;
+  workingPhrases?: readonly string[];
+  critters?: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
 };
 export type ThemeCatalogEntry = ThemeDescriptor & { definition?: ThemeDefinition };
+export type ThemeBranding = {
+  mascot: ThemeMascot;
+  brandName: string;
+  brandIcon: string;
+  workingIndicator: ThemeWorkingIndicator;
+  lobsterdex: boolean;
+  communityLinks: boolean;
+  workingPhrases?: readonly string[];
+  critters: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
+};
+
+const DEFAULT_THEME_CRITTERS: readonly ThemeCritterId[] = [];
+
+export function resolveThemeBranding(
+  source:
+    | Pick<
+        ThemeDescriptor,
+        | "mascot"
+        | "brandName"
+        | "brandIcon"
+        | "workingIndicator"
+        | "lobsterdex"
+        | "communityLinks"
+        | "workingPhrases"
+        | "critters"
+        | "avatarHat"
+        | "artwork"
+      >
+    | undefined,
+): ThemeBranding {
+  const mascot = source?.mascot ?? "claw";
+  return {
+    mascot,
+    brandName: source?.brandName ?? "OpenClaw",
+    brandIcon: source?.brandIcon ?? (mascot === "claw" ? "claw" : "mark"),
+    workingIndicator: source?.workingIndicator ?? (mascot === "claw" ? "claw" : "dots"),
+    lobsterdex: source?.lobsterdex ?? true,
+    communityLinks: source?.communityLinks ?? true,
+    workingPhrases: source?.workingPhrases,
+    critters: source?.critters ?? DEFAULT_THEME_CRITTERS,
+    avatarHat: source?.avatarHat,
+    ...(source?.artwork ? { artwork: source.artwork } : {}),
+  };
+}
 
 export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
   [
@@ -100,12 +189,20 @@ export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
     {
       id: "phosphor",
       name: "Phosphor",
+      mascot: "none",
+      brandIcon: "mark",
+      workingIndicator: "dots",
+      lobsterdex: false,
       description:
         "Luminous green on green-tinted black or pale green, with JetBrains Mono throughout. A classic green terminal atmosphere.",
     },
     {
       id: "crt",
       name: "CRT",
+      mascot: "none",
+      brandIcon: "mark",
+      workingIndicator: "dots",
+      lobsterdex: false,
       description:
         "White phosphor and amber on tube black, with a light counterpart, JetBrains Mono, and nearly square corners. A retro computer console.",
     },
@@ -127,14 +224,13 @@ export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
       description:
         "Hot magenta and cyan on violet-black or pale lavender, with Space Grotesk. Bright neon energy and a synthwave character.",
     },
-  ] satisfies Array<Pick<ThemeDescriptor, "id" | "name" | "description">>
-).map<ThemeDescriptor>((theme) => ({
-  id: theme.id,
-  name: theme.name,
-  description: theme.description,
-  source: "builtin",
-  modes: ["light", "dark"],
-}));
+  ] satisfies Array<Omit<ThemeDescriptor, "source" | "modes">>
+).map<ThemeDescriptor>((theme) =>
+  Object.assign(theme, {
+    source: "builtin",
+    modes: ["light", "dark"],
+  } satisfies Pick<ThemeDescriptor, "source" | "modes">),
+);
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -257,15 +353,123 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
 }
 
 /** Rejects executable CSS and incomplete palettes before they reach storage or a stylesheet. */
-export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
-  const record = requireRecord(value, "theme");
-  requireKeys(record, ["name", "description", "light", "dark"], "theme");
+export function normalizeThemeDefinition(
+  input: unknown,
+  options?: {
+    iconIds?: readonly string[];
+    hatIds?: readonly string[];
+    critterIds?: readonly string[];
+  },
+): ThemeDefinition {
+  const record = requireRecord(input, "theme");
+  requireKeys(
+    record,
+    [
+      "name",
+      "description",
+      "mascot",
+      "brandName",
+      "brandIcon",
+      "workingIndicator",
+      "lobsterdex",
+      "communityLinks",
+      "workingPhrases",
+      "critters",
+      "avatarHat",
+      "light",
+      "dark",
+    ],
+    "theme",
+  );
   const definition: ThemeDefinition = {
     name: requireText(record.name, "theme.name", THEME_NAME_MAX_LENGTH),
     description: requireText(record.description, "theme.description", THEME_DESCRIPTION_MAX_LENGTH),
     ...(record.light !== undefined ? { light: normalizePalette(record.light, "light") } : {}),
     ...(record.dark !== undefined ? { dark: normalizePalette(record.dark, "dark") } : {}),
   };
+  if (record.mascot !== undefined) {
+    const mascot = THEME_MASCOT_VALUES.find((candidate) => candidate === record.mascot);
+    if (!mascot) {
+      throw new Error(`theme.mascot must be one of ${THEME_MASCOT_VALUES.join(", ")}`);
+    }
+    definition.mascot = mascot;
+  }
+  if (record.brandName !== undefined) {
+    const brandName = requireText(record.brandName, "theme.brandName", THEME_BRAND_NAME_MAX_LENGTH);
+    if (/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(brandName)) {
+      throw new Error("theme.brandName must contain only printable characters");
+    }
+    definition.brandName = brandName;
+  }
+  if (record.brandIcon !== undefined) {
+    const allowedIds = [...THEME_BRAND_ICON_IDS, ...(options?.iconIds ?? [])];
+    const brandIcon = allowedIds.find((id) => id === record.brandIcon);
+    if (!brandIcon) {
+      throw new Error(`theme.brandIcon must be one of ${allowedIds.join(", ")}`);
+    }
+    definition.brandIcon = brandIcon;
+  }
+  if (record.workingIndicator !== undefined) {
+    const workingIndicator = THEME_WORKING_INDICATOR_VALUES.find(
+      (value) => value === record.workingIndicator,
+    );
+    if (!workingIndicator) {
+      throw new Error(
+        `theme.workingIndicator must be one of ${THEME_WORKING_INDICATOR_VALUES.join(", ")}`,
+      );
+    }
+    definition.workingIndicator = workingIndicator;
+  }
+  for (const key of ["lobsterdex", "communityLinks"] as const) {
+    if (record[key] !== undefined) {
+      if (typeof record[key] !== "boolean") {
+        throw new Error(`theme.${key} must be a boolean`);
+      }
+      definition[key] = record[key];
+    }
+  }
+  if (record.workingPhrases !== undefined) {
+    if (
+      !Array.isArray(record.workingPhrases) ||
+      record.workingPhrases.length > THEME_WORKING_PHRASES_MAX
+    ) {
+      throw new Error(
+        `theme.workingPhrases must be an array of at most ${THEME_WORKING_PHRASES_MAX} entries`,
+      );
+    }
+    const phrases = Array.from(record.workingPhrases, (phrase, index) =>
+      requireText(phrase, `theme.workingPhrases[${index}]`, THEME_WORKING_PHRASE_MAX_LENGTH),
+    );
+    if (new Set(phrases).size !== phrases.length) {
+      throw new Error("theme.workingPhrases must not contain duplicate entries after trimming");
+    }
+    definition.workingPhrases = phrases;
+  }
+  if (record.critters !== undefined) {
+    if (!Array.isArray(record.critters) || record.critters.length > 8) {
+      throw new Error("theme.critters must be an array of at most 8 entries");
+    }
+    const allowedIds = [...THEME_CRITTER_IDS, ...(options?.critterIds ?? [])];
+    const critters = Array.from(record.critters, (entry, index) => {
+      const critter = allowedIds.find((id) => id === entry);
+      if (!critter) {
+        throw new Error(`theme.critters[${index}] must be one of ${allowedIds.join(", ")}`);
+      }
+      return critter;
+    });
+    if (new Set(critters).size !== critters.length) {
+      throw new Error("theme.critters must not contain duplicate entries");
+    }
+    definition.critters = critters;
+  }
+  if (record.avatarHat !== undefined) {
+    const allowedIds = [...THEME_AVATAR_HAT_IDS, ...(options?.hatIds ?? [])];
+    const avatarHat = allowedIds.find((id) => id === record.avatarHat);
+    if (!avatarHat) {
+      throw new Error(`theme.avatarHat must be one of ${allowedIds.join(", ")}`);
+    }
+    definition.avatarHat = avatarHat;
+  }
   if (!definition.light && !definition.dark) {
     throw new Error("theme must provide at least one light or dark palette");
   }

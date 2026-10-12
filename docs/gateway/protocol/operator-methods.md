@@ -30,14 +30,19 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
-- `tools.effective` (`operator.read`) fetches the runtime-effective tool
-  inventory for a session.
+- `tools.effective` (`operator.read`) fetches a prospective tool preview for a
+  session.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side
     instead of accepting caller-supplied auth or delivery context.
-  - The response is a session-scoped server-derived projection of the active
-    inventory, including core, plugin, channel, and already-discovered MCP
-    server tools.
+  - The response is a session-scoped server-derived projection from saved
+    settings, including core, plugin, channel, and already-discovered MCP
+    server tools. It is not the exact tool inventory of an active run: run
+    authority, credentials, discovery, and final run policy can change which
+    tools are offered. Absence from this preview does not establish that a tool
+    is disabled, and inclusion does not guarantee execution access.
+  - The projection can use cached inventory while refreshing it. Unsaved UI
+    edits are not inputs, and saved or runtime changes may not appear immediately.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -64,7 +69,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
 - `skills.search` and `skills.detail` (`operator.read`) return ClawHub
-  discovery metadata.
+  discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
+  `installRef` from search and reads that release's card and scan summary. See
+  [Skill registry details](/gateway/protocol/operator-methods#skill-registry-details).
 - `skills.upload.begin`, `skills.upload.chunk`, and `skills.upload.commit`
   (`operator.admin`) stage a private skill archive before installing it. This
   is a separate admin upload path for trusted clients, not the normal ClawHub
@@ -122,6 +129,12 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Outside the `"provider-config"` view, rows that the
+[recommended models list](/concepts/recommended-models) names for their provider
+carry `recommended: true`. Each provider's recommended rows come before its other
+rows, in list order, after the session's selected model. Pickers may collapse the
+remaining rows behind an "All models" control.
+
 Clients that advertise `model-selection-policy` in connect `caps` receive
 `manualSelectionAllowed` on every `models.list` row. The same fact appears in
 their initial `models.snapshot`. Filter rows with `false` only when deriving
@@ -149,7 +162,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   retains compatible rows and reports its `providerOutcomes`; successful empty
   acquisition remains empty.
 - `provider: "<id>"` filters the published result through the captured provider
-  aliases. Unknown provider IDs are rejected.
+  aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
+  Omit the filter or run `openclaw models list --all` to list models and their
+  provider IDs.
 - `includeDetails: true` includes available input modalities, effective
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
@@ -161,10 +176,14 @@ For a new draft, `authProfileId` previews a retained account owned by the
 identified caller with `operator.read` access. It does not save an account
 default. `sessionKey` and `authProfileId` are mutually exclusive.
 
-Saved-session metadata stays current across unrelated session writes. Before
-publishing, the Gateway rechecks the selected session's identity and canonical
-metadata, runtime configuration, and current access authority. Recreating a row
-with identical session facts does not invalidate the read.
+Saved-session metadata and draft previews stay current across unrelated session
+creations and writes. Before publishing, the Gateway rechecks the selected
+session's identity and canonical metadata, runtime configuration, and current
+access authority. Recreating a row with identical session facts does not invalidate
+the read. `chat.metadata` also tolerates title, activity, and ordinary preference
+updates to the selected row when its metadata inputs and access facts remain
+unchanged. Account, model, runtime, lifecycle, and access changes still invalidate
+an in-flight metadata read.
 
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
@@ -174,8 +193,22 @@ compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
-`chat.metadata` remains available to legacy clients; the Control UI reads models
-directly and keeps commands in its metadata cache. Opening a conversation picker
+`chat.metadata` remains available to legacy clients. Clients that read models
+directly can pass `includeModels: false` to skip the duplicate catalog, account
+selection, and runtime-selection projection. Commands and swarm availability
+remain available. Compact responses include an opaque `revision`; pass it as
+`ifRevision` on a later compact read to receive `unchanged: true` instead of
+another command list. The revision describes prepared command and swarm facts.
+The bundled Control UI reads these agent-scoped facts without a session or
+account selection and retains them across session activity. Session-scoped model
+results and full session rows can carry `sessionModelRevision`, an opaque token
+for the saved model, account, runtime, and lifecycle inputs. The UI keeps its
+catalog when that token matches; missing tokens and explicit `catalogChanged`
+notifications retain an authoritative read. Shared catalog, auth, config, and
+connection changes invalidate independently. Harness-owned, model-locked sessions
+omit this token because their native owner can replace a private model binding
+independently of the saved row. Native clients that also support older Gateways retain the default
+request shape. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
 Metadata refresh publishes model-owner facts without preparing every agent's
 commands and model projections. Requests prepare their agent's metadata on demand;
@@ -185,6 +218,8 @@ is projected for the current session even when its model catalog is shared.
 Provider renewal with unchanged inventory and auth metadata preserves cached metadata
 without broadcasting `chat.metadata.changed`. Discovery progress alone does not
 invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Discovery progress retires shared RPC response bytes without rebuilding metadata
+or sending another client broadcast.
 Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then
@@ -200,11 +235,68 @@ does not make a reopened Settings picker refresh. The Gateway shares concurrent
 provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
+
+The WebSocket dispatcher shares identical `cron.list`, `cron.status`, `sessions.list`,
+`models.list`, and `chat.metadata` responses between eligible human connections.
+Each request still checks its own current authority. Sharing keys separate user
+and profile identity, scopes, client capabilities, and request parameters,
+including agent, session, and account selection. Explicit model refreshes,
+synthetic callers, and cron reads with restricted session visibility do not share.
+Session, cron, and model metadata broadcasts retire the relevant responses before
+clients can refetch. Config, access, and session-row revisions also fence reuse.
+These methods currently use a one-second absolute ceiling; this bounds
+personal model metadata changes that do not publish a broadcast. This adds no
+client polling or provider refresh. Session catalogs and workboard reads do not use this response-sharing owner.
+
+The running cron owner retains immutable job read views and aggregate status until
+a committed revision, loaded store replacement, or scheduler mutation changes them.
+Each list request still applies its current visibility filters. Delivery previews
+keep their session and configuration dependencies; a cron revision alone does not
+make them reusable. Passive cron readers retain their store refresh behavior.
+
 The Gateway advertises these published-read and details controls as
 `published-model-catalog`. Clients that require this contract must check the
 capability before sending the new fields; an older Gateway requires an update
 or restart, not a silent local fallback. The model CLI uses this contract for
 `models list` and `models list --refresh`.
+
+## Skill registry details
+
+Use the exact `installRef` from `skills.search` when requesting details. For example:
+
+```json
+{ "slug": "@example-publisher/example-skill", "version": "1.2.0" }
+```
+
+Omitting `version` selects the latest published release. The response retains
+`skill`, `latestVersion`, `metadata`, and `owner`, and adds `registry`, `source`,
+`installRef`, and `selectedRelease`. `latestVersion` and `metadata` always describe
+the listing's latest release; `selectedRelease`, `card`, and `security` describe
+the requested release. Publisher and release mismatches never substitute another
+skill or version.
+
+`card` contains full card text when its `status` is `available`. Otherwise it has
+`status: "unavailable"` and a `reason`. `security` reports `scanStatus`,
+`hasWarnings`, `hasScanResult`, and any scan time, summary, or VirusTotal URL.
+Missing scans are explicitly unavailable. Optional release or card failures leave
+basic listing metadata readable and appear in the affected section or `warnings`.
+
+`requirements` reports the latest release's registry setup keys, operating
+systems, and systems when available. Its `scope: "registry-setup"` and `note`
+explain that setup keys combine environment and configuration requirements and do
+not include binary requirements. Structured requirements for older releases are
+unavailable because ClawHub only publishes these facts for latest. These are
+registry declarations, not checks of a local agent's eligibility; use
+`skills.status` for local requirements and configuration checks.
+
+`downloadability` is independent of card availability, listing visibility, and
+scan results. Missing or removed releases are `unavailable`; other skill releases
+are `unknown` because ClawHub does not publish an exact-release artifact
+availability assertion. Both states include a reason. Installation still performs
+its own resolution, integrity, and policy checks.
+
+External `skills-sh:` references remain install-only. `skills.detail` rejects
+them rather than returning a native registry skill with the same slug.
 
 ## Exec approvals
 

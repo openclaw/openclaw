@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -11,8 +11,8 @@ import {
 } from "../loading/plugin-skills.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
-import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
-import { resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 
 export function resolveSkillsWatchSourceRoots(
   workspaceDir: string,
@@ -45,7 +45,12 @@ export function resolveSkillsWatchSourceRoots(
       path: dir,
       source,
     }));
-    baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
+    if (config && agentId) {
+      baseRoots.push({
+        path: resolveWorkshopSkillsDir(config, agentId),
+        source: "openclaw-workshop",
+      });
+    }
     baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
     if (isDefaultStateDir()) {
       baseRoots.push({
@@ -53,11 +58,9 @@ export function resolveSkillsWatchSourceRoots(
         source: "agents-skills-personal",
       });
     }
-    const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
-    extraDirs = extraDirsRaw
-      .map((d) => normalizeOptionalString(d) ?? "")
-      .filter(Boolean)
-      .map((dir) => resolveUserPath(dir));
+    extraDirs = normalizeTrimmedStringList(config?.skills?.load?.extraDirs).map((dir) =>
+      resolveUserPath(dir),
+    );
     const pluginSkillRoots = pluginMetadataSnapshot
       ? resolvePluginSkillRootsFromMetadata({
           workspaceDir,

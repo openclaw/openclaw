@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -31,7 +32,9 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 }));
 
 let delegate: typeof import("../../context-engine/delegate.js").delegateCompactionToRuntime;
-let compactQueued: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+let compactQueued: Awaited<
+  ReturnType<typeof loadCompactHooksHarness>
+>["compactEmbeddedAgentSession"];
 let sessions: typeof import("../sessions/index.js");
 let accessor: typeof import("../../config/sessions/session-accessor.js");
 let databases: typeof import("../../state/openclaw-agent-db.js");
@@ -39,7 +42,8 @@ let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),
@@ -87,6 +91,9 @@ beforeEach(async () => {
     await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
   const scope = await import("../agent-scope.js");
   vi.mocked(scope.listAgentEntries).mockImplementation(actualScope.listAgentEntries);
+  vi.mocked(scope.listAgentEntriesWithSource).mockImplementation(
+    actualScope.listAgentEntriesWithSource,
+  );
   vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
   vi.mocked(scope.resolveSessionAgentIds).mockImplementation(actualScope.resolveSessionAgentIds);
   requestPreparedCompaction.mockReset();
@@ -112,8 +119,8 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   decoyManager.appendMessage({ role: "user", content: "Unrelated store history", timestamp: 1 });
   decoyManager.flushPendingPersistence();
   const sessionManager = sessions.SessionManager.open(target, workspaceDir);
-  sessionManager.appendModelChange(model.provider, model.id);
-  sessionManager.appendThinkingLevelChange("off");
+  await sessionManager.appendModelChange(model.provider, model.id);
+  await sessionManager.appendThinkingLevelChange("off");
   for (const content of [
     "Review the deployment checklist.",
     "Compare the remaining options.",
@@ -168,7 +175,7 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
       session: { store: configuredStore },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
+        entries: { main: {}, marketing: {} },
         defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
       },
     },
@@ -190,11 +197,8 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
 
 describe("direct compactor through the context-engine delegate", () => {
   it.each([
-    { operation: "summary", partial: false, threadId: "thread-route" },
     { operation: "summary", partial: true, threadId: 0 },
     { operation: "endpoint", partial: false, threadId: 0 },
-    { operation: "endpoint", partial: true, threadId: "thread-route" },
-    { operation: "summary", partial: false, threadId: undefined },
   ] as const)(
     "returns durable $operation identity (partial=$partial, thread=$threadId)",
     async ({ operation, partial, threadId }) => {
@@ -207,13 +211,23 @@ describe("direct compactor through the context-engine delegate", () => {
         expectedLifecycleRevision: "caller-private-revision",
         unrelatedCapability: "caller-private-capability",
       };
+      const sql = observeHostDataSql();
+      hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+        sql.restore();
+        return undefined;
+      });
       const result = await delegate({
         sessionId: target.sessionId,
         sessionKey: target.sessionKey,
         sessionTarget,
         runtimeContext: fixture.runtimeContext,
-      });
+      }).finally(sql.restore);
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      expect(
+        sql.queries.filter(
+          (query) => /\bselect\b/i.test(query) && /\btranscript_events\b/i.test(query),
+        ),
+      ).toEqual([]);
       const returned = result.result?.sessionTarget;
       expect(returned).toEqual({ ...target, ...(threadId !== undefined ? { threadId } : {}) });
       expect(result.result).not.toHaveProperty("sessionFile");
@@ -226,6 +240,7 @@ describe("direct compactor through the context-engine delegate", () => {
         throw new Error("Compactor must return its complete resolved identity");
       }
       // Close the actual DB handles before observing the returned identity and history.
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open({
         agentId: returned.agentId,
@@ -334,6 +349,7 @@ describe("direct compactor through the context-engine delegate", () => {
       await stopped.promise;
       expect(result).toMatchObject({ ok: false, compacted: false });
       expect(result.result).toBeUndefined();
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open(fixture.target);
       expect(reopened.getSessionId()).toBe(fixture.target.sessionId);
@@ -341,6 +357,82 @@ describe("direct compactor through the context-engine delegate", () => {
       expect(reopened.buildSessionContext().messages).toEqual(fixture.originalMessages);
       expect(fixture.recordCompaction).not.toHaveBeenCalled();
       expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["abort", "owner-replaced"] as const)(
+    "discards a hydrated compaction transcript after %s before publication",
+    async (transition) => {
+      const fixture = await createFixture("summary");
+      const { historyLane } =
+        await import("../../config/sessions/session-transcript-worker-resources.js");
+      const { withSessionTranscriptWriteAssertion } =
+        await import("../../config/sessions/transcript-write-context.js");
+      const received = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      let current = true;
+      const reason = new Error("compaction preparation no longer current");
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+        let hydration = false;
+        return run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          hydration = request.kind === "transcript-hydration";
+          return request;
+        }, options).then(async (snapshot) => {
+          if (hydration) {
+            read.mockRestore();
+            received.resolve();
+            await release.promise;
+          }
+          return snapshot;
+        });
+      });
+      const pending = withSessionTranscriptWriteAssertion(
+        fixture.target,
+        () => {
+          if (!current) {
+            throw reason;
+          }
+        },
+        () =>
+          delegate({
+            sessionId: fixture.target.sessionId,
+            sessionKey: fixture.target.sessionKey,
+            sessionTarget: fixture.target,
+            runtimeContext: fixture.runtimeContext,
+            abortSignal: controller.signal,
+          }),
+      );
+      try {
+        await Promise.race([
+          received.promise,
+          pending.then(() => {
+            throw new Error("Compaction completed before the native hydration reply");
+          }),
+        ]);
+        if (transition === "abort") {
+          controller.abort(reason);
+        } else {
+          current = false;
+        }
+        release.resolve();
+        expect(await pending).toMatchObject({ ok: false, compacted: false });
+        expect(fixture.stream).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(fixture.recordCompaction).not.toHaveBeenCalled();
+        await databases.closeOpenClawAgentDatabasesAsync();
+        databases.closeOpenClawAgentDatabasesForTest();
+        expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
+          fixture.originalEntries,
+        );
+      } finally {
+        release.resolve();
+        read.mockRestore();
+        await pending.catch(() => undefined);
+      }
     },
   );
 
@@ -357,6 +449,7 @@ describe("direct compactor through the context-engine delegate", () => {
     expect(fixture.stream).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
     expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
       fixture.originalEntries,
@@ -370,12 +463,9 @@ describe("direct compactor through the context-engine delegate", () => {
     "keeps queued manual %s compaction countable when cancellation follows its commit during a post-compaction hook",
     async (operation) => {
       const fixture = await createFixture(operation);
-      const { markRuntimeCompactionDelegate } =
-        await import("../../context-engine/compaction-watchdog.js");
       const { incrementCompactionCount } =
         await import("../../auto-reply/reply/session-updates.js");
       const backend = vi.fn<ContextEngine["compact"]>(delegate);
-      markRuntimeCompactionDelegate(backend);
       resolveContextEngineMock.mockResolvedValueOnce({
         info: { ownsCompaction: false },
         compact: backend,

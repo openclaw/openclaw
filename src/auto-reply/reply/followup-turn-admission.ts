@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -6,17 +8,16 @@ import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveFollowupCurrentMessageId,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
 } from "./agent-runner-utils.js";
@@ -25,6 +26,7 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import {
@@ -54,18 +56,6 @@ export type FollowupRunnerParams = {
   toolProgressDetail?: "explain" | "raw";
 };
 
-export async function settleQueuedFollowupPresentation(
-  defaults: FollowupRunnerParams,
-): Promise<void> {
-  try {
-    await defaults.opts?.onQueuedFollowupSettled?.();
-  } catch (error) {
-    defaultRuntime.error?.(
-      `followup queue: queued presentation cleanup failed: ${formatErrorMessage(error)}`,
-    );
-  }
-}
-
 type FollowupSessionOwner = {
   current: () => SessionEntry | undefined;
   publish(entry: SessionEntry | undefined): void;
@@ -73,7 +63,7 @@ type FollowupSessionOwner = {
 } & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
 
 export type AdmittedFollowupTurn = {
-  runId: string;
+  readonly runId: string;
   queued: FollowupRun;
   operation: ReplyOperation;
   config: OpenClawConfig;
@@ -94,13 +84,6 @@ type FollowupAdmissionResult =
       operation?: ReplyOperation;
     };
 
-function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
-  return queued.run.inputProvenance?.kind === "internal_system" &&
-    queued.run.inputProvenance.sourceTool === "restart-sentinel"
-    ? queued.originatingReplyToId
-    : queued.messageId;
-}
-
 function isSameSessionGeneration(
   left: SessionEntry | undefined,
   right: SessionEntry | undefined,
@@ -113,15 +96,12 @@ function isSameSessionGeneration(
   );
 }
 
-/** Resolves one queued item into an admitted turn. */
 export async function admitFollowupTurn(params: {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;
   onCompactionNoticePayload?: (payload: ReplyPayload, turn: AdmittedFollowupTurn) => Promise<void>;
 }): Promise<FollowupAdmissionResult> {
-  const assertOperatorCurrent = () => {
-    params.queued.operatorAuthority?.assertCurrent();
-  };
+  const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
@@ -139,13 +119,8 @@ export async function admitFollowupTurn(params: {
     initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
-  const resolveRunSessionFile = (source: FollowupRun["run"], sessionId: string) =>
-    resolveAdmittedRunSessionFile({
-      agentId: source.agentId,
-      sessionId,
-      sessionKey: replySessionKey,
-      storePath: params.defaults.storePath,
-    }) ?? source.sessionFile;
+  const resolveRunSessionFile = (source: FollowupRun["run"]) =>
+    normalizeOptionalString(replySessionKey) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
@@ -154,6 +129,29 @@ export async function admitFollowupTurn(params: {
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
     kind: "queued_followup",
+    // Settings writers can refresh this queued source while admission waits.
+    // Copy only selection at the admission owner’s writer fence, before any
+    // source-adoption await. Session identity and authority keep their original
+    // bindings; later preference edits cannot alter this detached turn selection.
+    captureRunSelection: () => {
+      const selected = params.queued.run;
+      run = {
+        ...run,
+        provider: selected.provider,
+        model: selected.model,
+        requestedRouteResolution: selected.requestedRouteResolution,
+        hasAutoFallbackProvenance: selected.hasAutoFallbackProvenance,
+        autoFallbackPrimaryProbe: selected.autoFallbackPrimaryProbe
+          ? { ...selected.autoFallbackPrimaryProbe }
+          : undefined,
+        hasSessionModelOverride: selected.hasSessionModelOverride,
+        modelOverrideSource: selected.modelOverrideSource,
+        authProfileId: selected.authProfileId,
+        authProfileIdSource: selected.authProfileIdSource,
+        thinkLevel: selected.thinkLevel,
+        thinkingCatalog: selected.thinkingCatalog,
+      };
+    },
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
@@ -167,6 +165,8 @@ export async function admitFollowupTurn(params: {
     return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
+  const selectionEntry = admission.sessionEntry ?? initialEntry;
+  const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
   try {
@@ -180,27 +180,19 @@ export async function admitFollowupTurn(params: {
     queuedFollowupAdmitted = true;
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
     assertOperatorCurrent();
-    if (operation.sessionId !== run.sessionId) {
-      run = {
-        ...run,
-        sessionId: operation.sessionId,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
-        cliSessionBindingFacts: undefined,
-        autoFallbackPrimaryProbe: undefined,
-        modelSelectionLocked: false,
-      };
-    }
+    const sessionRotated = operation.sessionId !== run.sessionId;
     const admittedEntry = replySessionKey
       ? params.defaults.storePath
         ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
         : params.defaults.sessionStore?.[replySessionKey]
       : undefined;
-    const expectedPersistedEntry =
+    const admissionEntry =
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
-        : initialEntry?.sessionId === operation.sessionId
-          ? initialEntry
-          : undefined;
+        : undefined;
+    const expectedPersistedEntry =
+      admissionEntry ??
+      (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
     const assertPersistedGeneration = (entry: SessionEntry | undefined) => {
       const matchesExpectedGeneration = isSameSessionGeneration(entry, expectedPersistedEntry);
       const shouldValidateGeneration =
@@ -216,10 +208,6 @@ export async function admitFollowupTurn(params: {
       }
     };
     assertPersistedGeneration(admittedEntry);
-    const admissionEntry =
-      admission.sessionEntry?.sessionId === operation.sessionId
-        ? admission.sessionEntry
-        : undefined;
     const reloadedEntry =
       admittedEntry?.sessionId === operation.sessionId ? admittedEntry : undefined;
     const freshestMatchingEntry =
@@ -240,12 +228,13 @@ export async function admitFollowupTurn(params: {
         (initialEntry?.sessionId === operation.sessionId
           ? initialEntry.lifecycleRevision
           : undefined);
-    if (activeEntry?.sessionId === operation.sessionId) {
+    if (sessionRotated || activeEntry?.sessionId === operation.sessionId) {
       run = {
         ...run,
-        sessionFile: resolveRunSessionFile(run, operation.sessionId),
-        modelSelectionLocked: activeEntry.modelSelectionLocked === true,
-        ...(lifecycleRevisionChanged
+        ...(sessionRotated ? { sessionId: operation.sessionId } : {}),
+        sessionFile: resolveRunSessionFile(run),
+        modelSelectionLocked: activeEntry?.modelSelectionLocked === true,
+        ...(sessionRotated || lifecycleRevisionChanged
           ? {
               cliSessionBindingFacts: undefined,
               autoFallbackPrimaryProbe: undefined,
@@ -255,7 +244,10 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      entry: activeEntry,
+      // Reconcile the probe against the same admitted preferences, not a newer
+      // selection published while source adoption awaited. Lifecycle checks and
+      // compaction still consume fresh session state independently above/below.
+      entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };
@@ -290,10 +282,10 @@ export async function admitFollowupTurn(params: {
           source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
         ),
       });
-    const currentInboundContext =
-      params.defaults.opts?.isHeartbeat === true
-        ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+    const currentInboundContext = refreshActiveGoalContext(
+      queued.currentInboundContext,
+      activeEntry,
+    );
     // Preallocate the one lifecycle identity passed as opts.runId; canonical
     // execution owns registration and cleanup under this same id.
     const turn: AdmittedFollowupTurn = {
@@ -306,14 +298,6 @@ export async function admitFollowupTurn(params: {
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
-    const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
-      const refreshedInboundContext =
-        params.defaults.opts?.isHeartbeat === true
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
-      turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
-      turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
-    };
     const readTurnSessionEntry = () =>
       replySessionKey && params.defaults.storePath
         ? loadSessionEntry({
@@ -323,7 +307,7 @@ export async function admitFollowupTurn(params: {
         : replySessionKey && params.defaults.sessionStore
           ? params.defaults.sessionStore[replySessionKey]
           : session.current();
-    const synchronizeTurnGeneration = (
+    const refreshTurnSessionState = (
       entry: SessionEntry | undefined,
       previousEntry: SessionEntry | undefined,
     ) => {
@@ -335,13 +319,19 @@ export async function admitFollowupTurn(params: {
           run: {
             ...turn.queued.run,
             sessionId: entry.sessionId,
-            sessionFile: resolveRunSessionFile(turn.queued.run, entry.sessionId),
+            sessionFile: resolveRunSessionFile(turn.queued.run),
             cliSessionBindingFacts: undefined,
             autoFallbackPrimaryProbe: undefined,
             modelSelectionLocked: entry.modelSelectionLocked === true,
           },
         };
       }
+      const refreshedInboundContext = refreshActiveGoalContext(
+        params.queued.currentInboundContext,
+        entry,
+      );
+      turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
+      turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
       return generationRotated;
     };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
@@ -350,10 +340,15 @@ export async function admitFollowupTurn(params: {
       | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      turn.sendPolicy === "allow" &&
-      queued.currentInboundEventKind !== "room_event" &&
-      shouldNotifyUserAboutCompaction(config)
+      turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
+            if (
+              phase !== "context_bounded" &&
+              phase !== "degraded" &&
+              !shouldNotifyUserAboutCompaction(config)
+            ) {
+              return;
+            }
             if (phase !== "start") {
               pendingTerminalCompactionNotice = { phase, text };
               return;
@@ -365,7 +360,6 @@ export async function admitFollowupTurn(params: {
               if (error instanceof FollowupSessionGenerationInvalidatedError) {
                 compactionNoticeGenerationInvalidated = true;
                 operation.abortForRestart();
-                throw error;
               }
               throw error;
             }
@@ -384,6 +378,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
@@ -395,7 +390,7 @@ export async function admitFollowupTurn(params: {
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
-        isHeartbeat: params.defaults.opts?.isHeartbeat === true,
+        isHeartbeat: false,
         abortSignal: operation.abortSignal,
         onCompactionStart: () => operation.setPhase("preflight_compacting"),
         onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
@@ -431,8 +426,7 @@ export async function admitFollowupTurn(params: {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
       }
-      const generationRotated = synchronizeTurnGeneration(activeEntry, preflightEntry);
-      refreshTurnSessionState(activeEntry);
+      const generationRotated = refreshTurnSessionState(activeEntry, preflightEntry);
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
@@ -444,8 +438,7 @@ export async function admitFollowupTurn(params: {
         session.adopt(failureEntry);
         activeEntry = session.current() ?? failureEntry;
       }
-      synchronizeTurnGeneration(activeEntry, preflightEntry);
-      refreshTurnSessionState(activeEntry);
+      refreshTurnSessionState(activeEntry, preflightEntry);
       if (compactionNoticeGenerationInvalidated) {
         throw new FollowupSessionGenerationInvalidatedError(
           "Follow-up session generation changed during preflight notice delivery",
@@ -459,9 +452,11 @@ export async function admitFollowupTurn(params: {
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
         turn.queued.run.verboseLevel;
-      const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
-        includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
-      });
+      const text =
+        renderAgentHarnessPreflightUserMessage(error) ??
+        buildPreflightCompactionFailureText(formatErrorMessage(error), {
+          includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+        });
       if (!text) {
         turn.preflightError = error;
       } else {
@@ -485,7 +480,7 @@ export async function admitFollowupTurn(params: {
     return { kind: "admitted", turn };
   } catch (error) {
     if (queuedFollowupAdmitted) {
-      await settleQueuedFollowupPresentation(params.defaults);
+      await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
     operation.complete();
     throw error instanceof Error ? error : new Error(formatErrorMessage(error));

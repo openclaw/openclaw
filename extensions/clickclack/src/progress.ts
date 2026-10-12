@@ -1,25 +1,12 @@
-/**
- * Publishes ClickClack's native ephemeral agent.progress signal for one
- * OpenClaw turn. ClickClack renders this as its compact "Agent is
- * responding" status and the detailed progress lines above the composer.
- */
 import {
   buildChannelProgressDraftLine,
   isCompleteAgentPreamble,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import type { ClickClackClient } from "./http-client.js";
 
 export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
-
-type ClickClackProgressClient = {
-  publishEphemeral(params: {
-    workspaceId: string;
-    channelId?: string;
-    conversationId?: string;
-    type: "agent.progress";
-    payload?: Record<string, unknown>;
-  }): Promise<void>;
-};
 
 type ClickClackProgressTarget = {
   workspaceId: string;
@@ -47,18 +34,9 @@ function progressText(payload: ClickClackItemEventPayload): string {
     return payload.title;
   }
   const line = buildChannelProgressDraftLine({
+    ...payload,
     event: "item",
-    itemId: payload.itemId,
-    toolCallId: payload.toolCallId,
     itemKind: payload.kind,
-    title: payload.title,
-    name: payload.name,
-    phase: payload.phase,
-    status: payload.status,
-    summary: payload.summary,
-    progressText: payload.progressText,
-    meta: payload.meta,
-    commandBearing: payload.commandBearing,
   })?.text?.trim();
   if (line) {
     return line;
@@ -97,26 +75,17 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
     const phase = payload.phase?.trim().toLowerCase();
     const existingAnonymous =
       phase === "start" ? undefined : anonymousLines.toReversed().find((line) => line.active);
-    const line =
-      existingAnonymous ??
-      (() => {
-        const created = { id: `item:${kind}:${++anonymousSequence}`, active: true };
-        anonymousLines.push(created);
-        anonymousLinesByKind.set(kind, anonymousLines);
-        return created;
-      })();
+    const line = existingAnonymous ?? { id: `item:${kind}:${++anonymousSequence}`, active: true };
+    if (!existingAnonymous) {
+      anonymousLines.push(line);
+      anonymousLinesByKind.set(kind, anonymousLines);
+    }
     if (isFinal(payload)) {
       line.active = false;
     }
     return line.id;
   };
 }
-
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
 
 type QueuedProgressFrame = {
   lineId?: string;
@@ -127,12 +96,12 @@ const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
 const CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS = 1_000;
 
 export function createClickClackAgentProgressPublisher(params: {
-  client: ClickClackProgressClient;
+  client: Pick<ClickClackClient, "publishEphemeral">;
   target: ClickClackProgressTarget;
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -203,23 +172,15 @@ export function createClickClackAgentProgressPublisher(params: {
   };
 
   const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     let drained = false;
-    try {
-      await Promise.race([
-        pending.then(() => {
-          drained = true;
-        }),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
-        }),
-      ]);
-      return drained;
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    await raceWithTimeout(
+      pending.then(() => {
+        drained = true;
+      }),
+      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+      () => undefined,
+    );
+    return drained;
   };
 
   const scheduleLineDrain = (): void => {
@@ -268,7 +229,7 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }

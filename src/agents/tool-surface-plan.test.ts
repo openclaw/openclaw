@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { createCodeModeTools } from "./code-mode.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
@@ -11,7 +12,11 @@ import {
   createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
-import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
+import {
+  applyAgentToolSurfaceCatalog,
+  prepareAgentToolSurfacePresentation,
+  resolveAgentToolSurfacePlan,
+} from "./tool-surface-plan.js";
 
 // Params type stays module-local in production; derive it so the test cannot
 // keep a public export alive that no production caller needs.
@@ -28,7 +33,52 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 };
 
 describe("resolveAgentToolSurfacePlan", () => {
-  it.each(["tools", "directory", "code"] as const)(
+  it.each(
+    (["tools", "directory", "code"] as const).flatMap((mode) =>
+      [false, true].map((prepared) => ({ mode, prepared })),
+    ),
+  )(
+    "keeps memory persistence direct in $mode with prepared presentation=$prepared",
+    ({ mode, prepared }) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const params = {
+        config,
+        modelToolsEnabled: true,
+        trigger: "memory" as const,
+        forceCodeModeControls: mode === "code",
+        presentation: prepared
+          ? prepareAgentToolSurfacePresentation({
+              ...basePlanParams,
+              config,
+              trigger: "user",
+            })
+          : undefined,
+      };
+      const memory = createAgentHarnessToolSurfaceRuntimeCore(params);
+      const foreground = createAgentHarnessToolSurfaceRuntimeCore({ ...params, trigger: "user" });
+      try {
+        const result = memory.compactTools(["read", "write"].map(createStubTool));
+        expect(result.tools.map((tool) => tool.name)).toEqual(["read", "write"]);
+        expect(result.catalog.catalogRegistered).toBe(false);
+        expect(foreground.codeModeControlsEnabled || foreground.toolSearchControlsEnabled).toBe(
+          true,
+        );
+        expect(config.tools?.toolSearch).toEqual({
+          enabled: true,
+          mode: mode === "directory" ? "directory" : "tools",
+        });
+      } finally {
+        memory.cleanup();
+        foreground.cleanup();
+      }
+    },
+  );
+  it.each(["tools", "directory"] as const)(
     "keeps invocation-restricted tools direct with configured %s search",
     (mode) => {
       const config: OpenClawConfig = { tools: { toolSearch: { enabled: true, mode } } };
@@ -39,7 +89,6 @@ describe("resolveAgentToolSurfacePlan", () => {
         tools,
         config,
         ...plan,
-        forceDirectMessageTool: false,
         catalogRef: createToolSearchCatalogRef(),
       });
       expect(plan.toolSearchControlsEnabled).toBe(false);
@@ -122,9 +171,8 @@ describe("resolveAgentToolSurfacePlan", () => {
     },
   );
 
-  it("uses the selected model policy before transport aliases and reevaluates fallbacks", () => {
+  it("uses automatic activation by default while honoring model policy and fallback capability", () => {
     const config: OpenClawConfig = {
-      tools: { codeMode: "auto" },
       agents: { defaults: { models: { "test/family": { codeMode: false } } } },
     };
     const model = { id: "family-current", provider: "test", compat: { codeMode: "preferred" } };
@@ -135,6 +183,16 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(
       resolveAgentToolSurfacePlan({ ...params, modelId: "fallback" }).codeModeControlsEnabled,
     ).toBe(true);
+    for (const compat of [{ codeMode: "capable" }, {}]) {
+      const plan = resolveAgentToolSurfacePlan({
+        ...params,
+        modelId: "fallback",
+        model: { ...model, compat },
+      });
+      expect(plan.codeModeControlsEnabled).toBe(false);
+      expect(plan.toolSearchControlsEnabled).toBe(true);
+    }
+    expect(config.tools).toBeUndefined();
   });
 
   it.each([
@@ -159,47 +217,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   });
 
   it.each([
-    {
-      name: "code mode wins when engaged",
-      config: { tools: { codeMode: true, toolSearch: true } },
-      expected: { codeMode: true, toolSearch: false },
-    },
-    {
-      name: "tool search engages when code mode does not",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      expected: { codeMode: false, toolSearch: true },
-    },
-  ] satisfies Array<{
-    name: string;
-    config: OpenClawConfig;
-    expected: { codeMode: boolean; toolSearch: boolean };
-  }>)("keeps controls mutually exclusive: $name", ({ config, expected }) => {
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-
-    expect(plan.codeModeControlsEnabled).toBe(expected.codeMode);
-    expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
-    expect(plan.codeModeControlsEnabled && plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it("preserves Code Mode controls for a checkpoint-proven restart recovery", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: true },
-    };
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config,
-      forceCodeModeControls: true,
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(true);
-    expect(plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "Code Mode",
-      config: { tools: { codeMode: true, toolSearch: true } },
-    },
     {
       name: "Code Mode with a normalized message allowlist",
       config: { tools: { codeMode: true, toolSearch: true } },
@@ -240,7 +257,6 @@ describe("resolveAgentToolSurfacePlan", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: true,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -252,8 +268,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   it.each([
     { name: "no runtime allowlist", toolsAllow: undefined },
     { name: "a wildcard runtime allowlist", toolsAllow: ["*"] },
-    { name: "a wildcard alongside an explicit message", toolsAllow: ["message", "*"] },
-    { name: "an ordinary finite runtime allowlist", toolsAllow: ["read", "write"] },
     { name: "a message alongside another allowed tool", toolsAllow: ["message", "read"] },
   ])("preserves normal Code Mode message turns with $name", ({ toolsAllow }) => {
     const plan = resolveAgentToolSurfacePlan({
@@ -306,6 +320,48 @@ describe("resolveAgentToolSurfacePlan", () => {
 describe("applyAgentToolSurfaceCatalog", () => {
   const executeTool: ToolSearchCatalogToolExecutor = async () => ({ content: [], details: {} });
 
+  it.each(["code", "tools", "directory"] as const)(
+    "keeps the %s provider tool prefix across source reply delivery modes",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: mode === "code",
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+        },
+      };
+      const surfaces = [false, true, false].map((forceMessageTool) => {
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config,
+          modelToolsEnabled: true,
+          sessionKey: "agent:main:reply-mode-stability",
+          forceMessageTool,
+          executeTool,
+        });
+        try {
+          const result = runtime.compactTools(
+            ["message", "read", "hidden_target"].map(createStubTool),
+          );
+          expect(result.tools.some((tool) => tool.name === "message")).toBe(true);
+          const descriptors = result.tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          }));
+          expect(
+            runtime
+              .compactTools([createStubTool("read")])
+              .tools.some((tool) => tool.name === "message"),
+          ).toBe(false);
+          return descriptors;
+        } finally {
+          runtime.cleanup();
+        }
+      });
+      expect(surfaces[1]).toEqual(surfaces[0]);
+      expect(surfaces[2]).toEqual(surfaces[0]);
+    },
+  );
+
   it("compacts an unconfigured hosted run behind structured controls", () => {
     const config: OpenClawConfig = {};
     const plan = resolveAgentToolSurfacePlan({
@@ -321,7 +377,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       ],
       config,
       ...plan,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -351,7 +406,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -378,7 +432,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef,
     });
 
@@ -411,7 +464,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 
@@ -432,7 +484,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
       toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
-      forceDirectMessageTool: false,
       catalogRef: createToolSearchCatalogRef(),
     });
 

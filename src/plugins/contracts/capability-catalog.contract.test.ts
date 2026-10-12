@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type {
-  PluginCapabilityCatalogEntry,
-  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostEntry,
+  PluginCapabilityCatalogHostContext,
 } from "../capability-catalog-context.types.js";
 
 // These are actual import traps: descriptor construction must never evaluate host runtime/auth.
@@ -62,15 +62,18 @@ const fixtures = fs.readdirSync(extensions).flatMap((dir) => {
 const unavailable = () => {
   throw new Error("catalog construction invoked host runtime");
 };
-const context: PluginCapabilityCatalogContext = {
+const context: PluginCapabilityCatalogHostContext = {
   isProviderApiKeyConfigured: unavailable,
+  isProviderApiKeyConfiguredAsync: unavailable,
   isProviderAuthProfileConfigured: unavailable,
+  isProviderAuthProfileConfiguredAsync: unavailable,
   resolveAgentDir: unavailable,
   createRealtimeTranscriptionWebSocketSession: unavailable,
   resolveProviderRequestHeaders: unavailable,
   resolveProviderAuthProfileApiKey: unavailable,
   resolveApiKeyForProvider: unavailable,
   captureWsEvent: unavailable,
+  captureWsEventAsync: unavailable,
   createDebugProxyWebSocketAgent: unavailable,
   resolveDebugProxySettings: unavailable,
   fetchWithSsrFGuard: unavailable,
@@ -90,7 +93,7 @@ describe("bundled capability catalog import boundary", () => {
       const module = await import(
         pathToFileURL(path.resolve(root, manifest.capabilityCatalogEntry)).href
       );
-      const entry = module.default as PluginCapabilityCatalogEntry;
+      const entry = module.default as PluginCapabilityCatalogHostEntry;
       const catalog = typeof entry === "function" ? entry(context) : entry;
       for (const [family, ids] of Object.entries(contracts)) {
         const providers = catalog[family as keyof typeof catalog]!;

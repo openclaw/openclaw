@@ -1,0 +1,141 @@
+import { expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { recordUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { VERSION } from "../../version.js";
+import { readPackageVersion } from "./shared.js";
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import {
+  updatePluginsAfterCoreUpdate,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
+import {
+  continuePostCoreUpdateInFreshProcess,
+  writePostCorePluginUpdateResultFile,
+} from "./update-command-post-core.js";
+import { resumePostCoreUpdate } from "./update-command-resume.js";
+import { withUpdateEnv } from "./update-command-service-env.js";
+
+export function registerConvergenceCompletionTests({
+  mocks,
+  validConfigSnapshot,
+  successfulPluginUpdate,
+}: {
+  mocks: { events: string[]; leaseActive: boolean };
+  validConfigSnapshot: ConfigFileSnapshot;
+  successfulPluginUpdate: PostCorePluginUpdateResult;
+}) {
+  const record = (name: string): void => {
+    mocks.events.push(name + ":" + mocks.leaseActive);
+  };
+  it.each([
+    { runtime: "candidate", coreAlreadyCurrent: false },
+    { runtime: "current", coreAlreadyCurrent: true },
+    { runtime: "resumed", coreAlreadyCurrent: false },
+  ] as const)(
+    "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
+    async ({ runtime, coreAlreadyCurrent }) => {
+      const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
+      const installedVersion = runtime === "resumed" ? "2026.9.4" : VERSION;
+      vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
+      const run = createUpdateRun({ trigger: "cli" });
+      const env = { ...process.env };
+      const doctorEnv = { ...env, OPENCLAW_UPDATE_RUN_ID: run.runId };
+      recordUpdateModelRetirement("deferred", doctorEnv);
+      const opts = {
+        json: true,
+        run: { runId: run.runId, env, executorFence: { assertCurrent() {} } },
+      };
+      const pluginUpdate = { ...successfulPluginUpdate, changed: false };
+      vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+        ...pluginUpdate,
+        assessment: { kind: "no-payload-repair" },
+      });
+      vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async (params) => {
+        expect(mocks.leaseActive).toBe(false);
+        record("complete");
+        await params.beforeDoctor?.();
+        recordUpdateModelRetirement("completed", doctorEnv);
+        params.onWarnings?.(["Deferred retirement repair warning"]);
+        return { pluginUpdate, configSnapshot: validConfigSnapshot };
+      });
+      if (resumesTarget) {
+        const handoffDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(handoffDir, "handoff.json"), '{"completionOwner":"parent"}');
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoffDir, "plugins.json"));
+        vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
+          // Run the actual resume producer, not a canned child result. The existing
+          // transport mock observes when a modern child publishes to its parent.
+          await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
+            resumePostCoreUpdate({
+              root: "/tmp/openclaw",
+              channel: "stable",
+              opts,
+              timeoutMs: 5_000,
+            }),
+          );
+          expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+          const published = vi.mocked(writePostCorePluginUpdateResultFile).mock.lastCall?.[1];
+          expect(published).toBeDefined();
+          return { resumed: true, pluginUpdate: published };
+        });
+      }
+      const beforeDoctor = vi.fn(async () => record("park"));
+      const result = await convergeUpdatePlugins({
+        candidateRuntime: runtime === "candidate",
+        coreAlreadyCurrent,
+        result: {
+          status: coreAlreadyCurrent ? "skipped" : "ok",
+          ...(coreAlreadyCurrent ? { reason: "already-current" } : {}),
+          mode: runtime === "resumed" ? "npm" : "git",
+          root: "/tmp/openclaw",
+          before: { version: VERSION },
+          after: { version: installedVersion },
+          steps: [],
+          durationMs: 0,
+        },
+        root: "/tmp/openclaw",
+        installKindChanged: false,
+        configSnapshot: validConfigSnapshot,
+        requestedChannel: null,
+        storedChannel: null,
+        channel: "stable",
+        downgradeRisk: false,
+        opts,
+        preUpdatePluginInstallRecords: {},
+        startedAt: 1_000,
+        updateStepTimeoutMs: 5_000,
+        packageUpdateNodeRunner: "/selected/node",
+        beforeDoctor,
+      });
+      expect(updatePluginsAfterCoreUpdate).toHaveBeenCalledOnce();
+      expect(completePostCorePluginUpdate).toHaveBeenCalledOnce();
+      expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginUpdate: expect.objectContaining({ changed: false }),
+          nodeRunner: "/selected/node",
+          opts,
+        }),
+      );
+      expect(beforeDoctor).toHaveBeenCalledOnce();
+      expect(mocks.events).not.toContain("complete:true");
+      expect(result.resultWithPostUpdate.steps).toContainEqual(
+        expect.objectContaining({
+          name: "post-plugin-doctor-warning-1",
+          advisory: {
+            kind: "package-post-install-doctor",
+            message: "Deferred retirement repair warning",
+          },
+        }),
+      );
+      if (resumesTarget) {
+        expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
+      } else {
+        expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+      }
+    },
+  );
+}
+import fs from "node:fs/promises";
+import path from "node:path";

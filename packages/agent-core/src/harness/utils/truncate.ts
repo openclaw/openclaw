@@ -36,12 +36,7 @@ export interface TruncationOptions {
   maxBytes?: number;
 }
 
-interface ResolvedTruncationInput {
-  totalLines: number;
-  totalBytes: number;
-  maxLines: number;
-  maxBytes: number;
-}
+type ResolvedTruncationInput = ReturnType<typeof resolveTruncationInput>;
 
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
@@ -108,10 +103,7 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function resolveTruncationInput(
-  content: string,
-  options: TruncationOptions,
-): ResolvedTruncationInput {
+function resolveTruncationInput(content: string, options: TruncationOptions) {
   let totalLines = content.length > 0 && !content.endsWith("\n") ? 1 : 0;
   for (let index = content.indexOf("\n"); index !== -1; index = content.indexOf("\n", index + 1)) {
     totalLines++;
@@ -128,24 +120,25 @@ function buildTruncationResult(
   input: ResolvedTruncationInput,
   params: {
     content: string;
-    truncated: boolean;
-    truncatedBy: TruncationResult["truncatedBy"];
-    outputLines: number;
-    outputBytes: number;
+    truncatedBy?: TruncationResult["truncatedBy"];
+    outputLines?: number;
+    outputBytes?: number;
     lastLinePartial?: boolean;
     firstLineExceedsLimit?: boolean;
   },
 ): TruncationResult {
+  const truncatedBy = params.truncatedBy ?? null;
+  const outputLines = params.outputLines ?? input.totalLines;
+  const truncated = truncatedBy !== null;
   return {
     // One-element joins can retain a source slice; multiline joins build their own text.
-    content:
-      params.truncated && params.outputLines === 1 ? copyString(params.content) : params.content,
-    truncated: params.truncated,
-    truncatedBy: params.truncatedBy,
+    content: truncated && outputLines === 1 ? copyString(params.content) : params.content,
+    truncated,
+    truncatedBy,
     totalLines: input.totalLines,
     totalBytes: input.totalBytes,
-    outputLines: params.outputLines,
-    outputBytes: params.outputBytes,
+    outputLines,
+    outputBytes: params.outputBytes ?? input.totalBytes,
     lastLinePartial: params.lastLinePartial ?? false,
     firstLineExceedsLimit: params.firstLineExceedsLimit ?? false,
     maxLines: input.maxLines,
@@ -163,13 +156,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   const input = resolveTruncationInput(content, options);
 
   if (input.totalLines <= input.maxLines && input.totalBytes <= input.maxBytes) {
-    return buildTruncationResult(input, {
-      content,
-      truncated: false,
-      truncatedBy: null,
-      outputLines: input.totalLines,
-      outputBytes: input.totalBytes,
-    });
+    return buildTruncationResult(input, { content });
   }
 
   const firstLineEnd = content.indexOf("\n");
@@ -177,7 +164,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   if (input.totalLines > 0 && utf8ByteLength(firstLine) > input.maxBytes) {
     return buildTruncationResult(input, {
       content: "",
-      truncated: true,
       truncatedBy: "bytes",
       outputLines: 0,
       outputBytes: 0,
@@ -220,7 +206,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 
   return buildTruncationResult(input, {
     content: outputLines.join("\n"),
-    truncated: true,
     truncatedBy,
     outputLines: outputLines.length,
     outputBytes: outputBytesCount,
@@ -237,13 +222,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   const input = resolveTruncationInput(content, options);
 
   if (input.totalLines <= input.maxLines && input.totalBytes <= input.maxBytes) {
-    return buildTruncationResult(input, {
-      content,
-      truncated: false,
-      truncatedBy: null,
-      outputLines: input.totalLines,
-      outputBytes: input.totalBytes,
-    });
+    return buildTruncationResult(input, { content });
   }
 
   const outputLines: string[] = [];
@@ -285,7 +264,6 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   return buildTruncationResult(input, {
     // Join only selected lines so a multiline result does not retain the full source.
     content: outputLines.toReversed().join("\n"),
-    truncated: true,
     truncatedBy,
     outputLines: outputLines.length,
     outputBytes: outputBytesCount,

@@ -9,18 +9,20 @@ import type {
   GatewayServiceEnv,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
-  SystemdServiceIdentity,
+  SystemdServiceReadTarget,
 } from "./service-types.js";
 import {
   assertSystemdAvailable,
   disableSystemdUserUnitForRemoval,
   execSystemctl,
   execSystemctlUser,
+  isRunningAsRoot,
   isSystemctlAvailable,
   reloadSystemdUserManager,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
-  assertNoSystemGatewayOwnership,
+  assertNoSystemGatewayOwnershipForActivation,
   findInstalledSystemdGatewayScope,
 } from "./systemd-scope.js";
 import {
@@ -30,146 +32,96 @@ import {
 } from "./systemd-service-files.js";
 import { activateSystemdServiceIdentity } from "./systemd-service-identity.js";
 
-function isRunningAsRoot(): boolean {
-  if (typeof process.geteuid === "function") {
-    try {
-      return process.geteuid() === 0;
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-async function runSystemdServiceAction(params: {
-  stdout: NodeJS.WritableStream;
-  env?: GatewayServiceEnv;
-  action: "start" | "stop" | "restart";
-  label: string;
-  onMutation?: () => void;
-  assertCurrent?: () => void;
-  systemdIdentity?: SystemdServiceIdentity;
-  warn?: (message: string) => void;
-}) {
+async function runSystemdServiceAction(
+  params: GatewayServiceControlArgs,
+  action: "start" | "stop" | "restart",
+) {
   const env = params.env ?? process.env;
-  if (params.systemdIdentity && params.action !== "stop") {
-    if (params.systemdIdentity.scope === "user") {
-      await assertNoSystemGatewayOwnership({
-        ...env,
-        OPENCLAW_SYSTEMD_UNIT: params.systemdIdentity.unitName,
-      });
-    }
-    if (params.systemdIdentity.scope === "system" && !isRunningAsRoot()) {
-      throw new Error(
-        `${params.systemdIdentity.unitName} is a system-scope unit (${params.systemdIdentity.unitPath}); run \`sudo systemctl ${params.action} ${params.systemdIdentity.unitName}\` to ${params.action} it`,
-      );
-    }
-    await activateSystemdServiceIdentity({
-      identity: params.systemdIdentity,
-      action: params.action,
-      assertCurrent: params.assertCurrent,
-      warn:
-        params.warn ??
-        ((message) => {
-          params.stdout.write(`${formatLine("Warning", message)}\n`);
-        }),
-    });
-    params.onMutation?.();
-    params.stdout.write(`${formatLine(params.label, params.systemdIdentity.unitName)}\n`);
-    return;
-  }
-  const installed = await findInstalledSystemdGatewayScope(env);
+  const label = { start: "Started", stop: "Stopped", restart: "Restarted" }[action];
+  const reportMutation = createGatewayLifecycleMutationReporter(params.onMutation);
+  const report = (unitName: string) => {
+    reportMutation(`systemctl-${action}`);
+    params.stdout.write(`${formatLine(`${label} systemd service`, unitName)}\n`);
+  };
+  const warn =
+    params.warn ??
+    ((message: string) => params.stdout.write(`${formatLine("Warning", message)}\n`));
+  const installed = params.systemdIdentity ?? (await findInstalledSystemdGatewayScope(env));
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
-  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     if (!isRunningAsRoot()) {
       throw new Error(
-        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
+        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${action} ${unitName}\` to ${action} it`,
       );
     }
+  } else if (action !== "stop") {
+    if (!params.systemdIdentity) {
+      await assertSystemdAvailable(env);
+    }
+    await assertNoSystemGatewayOwnershipForActivation({ ...env, OPENCLAW_SYSTEMD_UNIT: unitName });
+  }
+  if (params.systemdIdentity) {
+    await activateSystemdServiceIdentity({
+      identity: params.systemdIdentity,
+      action,
+      assertCurrent: params.assertCurrent,
+      beforeMutation: params.beforeMutation,
+      beforeEffect: params.beforeEffect,
+      prepareEffect: params.prepareEffect,
+      warn,
+    });
+    report(params.systemdIdentity.unitName);
+    return;
+  }
+  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
+  if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
       return execSystemctl(args, env);
     };
   } else {
-    await assertSystemdAvailable(env);
-    if (params.action !== "stop") {
-      await assertNoSystemGatewayOwnership(env);
-    }
-    runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
+    runSystemctl = (args) =>
+      execSystemctlUser(
+        env,
+        args,
+        undefined,
+        params.assertCurrent,
+        action === "stop" ? { warn } : undefined,
+      );
   }
-  if (params.action !== "stop") {
+  if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
+    params.assertCurrent?.();
   }
-  params.assertCurrent?.();
-  const res = await runSystemctl([params.action, unitName]);
+  if (action === "restart") {
+    params.onRestartAttempted?.();
+  }
+  const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    throw systemdInspectionError(
+      res,
+      `systemctl ${action} failed: ${res.stderr || res.stdout}`.trim(),
+      installed?.scope,
+    );
   }
-  params.onMutation?.();
-  params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+  report(unitName);
 }
 
-export async function startSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-  systemdIdentity,
-  warn,
-}: GatewayServiceControlArgs): Promise<void> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "start",
-    assertCurrent,
-    systemdIdentity,
-    warn,
-    label: "Started systemd service",
-    onMutation: () => reportMutation("systemctl-start"),
-  });
+export async function startSystemdService(args: GatewayServiceControlArgs): Promise<void> {
+  await runSystemdServiceAction(args, "start");
 }
 
-export async function stopSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-}: GatewayServiceControlArgs): Promise<void> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "stop",
-    assertCurrent,
-    label: "Stopped systemd service",
-    onMutation: () => reportMutation("systemctl-stop"),
-  });
+export async function stopSystemdService(args: GatewayServiceControlArgs): Promise<void> {
+  await runSystemdServiceAction(args, "stop");
 }
 
-export async function restartSystemdService({
-  stdout,
-  env,
-  onMutation,
-  assertCurrent,
-  systemdIdentity,
-  warn,
-}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "restart",
-    assertCurrent,
-    systemdIdentity,
-    warn,
-    label: "Restarted systemd service",
-    onMutation: () => reportMutation("systemctl-restart"),
-  });
+export async function restartSystemdService(
+  args: GatewayServiceControlArgs,
+): Promise<GatewayServiceRestartResult> {
+  await runSystemdServiceAction(args, "restart");
   return { outcome: "completed" };
 }
 
@@ -195,20 +147,14 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
-    let exists = false;
-    try {
-      await fs.access(unitPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    let backupExists = false;
-    try {
-      await fs.access(`${unitPath}.bak`);
-      backupExists = true;
-    } catch {
-      // ignore
-    }
+    const exists = await fs.access(unitPath).then(
+      () => true,
+      () => false,
+    );
+    const backupExists = await fs.access(`${unitPath}.bak`).then(
+      () => true,
+      () => false,
+    );
     let enabled = false;
     if (systemctlAvailable) {
       const res = await execSystemctlUser(env, ["is-enabled", `${name}.service`]);
@@ -275,13 +221,36 @@ type UninstallUserSystemdGatewayUnitResult = {
  * unit untouched. Used by doctor to resolve a `dueling` installation by
  * dropping the redundant user-scope leftover (issue #79375). Removing a unit
  * under `$HOME` needs no root, unlike the system-scope unit.
+ *
+ * Pass the inspected user unit as `target` after confirmation. A later lookup
+ * must not fall back to a leftover legacy unit if that confirmed file vanished.
  */
 export async function uninstallUserSystemdGatewayUnit({
   env,
   stdout,
-}: GatewayServiceManageArgs): Promise<UninstallUserSystemdGatewayUnitResult> {
-  const unitName = `${resolveSystemdServiceName(env)}.service`;
-  const unitPath = resolveSystemdUnitPath(env);
+  target,
+}: GatewayServiceManageArgs & {
+  target?: SystemdServiceReadTarget;
+}): Promise<UninstallUserSystemdGatewayUnitResult> {
+  const installed = await findInstalledSystemdGatewayScope(env);
+  if (target) {
+    if (target.scope !== "user") {
+      throw new Error(
+        `Confirmed systemd unit ${target.unitName} is ${target.scope}-scope; refusing user-scope cleanup`,
+      );
+    }
+    if (
+      installed?.scope === "user" &&
+      (installed.unitName !== target.unitName || installed.unitPath !== target.unitPath)
+    ) {
+      throw new Error(
+        `Confirmed user systemd unit ${target.unitName} changed to ${installed.unitName}; refusing cleanup`,
+      );
+    }
+  }
+  const userUnit = target ?? (installed?.scope === "user" ? installed : undefined);
+  const unitName = userUnit?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  const unitPath = userUnit?.unitPath ?? resolveSystemdUnitPath(env);
   let disabled = false;
   if (await isSystemctlAvailable(env)) {
     await disableSystemdUserUnitForRemoval(env, unitName);

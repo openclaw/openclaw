@@ -1,8 +1,19 @@
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   readBrowserDashboardDefinition,
   sameBrowserDashboardDefinition,
 } from "./browser-dashboard-definition.js";
+import {
+  changeTabState,
+  closeStoppingTab,
+  definitionOwnsTab,
+  deleteStoppedTab,
+  emitDashboardChanged,
+  releaseTab,
+  tabsForDefinition,
+  type DashboardTab,
+} from "./browser-dashboard-records.js";
 import type {
   BrowserDashboardDefinition,
   BrowserDashboardRequest,
@@ -11,7 +22,10 @@ import type {
 import {
   getBrowserStateRuntime,
   getOptionalBrowserStateRuntime,
-  type BrowserDashboardOperation,
+  isBrowserStateRuntimeCurrent,
+  readCurrentBrowserState,
+  type BrowserSessionTabAuthority,
+  type BrowserStateRuntime,
 } from "./browser-runtime-state.js";
 import { resolveCdpControlPolicy } from "./browser/cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./browser/cdp.helpers.js";
@@ -23,94 +37,53 @@ import {
   type ResolvedBrowserProfile,
 } from "./browser/config.js";
 import { withBrowserRequestScope } from "./browser/request-scope.js";
+import type { CloseParams } from "./browser/session-tab-cleanup-claim.js";
+import { trackSessionBrowserTab } from "./browser/session-tab-registry.js";
 import {
-  closeBrowserDashboardTabs,
-  trackSessionBrowserTab,
-} from "./browser/session-tab-registry.js";
-import {
-  deleteBrowserSessionTabIf,
   deleteBrowserDashboardStopIntent,
-  parseBrowserSessionTabRecord,
   persistBrowserDashboardStopIntent,
   readBrowserDashboardStopIntent,
   readBrowserDashboardStopIntents,
   readBrowserDashboardTabs,
-  sameBrowserSessionTabRecord,
-  updateBrowserSessionTab,
-  withoutBrowserSessionTabCleanup,
-  type BrowserSessionTabRecord,
 } from "./browser/session-tab-store.js";
-import { getRuntimeConfig } from "./config/config.js";
+import { withBrowserDashboardRegistration } from "./browser/session-tab-tracking.js";
 
-type DashboardTab = BrowserSessionTabRecord & { storageKey: string };
-const logger = createSubsystemLogger("browser");
-export type BrowserDashboardAuthority = { signal?: AbortSignal; assertCurrent?: () => void };
+export type BrowserDashboardAuthority = BrowserSessionTabAuthority & { signal?: AbortSignal };
 
 function assertAuthority(authority: BrowserDashboardAuthority): void {
   authority.signal?.throwIfAborted();
   authority.assertCurrent?.();
 }
 
-function emitDashboardChanged(definition: BrowserDashboardDefinition): void {
-  try {
-    getOptionalBrowserStateRuntime()?.dashboardEvents?.emit(
-      "dashboard_changed",
-      {
-        sessionKey: definition.sessionKey,
-        name: definition.name,
-        instanceId: definition.instanceId,
-      },
-      { scope: "operator.admin" },
-    );
-  } catch (error) {
-    logger.warn(`Browser dashboard invalidation unavailable: ${String(error)}`);
-  }
+function bindDashboardAuthority(authority: BrowserDashboardAuthority): BrowserDashboardAuthority & {
+  runtime: BrowserStateRuntime;
+} {
+  const runtime = authority.runtime ?? getBrowserStateRuntime();
+  return {
+    ...authority,
+    runtime,
+    assertCurrent: () => {
+      assertAuthority(authority);
+      if (getOptionalBrowserStateRuntime() !== runtime) {
+        throw new Error("Browser dashboard runtime changed");
+      }
+    },
+  };
 }
 
 function operationKey(definition: BrowserDashboardDefinition): string {
   return JSON.stringify([definition.sessionKey, definition.agentId, definition.instanceId]);
 }
 
-function tabsForDefinition(
-  definition: BrowserDashboardDefinition,
-  storageKey?: string,
-): DashboardTab[] {
-  return readBrowserDashboardTabs(storageKey)
-    .filter(
-      (tab) =>
-        tab.dashboard?.sessionKey === definition.sessionKey &&
-        tab.dashboard?.instanceId === definition.instanceId &&
-        tab.dashboard?.agentId === definition.agentId &&
-        tab.dashboard?.name === definition.name,
-    )
-    .toSorted(
-      (left, right) =>
-        Number(right.dashboard?.state === "active") - Number(left.dashboard?.state === "active"),
-    );
-}
-
-function definitionOwnsTab(
-  definition: BrowserDashboardDefinition | undefined,
-  tab: DashboardTab,
-): boolean {
-  return Boolean(
-    definition &&
-    definition.profile === tab.profile &&
-    definition.url === tab.dashboard?.url &&
-    definition.instanceId === tab.dashboard?.instanceId &&
-    definition.sessionKey === tab.dashboard?.sessionKey,
-  );
-}
-
 function responseFor(
   definition: BrowserDashboardDefinition,
   tab?: DashboardTab,
+  stopped = false,
 ): BrowserDashboardResponse {
   const paused =
     tab?.dashboard?.state === "stopped" ||
     tab?.dashboard?.state === "stopping" ||
-    (!tab &&
-      sameBrowserDashboardDefinition(definition, readBrowserDashboardStopIntent(definition)));
+    (!tab && stopped);
   return {
     sessionKey: definition.sessionKey,
     name: definition.name,
@@ -174,50 +147,6 @@ async function resolveManagedProfile(definition: BrowserDashboardDefinition) {
   return { profile, resolved, ssrfPolicy: resolveCdpControlPolicy(profile, resolved.ssrfPolicy) };
 }
 
-function changeTabState(
-  tab: DashboardTab,
-  state: NonNullable<BrowserSessionTabRecord["dashboard"]>["state"],
-): DashboardTab | undefined {
-  let changed: DashboardTab | undefined;
-  updateBrowserSessionTab(tab.storageKey, (raw) => {
-    const current = parseBrowserSessionTabRecord(raw);
-    if (!current?.dashboard || !sameBrowserSessionTabRecord(current, tab)) {
-      return undefined;
-    }
-    const record = {
-      ...withoutBrowserSessionTabCleanup(current),
-      dashboard: { ...current.dashboard, state },
-    };
-    changed = { ...record, storageKey: tab.storageKey };
-    return record;
-  });
-  return changed;
-}
-
-function deleteStoppedTab(tab: DashboardTab): boolean {
-  return deleteBrowserSessionTabIf(tab.storageKey, (raw) => {
-    const current = parseBrowserSessionTabRecord(raw);
-    return Boolean(current && sameBrowserSessionTabRecord(current, tab));
-  });
-}
-
-async function releaseTab(
-  tab: DashboardTab,
-  params: Parameters<typeof closeBrowserDashboardTabs>[1] = {},
-): Promise<{ released: boolean; closed: number }> {
-  if (tab.dashboard?.state === "stopped") {
-    return { released: deleteStoppedTab(tab), closed: 0 };
-  }
-  const released = tab.dashboard?.state === "released" ? tab : changeTabState(tab, "released");
-  const closed = released ? await closeBrowserDashboardTabs([released], params) : 0;
-  return {
-    released: !readBrowserDashboardTabs(tab.storageKey).some(
-      (current) => current.storageKey === tab.storageKey,
-    ),
-    closed,
-  };
-}
-
 async function observeExistingTab(
   definition: BrowserDashboardDefinition,
   tab: DashboardTab,
@@ -253,22 +182,6 @@ async function observeExistingTab(
     : "different-browser";
 }
 
-async function closeStoppingTab(
-  tab: DashboardTab,
-  definition: BrowserDashboardDefinition,
-  params: Parameters<typeof closeBrowserDashboardTabs>[1] = {},
-): Promise<number> {
-  const closed = await closeBrowserDashboardTabs([tab], params);
-  if (
-    readBrowserDashboardTabs(tab.storageKey).some(
-      (current) => current.storageKey === tab.storageKey && current.dashboard?.state === "stopped",
-    )
-  ) {
-    emitDashboardChanged(definition);
-  }
-  return closed;
-}
-
 async function materialize(
   definition: BrowserDashboardDefinition,
   resume: boolean,
@@ -276,9 +189,12 @@ async function materialize(
 ): Promise<BrowserDashboardResponse> {
   const { profile, resolved, ssrfPolicy } = await resolveManagedProfile(definition);
   assertAuthority(authority);
-  const stoppedIntent = readBrowserDashboardStopIntent(definition);
+  const stoppedIntent = await readBrowserDashboardStopIntent(definition, authority);
+  assertAuthority(authority);
   const superseded: { tab: DashboardTab; wasUnreachable: boolean }[] = [];
-  for (const tab of tabsForDefinition(definition)) {
+  const tabs = await tabsForDefinition(definition, authority);
+  assertAuthority(authority);
+  for (const tab of tabs) {
     if (!definitionOwnsTab(definition, tab) || tab.dashboard?.state === "released") {
       superseded.push({ tab, wasUnreachable: false });
       continue;
@@ -294,9 +210,8 @@ async function materialize(
     const observation = await observeExistingTab(definition, tab, authority);
     if (observation === "present") {
       await assertDefinitionCurrent(definition, authority);
-      const current = tabsForDefinition(definition, tab.storageKey).find(
-        (candidate) => candidate.storageKey === tab.storageKey,
-      );
+      const current = (await tabsForDefinition(definition, authority, tab.storageKey))[0];
+      assertAuthority(authority);
       if (!current || current.dashboard?.state !== "active") {
         throw new Error("Dashboard tab stopped during this operation");
       }
@@ -306,7 +221,7 @@ async function materialize(
   }
   await assertDefinitionCurrent(definition, authority);
   if (!resume && stoppedIntent && sameBrowserDashboardDefinition(stoppedIntent, definition)) {
-    return responseFor(definition);
+    return responseFor(definition, undefined, true);
   }
   const opened = await browserOpenTab(undefined, definition.url, {
     profile: profile.name,
@@ -314,98 +229,92 @@ async function materialize(
     managedOnly: true,
   });
   const ownership = opened.ownership;
+  let materialized: DashboardTab;
   try {
-    await assertDefinitionCurrent(definition, authority);
     if (ownership?.status !== "durable" || opened.resolvedProfile !== profile.name) {
       throw new Error("Browser could not verify durable ownership for this dashboard tab");
     }
-    if (
-      superseded.some(
-        ({ tab, wasUnreachable }) =>
-          wasUnreachable &&
-          tab.profileFingerprint === ownership.profileFingerprint &&
-          tab.browserInstanceFingerprint === ownership.browserInstanceFingerprint,
-      )
-    ) {
-      throw new Error(
-        `Browser dashboard ${definition.name} was temporarily unreachable. Retry; its existing tab has been kept.`,
-      );
-    }
-    // Opening first revives a stopped managed browser, making its old fingerprint
-    // provably stale. A failed retirement compensates only this new target.
-    for (const candidate of superseded) {
-      if (
-        candidate.tab.dashboard?.state === "stopping" &&
-        definitionOwnsTab(definition, candidate.tab)
-      ) {
-        await closeStoppingTab(candidate.tab, definition);
-        assertAuthority(authority);
-        const stopped = tabsForDefinition(definition, candidate.tab.storageKey).find(
-          (tab) =>
-            tab.storageKey === candidate.tab.storageKey && tab.dashboard?.state === "stopped",
-        );
-        if (!stopped) {
+    materialized = await withBrowserDashboardRegistration(
+      ownership.nativeTargetId,
+      profile.name,
+      authority,
+      async (registrationAuthority) => {
+        await assertDefinitionCurrent(definition, registrationAuthority);
+        if (
+          superseded.some(
+            ({ tab, wasUnreachable }) =>
+              wasUnreachable &&
+              tab.profileFingerprint === ownership.profileFingerprint &&
+              tab.browserInstanceFingerprint === ownership.browserInstanceFingerprint,
+          )
+        ) {
           throw new Error(
-            "Previous dashboard tab could not stop; retry when its browser is available",
+            `Browser dashboard ${definition.name} was temporarily unreachable. Retry; its existing tab has been kept.`,
           );
         }
-        candidate.tab = stopped;
-      }
-      if (candidate.tab.dashboard?.state === "stopped") {
-        continue;
-      }
-      if (!(await releaseTab(candidate.tab)).released) {
-        throw new Error(
-          "Previous dashboard tab could not be released; retry when its browser is available",
-        );
-      }
-      assertAuthority(authority);
-    }
-    await assertDefinitionCurrent(definition, authority);
-    trackSessionBrowserTab({
-      sessionKey: definition.sessionKey,
-      targetId: ownership.nativeTargetId,
-      profile: profile.name,
-      ownership,
-      dashboard: {
-        name: definition.name,
-        sessionKey: definition.sessionKey,
-        instanceId: definition.instanceId,
-        agentId: definition.agentId,
-        url: definition.url,
-        state: "active",
-      },
-    });
-    const tab = tabsForDefinition(definition).find(
-      (candidate) =>
-        candidate.nativeTargetId === ownership.nativeTargetId &&
-        candidate.profileFingerprint === ownership.profileFingerprint &&
-        candidate.browserInstanceFingerprint === ownership.browserInstanceFingerprint,
-    );
-    if (!tab) {
-      throw new Error("Browser dashboard target registration failed");
-    }
-    // Keep paused intent across every await and failed write. The active row now
-    // wins reads; conditional retirement misses are retried by reconciliation.
-    for (const { tab: previous } of superseded) {
-      if (previous.dashboard?.state === "stopped") {
-        deleteStoppedTab(previous);
-      }
-    }
-    if (stoppedIntent) {
-      deleteBrowserDashboardStopIntent(stoppedIntent);
-    }
-    emitDashboardChanged(definition);
-    return responseFor(definition, tab);
-  } catch (error) {
-    // Creation owns this exact tab even if the caller or board disappears while opening it.
-    if (ownership?.status === "durable") {
-      try {
-        trackSessionBrowserTab({
+        // Opening first revives a stopped managed browser, making its old fingerprint
+        // provably stale. A failed retirement compensates only this new target.
+        for (const candidate of superseded) {
+          if (
+            candidate.tab.dashboard?.state === "stopping" &&
+            definitionOwnsTab(definition, candidate.tab)
+          ) {
+            await closeStoppingTab(candidate.tab, definition, registrationAuthority);
+            assertAuthority(registrationAuthority);
+            const stopped = (
+              await tabsForDefinition(definition, registrationAuthority, candidate.tab.storageKey)
+            ).find((tab) => tab.dashboard?.state === "stopped");
+            assertAuthority(registrationAuthority);
+            if (!stopped) {
+              throw new Error(
+                "Previous dashboard tab could not stop; retry when its browser is available",
+              );
+            }
+            candidate.tab = stopped;
+          }
+          if (candidate.tab.dashboard?.state === "stopped") {
+            continue;
+          }
+          if (!(await releaseTab(candidate.tab, registrationAuthority)).released) {
+            throw new Error(
+              "Previous dashboard tab could not be released; retry when its browser is available",
+            );
+          }
+          assertAuthority(registrationAuthority);
+        }
+        await assertDefinitionCurrent(definition, registrationAuthority);
+        const tab = await trackSessionBrowserTab({
           sessionKey: definition.sessionKey,
           targetId: ownership.nativeTargetId,
           profile: profile.name,
           ownership,
+          authority: registrationAuthority,
+          dashboard: {
+            name: definition.name,
+            sessionKey: definition.sessionKey,
+            instanceId: definition.instanceId,
+            agentId: definition.agentId,
+            url: definition.url,
+            state: "active",
+          },
+        });
+        if (!tab) {
+          throw new Error("Browser dashboard target registration failed");
+        }
+        return tab;
+      },
+    );
+  } catch (error) {
+    // Creation owns this exact tab even if the caller or board disappears while opening it.
+    if (ownership?.status === "durable") {
+      const cleanupAuthority = { runtime: authority.runtime };
+      try {
+        await trackSessionBrowserTab({
+          sessionKey: definition.sessionKey,
+          targetId: ownership.nativeTargetId,
+          profile: profile.name,
+          ownership,
+          authority: cleanupAuthority,
           dashboard: {
             sessionKey: definition.sessionKey,
             agentId: definition.agentId,
@@ -435,13 +344,13 @@ async function materialize(
         }
         throw error;
       }
-      const released = tabsForDefinition(definition).find(
+      const released = (await tabsForDefinition(definition, cleanupAuthority)).find(
         (tab) =>
           tab.nativeTargetId === ownership.nativeTargetId &&
           tab.profileFingerprint === ownership.profileFingerprint &&
           tab.browserInstanceFingerprint === ownership.browserInstanceFingerprint,
       );
-      if (!released || !(await releaseTab(released)).released) {
+      if (!released || !(await releaseTab(released, cleanupAuthority)).released) {
         throw new Error(
           "Dashboard creation failed; its retained cleanup record will retry closing the new tab",
           {
@@ -452,21 +361,36 @@ async function materialize(
     }
     throw error;
   }
+  // Accepted registration transfers cleanup to the durable owner. Later caller
+  // cancellation or definition changes must not compensate a committed target.
+  assertAuthority(authority);
+  emitDashboardChanged(definition, authority);
+  for (const { tab: previous } of superseded) {
+    if (previous.dashboard?.state === "stopped") {
+      await deleteStoppedTab(previous, authority);
+    }
+  }
+  if (stoppedIntent) {
+    await deleteBrowserDashboardStopIntent(stoppedIntent, authority);
+  }
+  assertAuthority(authority);
+  return responseFor(definition, materialized);
 }
 
 /** Re-resolve immediately before a model action crosses into Browser's normal dispatch. */
 export async function assertBrowserDashboardTargetCurrent(
   response: BrowserDashboardResponse,
   agentId: string | undefined,
-  authority: BrowserDashboardAuthority = {},
+  suppliedAuthority: BrowserDashboardAuthority = {},
   profile?: ResolvedBrowserProfile,
 ): Promise<void> {
+  const authority = bindDashboardAuthority(suppliedAuthority);
   const definition = await requireDefinition({ ...response, agentId }, authority);
   const target = response.browserTab;
   if (!target) {
     throw new Error("Dashboard has no active browser target");
   }
-  const current = tabsForDefinition(definition).find(
+  const current = (await tabsForDefinition(definition, authority)).find(
     (tab) =>
       definitionOwnsTab(definition, tab) &&
       tab.dashboard?.state === "active" &&
@@ -488,11 +412,8 @@ export async function assertBrowserDashboardTargetCurrent(
       signal: authority.signal,
     });
     await assertDefinitionCurrent(definition, authority);
-    const retained = tabsForDefinition(definition, current.storageKey).find(
-      (tab) =>
-        tab.storageKey === current.storageKey &&
-        tab.dashboard?.state === "active" &&
-        definitionOwnsTab(definition, tab),
+    const retained = (await tabsForDefinition(definition, authority, current.storageKey)).find(
+      (tab) => tab.dashboard?.state === "active" && definitionOwnsTab(definition, tab),
     );
     assertAuthority(authority);
     if (
@@ -510,63 +431,25 @@ export async function assertBrowserDashboardTargetCurrent(
 
 async function serializeDashboardOperation(
   request: BrowserDashboardRequest,
-  kind: "materialize" | "stop",
   authority: BrowserDashboardAuthority,
   execute: (
     definition: BrowserDashboardDefinition,
     authority: BrowserDashboardAuthority,
   ) => Promise<BrowserDashboardResponse>,
 ): Promise<BrowserDashboardResponse> {
-  const runtime = getBrowserStateRuntime();
-  const boundAuthority = {
-    ...authority,
-    assertCurrent: () => {
-      assertAuthority(authority);
-      if (getBrowserStateRuntime() !== runtime) {
-        throw new Error("Browser dashboard runtime changed");
-      }
-    },
-  };
+  const boundAuthority = bindDashboardAuthority(authority);
+  const runtime = boundAuthority.runtime;
   const definition = await requireDefinition(request, boundAuthority);
   const operations = runtime.dashboardOperations;
   const key = operationKey(definition);
   const previous = operations.get(key);
-  let materializationFailure: BrowserDashboardOperation["materializationFailure"];
   const promise = (async () => {
+    // A failed open does not poison queued callers; each gets its own attempt.
     await previous?.promise.catch(() => undefined);
-    if (kind === "materialize") {
-      materializationFailure = previous?.materializationFailure;
-    }
     const current = await requireDefinition(definition, boundAuthority);
-    if (
-      materializationFailure &&
-      !materializationFailure.callerCancelled &&
-      sameBrowserDashboardDefinition(materializationFailure.definition, current)
-    ) {
-      throw materializationFailure.error;
-    }
-    materializationFailure = undefined;
-    try {
-      return await execute(current, boundAuthority);
-    } catch (error) {
-      if (kind === "materialize") {
-        let callerCancelled = false;
-        try {
-          assertAuthority(boundAuthority);
-        } catch {
-          callerCancelled = true;
-        }
-        materializationFailure = { error, definition: current, callerCancelled };
-      }
-      throw error;
-    }
+    return await execute(current, boundAuthority);
   })();
-  const pending = {
-    promise,
-    get materializationFailure() {
-      return materializationFailure;
-    },
-  };
+  const pending = { promise };
   // Publish each admitted successor before awaiting it, so Stop follows the full queue.
   operations.set(key, pending);
   try {
@@ -583,28 +466,27 @@ export async function requestBrowserDashboard(
   request: BrowserDashboardRequest & { resume?: boolean },
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(
-    request,
-    "materialize",
-    authority,
-    (definition, current) =>
-      withBrowserRequestScope(
-        { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
-        async () => await materialize(definition, request.resume === true, current),
-      ),
+  return await serializeDashboardOperation(request, authority, (definition, current) =>
+    withBrowserRequestScope(
+      { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
+      async () => await materialize(definition, request.resume === true, current),
+    ),
   );
 }
 
 /** Read saved Browser lifetime without opening or resuming a target. */
 export async function inspectBrowserDashboard(
   request: BrowserDashboardRequest,
-  authority: BrowserDashboardAuthority = {},
+  suppliedAuthority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
+  const authority = bindDashboardAuthority(suppliedAuthority);
   const definition = await requireDefinition(request, authority);
-  const tab = tabsForDefinition(definition).find(
+  const stoppedIntent = await readBrowserDashboardStopIntent(definition, authority);
+  const tab = (await tabsForDefinition(definition, authority)).find(
     (entry) => definitionOwnsTab(definition, entry) && entry.dashboard?.state !== "released",
   );
-  return responseFor(definition, tab);
+  assertAuthority(authority);
+  return responseFor(definition, tab, sameBrowserDashboardDefinition(definition, stoppedIntent));
 }
 
 /** Explicit Stop follows all admitted opens and resumes before closing the owned target. */
@@ -612,7 +494,7 @@ export async function stopBrowserDashboard(
   request: BrowserDashboardRequest,
   authority: BrowserDashboardAuthority = {},
 ): Promise<BrowserDashboardResponse> {
-  return await serializeDashboardOperation(request, "stop", authority, stopMaterializedDashboard);
+  return await serializeDashboardOperation(request, authority, stopMaterializedDashboard);
 }
 
 async function stopMaterializedDashboard(
@@ -620,23 +502,27 @@ async function stopMaterializedDashboard(
   authority: BrowserDashboardAuthority,
 ): Promise<BrowserDashboardResponse> {
   await assertDefinitionCurrent(definition, authority);
-  for (const tab of tabsForDefinition(definition)) {
+  const tabs = await tabsForDefinition(definition, authority);
+  assertAuthority(authority);
+  for (const tab of tabs) {
     if (!definitionOwnsTab(definition, tab)) {
       continue;
     }
     const stopping =
-      tab.dashboard?.state === "stopped" ? undefined : changeTabState(tab, "stopping");
+      tab.dashboard?.state === "stopped"
+        ? undefined
+        : await changeTabState(tab, "stopping", authority);
+    assertAuthority(authority);
     if (!stopping && tab.dashboard?.state !== "stopped") {
       throw new Error("Dashboard target changed while stopping; retry Stop");
     }
     if (stopping) {
-      emitDashboardChanged(definition);
-      await closeStoppingTab(stopping, definition);
+      emitDashboardChanged(definition, authority);
+      await closeStoppingTab(stopping, definition, authority);
       assertAuthority(authority);
       if (
-        readBrowserDashboardTabs(stopping.storageKey).some(
-          (current) =>
-            current.storageKey === stopping.storageKey && current.dashboard?.state === "stopping",
+        (await readBrowserDashboardTabs(stopping.storageKey, authority)).some(
+          (current) => current.dashboard?.state === "stopping",
         )
       ) {
         throw new Error(
@@ -646,25 +532,52 @@ async function stopMaterializedDashboard(
     }
   }
   await assertDefinitionCurrent(definition, authority);
-  const current = tabsForDefinition(definition).find(
+  const current = (await tabsForDefinition(definition, authority)).find(
     (tab) => definitionOwnsTab(definition, tab) && tab.dashboard?.state !== "released",
   );
+  assertAuthority(authority);
   if (!current) {
-    persistBrowserDashboardStopIntent(definition);
-    emitDashboardChanged(definition);
+    await persistBrowserDashboardStopIntent(definition, authority);
+    assertAuthority(authority);
+    emitDashboardChanged(definition, authority);
   }
-  return responseFor(definition, current);
+  return responseFor(definition, current, !current);
 }
 
 /** Existing cleanup cycle reconciles dashboard removal, replacement, and explicit stop. */
 export async function reconcileBrowserDashboards(
-  params: { sessionKeys?: Array<string | undefined>; onWarn?: (message: string) => void } = {},
+  params: {
+    sessionKeys?: Array<string | undefined>;
+    onWarn?: (message: string) => void;
+  } & Pick<CloseParams, "isCurrent"> &
+    SessionEntryCurrentPreparation = {},
 ): Promise<number> {
-  if (!getOptionalBrowserStateRuntime()?.gateway) {
+  const runtime = getOptionalBrowserStateRuntime();
+  if (!runtime?.gateway) {
     return 0;
   }
+  const isCurrent = () => isBrowserStateRuntimeCurrent(runtime, params.isCurrent);
+  const authority: BrowserSessionTabAuthority = {
+    runtime,
+    assertCurrent: () => {
+      if (!isBrowserStateRuntimeCurrent(runtime)) {
+        throw new Error("Browser dashboard cleanup is no longer current");
+      }
+    },
+  };
   let closed = 0;
-  for (const tab of readBrowserDashboardTabs()) {
+  if (!isCurrent()) {
+    return closed;
+  }
+  const tabs = await readCurrentBrowserState(
+    runtime,
+    () => readBrowserDashboardTabs(undefined, { runtime }),
+    params.isCurrent,
+  );
+  if (!tabs || !isCurrent()) {
+    return closed;
+  }
+  for (const tab of tabs) {
     if (
       !tab.dashboard ||
       (params.sessionKeys && !params.sessionKeys.includes(tab.dashboard.sessionKey))
@@ -675,42 +588,77 @@ export async function reconcileBrowserDashboards(
       const definition = await readBrowserDashboardDefinition({
         ...tab.dashboard,
       });
+      if (!isCurrent()) {
+        return closed;
+      }
       if (!definitionOwnsTab(definition, tab) || tab.dashboard.state === "released") {
-        closed += (await releaseTab(tab, params)).closed;
+        closed += (await releaseTab(tab, authority, params)).closed;
       } else if (definition && tab.dashboard.state === "stopping") {
-        closed += await closeStoppingTab(tab, definition, params);
+        closed += await closeStoppingTab(tab, definition, authority, params);
       } else if (
         definition &&
         tab.dashboard.state === "stopped" &&
-        tabsForDefinition(definition).some(
+        (await tabsForDefinition(definition, authority)).some(
           (candidate) =>
             candidate.dashboard?.state === "active" && definitionOwnsTab(definition, candidate),
         )
       ) {
-        await releaseTab(tab, params);
+        await releaseTab(tab, authority, params);
       }
     } catch (error) {
+      if (!isCurrent()) {
+        return closed;
+      }
       params.onWarn?.(
         `Could not reconcile Browser dashboard ${tab.dashboard.name}: ${String(error)}`,
       );
     }
   }
-  for (const intent of readBrowserDashboardStopIntents()) {
+  if (!isCurrent()) {
+    return closed;
+  }
+  const intents = await readCurrentBrowserState(
+    runtime,
+    () => readBrowserDashboardStopIntents({ runtime }),
+    params.isCurrent,
+  );
+  if (!intents || !isCurrent()) {
+    return closed;
+  }
+  for (const intent of intents) {
     if (params.sessionKeys && !params.sessionKeys.includes(intent.sessionKey)) {
       continue;
     }
     try {
       const definition = await readBrowserDashboardDefinition(intent);
+      if (!isCurrent()) {
+        return closed;
+      }
       if (
         !sameBrowserDashboardDefinition(intent, definition) ||
         (definition &&
-          tabsForDefinition(definition).some(
+          (await tabsForDefinition(definition, authority)).some(
             (tab) => tab.dashboard?.state === "active" && definitionOwnsTab(definition, tab),
           ))
       ) {
-        deleteBrowserDashboardStopIntent(intent);
+        if ((params.prepareCurrent && !(await params.prepareCurrent())) || !isCurrent()) {
+          return closed;
+        }
+        await deleteBrowserDashboardStopIntent(intent, {
+          ...authority,
+          sessionEntryCurrent: params.sessionEntryCurrent,
+          assertCurrent: () => {
+            authority.assertCurrent?.();
+            if (!isCurrent()) {
+              throw new Error("Browser dashboard cleanup caller changed");
+            }
+          },
+        });
       }
     } catch (error) {
+      if (!isCurrent()) {
+        return closed;
+      }
       params.onWarn?.(`Could not reconcile Browser dashboard ${intent.name}: ${String(error)}`);
     }
   }

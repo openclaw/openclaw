@@ -18,6 +18,7 @@ export type ServiceDefinitionDrift = {
       expected: string | number | boolean;
     }
   | { kind: "unknown-edit"; reason: string }
+  | { kind: "preserved" }
 );
 
 export type ServiceConfigIssue = {

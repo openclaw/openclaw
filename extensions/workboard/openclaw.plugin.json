@@ -1,5 +1,11 @@
 {
   "id": "workboard",
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
   "categories": [
     "productivity"
   ],
@@ -83,6 +89,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -223,9 +232,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/13b6bea13c6ab02980e511c6ede160d1f15d9c27521a6af50c78f5a89ff40fd7/index.js",
+    "entry": "dist/control-ui/d3db12782fbaa2ac161641ace1b5cd7893ca429a1d96f55fc412763a55394cc8/index.js",
     "styles": [
-      "dist/control-ui/13b6bea13c6ab02980e511c6ede160d1f15d9c27521a6af50c78f5a89ff40fd7/index.css"
+      "dist/control-ui/d3db12782fbaa2ac161641ace1b5cd7893ca429a1d96f55fc412763a55394cc8/index.css"
     ]
   }
 }

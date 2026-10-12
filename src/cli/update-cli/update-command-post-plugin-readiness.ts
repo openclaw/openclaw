@@ -1,9 +1,11 @@
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
-import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
+import { formatCommandOutput, formatCommandResult } from "../../process/command-error.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -56,26 +58,12 @@ function createPostPluginReadinessExecutionFailure(
 
 export async function applyPostPluginUpdateReadiness(params: {
   root: string;
-  entryPath?: string;
+  entryPath: string;
   pluginUpdate: PostCorePluginUpdateResult;
   timeoutMs: number;
   nodeRunner?: string;
 }): Promise<PostCorePluginUpdateResult> {
-  let entryPath = params.entryPath;
-  if (!entryPath) {
-    try {
-      entryPath = await resolveGatewayInstallEntrypoint(params.root);
-    } catch (error) {
-      return createPostPluginReadinessExecutionFailure(params.pluginUpdate, String(error));
-    }
-  }
-  if (!entryPath) {
-    return createPostPluginReadinessExecutionFailure(
-      params.pluginUpdate,
-      "Updated OpenClaw entrypoint not found for post-plugin readiness checks",
-    );
-  }
-  const args = [entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
+  const args = [params.entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const startedAt = Date.now();
@@ -89,6 +77,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   };
   const pluginUpdate: PostCorePluginUpdateResult = { ...params.pluginUpdate, doctorLint };
   let execution: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>>;
+  let executionFailure: string | undefined;
   let report: ReturnType<typeof parseUpdateDoctorLintReport>;
   try {
     execution = await runUtf8CommandWithTimeout(
@@ -112,10 +101,26 @@ export async function applyPostPluginUpdateReadiness(params: {
     doctorLint.signal = execution.signal;
     doctorLint.killed = execution.killed;
     doctorLint.outputLimitExceeded = execution.outputLimitExceeded;
-    doctorLint.stderrTail = execution.stderr.slice(-2_000);
+    // Redact before bounding diagnostics, and never copy command argv into the warning.
+    const stderr = redactSupportString(
+      execution.stderr,
+      { env: process.env, stateDir: resolveStateDir() },
+      { maxLength: Number.MAX_SAFE_INTEGER },
+    );
+    doctorLint.stderrTail = formatCommandOutput(stderr, 2_000);
+    if (execution.code !== 0 || execution.termination !== "exit" || execution.outputLimitExceeded) {
+      executionFailure = formatCommandResult("Post-plugin Doctor readiness", {
+        ...execution,
+        stdout: "",
+        stderr: formatCommandOutput(stderr, 384),
+      });
+    }
     report = parseUpdateDoctorLintReport(execution.stdout);
   } catch (error) {
-    return createPostPluginReadinessExecutionFailure(pluginUpdate, String(error));
+    return createPostPluginReadinessExecutionFailure(
+      pluginUpdate,
+      executionFailure ?? String(error),
+    );
   } finally {
     doctorLint.durationMs = Date.now() - startedAt;
   }

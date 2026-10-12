@@ -21,6 +21,8 @@ Remote attachments must be public `https:` URLs. `http:`, loopback, link-local, 
 
 Local attachments accept absolute paths, workspace-relative paths, or home-relative `~/` paths. They still pass the agent file-read policy and media type checks before delivery.
 
+Stored inbound attachments also accept `media://inbound/<id>` references from conversation history. Use the reference in a structured attachment field or a standalone `MEDIA:` line. The Gateway resolves it to the stored file and applies the same file-read and sandbox checks as an explicit local path.
+
 In Control UI chat, relative local references resolve against the session's working directory, including a selected project or worktree. They use the same authenticated media route as absolute paths; a missing file shows an attachment error instead of a literal `MEDIA:` line. Files on another execution host must first be delivered as managed attachments.
 
 <Warning>
@@ -111,6 +113,21 @@ Rules:
 - Only URL-backed embeds render; use `ref="..."` or `url="..."`.
 - Block-form inline HTML embed shortcodes do not render.
 - The web UI strips the shortcode from visible text and renders the embed inline.
+
+For a YouTube video, supply its URL directly; no HTML widget, download, or
+rehosting is needed:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+The Control UI renders a thumbnail card and loads the YouTube player when the user
+presses **Play**. This dedicated card does not require
+`gateway.controlUi.allowExternalEmbedUrls`; it does not allow arbitrary external
+pages or YouTube iframes inside `show_widget`. In strict embed mode it offers a
+watch link instead. Use regular YouTube links on other surfaces. See
+[YouTube videos](/web/control-ui/chat#youtube-videos) for supported URLs and the
+privacy behavior.
 
 ## Stored rendering shape
 

@@ -1,4 +1,3 @@
-// Control UI module implements model auth behavior.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -14,29 +13,13 @@ export function canonicalModelAuthProviderId(provider: string): string {
   return resolveUsageProviderId(normalized) ?? normalized;
 }
 
-/**
- * True when a provider's auth should be actively monitored on the dashboard.
- *
- * Includes:
- * - Providers with at least one OAuth or bearer-token profile (refreshable
- *   credentials that can expire and need rotation)
- * - Providers with status="missing" (configured-but-not-logged-in — the
- *   server synthesizes these so the UI can prompt for login)
- *
- * Excludes API-key-only providers — their credentials don't expire on a
- * schedule the dashboard can meaningfully monitor.
- *
- * Single source of truth for the chat composer and the sidebar attention
- * chips. Keep consumers in sync by always routing through this helper.
- */
+/** API-key-only providers have no scheduled expiry for the dashboard to monitor. */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
-  if (p.status === "missing") {
-    return true;
-  }
-  if (!Array.isArray(p.profiles)) {
-    return false;
-  }
-  return p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token");
+  return (
+    p.status === "missing" ||
+    (Array.isArray(p.profiles) &&
+      p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token"))
+  );
 }
 
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;
@@ -114,6 +97,7 @@ export async function loadModelAuthStatus(
     const result = signal
       ? await client.request<ModelAuthStatusResult>("models.authStatus", params, { signal })
       : await client.request<ModelAuthStatusResult>("models.authStatus", params);
+    // RPC result types do not validate payloads; keep malformed auth data out of the cache.
     const snapshot = result ?? EMPTY_AUTH_STATUS;
     if (Array.isArray(snapshot.providers)) {
       authRefreshDeadlines.set(snapshot, authStatusRefreshAt(snapshot, requestedAt));

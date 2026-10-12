@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
@@ -20,6 +21,40 @@ struct ChatToolActivityTests {
             title: "Read", name: "read", status: "blocked",
             hideFromChannelProgress: nil, suppressChannelProgress: nil)
         #expect(item.displayState == .blocked)
+        #expect(!item.isError)
+        #expect(!item.isPending)
+    }
+
+    @Test func `fallback title for an unseen outcome gives way to the call's own title`() {
+        func item(_ title: String, phase: String, status: String?) -> OpenClawAgentActivityItem {
+            OpenClawAgentActivityItem(
+                itemId: "tool:call", toolCallId: "call", kind: "tool", phase: phase,
+                title: title, name: "exec", status: status,
+                hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        }
+        #expect(item("Mcp Openclaw Exec — outcome unknown", phase: "end", status: nil).preparedTitle == nil)
+        #expect(item("Exec List pull requests", phase: "start", status: "running").preparedTitle
+            == "Exec List pull requests")
+        #expect(item("Exec List pull requests", phase: "end", status: "completed").preparedTitle
+            == "Exec List pull requests")
+    }
+
+    @Test func `prepared skipped outcome stays neutral despite raw result error`() throws {
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "read")],
+            results: [self.content(
+                type: "toolResult",
+                text: "Skipped to process an incoming message.",
+                id: "call-1",
+                name: "read",
+                isError: true)],
+            activity: [OpenClawAgentActivityItem(
+                itemId: "tool:call-1", toolCallId: "call-1", kind: "tool", phase: "end",
+                title: "Read", name: "read", status: "skipped",
+                hideFromChannelProgress: nil, suppressChannelProgress: nil)])
+
+        let item = try #require(items.first)
+        #expect(String(localized: item.displayState.title) == "Skipped")
         #expect(!item.isError)
         #expect(!item.isPending)
     }

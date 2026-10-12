@@ -1,10 +1,9 @@
-// Moonshot tests cover provider catalog plugin behavior.
+import { calculateCost, type Model } from "openclaw/plugin-sdk/llm";
 import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyMoonshotNativeStreamingUsageCompat,
   buildMoonshotProvider,
-  MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
 } from "./api.js";
 
@@ -22,65 +21,31 @@ function requireFirstMoonshotModel(provider: MoonshotProvider): MoonshotModel {
 }
 
 describe("moonshot provider catalog", () => {
-  it("builds the bundled Moonshot provider defaults", () => {
+  it("prices K3 default five-minute cache writes separately from cache reads", () => {
     const provider = buildMoonshotProvider();
-
-    expect(provider.baseUrl).toBe(MOONSHOT_BASE_URL);
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "kimi-k3",
-      "kimi-k2.7-code",
-      "kimi-k2.7-code-highspeed",
-    ]);
-    expect(provider.models.find((model) => model.id === "kimi-k3")).toMatchObject({
-      reasoning: true,
-      thinkingLevelMap: {
-        off: null,
-        minimal: null,
-        low: "low",
-        medium: null,
-        high: "high",
-        xhigh: "max",
-        max: "max",
-      },
-      input: ["text", "image"],
-      contextWindow: 1_048_576,
-      maxTokens: 1_048_576,
-      cost: {
-        input: 3,
-        output: 15,
-        cacheRead: 0.3,
-        cacheWrite: 0,
-      },
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "high", "max"],
-      },
-    });
-    expect(provider.models.find((model) => model.id === "kimi-k2.7-code")).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 262144,
-      maxTokens: 262144,
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.19,
-        cacheWrite: 0,
-      },
-    });
-    expect(provider.models.find((model) => model.id === "kimi-k2.7-code-highspeed")).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 262144,
-      maxTokens: 262144,
-      cost: {
-        input: 1.9,
-        output: 8,
-        cacheRead: 0.38,
-        cacheWrite: 0,
-      },
-    });
+    const entry = provider.models.find((model) => model.id === "kimi-k3");
+    if (!entry) {
+      throw new Error("expected Kimi K3 catalog model");
+    }
+    const model: Model<"openai-completions"> = {
+      ...entry,
+      input: ["text"],
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl: provider.baseUrl,
+    };
+    const usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 1000,
+      cacheWrite: 1000,
+      totalTokens: 2000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const cost = calculateCost(model, usage);
+    expect(cost.cacheRead).toBeCloseTo(0.0003, 10);
+    expect(cost.cacheWrite).toBeCloseTo(0.003, 10);
+    expect(cost.total).toBeCloseTo(0.0033, 10);
   });
 
   it("opts native Moonshot baseUrls into streaming usage only inside the extension", () => {

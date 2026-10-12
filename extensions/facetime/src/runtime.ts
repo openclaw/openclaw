@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeFaceTimeCallEvent } from "./call-events.js";
 import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import { resolveFaceTimeConfig, validateFaceTimeConfig, type FaceTimeConfig } from "./config.js";
@@ -9,11 +10,10 @@ import { installFaceTimeDriver } from "./driver-setup.js";
 import { resolveFaceTimeHelperEndpoint } from "./helper-endpoint.js";
 import {
   FaceTimeHelperAmbiguousError,
-  FaceTimeHelperSocketServer,
   FaceTimeHelperUnavailableError,
   readHelperResults,
-  type FaceTimeHelperPeer,
-} from "./helper-rpc.js";
+} from "./helper-results.js";
+import { FaceTimeHelperSocketServer, type FaceTimeHelperPeer } from "./helper-rpc.js";
 import { FaceTimeHelperSupervisor } from "./helper-supervisor.js";
 import {
   doesPendingFaceTimeDialHaveCallUUID,
@@ -39,7 +39,6 @@ import {
   retainOutboundDialHelperPeers,
   readOutboundCallUUID,
   readOutboundProxyIdentifier,
-  retainHelperResultPeers,
 } from "./runtime-helper-results.js";
 import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "./runtime-status.js";
@@ -77,12 +76,16 @@ export async function createFaceTimeRuntime(params: {
   }
 
   const calls = new FaceTimeCallRegistry<ActiveFaceTimeCall>();
+  const storeOptions = {
+    namespace: "pending-dial",
+    maxEntries: 1,
+    overflowPolicy: "reject-new" as const,
+  };
+  // package.json supports 2026.9.4 hosts; choose their API before any store work.
   const pendingDialStore = new PendingFaceTimeDialStore(
-    params.runtime.state.openKeyedStore({
-      namespace: "pending-dial",
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    }),
+    typeof params.runtime.state.openKeyedStoreV2 === "function"
+      ? params.runtime.state.openKeyedStoreV2(storeOptions)
+      : params.runtime.state.openKeyedStore(storeOptions),
   );
   let outboundDialInFlight: Promise<FaceTimeDialResult> | undefined;
   let outboundDialDispatchPending = false;
@@ -105,12 +108,11 @@ export async function createFaceTimeRuntime(params: {
   });
   let stopping = false;
   let helperStopped = false;
-  const helperRef: { current?: FaceTimeHelperSocketServer } = {};
   const helperSupervisor = new FaceTimeHelperSupervisor({
     pluginRoot: params.pluginRoot,
     logger: params.logger,
     runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
-    connectedBundles: () => helperRef.current?.connectedHelperBundles ?? [],
+    connectedBundles: () => helper.connectedHelperBundles,
   });
   const pendingOperations = new Set<Promise<void>>();
   const observePendingOperation = (operation: Promise<void>) => {
@@ -252,19 +254,18 @@ export async function createFaceTimeRuntime(params: {
     if (!cancelled && !definitivelyAbsent) {
       throw new Error("FaceTime helper could not confirm outbound call cancellation");
     }
-    callUUID = helperResults.map(readOutboundCallUUID).find((value) => Boolean(value)) ?? callUUID;
+    const replyCallUUID = helperResults.map(readOutboundCallUUID).find((value) => Boolean(value));
+    callUUID = replyCallUUID ?? callUUID;
     if (outboundCallPending === pending) {
       retainOutboundDialHelperPeers(outboundCarrierPeers, result);
-      retainFaceTimeDialCallUUID(pending, callUUID);
+      // Native events may replace the carrier while cancellation is in flight.
+      retainFaceTimeDialCallUUID(pending, replyCallUUID);
       await persistOutboundCallPending();
     }
     return { ...(callUUID ? { callUUID } : {}), dialID, handle };
   };
   let helperTopologyVersion = 0;
   const helperEndpoint = resolveFaceTimeHelperEndpoint();
-  const callEventRef: {
-    current?: ReturnType<typeof createFaceTimeCallEventHandler>;
-  } = {};
   const helper = new FaceTimeHelperSocketServer({
     ...helperEndpoint,
     logger: params.logger,
@@ -287,16 +288,13 @@ export async function createFaceTimeRuntime(params: {
       }
       const event = normalizeFaceTimeCallEvent(message);
       if (event) {
-        const operation = callEventRef.current?.handleCallEvent(event, peer);
-        if (operation) {
-          return observePendingOperation(operation);
-        }
+        return observePendingOperation(callEvents.handleCallEvent(event, peer));
       }
       return undefined;
     },
     onConnect(bundleIdentifier) {
       helperTopologyVersion += 1;
-      helperSupervisor?.connected(bundleIdentifier);
+      helperSupervisor.connected(bundleIdentifier);
       for (const call of calls.values()) {
         if (call.carrierHangupPending) {
           void attemptCarrierHangup(call, "helper-reconnected");
@@ -310,7 +308,7 @@ export async function createFaceTimeRuntime(params: {
     },
     onDisconnect(bundleIdentifier) {
       helperTopologyVersion += 1;
-      helperSupervisor?.disconnected(bundleIdentifier);
+      helperSupervisor.disconnected(bundleIdentifier);
       if (stopping || calls.size === 0) {
         return;
       }
@@ -326,11 +324,9 @@ export async function createFaceTimeRuntime(params: {
       }
     },
     onStale(bundleIdentifier, processId) {
-      helperSupervisor?.stale(bundleIdentifier, processId);
+      helperSupervisor.stale(bundleIdentifier, processId);
     },
   });
-  helperRef.current = helper;
-
   const callControl = createFaceTimeCallControl({
     calls,
     helper,
@@ -341,10 +337,9 @@ export async function createFaceTimeRuntime(params: {
     captureBinary,
     isStopping: () => stopping,
     getHelperTopologyVersion: () => helperTopologyVersion,
-    retainHelperResultPeers,
   });
   const { attemptCarrierHangup, stopCall } = callControl;
-  callEventRef.current = createFaceTimeCallEventHandler({
+  const callEvents = createFaceTimeCallEventHandler({
     calls,
     helper,
     config,
@@ -382,16 +377,13 @@ export async function createFaceTimeRuntime(params: {
       config,
       fullConfig: params.fullConfig,
       runtime: params.runtime,
-      logger: params.logger,
       helperConnected: helper.connectedSockets > 0,
       captureBinary,
     });
 
   return {
     config,
-    async status() {
-      return await readStatus();
-    },
+    status: readStatus,
     async dial(dialParams) {
       if (stopping) {
         throw new Error("cannot start an outbound FaceTime call while the plugin is stopping");
@@ -541,9 +533,7 @@ export async function createFaceTimeRuntime(params: {
         for (let attempt = 0; attempt < OUTBOUND_RECONCILE_ATTEMPTS && !call; attempt += 1) {
           call = findCall();
           if (!call && attempt + 1 < OUTBOUND_RECONCILE_ATTEMPTS) {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, OUTBOUND_RECONCILE_INTERVAL_MS);
-            });
+            await sleep(OUTBOUND_RECONCILE_INTERVAL_MS);
           }
         }
       }
@@ -582,9 +572,7 @@ export async function createFaceTimeRuntime(params: {
         preflight,
       });
     },
-    async preflight() {
-      return await runPreflight();
-    },
+    preflight: runPreflight,
     async installDriver() {
       if (stopping) {
         throw new Error("cannot install the FaceTime audio driver while the plugin is stopping");
@@ -609,7 +597,6 @@ export async function createFaceTimeRuntime(params: {
       driverInstallTask = installFaceTimeDriver({
         pluginRoot: params.pluginRoot,
         runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
-        callActive: false,
         signal: installAbortController.signal,
       })
         .then((result) => {

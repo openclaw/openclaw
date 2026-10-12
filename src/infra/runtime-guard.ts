@@ -1,4 +1,3 @@
-// Validates the current runtime before OpenClaw startup.
 import process from "node:process";
 import { format } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -13,27 +12,21 @@ import {
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
-  isSupportedOpenClawNodeVersion,
   parseNodeReleaseVersion,
+  type NodeReleaseVersion,
 } from "../../node-version.mjs";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 
+export { isSupportedOpenClawNodeVersion as isSupportedNodeVersion } from "../../node-version.mjs";
+
 type RuntimeKind = "bun" | "node" | "unknown";
 
-type Semver = {
-  major: number;
-  minor: number;
-  patch: number;
-};
+const MINIMUM_BUN_VERSION: NodeReleaseVersion = { major: 1, minor: 4, patch: 0 };
 
-const MINIMUM_BUN_VERSION: Semver = { major: 1, minor: 4, patch: 0 };
-
-const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
-/** Runtime facts included in startup/runtime-version diagnostics. */
 type RuntimeDetails = {
   kind: RuntimeKind;
   version: string | null;
@@ -49,7 +42,7 @@ const SEMVER_RE = /(\d+)\.(\d+)\.(\d+)/;
 let diagnosticWarningPrinted = false;
 
 /** Parses the first major/minor/patch triple from a runtime or package version label. */
-export function parseSemver(version: string | null): Semver | null {
+export function parseSemver(version: string | null): NodeReleaseVersion | null {
   if (!version) {
     return null;
   }
@@ -65,65 +58,35 @@ export function parseSemver(version: string | null): Semver | null {
   };
 }
 
-/** Compares parsed semver triples against an inclusive minimum version. */
-function isAtLeast(version: Semver | null, minimum: Semver): boolean {
-  if (!version) {
-    return false;
-  }
-  if (version.major !== minimum.major) {
-    return version.major > minimum.major;
-  }
-  if (version.minor !== minimum.minor) {
-    return version.minor > minimum.minor;
-  }
-  return version.patch >= minimum.patch;
-}
-
-/** Reads current process runtime metadata for startup support checks. */
 export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
-  const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
-  const version = bunVersion ?? process.versions?.node ?? null;
-  const execPath = process.execPath ?? null;
-  const pathEnv = process.env.PATH ?? "(not set)";
-  const sqlite = await detectCurrentRuntimeSqlite();
-
-  return {
-    kind,
-    version,
-    execPath,
-    pathEnv,
-    hasNodeSqlite: sqlite.available,
-    sqliteVersion: sqlite.version,
-    sqliteSelectionError: sqlite.selectionError,
-    sqliteProbe: sqlite.probe,
+  const details: RuntimeDetails = {
+    kind: bunVersion ? "bun" : process.versions?.node ? "node" : "unknown",
+    version: bunVersion ?? process.versions?.node ?? null,
+    execPath: process.execPath ?? null,
+    pathEnv: process.env.PATH ?? "(not set)",
+    hasNodeSqlite: false,
+    sqliteVersion: null,
+    sqliteSelectionError: undefined,
+    sqliteProbe: undefined,
   };
-}
-
-async function detectCurrentRuntimeSqlite(): Promise<{
-  available: boolean;
-  version: string | null;
-  selectionError?: string;
-  probe?: SqliteCapabilities;
-}> {
   try {
     ensureSqliteLibrarySelected();
   } catch (error) {
-    return {
-      available: false,
-      version: null,
-      selectionError: error instanceof Error ? error.message : String(error),
-    };
+    details.sqliteSelectionError = error instanceof Error ? error.message : String(error);
+    return details;
   }
   try {
     const probe = await detectCurrentSqliteCapabilities();
-    return { available: probe.available, version: probe.version, probe };
+    details.hasNodeSqlite = probe.available;
+    details.sqliteVersion = probe.version;
+    details.sqliteProbe = probe;
   } catch {
-    return { available: false, version: null };
+    return details;
   }
+  return details;
 }
 
-/** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
 function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.sqliteSelectionError) {
     return false;
@@ -144,31 +107,12 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   return false;
 }
 
-/** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
 export async function isCurrentRuntimeSupported(): Promise<boolean> {
   return runtimeSatisfies(await detectRuntime());
 }
 
-/** Checks a Node version label against OpenClaw's supported Node version range. */
-export function isSupportedNodeVersion(version: string | null): boolean {
-  return isSupportedOpenClawNodeVersion(version);
-}
-
-/** Checks a Bun version label against OpenClaw's minimum supported release. */
 export function isSupportedBunVersion(version: string | null): boolean {
-  return isAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
-}
-
-/** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
-function parseMinimumNodeEngine(engine: string | null): Semver | null {
-  if (!engine) {
-    return null;
-  }
-  const match = engine.match(MINIMUM_ENGINE_RE);
-  if (!match) {
-    return null;
-  }
-  return parseSemver(match[1] ?? null);
+  return isNodeVersionAtLeast(parseSemver(version), MINIMUM_BUN_VERSION);
 }
 
 /** Returns whether a Node version satisfies a supported engine range, or null if unsupported. */
@@ -176,11 +120,6 @@ export function nodeVersionSatisfiesEngine(
   version: string | null,
   engine: string | null,
 ): boolean | null {
-  const minimum = parseMinimumNodeEngine(engine);
-  if (minimum) {
-    return isNodeVersionAtLeast(parseNodeReleaseVersion(version), minimum);
-  }
-
   if (!engine) {
     return null;
   }
@@ -204,14 +143,16 @@ export function nodeVersionSatisfiesEngine(
     if (!clauseMinimum || (upperRaw && !upper)) {
       return null;
     }
-    if (isAtLeast(parsed, clauseMinimum) && (!upper || !isAtLeast(parsed, upper))) {
+    if (
+      isNodeVersionAtLeast(parsed, clauseMinimum) &&
+      (!upper || !isNodeVersionAtLeast(parsed, upper))
+    ) {
       satisfied = true;
     }
   }
   return satisfied;
 }
 
-/** Exits through the provided runtime when the current Node runtime is unsupported. */
 export async function assertSupportedRuntime(
   providedRuntime?: RuntimeEnv,
   providedDetails?: RuntimeDetails,
@@ -220,24 +161,25 @@ export async function assertSupportedRuntime(
   recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   const details = providedDetails ?? (await detectRuntime());
+  const writeNotice = (message: string) =>
+    providedRuntime ? providedRuntime.error(message) : process.stderr.write(`${message}\n`);
   if (runtimeSatisfies(details)) {
     const note =
       details.kind === "node" && details.sqliteProbe
         ? nodeRuntimeNote(details.version, details.sqliteProbe)
         : null;
     if (note) {
-      if (providedRuntime) {
-        providedRuntime.error(note);
-      } else {
-        process.stderr.write(`${note}\n`);
-      }
+      writeNotice(note);
     }
     return;
   }
   // Only startup callers with a pre-dotenv snapshot may select another runtime.
   if (details.kind === "node" && argv && recoveryEnv) {
     const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
-    await recoverNodeRuntime({ env: recoveryEnv });
+    if (await recoverNodeRuntime({ env: recoveryEnv })) {
+      // The replacement finished; this unsupported parent must not continue startup.
+      throw new ExitError(Number(process.exitCode ?? 0));
+    }
   }
   if (
     details.kind === "node" &&
@@ -247,11 +189,7 @@ export async function assertSupportedRuntime(
   ) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
-      if (providedRuntime) {
-        providedRuntime.error(warning);
-      } else {
-        process.stderr.write(`${warning}\n`);
-      }
+      writeNotice(warning);
       diagnosticWarningPrinted = true;
     }
     return;
@@ -268,7 +206,9 @@ export async function assertSupportedRuntime(
           formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
         );
       },
-      exit: (code) => process.exit(code),
+      exit: (code) => {
+        throw new ExitError(code);
+      },
     };
   }
 

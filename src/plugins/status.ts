@@ -1,4 +1,3 @@
-// Builds plugin status snapshots for CLI and diagnostics.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
@@ -16,12 +15,11 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
-import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
-  buildPluginShapeSummary,
-  type PluginCapabilityEntry,
-  type PluginInspectShape,
-} from "./inspect-shape.js";
+  resolveEffectivePluginIds,
+  resolveEffectivePluginIdsAsync,
+} from "./effective-plugin-ids.js";
+import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
   loadPluginRegistryHandle,
@@ -38,7 +36,9 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { normalizePluginIdScope } from "./plugin-scope.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
@@ -73,13 +73,9 @@ export type {
   PluginCompatibilitySummary,
 } from "./status-compatibility.js";
 
-export type PluginInspectReport = {
+export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;
@@ -197,6 +193,7 @@ type PluginReportParams = {
   onlyPluginIds?: readonly string[];
   /** Capture full registrations without starting channel runtime sidecars. */
   runtimeInspection?: boolean;
+  loadMode?: "validate";
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -279,6 +276,7 @@ function preparePluginReport(params: PluginReportParams | undefined) {
       env: params?.env,
       loadModules: true,
       cache: true,
+      mode: params?.loadMode,
       onlyPluginIds,
       toolDiscovery: params?.runtimeInspection,
     }),
@@ -288,8 +286,8 @@ function preparePluginReport(params: PluginReportParams | undefined) {
 function buildPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
+  prepared = preparePluginReport(params),
 ): PluginStatusReport {
-  const prepared = preparePluginReport(params);
   const { rawConfig, workspaceDir, metadataSnapshot, context, runtimeCompatConfig, onlyPluginIds } =
     prepared;
   const registry = loadModules
@@ -308,6 +306,7 @@ function buildPluginReport(
             env: params?.env,
             logger: params?.logger,
             loadModules: false,
+            throwOnLoadError: false,
             onlyPluginIds,
             manifestRegistry: metadataSnapshot.manifestRegistry,
             runtimeContext: context,
@@ -356,6 +355,28 @@ function projectPluginReport(
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
   return buildPluginReport(params, false);
+}
+
+export async function buildPluginSnapshotReportAsync(
+  params?: PluginReportParams,
+): Promise<PluginStatusReport> {
+  const prepared = preparePluginReport({ ...params, effectiveOnly: false });
+  if (params?.effectiveOnly === true) {
+    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
+      config: prepared.rawConfig,
+      workspaceDir: prepared.workspaceDir,
+      env: params.env ?? process.env,
+      metadataSnapshot: prepared.metadataSnapshot,
+    });
+    const onlyPluginIds =
+      requestedPluginIds === undefined
+        ? effectivePluginIds
+        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
+    prepared.onlyPluginIds = onlyPluginIds;
+    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
+  }
+  return buildPluginReport(params, false, prepared);
 }
 
 /** Complete diagnostics projection before retiring its imported plugin generation. */
@@ -460,7 +481,7 @@ function buildPluginInspectRecord(
   const shape = shapeSummary.shape;
   const gatewayMethods = (
     rows?.gatewayMethodDescriptors ??
-    (report.gatewayMethodDescriptors ?? []).filter(
+    report.gatewayMethodDescriptors.filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
   ).map((descriptor) => descriptor.name);
@@ -558,36 +579,19 @@ function buildPluginInspectRecord(
   };
 }
 
-function groupByPluginId<T>(rows: readonly T[], getPluginId: (row: T) => string | undefined) {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    const pluginId = getPluginId(row);
-    if (pluginId === undefined) {
-      continue;
-    }
-    const group = grouped.get(pluginId);
-    if (group) {
-      group.push(row);
-    } else {
-      grouped.set(pluginId, [row]);
-    }
-  }
-  return grouped;
-}
-
 export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
   const context = resolvePluginInspectContext(params);
   const { report } = context;
   if (report.plugins.length < 2) {
     return report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
   }
-  const typedHooks = groupByPluginId(report.typedHooks, (entry) => entry.pluginId);
-  const hooks = groupByPluginId(report.hooks, (entry) => entry.pluginId);
-  const tools = groupByPluginId(report.tools, (entry) => entry.pluginId);
-  const diagnostics = groupByPluginId(report.diagnostics, (entry) => entry.pluginId);
-  const sessionCatalogs = groupByPluginId(report.sessionCatalogs, (entry) => entry.pluginId);
-  const gatewayMethodDescriptors = groupByPluginId(
-    report.gatewayMethodDescriptors ?? [],
+  const typedHooks = groupPluginRecords(report.typedHooks, (entry) => entry.pluginId);
+  const hooks = groupPluginRecords(report.hooks, (entry) => entry.pluginId);
+  const tools = groupPluginRecords(report.tools, (entry) => entry.pluginId);
+  const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
+  const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
+  const gatewayMethodDescriptors = groupPluginRecords(
+    report.gatewayMethodDescriptors,
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
   );
   return report.plugins.map((plugin) =>

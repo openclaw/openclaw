@@ -3,7 +3,14 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension OpenClawChatViewModel {
-    func handleProgressCardChanged(_ event: ProgressCardChangedEvent) {
+    private struct ProgressCardRequest {
+        let session: SessionSnapshot
+        let id: UInt64
+        let generation: UInt64
+    }
+
+    @discardableResult
+    func handleProgressCardChanged(_ event: ProgressCardChangedEvent) -> Task<Void, Never>? {
         let session = self.currentSessionSnapshot()
         let target = self.progressCardTarget(for: session)
         let canonical = target?.sessionKey ?? session.key
@@ -16,36 +23,32 @@ extension OpenClawChatViewModel {
             current: canonical,
             mainSessionKey: self.resolvedMainSessionKey,
             activeAgentId: owner)
-        else { return }
+        else { return nil }
 
         // Global and ordinary rows can share a wire key. Events invalidate; only the
         // captured target's get response may publish or clear its durable card.
-        self.scheduleProgressCardFetch(for: session)
+        return self.scheduleProgressCardFetch(for: session)
     }
 
-    func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) {
+    @discardableResult
+    func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) -> Task<Void, Never>? {
         let session = session ?? self.currentSessionSnapshot()
-        guard self.isCurrentSession(session) else { return }
+        guard self.isCurrentSession(session) else { return nil }
         self.lastIssuedProgressCardRequestID &+= 1
-        let requestID = self.lastIssuedProgressCardRequestID
-        let generation = self.progressCardGeneration
-        Task { [weak self] in
+        let request = ProgressCardRequest(
+            session: session,
+            id: self.lastIssuedProgressCardRequestID,
+            generation: self.progressCardGeneration)
+        return Task { [weak self] in
             guard let self else { return }
             let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             self.progressCardStoreAvailable = storeAvailable
             // Gateways without the durable store reject the fetch outright
             // (2026.7.x: "missing scope: operator.admin"); the legacy
             // stream:"plan" fallback owns the card there.
             guard storeAvailable != false else { return }
-            await self.fetchProgressCard(
-                for: session,
-                generation: generation,
-                requestID: requestID)
+            await self.fetchProgressCard(request)
         }
     }
 
@@ -92,11 +95,8 @@ extension OpenClawChatViewModel {
         return OpenClawChatSessionTarget(sessionKey: "global", agentID: owner)
     }
 
-    private func fetchProgressCard(
-        for session: SessionSnapshot,
-        generation: UInt64,
-        requestID: UInt64) async
-    {
+    private func fetchProgressCard(_ request: ProgressCardRequest) async {
+        let session = request.session
         guard let target = self.progressCardTarget(for: session), let owner = target.agentID else {
             self.logDiagnostic("chat.ui progress card waits for canonical history identity")
             return
@@ -106,11 +106,7 @@ extension OpenClawChatViewModel {
             let card = try await self.transport.fetchProgressCard(
                 sessionKey: target.sessionKey,
                 agentID: owner)
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             if let card, card.sessionkey != expectedKey {
                 self.logDiagnostic("chat.ui progress card response rejected: session identity changed")
                 return
@@ -120,11 +116,7 @@ extension OpenClawChatViewModel {
                 self.errorText = nil
             }
         } catch {
-            guard self.isCurrentProgressCardRequest(
-                session: session,
-                generation: generation,
-                requestID: requestID)
-            else { return }
+            guard self.isCurrentProgressCardRequest(request) else { return }
             if let response = error as? GatewayResponseError,
                response.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED"
             {
@@ -141,14 +133,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func isCurrentProgressCardRequest(
-        session: SessionSnapshot,
-        generation: UInt64,
-        requestID: UInt64) -> Bool
-    {
-        self.progressCardGeneration == generation &&
-            self.lastIssuedProgressCardRequestID == requestID &&
-            self.isCurrentSession(session)
+    private func isCurrentProgressCardRequest(_ request: ProgressCardRequest) -> Bool {
+        self.progressCardGeneration == request.generation &&
+            self.lastIssuedProgressCardRequestID == request.id &&
+            self.isCurrentSession(request.session)
     }
 
     func applyProgressCard(_ card: ProgressCard?) {
@@ -179,21 +167,10 @@ extension OpenClawChatViewModel {
     }
 
     static func parseLegacyProgressCardSteps(_ value: AnyCodable?) -> [ProgressCardStep] {
-        guard let value else { return [] }
-        let rawItems: [Any]
-        switch value.value {
-        case let items as [AnyCodable]:
-            rawItems = items.map(\.value)
-        case let items as [Any]:
-            rawItems = items
-        case let items as NSArray:
-            rawItems = items.map(\.self)
-        default:
-            return []
-        }
+        guard let rawItems = value?.arrayValue else { return [] }
         var hasInProgressStep = false
         return rawItems.compactMap { rawItem in
-            guard let step = Self.parseLegacyProgressCardStep(rawItem) else { return nil }
+            guard let step = Self.parseLegacyProgressCardStep(rawItem.value) else { return nil }
             if case .inProgress = step.status {
                 guard !hasInProgressStep else { return nil }
                 hasInProgressStep = true
@@ -203,30 +180,13 @@ extension OpenClawChatViewModel {
     }
 
     private static func parseLegacyProgressCardStep(_ rawValue: Any) -> ProgressCardStep? {
-        let value = (rawValue as? AnyCodable)?.value ?? rawValue
-        if let legacyStep = value as? String {
+        let value = (rawValue as? AnyCodable) ?? AnyCodable(rawValue)
+        if let legacyStep = value.stringValue {
             return self.makeLegacyProgressCardStep(text: legacyStep, status: .pending)
         }
-
-        let fields: [String: Any]
-        switch value {
-        case let dictionary as [String: AnyCodable]:
-            fields = dictionary.mapValues(\.value)
-        case let dictionary as [String: String]:
-            fields = dictionary
-        case let dictionary as [String: Any]:
-            fields = dictionary
-        case let dictionary as NSDictionary:
-            fields = dictionary.reduce(into: [:]) { result, entry in
-                guard let key = entry.key as? String else { return }
-                result[key] = (entry.value as? AnyCodable)?.value ?? entry.value
-            }
-        default:
-            return nil
-        }
-
-        guard let text = fields["step"] as? String,
-              let rawStatus = fields["status"] as? String,
+        guard let fields = value.dictionaryValue,
+              let text = fields["step"]?.stringValue,
+              let rawStatus = fields["status"]?.stringValue,
               let status = ProgressCardStepStatus(rawValue: rawStatus)
         else {
             return nil

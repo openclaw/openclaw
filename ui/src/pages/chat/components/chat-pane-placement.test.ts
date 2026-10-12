@@ -52,98 +52,117 @@ function mount(
 }
 
 describe("chat pane device placement", () => {
-  it("presents active post-turn reconciliation as cloud file sync", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    containers.push(container);
-    const session = {
-      key: "agent:main:cloud-sync",
-      kind: "direct",
-      updatedAt: 0,
-      placement: {
-        state: "active",
-        workspaceResultReconciling: true,
-        generation: 2,
-        createdAtMs: 100_000,
-        updatedAtMs: 300_000,
-        stateChangedAtMs: 300_000,
-        environmentId: "worker:cloud",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
-        workspaceBaseManifestRef: "base-manifest",
-        remoteWorkspaceDir: "/worker/repo",
-      },
-    } satisfies GatewaySessionRow;
+  it.each(["profile", "device"] as const)(
+    "presents post-turn workspace sync for %s without cloud-only wording",
+    (target) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      const session = {
+        key: "agent:main:cloud-sync",
+        kind: "direct",
+        updatedAt: 0,
+        agentRuntime: { id: "openclaw", source: "model" as const },
+        placement: {
+          state: "active",
+          workspaceResultReconciling: true,
+          ...(target === "device"
+            ? {
+                providerId: "device",
+                profileId: "native",
+                inference: "worker" as const,
+                runner: {
+                  kind: "device" as const,
+                  deviceId: "paired",
+                  status: "available" as const,
+                },
+              }
+            : {}),
+          generation: 2,
+          createdAtMs: 100_000,
+          updatedAtMs: 300_000,
+          stateChangedAtMs: 300_000,
+          environmentId: "worker:cloud",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      } satisfies GatewaySessionRow;
 
-    render(renderChatPanePlacement({ session }), container);
-
-    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-      "Cloud · syncing files",
-    );
-    expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
-      "Safely applying cloud edits",
-    );
-    expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
-  });
-
-  it.each(
-    [
-      {
-        status: "available" as const,
-        targetKind: "profile" as const,
-        stop: "Stop device worker…",
-        label: "Runs on device",
-        move: "Move session…",
-        waiting: false,
-      },
-      {
-        status: "offline" as const,
-        targetKind: "profile" as const,
-        stop: "Stop device worker…",
-        label: "Device offline",
-        move: "Continue on Gateway…",
-        waiting: true,
-      },
-      {
-        status: undefined,
-        targetKind: "device" as const,
-        label: "Runs on Cloud",
-        move: "Move session…",
-        waiting: false,
-        stop: "Stop cloud worker…",
-      },
-    ].flatMap((scenario) =>
-      (["starting", "failed"] as const).map((phase) => ({ scenario, phase })),
-    ),
-  )(
-    "renders $scenario.status active ownership ahead of $phase $scenario.targetKind startup intent",
-    ({ scenario, phase }) => {
-      const container = mount(scenario.status, {
-        phase,
-        targetKind: scenario.targetKind,
-      });
+      render(renderChatPanePlacement({ session }), container);
 
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-        scenario.label,
+        "Worker · syncing files",
       );
-      expect(container.querySelector(".chat-pane__placement-move")?.textContent?.trim()).toBe(
-        scenario.move,
+      expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
+        "Finalizing worker workspace",
       );
-      const note = container.querySelector(".chat-pane__placement-note");
-      const move = container.querySelector<HTMLElement>(".chat-pane__placement-move");
-      const reclaim = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
-      expect(move?.hasAttribute("disabled")).toBe(false);
-      expect(reclaim?.textContent?.trim()).toBe(scenario.stop);
-      if (scenario.waiting) {
-        expect(note?.textContent).toContain("Waiting for device to reconnect");
-        expect(reclaim?.hasAttribute("disabled")).toBe(true);
-        expect(reclaim?.title).toContain("Reconnect the device");
+      expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
+      if (target === "device") {
+        expect(container.textContent).toContain("Inference");
+        expect(container.textContent).toContain("Direct from worker");
       } else {
-        expect(note).toBeNull();
-        expect(reclaim?.hasAttribute("disabled")).toBe(false);
+        expect(container.textContent).not.toContain("Inference");
+        expect(container.textContent).not.toContain("Through Gateway");
       }
     },
   );
+
+  it.each([
+    {
+      phase: "starting" as const,
+      status: "available" as const,
+      targetKind: "profile" as const,
+      stop: "Stop device worker…",
+      label: "Runs on device",
+      move: "Move session…",
+      waiting: false,
+    },
+    {
+      phase: "failed" as const,
+      status: "offline" as const,
+      targetKind: "profile" as const,
+      stop: "Stop device worker…",
+      label: "Device offline",
+      move: "Continue on Gateway…",
+      waiting: true,
+    },
+    {
+      phase: "failed" as const,
+      status: undefined,
+      targetKind: "device" as const,
+      label: "Runs on Cloud",
+      move: "Move session…",
+      waiting: false,
+      stop: "Stop cloud worker…",
+    },
+  ])("renders $status active ownership ahead of $phase $targetKind startup intent", (scenario) => {
+    const container = mount(scenario.status, {
+      phase: scenario.phase,
+      targetKind: scenario.targetKind,
+    });
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      scenario.label,
+    );
+    expect(container.querySelector(".chat-pane__placement-move")?.textContent?.trim()).toBe(
+      scenario.move,
+    );
+    const note = container.querySelector(".chat-pane__placement-note");
+    const move = container.querySelector<HTMLElement>(".chat-pane__placement-move");
+    const reclaim = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
+    expect(move?.hasAttribute("disabled")).toBe(false);
+    expect(reclaim?.textContent?.trim()).toBe(scenario.stop);
+    if (scenario.waiting) {
+      expect(note?.textContent).toContain("Waiting for device to reconnect");
+      expect(reclaim?.hasAttribute("disabled")).toBe(true);
+      expect(reclaim?.title).toContain("Reconnect the device");
+    } else {
+      expect(note).toBeNull();
+      expect(reclaim?.hasAttribute("disabled")).toBe(false);
+    }
+  });
 
   it.each(["local", undefined] as const)(
     "offers worker dispatch for a repository-only session with %s placement",

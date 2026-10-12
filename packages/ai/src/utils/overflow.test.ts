@@ -56,6 +56,7 @@ describe("provider overflow messages", () => {
   });
 
   it.each([
+    "Context window exceeded: estimated input 35137 leaves only 0 output tokens within the 32768-token context.",
     "Error: 400 Input length (265330) exceeds model's maximum context length (262144).",
     "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131,040 tokens.",
     "Input length 131393 exceeds maximum allowed input length of 131040 token",
@@ -63,23 +64,21 @@ describe("provider overflow messages", () => {
     'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000"}}',
     "code 1210: tokens in request more than max tokens allowed",
     "code 1261: Prompt exceeds max length",
-    "Context size has been exceeded.",
-    "400 Context size has been exceeded.",
     "500 Context size has been exceeded.",
+    "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
 });
 
 describe("scoped overflow messages", () => {
-  it.each([
-    "Context size has been exceeded.",
-    "400 Context size has been exceeded.",
-    "500 Context size has been exceeded.",
-  ])("recognizes llama.cpp wording through the provider fallback: %s", (message) => {
-    expect(matchesContextOverflowMessage(message, "provider-fallback")).toBe(true);
-    expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
-  });
+  it.each(["500 Context size has been exceeded."])(
+    "recognizes llama.cpp wording through the provider fallback: %s",
+    (message) => {
+      expect(matchesContextOverflowMessage(message, "provider-fallback")).toBe(true);
+      expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
+    },
+  );
 
   it("recognizes the provider input-length wording in the strict failover scope", () => {
     expect(

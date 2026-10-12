@@ -5,21 +5,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import type { SettingsManager } from "./sessions/settings-manager.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
-
-type AgentSettingsManagerLike = {
-  getCompactionEnabled?: () => boolean;
-  getCompactionReserveTokens: () => number;
-  getCompactionKeepRecentTokens: () => number;
-  applyOverrides: (overrides: {
-    compaction: {
-      reserveTokens?: number;
-      keepRecentTokens?: number;
-    };
-  }) => void;
-  setCompactionEnabled?: (enabled: boolean) => void;
-};
 
 function toPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -30,14 +18,11 @@ function toPositiveInt(value: unknown): number | undefined {
 
 /** Applies configured compaction reserve/keep-recent settings to an agent settings manager. */
 export function applyAgentCompactionSettingsFromConfig(params: {
-  settingsManager: AgentSettingsManagerLike;
+  settingsManager: SettingsManager;
   cfg?: OpenClawConfig;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
-}): {
-  didOverride: boolean;
-  compaction: { reserveTokens: number; keepRecentTokens: number };
-} {
+}): void {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
@@ -71,24 +56,13 @@ export function applyAgentCompactionSettingsFromConfig(params: {
 
   const shouldApplyEnabled =
     configuredEnabled !== undefined &&
-    typeof params.settingsManager.setCompactionEnabled === "function" &&
-    (typeof params.settingsManager.getCompactionEnabled !== "function" ||
-      params.settingsManager.getCompactionEnabled() !== configuredEnabled);
+    params.settingsManager.getCompactionEnabled() !== configuredEnabled;
   if (shouldApplyEnabled) {
-    params.settingsManager.setCompactionEnabled!(configuredEnabled);
+    params.settingsManager.setCompactionEnabled(configuredEnabled);
   }
   if (Object.keys(overrides).length > 0) {
     params.settingsManager.applyOverrides({ compaction: overrides });
   }
-  const didOverride = shouldApplyEnabled || Object.keys(overrides).length > 0;
-
-  return {
-    didOverride,
-    compaction: {
-      reserveTokens: targetReserveTokens,
-      keepRecentTokens: targetKeepRecentTokens,
-    },
-  };
 }
 
 /** Resolve the compaction mode after provider-backed safeguard promotion. */
@@ -100,22 +74,9 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
   return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
-/**
- * Detect providers whose shared model runtime `isContextOverflow` Case 2 (silent overflow)
- * fires on a successful turn and triggers OpenClaw runtime's `_runAutoCompaction` from
- * inside `Session.prompt()`, collapsing `agent.state.messages` before the
- * provider call (openclaw#75799).
- *
- * True on any of: `zai-native` endpoint class, normalized provider id `zai`,
- * a `z-ai/` / `openrouter/z-ai/` model-id namespace prefix, or a bare `glm-`
- * model id (no namespace prefix) — the latter covers in-house gateways that
- * expose Zhipu's GLM family directly without a `z-ai/` qualifier. Intentionally
- * narrow: namespaced GLM ids that route through other providers (e.g.
- * `ollama/glm-*`, `opencode-go/glm-*`) are NOT included because their hosts
- * have their own overflow accounting and may not exhibit the z.ai silent-
- * overflow shape. Other providers documented as silently truncating are not
- * added without a reproducible repro.
- */
+// z.ai-style silent overflow can compact a successful turn before our provider call (#75799).
+// Bare GLM names cover relabeled gateways; other providers' namespaced GLM models
+// retain their own overflow accounting and must not receive this guard.
 export function isSilentOverflowProneModel(model: {
   provider?: string | null;
   modelId?: string | null;
@@ -125,67 +86,37 @@ export function isSilentOverflowProneModel(model: {
   if (provider === "zai") {
     return true;
   }
-  if (typeof model.baseUrl === "string" && model.baseUrl.length > 0) {
-    if (resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native") {
-      return true;
-    }
+  if (
+    typeof model.baseUrl === "string" &&
+    model.baseUrl.length > 0 &&
+    resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native"
+  ) {
+    return true;
   }
-  if (typeof model.modelId === "string" && model.modelId.length > 0) {
-    const normalized = model.modelId.toLowerCase();
-    if (
-      normalized.startsWith("z-ai/") ||
-      normalized.startsWith("openrouter/z-ai/") ||
-      normalized.startsWith("glm-")
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Disable OpenClaw runtime's `_checkCompaction → _runAutoCompaction` (which would otherwise
- * fire from inside `Session.prompt()` and reassign `agent.state.messages`
- * before the provider call) when OpenClaw or a plugin owns compaction:
- * `contextEngineInfo.ownsCompaction === true`, effective safeguard compaction,
- * or an active model that is silent-overflow-prone (openclaw#75799).
- * Default-mode runs against ordinary providers keep OpenClaw runtime's auto-compaction as
- * the existing baseline.
- */
-function shouldDisableAgentAutoCompaction(params: {
-  contextEngineInfo?: ContextEngineInfo;
-  compactionMode?: AgentCompactionMode;
-  silentOverflowProneProvider?: boolean;
-}): boolean {
+  const normalized = typeof model.modelId === "string" ? model.modelId.toLowerCase() : "";
   return (
-    params.contextEngineInfo?.ownsCompaction === true ||
-    params.compactionMode === "safeguard" ||
-    params.silentOverflowProneProvider === true
+    normalized.startsWith("z-ai/") ||
+    normalized.startsWith("openrouter/z-ai/") ||
+    normalized.startsWith("glm-")
   );
 }
 
-/**
- * Apply the auto-compaction guard. Callers that reload a `DefaultResourceLoader`
- * MUST call this AGAIN after each `reload()` — `settingsManager.reload()`
- * rehydrates `compaction.enabled` from disk and silently restores OpenClaw runtime's
- * default-on behavior, undoing the guard. Mirrors the existing
- * `applyAgentCompactionSettingsFromConfig` re-call pattern at the same sites.
- */
+// Reapply after resource reload: settingsManager.reload() restores the disk setting.
 export function applyAgentAutoCompactionGuard(params: {
-  settingsManager: AgentSettingsManagerLike;
+  settingsManager: SettingsManager;
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
-}): { supported: boolean; disabled: boolean } {
-  const disable = shouldDisableAgentAutoCompaction({
-    contextEngineInfo: params.contextEngineInfo,
-    compactionMode: params.compactionMode,
-    silentOverflowProneProvider: params.silentOverflowProneProvider,
-  });
-  const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
-  if (!disable || !hasMethod) {
-    return { supported: hasMethod, disabled: false };
+  compactionForbidden?: boolean;
+}): void {
+  // Leave compaction with its selected owner so prompt-time runtime compaction
+  // cannot rewrite the transcript before OpenClaw's provider call.
+  const disable =
+    params.contextEngineInfo?.ownsCompaction === true ||
+    params.compactionMode === "safeguard" ||
+    params.silentOverflowProneProvider === true ||
+    params.compactionForbidden === true;
+  if (disable) {
+    params.settingsManager.setCompactionEnabled(false);
   }
-  params.settingsManager.setCompactionEnabled!(false);
-  return { supported: true, disabled: true };
 }

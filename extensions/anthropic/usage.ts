@@ -44,10 +44,6 @@ function encodeAdminToken(token: string): string {
   return encodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, token);
 }
 
-function decodeAdminToken(raw: string): string | undefined {
-  return decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, raw);
-}
-
 function utcDay(value: string): string | undefined {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : undefined;
@@ -185,12 +181,9 @@ async function fetchAnthropicAdminUsage(params: {
   apiKey: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  now?: number;
-  periodDays?: number;
 }): Promise<ProviderUsageSnapshot> {
   const period = resolveProviderUsageDailyPeriod({
-    now: params.now ?? Date.now(),
-    periodDays: params.periodDays,
+    now: Date.now(),
     defaultPeriodDays: ANTHROPIC_USAGE_HISTORY_DAYS,
   });
   const common = {
@@ -256,11 +249,7 @@ export async function resolveAnthropicUsageAuth(
     return oauthToken;
   }
 
-  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
-  const adminKey = normalizeAdminKey(apiKey);
-  if (adminKey) {
-    return { token: encodeAdminToken(adminKey) };
-  }
+  const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {
@@ -274,27 +263,20 @@ export async function resolveAnthropicUsageAuth(
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
-function formatClaudePlanLabel(
-  subscriptionType?: string,
-  rateLimitTier?: string,
-): string | undefined {
-  const base = subscriptionType?.trim();
+function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
+  const base = ctx.subscriptionType?.trim();
   if (!base) {
     return undefined;
   }
   const label = base.charAt(0).toUpperCase() + base.slice(1);
-  const tier = rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
+  const tier = ctx.rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
   return tier ? `${label} (${tier})` : label;
-}
-
-function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
-  return formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
 }
 
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeAdminToken(ctx.token);
+  const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (adminKey) {
     return await fetchAnthropicAdminUsage({
       apiKey: adminKey,

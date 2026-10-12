@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { findChangelogSection, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import { compactReleaseNotes } from "./lib/release-notes-compaction.mjs";
 
@@ -20,9 +21,6 @@ const RELEASE_VERSION_PATTERN =
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 
-/**
- * Resolves acceptable changelog headings for a package version.
- */
 export function resolvePackageChangelogVersions(packageVersion, options = {}) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
@@ -50,9 +48,6 @@ function assertMeaningfulReleaseBody(section, version) {
   }
 }
 
-/**
- * Extracts the current release changelog section for package publishing.
- */
 export function extractCurrentPackageChangelog(content, packageVersion, options = {}) {
   const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
@@ -90,9 +85,14 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
   }
   const packagedBytes = Buffer.byteLength(packaged, "utf8");
   if (packagedBytes > MAX_PACKAGED_CHANGELOG_BYTES) {
-    throw new Error(
-      `Packaged changelog is ${packagedBytes} bytes, which exceeds the ${MAX_PACKAGED_CHANGELOG_BYTES} byte safety limit.`,
-    );
+    const message = `Packaged changelog is ${packagedBytes} bytes, which exceeds the ${MAX_PACKAGED_CHANGELOG_BYTES} byte size limit.`;
+    if (
+      reportLimitViolations([
+        { file: CHANGELOG_PATH, title: "Packaged changelog size budget", message },
+      ])
+    ) {
+      throw new Error(message);
+    }
   }
   return packaged;
 }
@@ -138,9 +138,6 @@ async function readPackageVersion(cwd) {
   return packageJson.version;
 }
 
-/**
- * Restores the source changelog from a package-changelog backup.
- */
 export async function restorePackageChangelog(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   const packagedBackupPath = path.join(cwd, PACKAGED_BACKUP_PATH);
@@ -189,9 +186,6 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
   return true;
 }
 
-/**
- * Writes packaged changelog content while preserving a restorable backup.
- */
 export async function preparePackageChangelog(cwd = process.cwd(), options = {}) {
   await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);

@@ -20,10 +20,10 @@ install_archive() {
 
   # Bound individual transfers and the retry window. curl resets --max-time for
   # each retry, while a started retry can outlive --retry-max-time.
-  curl --fail --location --silent --show-error \
+  curl --fail --location --no-progress-meter --show-error \
     --connect-timeout 10 --max-time 120 \
     --retry 3 --retry-max-time 120 \
-    --output "$archive" "$url"
+    --output "$archive" "$url" 2> >(sed 's/^Warning: /::warning::/' >&2)
   if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$checksum" ]]; then
     echo "$name archive checksum mismatch" >&2
     exit 1
@@ -38,12 +38,12 @@ mkdir -p "$install_dir"
 
 install_archive \
   swiftformat \
-  "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat.zip" \
-  "28c7802e11fa5ae113d903066439c6bb1be20a8ac1ad9709c42616a7e273fb0f"
+  "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.1/swiftformat.zip" \
+  "385ef1a263ba28685157b98c5536b9c9105e124518f28b7ef8a2bee4b167eaeb"
 install_archive \
   swiftlint \
   "https://github.com/realm/SwiftLint/releases/download/0.65.1/portable_swiftlint.zip" \
   "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0"
 
-[[ "$($install_dir/swiftformat --version)" == "0.63.0" ]]
+[[ "$($install_dir/swiftformat --version)" == "0.63.1" ]]
 [[ "$($install_dir/swiftlint version)" == "0.65.1" ]]

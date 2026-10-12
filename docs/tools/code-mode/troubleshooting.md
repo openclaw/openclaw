@@ -21,9 +21,19 @@ type CodeModeErrorCode =
 ```
 
 `invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
-and `typecheck` fields, rejected module access, unknown/expired/
-wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
-covers a QuickJS worker that fails to start or exits non-zero.
+and `typecheck` fields, rejected module access, JavaScript syntax errors, unknown/expired/
+wrong-scope `runId` values, and too many suspended runs. It also covers an
+uncaught nested tool call that the host rejected as invalid input (an
+`input_contract` schema mismatch or a tool's own input error); the error names
+the missing or unexpected arguments. Other uncaught tool failures report
+`internal_error`. Codes the guest assigns to `error.code` never change the
+terminal code. `runtime_unavailable`
+covers an unavailable executor or a worker that fails to start or exits
+unexpectedly. Check the selected `tools.codeMode.executor` and its plugin
+availability; the `quickjs` executor requires the bundled `code-mode-quickjs`
+runtime. Explicit selection activates that bundle despite generic plugin disable
+or allowlist settings, but an explicit deny or disabled entry still blocks it.
+OpenClaw does not switch executors automatically.
 `aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
 terminates the worker or drops the suspended run, so that `runId` cannot be
 resumed. It is distinct from `timeout`, which means an execution deadline was
@@ -32,12 +42,34 @@ exceeded.
 the bounded projection; ordinary oversized successful results are truncated and
 remain successful.
 
-Errors returned to the guest are plain data; host `Error` instances, stack
-objects, prototypes, and host functions do not cross into QuickJS.
+JavaScript syntax errors are rejected during source preparation, before any
+nested tool dispatch. The bounded diagnostic includes a one-based source line
+and column. Malformed JavaScript reports its syntax error before module-access
+checks. Correct the source and submit a new `exec`; OpenClaw does not repair
+or replay it automatically. This no-dispatch outcome does not enable
+`restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
+guest code, including `SyntaxError`, remain runtime failures.
 
-A bridge failure can occur after a tool has performed its action. When a result
-reports `failurePhase: "bridge"` and `replaySafe: false`, check the destination
-before repeating a send or another action that changes state. A failed `exec`
+The current parser has a known limitation with division immediately after an
+optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
+JavaScript, but source preparation rejects it before tool dispatch. Parenthesize
+the property access: `(value?.return) / 2 / 3`.
+
+Errors returned to the guest are plain data; host `Error` instances, stack
+objects and prototypes are not passed through the JSON result bridge. This
+bridge contract does not make the Node executor a security boundary; see
+[Code Mode executors](/tools/code-mode/executors).
+
+`failurePhase` identifies where the terminal error originated. An uncaught
+rejected tool call reports `"bridge"`; a new JavaScript error after a successful
+call or a caught tool rejection reports `"guest"`. Rethrowing the original tool
+error keeps `"bridge"`, including after `wait`. Bridge failure origin and code
+come only from host replies. Guest code cannot settle its own pending tool calls
+or forge bridge provenance.
+
+Failure origin is separate from replay safety. When `bridgeDispatchStarted` is
+`true` and `replaySafe` is `false`, check the destination before repeating a send
+or another action that changes state—even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
 ## Telemetry
@@ -53,7 +85,7 @@ policy narrows that catalog.
 Catalog teardown retains only these final aggregate diagnostics, not executable
 tools or VM state. If teardown closes a suspended run while `wait` is observing
 pending work, that wait returns `failed` with `code: "aborted"` and the final
-telemetry; pending calls are canceled and the snapshot is dropped. Retained
+telemetry; pending calls are canceled and the continuation is released. Retained
 diagnostics grant no authority to resume or repair the closed run.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
@@ -104,6 +136,6 @@ This logs a capped, redacted JSON snapshot of the model request; use it only
 while debugging, since prompts and message text can still appear.
 
 For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also fails closed if the final provider
-payload does not contain exactly one `exec`, one `wait`, and only approved
+redacted SSE events. Code mode also rejects the final provider
+payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.

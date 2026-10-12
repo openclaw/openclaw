@@ -21,20 +21,13 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isSIWCAuthFlow } from "./token-sharing.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const OPENAI_COMPLETIONS_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions";
 const OPENAI_ADMIN_TOKEN_PREFIX = "openclaw:openai-admin:v1:";
 const OPENAI_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const OPENAI_USAGE_HISTORY_DAYS = 30;
-
-function encodeAdminToken(token: string): string {
-  return encodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, token);
-}
-
-function decodeAdminToken(raw: string): string | undefined {
-  return decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, raw);
-}
 
 function utcDay(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
@@ -87,67 +80,59 @@ function aggregateHistory(params: {
   projectId?: string;
 }): ProviderUsageSnapshot {
   const daily = new Map<number, ReturnType<typeof createProviderUsageDailyAccumulator>>();
-  const getDaily = (startTime: number) => {
-    const current =
-      daily.get(startTime) ?? createProviderUsageDailyAccumulator(utcDay(startTime), true);
-    daily.set(startTime, current);
-    return current;
-  };
-
-  for (const rawBucket of params.costs) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startTime = parseProviderUsageNumber(bucket?.start_time);
-    if (startTime === undefined || !Array.isArray(bucket?.results)) {
-      continue;
-    }
-    const accumulator = getDaily(startTime);
-    for (const rawResult of bucket.results) {
-      const result = asProviderUsageObject(rawResult);
-      const amount = parseProviderUsageNumber(asProviderUsageObject(result?.amount)?.value) ?? 0;
-      const category = resolveProviderUsageDisplayName(result?.line_item, "API");
-      accumulator.amount += amount;
-      accumulator.categories.set(category, (accumulator.categories.get(category) ?? 0) + amount);
-    }
-  }
-
-  for (const rawBucket of params.completions) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startTime = parseProviderUsageNumber(bucket?.start_time);
-    if (startTime === undefined || !Array.isArray(bucket?.results)) {
-      continue;
-    }
-    const accumulator = getDaily(startTime);
-    for (const rawResult of bucket.results) {
-      const result = asProviderUsageObject(rawResult);
-      if (!result) {
+  for (const kind of ["costs", "completions"] as const) {
+    for (const rawBucket of params[kind]) {
+      const bucket = asProviderUsageObject(rawBucket);
+      const startTime = parseProviderUsageNumber(bucket?.start_time);
+      if (startTime === undefined || !Array.isArray(bucket?.results)) {
         continue;
       }
-      const requests = parseProviderUsageNonNegativeInteger(result.num_model_requests);
-      const textInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
-      const audioInputTokens = parseProviderUsageNonNegativeInteger(result.input_audio_tokens);
-      const cacheReadTokens = parseProviderUsageNonNegativeInteger(result.input_cached_tokens);
-      const inputTokens = Math.max(0, textInputTokens - cacheReadTokens) + audioInputTokens;
-      const outputTokens =
-        parseProviderUsageNonNegativeInteger(result.output_tokens) +
-        parseProviderUsageNonNegativeInteger(result.output_audio_tokens);
-      const totalTokens = textInputTokens + audioInputTokens + outputTokens;
-      accumulator.requests = (accumulator.requests ?? 0) + requests;
-      accumulator.inputTokens += inputTokens;
-      accumulator.cacheReadTokens += cacheReadTokens;
-      accumulator.outputTokens += outputTokens;
-      accumulator.totalTokens += totalTokens;
-      addProviderUsageModel(
-        accumulator,
-        resolveProviderUsageDisplayName(result.model, "Responses and Chat Completions"),
-        {
-          requests,
-          inputTokens,
-          cacheReadTokens,
-          cacheWriteTokens: 0,
-          outputTokens,
-          totalTokens,
-        },
-      );
+      const accumulator =
+        daily.get(startTime) ?? createProviderUsageDailyAccumulator(utcDay(startTime), true);
+      daily.set(startTime, accumulator);
+      for (const rawResult of bucket.results) {
+        const result = asProviderUsageObject(rawResult);
+        if (kind === "costs") {
+          const amount =
+            parseProviderUsageNumber(asProviderUsageObject(result?.amount)?.value) ?? 0;
+          const category = resolveProviderUsageDisplayName(result?.line_item, "API");
+          accumulator.amount += amount;
+          accumulator.categories.set(
+            category,
+            (accumulator.categories.get(category) ?? 0) + amount,
+          );
+          continue;
+        }
+        if (!result) {
+          continue;
+        }
+        const requests = parseProviderUsageNonNegativeInteger(result.num_model_requests);
+        const textInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
+        const audioInputTokens = parseProviderUsageNonNegativeInteger(result.input_audio_tokens);
+        const cacheReadTokens = parseProviderUsageNonNegativeInteger(result.input_cached_tokens);
+        const inputTokens = Math.max(0, textInputTokens - cacheReadTokens) + audioInputTokens;
+        const outputTokens =
+          parseProviderUsageNonNegativeInteger(result.output_tokens) +
+          parseProviderUsageNonNegativeInteger(result.output_audio_tokens);
+        const totalTokens = textInputTokens + audioInputTokens + outputTokens;
+        accumulator.requests = (accumulator.requests ?? 0) + requests;
+        accumulator.inputTokens += inputTokens;
+        accumulator.cacheReadTokens += cacheReadTokens;
+        accumulator.outputTokens += outputTokens;
+        accumulator.totalTokens += totalTokens;
+        addProviderUsageModel(
+          accumulator,
+          resolveProviderUsageDisplayName(result.model, "Responses and Chat Completions"),
+          {
+            requests,
+            inputTokens,
+            cacheReadTokens,
+            cacheWriteTokens: 0,
+            outputTokens,
+            totalTokens,
+          },
+        );
+      }
     }
   }
 
@@ -226,9 +211,13 @@ export async function resolveOpenAIUsageAuth(
 ): Promise<ProviderResolvedUsageAuth> {
   const explicitAdminKey = cleanProviderUsageCredential(ctx.env.OPENAI_ADMIN_KEY);
   if (explicitAdminKey) {
-    return { token: encodeAdminToken(explicitAdminKey) };
+    return { token: encodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, explicitAdminKey) };
   }
   const oauth = await ctx.resolveOAuthToken();
+  if (oauth && isSIWCAuthFlow(oauth.authFlow)) {
+    // ChatPass has no supported usage endpoint. Never send its scoped bearer to WHAM.
+    return { handled: true };
+  }
   if (oauth) {
     return oauth;
   }
@@ -240,7 +229,7 @@ export async function resolveOpenAIUsageAuth(
 export async function fetchOpenAIUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeAdminToken(ctx.token);
+  const adminKey = decodeProviderUsageAdminToken(OPENAI_ADMIN_TOKEN_PREFIX, ctx.token);
   if (!adminKey) {
     const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {

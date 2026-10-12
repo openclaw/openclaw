@@ -22,8 +22,8 @@ describe("DeepSeek onboarding", () => {
     });
   });
 
-  it.each([undefined, "merge"] as const)("keeps discovery-owned rows out of %s config", (mode) => {
-    const empty = applyDeepSeekConfig({ models: { mode } });
+  it("keeps discovery-owned rows out of default config", () => {
+    const empty = applyDeepSeekConfig({ models: {} });
     expect(empty.models?.providers?.deepseek?.models).toEqual([]);
     expect(resolveAgentModelPrimaryValue(empty.agents?.defaults?.model)).toBe(
       DEEPSEEK_DEFAULT_MODEL_REF,
@@ -34,7 +34,7 @@ describe("DeepSeek onboarding", () => {
       Object.assign({}, model, { id: `operator-${model.id}` }),
     );
     const configured = applyDeepSeekConfig({
-      models: { mode, providers: { deepseek: { ...provider, models: authored } } },
+      models: { providers: { deepseek: { ...provider, models: authored } } },
     });
     expect(configured.models?.providers?.deepseek?.models).toEqual(authored);
   });

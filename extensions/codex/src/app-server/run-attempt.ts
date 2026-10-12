@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
@@ -24,9 +25,21 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
+  if (
+    params.requireWorkspaceOnly === true &&
+    (params.disableTools === true ||
+      typeof params.hostCapabilities?.createToolSurfaceAsync !== "function")
+  ) {
+    throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
+  }
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
-    prepareCodexAttemptConnection({ params, options }),
+    prepareCodexAttemptConnection({
+      params: params.continuation
+        ? { ...params, prompt: `${params.continuation.prompt}\n\n${params.prompt}` }
+        : params,
+      options,
+    }),
   );
   try {
     const runtime = await preparation.measure("runtime", () =>
@@ -44,8 +57,15 @@ export async function runCodexAppServerAttempt(
         prepareCodexAttemptPrompt(attemptContext),
       );
       const resources = prepareCodexAttemptResources(attemptPrompt);
-      attemptTools.runtimeYieldCompletionClaim.current = () =>
-        resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
+      // This turn's claimed children make the yield; otherwise report native
+      // children of earlier turns, whose completion still resumes the session.
+      attemptTools.runtimeYieldCompletionClaim.current = () => {
+        if (resources.state.nativeHookRelay?.hasClaimedDirectChild()) {
+          return true;
+        }
+        const pendingChildren = resources.state.nativeSubagentMonitor?.listPendingChildren() ?? [];
+        return pendingChildren.length > 0 ? { pendingChildren } : false;
+      };
       let activeTurnOwnsCleanup = false;
       try {
         await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
@@ -88,6 +108,7 @@ export async function runCodexAppServerAttempt(
             turnRequest,
           );
           if ("result" in turnStart) {
+            connection.assertModelExecutionCurrent();
             return turnStart.result;
           }
           const activeTurn = activateCodexAttemptTurn(
@@ -114,6 +135,9 @@ export async function runCodexAppServerAttempt(
               await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
             }
           } catch (error) {
+            // Rejected cleanup admission must not hide the model permission loss
+            // behind a secondary subscription-release error.
+            connection.assertModelExecutionCurrent();
             if (!finalizedResult || !turnRuntime.state.pluginRuntimeRefreshStop) {
               throw error;
             }
@@ -139,6 +163,7 @@ export async function runCodexAppServerAttempt(
           ) {
             throw resources.state.executionDisconnectError;
           }
+          connection.assertModelExecutionCurrent();
           return finalizedResult;
         } finally {
           turnRuntime.deadlines.dispose();
@@ -153,8 +178,11 @@ export async function runCodexAppServerAttempt(
         connection.runAbortController.signal.aborted ? "cancel" : "error",
       );
     }
+  } catch (error) {
+    throw codexPrewriteRejectionCause(error);
   } finally {
     // Preparation can fail before the active turn installs its terminal freeze.
-    params.abortSignal?.removeEventListener("abort", connection.abortFromUpstream);
+    connection.cancellation.dispose();
+    connection.releaseModelExecution();
   }
 }

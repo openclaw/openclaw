@@ -7,9 +7,8 @@ import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
 } from "../pw-tools-core.test-harness.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { createProfileSelectionOps } from "../server-context.selection.js";
-import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
+import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
@@ -121,46 +120,26 @@ const mutations: MutationCase[] = [
 ];
 
 function stateRoute(tab: BrowserTab, spec: MutationCase, hold: () => Promise<void>) {
-  const profile = makeBrowserProfile();
-  const unused = async (): Promise<never> => {
-    throw new Error("Unexpected profile operation");
-  };
   const listTabs = async () => {
     if (spec.preparation === "focus") {
       await hold();
     }
     return [tab];
   };
-  const selection = createProfileSelectionOps({
-    profile,
-    runtime: { profile, running: null },
-    getCdpControlPolicy: () => undefined,
-    listTabs,
-    openTab: unused,
+  const context = createDashboardRouteContext(tab, {
+    selection: (profile) => ({
+      listTabs,
+      focusTab: createProfileSelectionOps({
+        profile,
+        runtime: { profile, running: null },
+        getCdpControlPolicy: () => undefined,
+        listTabs,
+        openTab: async () => {
+          throw new Error("Unexpected profile operation");
+        },
+      }).focusTab,
+    }),
   });
-  const profileCtx: ProfileContext = {
-    profile,
-    ensureBrowserAvailable: async () => {},
-    ensureTabAvailable: async () => tab,
-    isHttpReachable: async () => true,
-    isTransportAvailable: async () => true,
-    isReachable: async () => true,
-    listTabs,
-    openTab: unused,
-    labelTab: unused,
-    focusTab: selection.focusTab,
-    closeTab: unused,
-    stopRunningBrowser: unused,
-    resetProfile: unused,
-  };
-  const state = makeBrowserServerState({ profile, resolvedOverrides: { ssrfPolicy: undefined } });
-  const context: BrowserRouteContext = {
-    ...profileCtx,
-    state: () => state,
-    forProfile: () => profileCtx,
-    listProfiles: unused,
-    mapTabError: () => null,
-  };
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentStorageRoutes(app, context);
   registerBrowserPermissionRoutes(app, context);

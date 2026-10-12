@@ -1,15 +1,28 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCrabboxWorkerDesktopSetup } from "./crabbox-worker-desktop-setup.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const browserClosures: Promise<unknown>[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
+  afterEach(async () => {
+    try {
+      // Timeout starts afterEach before body finally settles; retain the browser's stop
+      // marker until Python has reaped every adopted child and closed its pipes.
+      await Promise.all(browserClosures.splice(0));
+    } finally {
+      cleanupDirectories();
+    }
+  });
+});
 const sessionBus = "unix:path=/run/fixture/bus";
 const wallpaper = Buffer.from("fixture wallpaper");
 const browserLauncherProof = String.raw`
-import ctypes, json, os, pathlib, shlex, shutil, signal, subprocess, sys, time
+import ctypes, json, os, pathlib, shlex, shutil, signal, subprocess, sys
 
 root = pathlib.Path(sys.argv[2])
 home = root / "home"
@@ -20,7 +33,8 @@ flock = shutil.which("flock")
 assert flock, "Linux flock is required"
 # Adopt the launcher's background child so this fixture can terminate and reap it.
 assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
-environment = {"PATH": str(bin) + ":" + os.environ["PATH"], "HOME": str(home), "FIXTURE_ROOT": str(root)}
+readiness, ready_writer = os.pipe()
+environment = {"PATH": str(bin) + ":" + os.environ["PATH"], "HOME": str(home), "FIXTURE_ROOT": str(root), "FIXTURE_READY_FD": str(ready_writer)}
 commands = {
     "getent": 'import os; print("fixture:x:0:0::" + os.environ["FIXTURE_ROOT"] + "/home:/bin/bash")',
     "curl": 'import os, pathlib, sys; assert sys.argv[-1] == "http://127.0.0.1:9222/json/version"; sys.exit(0 if (pathlib.Path(os.environ["FIXTURE_ROOT"]) / "ready").exists() else 1)',
@@ -29,6 +43,7 @@ root = pathlib.Path(os.environ["FIXTURE_ROOT"])
 with (root / "launches").open("a") as output: output.write("launch" + chr(10))
 (root / "browser.pid.tmp").write_text(str(os.getpid()))
 (root / "browser.pid.tmp").replace(root / "browser.pid")
+with os.fdopen(int(os.environ["FIXTURE_READY_FD"]), "w") as ready: ready.write(str(os.getpid()) + chr(10))
 while not (root / "stop").exists(): time.sleep(0.01)
 ''',
 }
@@ -45,14 +60,15 @@ launcher.write_text(script)
 def interrupted(signum, frame): raise SystemExit(128 + signum)
 signal.signal(signal.SIGTERM, interrupted)
 signal.signal(signal.SIGINT, interrupted)
-first = subprocess.Popen(["/bin/bash", str(launcher)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+first = subprocess.Popen(["/bin/bash", str(launcher)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=(ready_writer,))
+os.close(ready_writer)
 result = {}
 try:
-    deadline = time.monotonic() + 5
-    while not (root / "browser.pid").exists():
-        assert first.poll() is None and time.monotonic() < deadline, "Browser fixture did not start"
-        time.sleep(0.01)
-    browser = int((root / "browser.pid").read_text())
+    with os.fdopen(readiness) as ready:
+        identity = ready.readline()
+    assert identity, "Browser fixture did not start"
+    browser = int(identity)
+    assert int((root / "browser.pid").read_text()) == browser
     locks = list(home.glob(".cache/openclaw/worker-browser/*/.openclaw-launch.lock"))
     assert len(locks) == 1
     def lock_available():
@@ -60,7 +76,7 @@ try:
     result["parentHeldDuringReadiness"] = not lock_available()
     assert result["parentHeldDuringReadiness"], "Launcher released its lock before readiness"
     (root / "ready").touch()
-    _, errors = first.communicate(timeout=5)
+    _, errors = first.communicate()
     assert first.returncode == 0, errors.decode()
     os.kill(browser, 0)
     result["browserAliveAfterReady"] = True
@@ -78,7 +94,7 @@ finally:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     (root / "stop").touch()
     if first.poll() is None: first.terminate()
-    first.communicate(timeout=5)
+    first.communicate()
     while True:
         try: os.waitpid(-1, 0)
         except ChildProcessError: break
@@ -191,7 +207,11 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
       mode: 0o700,
     });
   }
-  const script = createCrabboxWorkerDesktopSetup("cbx_desktop_test", wallpaper.toString("base64"))
+  const script = createCrabboxWorkerDesktopSetup(
+    "cbx_desktop_test",
+    wallpaper.toString("base64"),
+    "linux",
+  )
     .replaceAll("/var/lib/crabbox/desktop.env", path.join(root, "desktop.env"))
     .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`)
     .replaceAll("/usr/local/bin/", `${bin}/`);
@@ -219,23 +239,46 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
 }
 
 describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", () => {
-  it("reuses the live browser after releasing only the completed launcher's lock", () => {
+  it("reuses the live browser after releasing only the completed launcher's lock", async ({
+    signal,
+  }) => {
     const root = tempDirs.make("crabbox-browser-launch-");
-    const setup = createCrabboxWorkerDesktopSetup("cbx_browser_test", wallpaper.toString("base64"));
+    const setup = createCrabboxWorkerDesktopSetup(
+      "cbx_browser_test",
+      wallpaper.toString("base64"),
+      "linux",
+    );
     const launcher = setup.match(
       /<<'WORKER_BROWSER_LAUNCHER_EOF'\n([\s\S]*?)\nWORKER_BROWSER_LAUNCHER_EOF/u,
     )?.[1];
     expect(launcher).toBeDefined();
     const launcherFile = path.join(root, "browser.sh");
     fs.writeFileSync(launcherFile, `${launcher}\n`);
-    const result = spawnSync("python3", ["-c", browserLauncherProof, launcherFile, root], {
-      encoding: "utf8",
-      timeout: 15_000,
+    const child = spawn("python3", ["-c", browserLauncherProof, launcherFile, root], {
       env: { PATH: process.env.PATH },
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
+    const closed = once(child, "close");
+    browserClosures.push(closed);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    try {
+      const [code] = await withinTest(closed, signal);
+      expect(code, stderr).toBe(0);
+    } finally {
+      // Python owns the adopted browser; let its finally stop and reap the whole fixture.
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      await closed;
+    }
+    expect(JSON.parse(stdout)).toEqual({
       parentHeldDuringReadiness: true,
       browserAliveAfterReady: true,
       releasedAfterReady: true,

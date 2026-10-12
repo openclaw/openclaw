@@ -1,17 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { runtimeAuthMetadataState } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileState, AuthProfileStore } from "./types.js";
 
 const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
-
-function hasInlineOAuthTokenMaterial(credential: object): boolean {
-  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => Reflect.get(credential, field) !== undefined);
-}
 
 function hasChangedInlineOAuthTokenMaterial(params: {
   credential: object;
@@ -46,10 +41,7 @@ function preserveLegacyOAuthRefsOnSave(params: {
     ) {
       continue;
     }
-    if (
-      hasInlineOAuthTokenMaterial(credential) &&
-      hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })
-    ) {
+    if (hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })) {
       continue;
     }
     // Preserve legacy oauthRef ownership when current save data did not replace
@@ -100,10 +92,6 @@ export function prepareAuthProfileStoreMutation(params: {
       credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
       stateChanged,
       selectionChanged,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        payload.profiles,
-        changedProfileIds,
-      ),
     },
   };
 }
@@ -118,21 +106,14 @@ export function prepareAuthProfileStateMutation(params: {
   const statePayload = buildPersistedAuthProfileState(store);
   const stateChanged = !isDeepStrictEqual(existingState, statePayload);
   const previousState = coerceAuthProfileState(existingState);
+  const metadata = (state: AuthProfileState | null) =>
+    runtimeAuthMetadataState({
+      ...store,
+      profiles: selectionProfiles,
+      order: state?.order,
+      usageStats: state?.usageStats,
+    });
   const selectionChanged =
-    stateChanged &&
-    !isDeepStrictEqual(
-      runtimeAuthMetadataState({
-        ...store,
-        profiles: selectionProfiles,
-        order: previousState.order,
-        usageStats: previousState.usageStats,
-      }),
-      runtimeAuthMetadataState({
-        ...store,
-        profiles: selectionProfiles,
-        order: statePayload?.order,
-        usageStats: statePayload?.usageStats,
-      }),
-    );
+    stateChanged && !isDeepStrictEqual(metadata(previousState), metadata(statePayload));
   return { statePayload, stateChanged, selectionChanged };
 }

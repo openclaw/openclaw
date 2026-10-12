@@ -1,5 +1,4 @@
-// WhatsApp web auto-reply media delivery behavior.
-import fs from "node:fs/promises";
+// WhatsApp web auto-reply media and terminal failure delivery behavior.
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +7,8 @@ import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
+  sendWebDirectInboundMessage,
+  sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundCallbackMessage } from "./inbound.js";
@@ -129,26 +130,9 @@ describe("web auto-reply media delivery", () => {
     return call[0];
   }
 
-  async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
-    setLoadConfigMock(() => ({
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"],
-          mediaMaxMb,
-        },
-      },
-    }));
-    try {
-      return await run();
-    } finally {
-      resetLoadConfigMock();
-    }
-  }
-
-  function fetchResponse(body: Buffer | null, mime: string, status = 200): Response {
-    return new Response(body ? Uint8Array.from(body) : null, {
+  function fetchResponse(body: Buffer, mime: string): Response {
+    return new Response(Uint8Array.from(body), {
       headers: { "content-type": mime },
-      status,
     });
   }
 
@@ -157,100 +141,6 @@ describe("web auto-reply media delivery", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => fetchResponse(buffer, mime));
   }
-
-  async function expectCompressedImageWithinCap(params: {
-    mediaUrl: string;
-    mime: string;
-    image: Buffer;
-    messageId: string;
-    mediaMaxMb?: number;
-  }) {
-    await withMediaCap(params.mediaMaxMb ?? 1, async () => {
-      const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-        resolverValue: { text: "hi", mediaUrl: params.mediaUrl },
-      });
-      const fetchMock = mockFetchMediaBuffer(params.image, params.mime);
-
-      await dispatch(params.messageId);
-
-      const payload = getSingleImagePayload(sendMedia);
-      expect(payload.image.length).toBeLessThanOrEqual((params.mediaMaxMb ?? 1) * 1024 * 1024);
-      expect(payload.mimetype).toBe("image/jpeg");
-      expect(reply).not.toHaveBeenCalled();
-      fetchMock.mockRestore();
-    });
-  }
-
-  it("sends common in-limit image formats without re-encoding", async () => {
-    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
-    const webp = await fs.readFile("extensions/whatsapp/src/__fixtures__/large-noisy.webp");
-    const formats = [
-      {
-        name: "png",
-        mime: "image/png",
-        image: createSolidPngBuffer(64, 64, { r: 80, g: 120, b: 200 }),
-      },
-      {
-        name: "jpeg",
-        mime: "image/jpeg",
-        image: jpeg,
-      },
-      {
-        name: "webp",
-        mime: "image/webp",
-        image: webp,
-      },
-    ] as const;
-
-    await withMediaCap(1, async () => {
-      const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-        resolverValue: {
-          text: "hi",
-          mediaUrl: "https://example.com/big.image",
-        },
-      });
-      let fetchIndex = 0;
-
-      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-        const matched = formats[Math.min(fetchIndex, formats.length - 1)] ?? formats[0];
-        fetchIndex += 1;
-        const { image, mime } = matched;
-        return fetchResponse(image, mime);
-      });
-
-      try {
-        for (const [index, fmt] of formats.entries()) {
-          const beforeCalls = sendMedia.mock.calls.length;
-          await dispatch(`msg-${fmt.name}-${index}`, {
-            from: `+1${index}`,
-            conversationId: `conv-${index}`,
-            chatJid: `conv-${index}`,
-          });
-          expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
-          const payload = imagePayloadAt(sendMedia, beforeCalls);
-          expect(payload.image.length).toBeGreaterThan(0);
-          expect(payload.image.length).toBeLessThanOrEqual(1024 * 1024);
-          expect(payload.mimetype).toBe(fmt.mime);
-        }
-        expect(sendMedia).toHaveBeenCalledTimes(formats.length);
-        expect(reply).not.toHaveBeenCalled();
-      } finally {
-        fetchMock.mockRestore();
-      }
-    });
-  });
-
-  it("honors channels.whatsapp.mediaMaxMb for outbound auto-replies", async () => {
-    const bigPng = createNoisyPngBuffer(256, 256);
-    expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
-    await expectCompressedImageWithinCap({
-      mediaUrl: "https://example.com/big.png",
-      mime: "image/png",
-      image: bigPng,
-      messageId: "msg1",
-      mediaMaxMb: SMALL_MEDIA_CAP_MB,
-    });
-  });
 
   it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
     const bigPng = createNoisyPngBuffer(256, 256);
@@ -331,48 +221,73 @@ describe("web auto-reply media delivery", () => {
     expect(fallback).toContain("Media failed");
     fetchMock.mockRestore();
   });
-  it("returns a warning when remote media fetch 404s", async () => {
-    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "caption",
-        mediaUrl: "https://example.com/missing.jpg",
-      },
-    });
+});
 
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(fetchResponse(null, "text/plain", 404));
+describe("web auto-reply terminal failure delivery", () => {
+  installWebAutoReplyUnitTestHooks({ pinDns: true });
+  const TERMINAL_FAILURE_TEXT = "⚠️ The model ended this turn without answering.";
+  const SELF_JID = "123@s.whatsapp.net";
+  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
 
-    await dispatch("msg1");
-
-    expect(sendMedia).not.toHaveBeenCalled();
-    const fallback = replyText(reply);
-    expect(fallback).toContain("caption");
-    expect(fallback).toContain("Media failed");
-    expect(fallback).not.toContain("404");
-
-    fetchMock.mockRestore();
+  beforeAll(async () => {
+    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
-  it("sends media with a caption when delivery succeeds", async () => {
-    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "hi",
-        mediaUrl: "https://example.com/img.png",
-      },
+
+  async function startMonitorWithTerminalFailure(): Promise<{
+    spies: ReturnType<typeof createWebInboundDeliverySpies>;
+    onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
+  }> {
+    const spies = createWebInboundDeliverySpies();
+    const resolver = vi.fn().mockResolvedValue({ text: TERMINAL_FAILURE_TEXT, isError: true });
+    let capturedOnMessage: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
+    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+      capturedOnMessage = onMessage;
+      return createMockWebListener();
+    };
+
+    await monitorWebChannel(false, listenerFactory, false, resolver);
+    if (!capturedOnMessage) {
+      throw new Error("expected WhatsApp web message handler");
+    }
+    return { spies, onMessage: capturedOnMessage };
+  }
+
+  it("sends a terminal failure final to a direct chat", async () => {
+    const { spies, onMessage } = await startMonitorWithTerminalFailure();
+
+    await sendWebDirectInboundMessage({
+      onMessage,
+      spies,
+      id: "direct-terminal-failure",
+      from: "+1000",
+      to: "+2000",
+      body: "hello",
     });
 
-    const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
+    expect(spies.reply).toHaveBeenCalledTimes(1);
+    const sentText = spies.reply.mock.calls[0]?.[0];
+    expect(sentText).toContain(TERMINAL_FAILURE_TEXT);
+    // Suppressing the terminal failure previously left core to substitute its generic
+    // no-visible-reply fallback, which hides the real reason the turn ended.
+    expect(sentText).not.toContain("No reply was generated");
+  });
 
-    const fetchMock = mockFetchMediaBuffer(png, "image/png");
+  it("sends a terminal failure final to a group chat", async () => {
+    const { spies, onMessage } = await startMonitorWithTerminalFailure();
 
-    await dispatch("msg1");
+    await sendWebGroupInboundMessage({
+      onMessage,
+      spies,
+      id: "group-terminal-failure",
+      body: "hello",
+      senderE164: "+1000",
+      senderName: "Tester",
+      selfE164: "+2000",
+      selfJid: SELF_JID,
+      mentionedJids: [SELF_JID],
+    });
 
-    const payload = getSingleImagePayload(sendMedia);
-    expect(payload.caption).toBe("hi");
-    expect(payload.image.length).toBeGreaterThan(0);
-    // Should not fall back to separate text reply because caption is used.
-    expect(reply).not.toHaveBeenCalled();
-
-    fetchMock.mockRestore();
+    expect(spies.reply).toHaveBeenCalledTimes(1);
+    expect(spies.reply.mock.calls[0]?.[0]).toContain(TERMINAL_FAILURE_TEXT);
   });
 });

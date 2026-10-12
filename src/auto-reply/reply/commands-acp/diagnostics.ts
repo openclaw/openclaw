@@ -1,4 +1,3 @@
-// Formats ACP diagnostics and runtime error details for command replies.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -6,9 +5,11 @@ import {
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText, toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
-import { listAcpSessionEntries, readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
-import type { SessionEntry, SessionAcpMeta } from "../../../config/sessions/types.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import {
+  listAcpSessionEntries,
+  readAcpSessionEntryAsync,
+} from "../../../acp/runtime/session-meta.js";
+import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -20,23 +21,6 @@ import {
   formatAcpCapabilitiesText,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
-
-function isBackendPluginBlockedByAllowlist(params: {
-  cfg: HandleCommandsParams["cfg"];
-  backendId: string;
-}): boolean {
-  const allow = params.cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return false;
-  }
-  const normalizedBackendId = normalizeLowercaseStringOrEmpty(params.backendId);
-  if (!normalizedBackendId) {
-    return false;
-  }
-  return !allow.some(
-    (pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === normalizedBackendId,
-  );
-}
 
 export async function handleAcpDoctorAction(
   params: HandleCommandsParams,
@@ -50,32 +34,31 @@ export async function handleAcpDoctorAction(
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
-  const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
-  lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
-  lines.push(`runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`);
-  lines.push(`evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`);
-  lines.push(`activeTurns: ${managerSnapshot.turns.active}`);
-  lines.push(`queueDepth: ${managerSnapshot.turns.queueDepth}`);
-  lines.push(
+  const lines = [
+    "ACP doctor:",
+    "-----",
+    `configuredBackend: ${backendId}`,
+    `activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`,
+    `runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`,
+    `evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`,
+    `activeTurns: ${managerSnapshot.turns.active}`,
+    `queueDepth: ${managerSnapshot.turns.queueDepth}`,
     `turnLatencyMs: avg=${managerSnapshot.turns.averageLatencyMs}, max=${managerSnapshot.turns.maxLatencyMs}`,
-  );
-  lines.push(
     `turnCounts: completed=${managerSnapshot.turns.completed}, failed=${managerSnapshot.turns.failed}`,
-  );
+  ];
   const errorStatsText =
     Object.entries(managerSnapshot.errorsByCode)
       .map(([code, count]) => `${code}=${count}`)
       .join(", ") || "(none)";
   lines.push(`errorCodes: ${errorStatsText}`);
-  if (registeredBackend) {
-    lines.push(`registeredBackend: ${registeredBackend.id}`);
-  } else {
-    lines.push("registeredBackend: (none)");
-  }
-  const backendBlockedByAllowlist = isBackendPluginBlockedByAllowlist({
-    cfg: params.cfg,
-    backendId,
-  });
+  lines.push(`registeredBackend: ${registeredBackend ? registeredBackend.id : "(none)"}`);
+  const allow = params.cfg.plugins?.allow;
+  const normalizedBackendId = normalizeLowercaseStringOrEmpty(backendId);
+  const backendBlockedByAllowlist =
+    Array.isArray(allow) &&
+    allow.length > 0 &&
+    Boolean(normalizedBackendId) &&
+    !allow.some((pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === normalizedBackendId);
   if (backendBlockedByAllowlist) {
     lines.push(`pluginActivation: blocked (${backendId} is missing from plugins.allow)`);
   }
@@ -116,7 +99,6 @@ export async function handleAcpDoctorAction(
     if ((capabilities.configOptionKeys?.length ?? 0) > 0) {
       lines.push(`configKeys: ${capabilities.configOptionKeys?.join(", ")}`);
     }
-    return commandReply(lines.join("\n"));
   } catch (error) {
     const acpError = toAcpRuntimeError({
       error,
@@ -130,11 +112,11 @@ export async function handleAcpDoctorAction(
     }
     lines.push(`next: ${installHint}`);
     lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
-    if (normalizeLowercaseStringOrEmpty(backendId) === "acpx") {
+    if (normalizedBackendId === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
-    return commandReply(lines.join("\n"));
   }
+  return commandReply(lines.join("\n"));
 }
 
 export function handleAcpInstallAction(
@@ -157,23 +139,6 @@ export function handleAcpInstallAction(
   return commandReply(lines.join("\n"));
 }
 
-function formatAcpSessionLine(params: {
-  key: string;
-  agentId?: string;
-  currentAgentId: string;
-  entry: SessionEntry;
-  acp: SessionAcpMeta;
-  currentSessionKey?: string;
-  threadId?: string;
-}): string {
-  const acp = params.acp;
-  const marker =
-    params.currentSessionKey === params.key && params.currentAgentId === params.agentId ? "*" : " ";
-  const label = normalizeOptionalString(params.entry.label) || acp.agent;
-  const threadText = params.threadId ? `, thread:${params.threadId}` : "";
-  return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${params.agentId ? `, owner:${params.agentId}` : ""}${threadText}) -> ${params.key}`;
-}
-
 export async function handleAcpSessionsAction(
   params: HandleCommandsParams,
   restTokens: string[],
@@ -191,49 +156,48 @@ export async function handleAcpSessionsAction(
   const bindingContext = resolveAcpCommandBindingContext(params);
   const normalizedChannel = bindingContext.channel;
   const normalizedAccountId = bindingContext.accountId || undefined;
-  const bindingService = getSessionBindingService();
   const currentEntry = params.command.senderIsOwner
     ? null
-    : readAcpSessionEntry({
+    : await readAcpSessionEntryAsync({
         cfg: params.cfg,
         sessionKey: currentSessionKey,
         agentId: target.agentId,
+        assertCurrent: params.command.assertOwnerCurrent,
       });
+  params.command.assertOwnerCurrent?.();
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })
     : currentEntry?.entry && currentEntry.acp
       ? [currentEntry]
       : [];
+  params.command.assertOwnerCurrent?.();
 
-  const rows = visibleEntries
+  const selectedEntries = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
-    .slice(0, 20)
+    .slice(0, 20);
+  const bindingsBySession = await listSessionBindingsBySessionsAsync(
+    selectedEntries
+      .filter(({ entry, acp }) => entry && acp)
+      .map(({ storeSessionKey }) => storeSessionKey),
+  );
+  params.command.assertOwnerCurrent?.();
+  const rows = selectedEntries
     .map(({ storeSessionKey, agentId, entry, acp }) => {
       if (!entry || !acp) {
         return "";
       }
-      const bindingThreadId = bindingService
-        .listBySession(storeSessionKey)
-        .find(
-          (binding) =>
-            (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
-            (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
-        )?.conversation.conversationId;
-      return formatAcpSessionLine({
-        key: storeSessionKey,
-        agentId,
-        currentAgentId: target.agentId,
-        entry,
-        acp,
-        currentSessionKey,
-        threadId: bindingThreadId,
-      });
+      const bindingThreadId = (bindingsBySession.get(storeSessionKey) ?? []).find(
+        (binding) =>
+          (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
+          (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
+      )?.conversation.conversationId;
+      const marker =
+        currentSessionKey === storeSessionKey && target.agentId === agentId ? "*" : " ";
+      const label = normalizeOptionalString(entry.label) || acp.agent;
+      const threadText = bindingThreadId ? `, thread:${bindingThreadId}` : "";
+      return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${agentId ? `, owner:${agentId}` : ""}${threadText}) -> ${storeSessionKey}`;
     })
     .filter(Boolean);
 
-  if (rows.length === 0) {
-    return commandReply("ACP sessions:\n-----\n(none)");
-  }
-
-  return commandReply(["ACP sessions:", "-----", ...rows].join("\n"));
+  return commandReply(["ACP sessions:", "-----", ...(rows.length ? rows : ["(none)"])].join("\n"));
 }

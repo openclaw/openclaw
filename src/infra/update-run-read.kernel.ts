@@ -6,6 +6,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import type {
+  UpdateRunReconciliationCandidate,
+  UpdateRunReconciliationInput,
+} from "./update-run-reconciliation.types.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_FIELDS = [
@@ -21,7 +27,7 @@ export function decodeRun(row: UpdateRuns) {
   const metadata = Object.fromEntries(
     JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
   );
-  return UpdateRunRecordSchema.parse({
+  const record = UpdateRunRecordSchema.parse({
     ...metadata,
     runId: row.run_id,
     createdAtMs: row.created_at_ms,
@@ -34,6 +40,10 @@ export function decodeRun(row: UpdateRuns) {
     finishedAtMs: row.finished_at_ms,
     downtimeMs: row.downtime_ms,
   });
+  if (record.origin.admission) {
+    record.admission = record.origin.admission;
+  }
+  return record;
 }
 
 export function readUpdateRunRecord(db: DatabaseSync, runId: string) {
@@ -54,10 +64,34 @@ export function readLatestUpdateRun(db: DatabaseSync) {
   return readUpdateRuns(db, { limit: 1 })[0];
 }
 
+/** A descriptor reserves its history for fenced recovery, even when its driver died.
+ * Presence is exclusion only: corrupt or older evidence never grants cleanup authority. */
+export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolean {
+  return (
+    tableExists(db, "config_machine_state") &&
+    Boolean(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+          .selectFrom("config_machine_state")
+          .select("state_key")
+          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
+      ),
+    )
+  );
+}
+
+export function readInterruptedUpdateCandidate(db: DatabaseSync) {
+  const run = readLatestUpdateRun(db);
+  return run && !hasStoredUpdateRecovery(db, run.runId) ? run : undefined;
+}
+
 export type UpdateRunListInput = {
   limit?: number;
   active?: boolean;
+  succeeded?: boolean;
   reason?: string;
+  excludeReason?: string;
   includeRunId?: string;
 };
 
@@ -71,8 +105,17 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
   if (input.active) {
     query = query.where("status", "=", "running");
   }
+  if (input.succeeded) {
+    query = query.where("status", "=", "succeeded");
+  }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);
+  }
+  const excludeReason = input.excludeReason;
+  if (excludeReason) {
+    query = query.where((eb) =>
+      eb.or([eb("reason", "is", null), eb("reason", "!=", excludeReason)]),
+    );
   }
   const runs = executeSqliteQuerySync(
     db,
@@ -89,4 +132,28 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
     }
   }
   return runs;
+}
+
+export function canReconcileUpdateRunCandidates(
+  candidates: UpdateRunReconciliationCandidate[],
+  input: UpdateRunReconciliationInput,
+): boolean {
+  return (
+    candidates.some(
+      ({ rule }) => rule && (!input.legacyOnly || rule === LEGACY_UPDATE_RUN_EXPIRED_REASON),
+    ) &&
+    !(input.explicit && candidates.some(({ record, rule }) => record.status === "running" && !rule))
+  );
+}
+
+export function readUpdateRunStatusInDatabase(db: DatabaseSync) {
+  return { activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) };
+}
+
+export function readUpdateRunHistoryStatusInDatabase(db: DatabaseSync) {
+  return {
+    activeRun: readActiveUpdateRun(db),
+    lastRun: readUpdateRuns(db, { limit: 1, excludeReason: "dry-run" })[0],
+    expiredRun: readUpdateRuns(db, { limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0],
+  };
 }

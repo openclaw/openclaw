@@ -5,7 +5,6 @@
  * Or: bun src/mcp/openclaw-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
@@ -18,7 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
-  resolveToolsMcpAgentSessionKey,
+  resolveToolsMcpAgentSessionKey as resolveOpenClawToolsMcpAgentSessionKey,
   resolveToolsMcpAgentId,
   resolveToolsMcpSessionContext,
 } from "./agent-session-env.js";
@@ -36,12 +35,6 @@ export {
 } from "./openclaw-tools-serve-config.js";
 
 export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
-
-export function resolveOpenClawToolsMcpAgentSessionKey(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return resolveToolsMcpAgentSessionKey(env);
-}
 
 export function resolveOpenClawToolsForMcp(
   params: {
@@ -96,17 +89,9 @@ export function resolveOpenClawToolsForMcp(
   );
 }
 
-function createOpenClawToolsMcpServer(
-  params: {
-    tools?: AnyAgentTool[];
-  } = {},
-): Server {
-  const tools = params.tools ?? resolveOpenClawToolsForMcp();
-  return createToolsMcpServer({ name: "openclaw-tools", tools });
-}
-
 async function serveOpenClawToolsMcp(): Promise<void> {
-  const server = createOpenClawToolsMcpServer({
+  const server = createToolsMcpServer({
+    name: "openclaw-tools",
     tools: resolveOpenClawToolsForMcp({ agentId: resolveToolsMcpAgentId() }),
   });
   await connectToolsMcpServerToStdio(server);
@@ -115,6 +100,6 @@ async function serveOpenClawToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveOpenClawToolsMcp().catch((err: unknown) => {
     process.stderr.write(`openclaw-tools-serve: ${formatErrorMessage(err)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

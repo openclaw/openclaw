@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
+import { hasMediaPayload } from "../media-payload.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 const STRUCTURED_TOOL_RESULT_MAX_CHARS = 8000;
@@ -42,11 +43,6 @@ function isBinaryMimeType(mimeType: string): boolean {
   return normalized ? !TEXTUAL_MIME_PATTERN.test(normalized) : false;
 }
 
-function describeOmittedValue(value: unknown, label: string): string {
-  const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
-  return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
-}
-
 function redactInlineDataUris(value: string): string {
   return value.replace(
     INLINE_DATA_URI_PATTERN,
@@ -71,7 +67,8 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
         if (key === "data") {
           const mimeType = readMimeType(this);
           if (mimeType && isBinaryMimeType(mimeType)) {
-            return describeOmittedValue(value, "binary data");
+            const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
+            return length ? `[binary data omitted: ${length} chars]` : "[binary data omitted]";
           }
         }
         if (typeof value === "bigint") {
@@ -107,18 +104,6 @@ function truncateStructuredToolText(text: string): string {
     return text;
   }
   return `${truncateUtf16Safe(text, STRUCTURED_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
-}
-
-/** Media metadata alone is not an attachment; provider emitters need inline bytes. */
-export function hasMediaPayload(
-  block: unknown,
-): block is Record<string, unknown> & { data: string } {
-  return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
-}
-
-/** Image metadata alone is not an attachment; provider emitters need inline bytes. */
-export function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return isRecord(block) && block.type === "image" && hasMediaPayload(block);
 }
 
 function classifyToolResultMedia(blocks: readonly unknown[]): {

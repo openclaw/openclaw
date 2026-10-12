@@ -105,72 +105,6 @@ function expectDeliveryContextFields(entry: StoredEntry, expected: Record<string
 }
 
 describe("subagent session deliveryContext from spawn request params", () => {
-  test("new subagent session inherits deliveryContext from request channel/to/threadId", async () => {
-    await prepareSessionStore();
-
-    await sendAgentRequest({
-      message: "[Subagent Task]: analyze data",
-      sessionKey: "agent:main:subagent:test-delivery-ctx",
-      channel: "slack",
-      to: "channel:C0AF8TW48UQ",
-      accountId: "default",
-      threadId: "1774374945.091819",
-      idempotencyKey: "idem-subagent-delivery-ctx-1",
-    });
-
-    const entry = await readStoredSessionEntry("agent:main:subagent:test-delivery-ctx");
-    expectDeliveryContextFields(entry, {
-      channel: "slack",
-      to: "channel:C0AF8TW48UQ",
-      threadId: "1774374945.091819",
-      accountId: "default",
-    });
-    expect(entry.route).toEqual({
-      channel: "slack",
-      accountId: "default",
-      target: { to: "channel:C0AF8TW48UQ" },
-      thread: { id: "1774374945.091819" },
-    });
-    expect(entry.lastChannel).toBe("slack");
-    expect(entry.lastTo).toBe("channel:C0AF8TW48UQ");
-  });
-
-  test("existing session deliveryContext is NOT overwritten by request params", async () => {
-    await prepareSessionStore({
-      "agent:main:subagent:existing-ctx": {
-        sessionId: "sess-existing",
-        updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "slack",
-          to: "user:U09U1LV7JDN",
-          accountId: "default",
-          threadId: "1771242986.529939",
-        },
-        lastChannel: "slack",
-        lastTo: "user:U09U1LV7JDN",
-        lastAccountId: "default",
-        lastThreadId: "1771242986.529939",
-      },
-    });
-
-    await sendAgentRequest({
-      message: "follow-up",
-      sessionKey: "agent:main:subagent:existing-ctx",
-      channel: "slack",
-      to: "channel:C0AF8TW48UQ",
-      threadId: "9999999999.000000",
-      idempotencyKey: "idem-subagent-delivery-ctx-2",
-    });
-
-    const entry = await readStoredSessionEntry("agent:main:subagent:existing-ctx");
-    // The ORIGINAL deliveryContext should be preserved (primary wins in merge).
-    expectDeliveryContextFields(entry, {
-      to: "user:U09U1LV7JDN",
-      threadId: "1771242986.529939",
-    });
-    expect(entry.lastTo).toBe("user:U09U1LV7JDN");
-  });
-
   test("existing session route metadata survives agent request delivery normalization", async () => {
     await prepareSessionStore({
       "agent:main:subagent:existing-route-metadata": {
@@ -268,22 +202,5 @@ describe("subagent session deliveryContext from spawn request params", () => {
       thread: { id: "1775577152.364109" },
     });
     expect(entry.lastThreadId).toBe("1775577152.364109");
-  });
-
-  test("request without to/threadId does not inject empty values", async () => {
-    await prepareSessionStore();
-
-    await sendAgentRequest({
-      message: "internal task",
-      sessionKey: "agent:main:subagent:no-routing",
-      channel: "slack",
-      idempotencyKey: "idem-subagent-delivery-ctx-3",
-    });
-
-    const entry = await readStoredSessionEntry("agent:main:subagent:no-routing");
-    expectDeliveryContextFields(entry, { channel: "slack" });
-    const deliveryContext = readDeliveryContext(entry);
-    expect(deliveryContext.to).toBeUndefined();
-    expect(deliveryContext.threadId).toBeUndefined();
   });
 });

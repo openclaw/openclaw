@@ -1,15 +1,14 @@
 import fs from "node:fs";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { readCurrentConfigForPolicyCheck } from "../config/io.runtime.js";
 import type { ConfigReplaceResult } from "../config/mutate.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexWriteReceipt } from "./installed-plugin-index-store-write.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginRuntimeApplication } from "./lifecycle.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
@@ -18,6 +17,8 @@ import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
+import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { withPluginSourceCleanup } from "./source-cleanup.js";
 
 export type PluginInstallRuntimeCommit = {
   pluginId: string;
@@ -25,11 +26,17 @@ export type PluginInstallRuntimeCommit = {
 } & ({ operation: "install"; sourceDigests: Record<string, string> } | { operation: "uninstall" });
 
 export type PluginInstallRuntimeDeferral = {
-  record(commit: PluginInstallRuntimeCommit, assertSourceCurrent?: () => void): void;
+  record(commit: PluginInstallRuntimeCommit): void;
   deferCleanup(cleanup: PluginSourceCleanup, sourcePath: string): void;
 };
 
 type PluginSourceCleanup = (
+  assertOwned: () => void,
+  warn: (message: string) => void,
+) => Promise<void>;
+
+type PreparedPluginSourceCleanup = (
+  index: InstalledPluginIndex,
   assertOwned: () => void,
   warn: (message: string) => void,
 ) => Promise<void>;
@@ -58,13 +65,12 @@ function indexFromRow(value: string | undefined) {
 export class PluginInstallRuntimeBatch {
   private readonly installs: Array<{
     commit?: PluginInstallRuntimeCommit;
-    cleanups: PluginSourceCleanup[];
+    cleanups: PreparedPluginSourceCleanup[];
   }> = [];
   private targets: PluginInstallBatchTarget[] = [];
   private readonly retained = new Set<string>();
-  private readonly sourceChecks = new Map<string, () => void>();
   private databasePath?: string;
-  private phase: "collecting" | "prepared" | "applying" | "closed" = "collecting";
+  private phase: "collecting" | "preparing" | "prepared" | "applying" | "closed" = "collecting";
 
   constructor(
     private readonly options: Pick<OpenClawStateDatabaseOptions, "env" | "path" | "database">,
@@ -83,7 +89,6 @@ export class PluginInstallRuntimeBatch {
     }
     this.targets = [];
     this.retained.clear();
-    this.sourceChecks.clear();
   }
 
   private assertOpen() {
@@ -103,17 +108,12 @@ export class PluginInstallRuntimeBatch {
     const entry: (typeof this.installs)[number] = { cleanups: [] };
     this.installs.push(entry);
     return {
-      record: (commit, assertSourceCurrent) => {
+      record: (commit) => {
         this.assertCollecting();
         if (entry.commit) {
           throw new Error("Plugin install already committed in this batch");
         }
         entry.commit = commit;
-        if (assertSourceCurrent) {
-          this.sourceChecks.set(commit.pluginId, assertSourceCurrent);
-        } else {
-          this.sourceChecks.delete(commit.pluginId);
-        }
       },
       deferCleanup: (cleanup, sourcePath) => {
         this.assertCollecting();
@@ -122,7 +122,7 @@ export class PluginInstallRuntimeBatch {
         }
         const configPath = entry.commit.write.configWrite.path;
         const original = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
-        entry.cleanups.push(async (assertOwned, warn) => {
+        entry.cleanups.push(async (index, assertOwned, warn) => {
           const assertUnclaimed = () => {
             assertOwned();
             const current = fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
@@ -133,28 +133,21 @@ export class PluginInstallRuntimeBatch {
             ) {
               throw new Error(`Retired plugin source changed before cleanup: ${sourcePath}`);
             }
-            const index = indexFromRow(
-              readPersistedInstalledPluginIndexRowSync({ filePath: this.databasePath })?.value_json,
-            );
-            if (!index) {
-              throw new Error("Plugin index disappeared before source cleanup");
-            }
-            const config = readCurrentConfigForPolicyCheck({
-              configPath,
-              env: this.options.env ?? process.env,
-            });
             if (
               createInstalledPluginOwnershipResolver(index, this.options.env).isSourceInUse(
                 sourcePath,
-                config.plugins?.load?.paths ?? [],
+                [],
               )
             ) {
               throw new Error(`Retired plugin source acquired a current owner: ${sourcePath}`);
             }
             assertOwned();
           };
-          assertUnclaimed();
-          await cleanup(assertUnclaimed, warn);
+          await withPluginSourceCleanup(
+            sourcePath,
+            { configPath, env: this.options.env, assertCurrent: assertUnclaimed },
+            (assertCurrent) => cleanup(assertCurrent, warn),
+          );
         });
       },
     };
@@ -166,17 +159,22 @@ export class PluginInstallRuntimeBatch {
   }
 
   /** Called before the original batch lease exits, after its compensation has settled. */
-  prepare(lease: PluginLifecycleLeaseContext): void {
+  async prepare(lease: PluginLifecycleLeaseContext): Promise<void> {
     this.assertCollecting();
+    this.phase = "preparing";
+    const databasePath = lease.databasePath;
     lease.assertOwned();
-    this.databasePath = lease.databasePath;
+    this.assertOpen();
+    this.databasePath = databasePath;
     if (!this.hasCommitted && this.retained.size === 0) {
       this.phase = "prepared";
       return;
     }
-    const index = indexFromRow(
-      readPersistedInstalledPluginIndexRowSync({ filePath: lease.databasePath })?.value_json,
-    );
+    // Settlement needs the final persisted row, even if this lease cached an earlier index.
+    const row = await readPluginMetadataStateRow("installed-index", { path: databasePath });
+    lease.assertOwned();
+    this.assertOpen();
+    const index = indexFromRow(row?.value_json);
     const current = index?.installRecords ?? {};
     const targets = new Map<string, PluginInstallBatchTarget>();
     for (const pluginId of this.retained) {
@@ -197,7 +195,6 @@ export class PluginInstallRuntimeBatch {
             entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
           })),
       );
-      this.sourceChecks.set(pluginId, source.assertSourceCurrent);
       targets.set(pluginId, {
         pluginId,
         installHash: hashStableJson(current[pluginId]),
@@ -213,7 +210,7 @@ export class PluginInstallRuntimeBatch {
     }
     for (const commit of finalCommits.values()) {
       const { pluginId, write } = commit;
-      if (write.mutation.databasePath !== lease.databasePath) {
+      if (write.mutation.databasePath !== databasePath) {
         throw new Error("Plugin batch commit belongs to a different state database");
       }
       const installed = indexFromRow(write.mutation.after.value_json)?.installRecords[pluginId];
@@ -233,6 +230,8 @@ export class PluginInstallRuntimeBatch {
       }
       targets.set(pluginId, { pluginId, installHash, sourceDigests: commit.sourceDigests });
     }
+    lease.assertOwned();
+    this.assertOpen();
     this.targets = [...targets.values()].toSorted((a, b) => a.pluginId.localeCompare(b.pluginId));
     this.phase = "prepared";
   }
@@ -255,19 +254,33 @@ export class PluginInstallRuntimeBatch {
         warn(warning);
       }
       await withPluginLifecycleLease(this.options, async (lease) => {
-        const assertCurrent = () => {
+        const assertOwned = () => {
           this.assertOpen();
           lease.assertOwned();
           if (lease.databasePath !== this.databasePath) {
             throw new Error("Plugin cleanup belongs to a different state database");
           }
-          const records =
-            indexFromRow(
-              readPersistedInstalledPluginIndexRowSync({ filePath: lease.databasePath })
-                ?.value_json,
-            )?.installRecords ?? {};
+        };
+        assertOwned();
+        const sourceCleanups = this.installs.flatMap(({ commit, cleanups }) =>
+          commit && targets.some((target) => target.pluginId === commit.pluginId) ? cleanups : [],
+        );
+        if (sourceCleanups.length === 0) {
+          return;
+        }
+        const row = await readPluginMetadataStateRow("installed-index", {
+          path: lease.databasePath,
+        });
+        assertOwned();
+        const index = indexFromRow(row?.value_json);
+        if (!index) {
+          throw new Error("Plugin index disappeared before source cleanup");
+        }
+        // Index producers share this lease; cleanups retire filesystem sources only.
+        const records = index.installRecords;
+        const assertCurrent = () => {
+          assertOwned();
           for (const target of targets) {
-            this.sourceChecks.get(target.pluginId)?.();
             if (
               !records[target.pluginId] ||
               hashStableJson(records[target.pluginId]) !== target.installHash
@@ -276,15 +289,10 @@ export class PluginInstallRuntimeBatch {
             }
           }
         };
-        for (const { commit, cleanups } of this.installs) {
-          if (!commit || !targets.some((target) => target.pluginId === commit.pluginId)) {
-            continue;
-          }
-          for (const cleanup of cleanups) {
-            assertCurrent();
-            await cleanup(assertCurrent, warn);
-            assertCurrent();
-          }
+        for (const cleanup of sourceCleanups) {
+          assertCurrent();
+          await cleanup(index, assertCurrent, warn);
+          assertCurrent();
         }
       });
       return application;

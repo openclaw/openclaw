@@ -29,7 +29,7 @@ export function buildUnresolvedBlockedPreludeSteps(
   invocationPurpose: LegacyStateMigrationInvocationPurpose,
 ): LegacyStateMigrationStep[] {
   const ids = [
-    ...(mode === "doctor" ? ["media-persistence"] : []),
+    ...(mode === "doctor" ? ["media-persistence", "session-entry-state"] : []),
     ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
     ...(mode === "doctor"
       ? ["profile-workspace", "plugin-migration-preparation", "orphan-session-keys"]
@@ -40,7 +40,7 @@ export function buildUnresolvedBlockedPreludeSteps(
     phase: "shared",
     source: [],
     target: [],
-    requiredness: "conditional",
+    requiredness: id === "session-entry-state" ? "required" : "conditional",
     reversibility: "checkpoint-required",
     run: () => ({ changes: [], warnings: [] }),
   }));
@@ -82,6 +82,36 @@ export function createConfigMigrationSources(
       path: path.resolve(inputPath),
     })),
   );
+}
+
+export function createAgentTargetDiscoveryStep(params: {
+  configPath: string;
+  configIncludedPaths: readonly string[];
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  run: LegacyStateMigrationStep["run"];
+  refusal?: PreparedLegacyStateMigrationStep["refusal"];
+}): LegacyStateMigrationStep {
+  return {
+    id: "agent-migration-targets",
+    phase: "shared",
+    source: [
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
+      {
+        kind: "sqlite",
+        path: resolveOpenClawStateSqlitePath({
+          ...params.env,
+          OPENCLAW_STATE_DIR: params.stateDir,
+        }),
+      },
+      { kind: "path", path: path.join(params.stateDir, "agents") },
+    ],
+    target: [],
+    requiredness: "required",
+    reversibility: "not-applicable",
+    ...(params.refusal ? { refusal: params.refusal } : {}),
+    run: params.run,
+  };
 }
 
 export function inspectOrphanSessionStoreEndpoints(params: {
@@ -185,6 +215,29 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             preparedTargets = targets;
           },
         }),
+      ),
+      sharedStep(
+        "session-entry-state",
+        agentPersistence,
+        agentPersistence,
+        async () => {
+          const { repairLegacySessionEntryStates } =
+            await import("../commands/doctor-session-delivery-state.js");
+          const report = await repairLegacySessionEntryStates({
+            apply: true,
+            cfg: params.config,
+            env: stateEnv,
+          });
+          return {
+            changes:
+              report.repaired > 0
+                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+                : [],
+            warnings: [],
+          };
+        },
+        undefined,
+        "required",
       ),
     );
   }

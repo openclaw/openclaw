@@ -4,12 +4,12 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
+import { getUpdateRunAsync as getUpdateRun } from "../infra/update-run-reader.js";
 import {
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-  recordUpdateRunVerification,
-} from "../infra/update-run-ledger.js";
+  finishUpdateRunAsync as finishUpdateRun,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunVerificationAsync as recordUpdateRunVerification,
+} from "../infra/update-run-write.async.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 
@@ -21,10 +21,10 @@ export async function finalizeRestartUpdateRun(
 ) {
   const options = { env: context.workerContext.environment };
   const updateRunId = payload.stats?.runId;
-  let updateRun = updateRunId ? getUpdateRun(updateRunId, options) : undefined;
+  let updateRun = updateRunId ? await getUpdateRun(updateRunId, options) : undefined;
   if (updateRun?.status === "running") {
     if (!updateRun.origin.sessionKey && payload.sessionKey) {
-      updateRun = recordUpdateRunPhase(
+      updateRun = await recordUpdateRunPhase(
         updateRun.runId,
         updateRun.phase,
         {
@@ -47,7 +47,7 @@ export async function finalizeRestartUpdateRun(
       updateRun.status === "running" &&
       (updateRun.phase === "restarting" || updateRun.phase === "verifying")
     ) {
-      updateRun = recordUpdateRunPhase(updateRun.runId, "verifying", {}, options);
+      updateRun = await recordUpdateRunPhase(updateRun.runId, "verifying", {}, options);
     }
     const runningVersion = resolveRuntimeServiceVersion();
     const runningBuildId = resolveRuntimeServiceBuildId();
@@ -77,7 +77,7 @@ export async function finalizeRestartUpdateRun(
     const pluginErrors = getActivePluginRegistry()
       ?.diagnostics.filter((entry) => entry.level === "error")
       .map((entry) => entry.message);
-    updateRun = recordUpdateRunVerification(
+    updateRun = await recordUpdateRunVerification(
       updateRun.runId,
       {
         booted: true,
@@ -99,13 +99,14 @@ export async function finalizeRestartUpdateRun(
     );
     if (updateRun.phase === "verifying" && updateRun.status === "running") {
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
-      await createUpdateRunNotifier(
+      const notify = await createUpdateRunNotifier(
         updateRun,
         undefined,
         undefined,
         undefined,
         context,
-      )(updateRun, "verifying");
+      );
+      await notify(updateRun, "verifying");
     }
     // A managed handoff preserves its original trigger, while an unmanaged RPC
     // also reaches restarting. Only the recorded owner can finish CLI verification.
@@ -116,7 +117,7 @@ export async function finalizeRestartUpdateRun(
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
     ) {
-      updateRun = finishUpdateRun(
+      updateRun = await finishUpdateRun(
         updateRun.runId,
         {
           status:

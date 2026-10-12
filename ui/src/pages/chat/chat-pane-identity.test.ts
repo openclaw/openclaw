@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
 import { html, render } from "lit";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -9,9 +9,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -24,23 +26,52 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { renderChat } from "./chat-view.ts";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
-  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    (pane as TestChatPane & { agentId: string }).agentId = "personal";
-    pane.sessionKey = "global";
-    state.sessionKey = "global";
-    state.assistantAgentId = "personal";
-    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-    pane.context.agentSelection.set("work");
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+    installTranscriptDomMocks();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.sessionKey = "agent:main:dashboard:first-paint";
+    const container = document.createElement("div");
+    const draw = () => {
+      pane.render();
+      render(renderChat(pane.chatProps!), container);
+    };
+    try {
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
-    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
+      draw();
+      expect(container.textContent).toContain("Cached mission briefing.");
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
 
-    expect(state.assistantAgentId).toBe("personal");
-    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+      state.chatMessages = [];
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+
+      state.currentSessionId = null;
+      state.connected = true;
+      state.chatLoading = true;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatLoading = false;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+    } finally {
+      render(html``, container);
+      resetTranscriptTestDom();
+    }
   });
 
   it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
@@ -148,11 +179,15 @@ describe("chat pane assistant identity snapshots", () => {
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
+          key: "global",
           agentId: "main",
-          includeApprovals: true,
         }),
       );
+      expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        agentId: "main",
+        includeApprovals: true,
+      });
       pane.state.chatSessionApprovalQueue = [
         {
           id: "stale-main-approval",
@@ -199,7 +234,7 @@ describe("chat pane assistant identity snapshots", () => {
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
     const client = createGatewayBrowserClientFixture();
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
     state.connected = true;
@@ -216,7 +251,10 @@ describe("chat pane assistant identity snapshots", () => {
   it("resets a session-specific identity when the logical connection changes", () => {
     const client = createGatewayBrowserClientFixture();
     const nextClient = createGatewayBrowserClientFixture();
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     state.assistantName = "Session Agent";
 
     pane.applyGatewaySnapshot({
@@ -275,7 +313,7 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.paneTitle = "Unrelated pane title";
+    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -314,7 +352,7 @@ describe("chat pane approval requester identity", () => {
     });
     Object.freeze(approval.request);
     Object.freeze(approval);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const redraw = vi.fn(() => {
       pane.render();
       render(renderChat(pane.chatProps!), container);
@@ -349,6 +387,10 @@ describe("chat pane approval requester identity", () => {
           },
         });
         await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
+        const approvalElement = container.querySelector<
+          HTMLElement & { updateComplete: Promise<boolean> }
+        >("openclaw-exec-approval-card")!;
+        await approvalElement.updateComplete;
         const card = container.querySelector(".chat-inline-approval .exec-approval-card");
         expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
         expect
@@ -360,6 +402,7 @@ describe("chat pane approval requester identity", () => {
     } finally {
       cancelChatStreamRenderFrame(state);
       render(html``, container);
+      container.remove();
     }
   });
 });
@@ -369,8 +412,7 @@ function createGlobalFeaturePane(
   methods: string[],
 ) {
   const client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.list" ? Promise.resolve({ tasks: [] }) : request(method, params),
+    request: (method, params) => request(method, params),
   });
   const sessions = createSessionCapabilityFixture({
     state: { modelOverrides: {}, result: null, loading: false, error: null },
@@ -453,6 +495,9 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
+  beforeEach(installTranscriptDomMocks);
+  afterEach(resetTranscriptTestDom);
+
   it.each([
     ["global", "research"],
     ["main", "research"],
@@ -506,17 +551,13 @@ describe("global chat pane feature ownership", () => {
           },
         });
       }
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
         render(renderChat(pane.chatProps!), container);
-        await (
-          container.querySelector("openclaw-chat-question-panel") as
-            | (HTMLElement & {
-                updateComplete?: Promise<unknown>;
-              })
-            | null
-        )?.updateComplete;
+        if (container.querySelector("openclaw-chat-question-card")) {
+          await questionPanelIn(container);
+        }
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
@@ -615,18 +656,32 @@ describe("global chat pane feature ownership", () => {
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
+  it("keeps revision-checked shared clearing behind a separate writer action", async () => {
+    const card = globalProgressCard("research");
+    const request = vi.fn(async (method: string) =>
+      method === "progressCard.put" ? { card: null } : { card },
+    );
+    const { pane } = createGlobalFeaturePane(request, ["progressCard.get", "progressCard.put"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+    expect(pane.chatProps?.onClearSavedProgressCard).toBeDefined();
+    pane.chatProps!.onClearSavedProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+    expect(request).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+      expectedRevision: card.revision,
+    });
+  });
+
+  it("hides only this pane's selected agent progress without clearing its card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {
-      if (method === "progressCard.put") {
-        card = null;
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
       }
       return { card };
     });
-    const { pane, emit } = createGlobalFeaturePane(request, [
-      "progressCard.get",
-      "progressCard.put",
-    ]);
+    const { pane, emit } = createGlobalFeaturePane(request, ["progressCard.get"]);
     await pane.updateComplete;
     expect(request).toHaveBeenCalledWith("progressCard.get", {
       sessionKey: "global",
@@ -645,11 +700,57 @@ describe("global chat pane feature ownership", () => {
     }
     pane.chatProps!.onDismissProgressCard!(displayedCard);
     await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
-    expect(request).toHaveBeenLastCalledWith("progressCard.put", {
-      sessionKey: "global",
-      agentId: "research",
-      expectedRevision: 2,
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
+
+    card = globalProgressCard("research", 3);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        3,
+      ),
+    );
+    expect(pane.chatProps?.progressCard).toBeNull();
+
+    card = null;
+    emit({ sessionKey: "agent:research:global", revision: null });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        4,
+      ),
+    );
+    card = globalProgressCard("research", 5);
+    emit({ sessionKey: card.sessionKey, revision: card.revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+  });
+
+  it("keeps each hidden card hidden when the same pane switches agents", async () => {
+    const research = globalProgressCard("research");
+    const main = globalProgressCard("main");
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId;
+      return { card: agentId === "main" ? main : research };
     });
+    const { pane, select } = createGlobalFeaturePane(request, ["progressCard.get"]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(research));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("main");
+    await pane.updateComplete;
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(main));
+    pane.chatProps!.onDismissProgressCard!(pane.chatProps!.progressCard!);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
+
+    select("research");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    select("main");
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
   });
 
   it("keeps Main progress when an old Research response arrives for the same raw global key", async () => {
@@ -679,5 +780,159 @@ describe("global chat pane feature ownership", () => {
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toEqual(main);
     expect(reads).toBe(2);
+  });
+});
+
+describe("chat pane message cuts", () => {
+  it("restores forked prompt attachments into the new session composer", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockResolvedValue({
+        sessionKey: "agent:main:forked",
+        editorText: "edit me",
+        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      }),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
+
+    await pane.forkFromMessage("user-entry");
+
+    expect(state.sessionKey).toBe("agent:main:current");
+    expect(state.chatAttachments).toEqual([
+      { id: "old", mimeType: "image/jpeg", dataUrl: "data:old" },
+    ]);
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toEqual({
+      attachments: [
+        {
+          id: expect.stringMatching(/^att-/),
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,aW1hZ2U=",
+        },
+      ],
+      draft: "edit me",
+    });
+  });
+
+  it("keeps a newer global agent selection when a message fork finishes late", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    state.sessionKey = "global";
+    state.assistantAgentId = "main";
+
+    const pending = pane.forkFromMessage("user-entry");
+    state.assistantAgentId = "work";
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "edit me" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("global");
+    expect(state.assistantAgentId).toBe("work");
+  });
+
+  it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.forkFromMessage("user-entry");
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
+  });
+
+  it("does not navigate or seed a draft after leaving and returning to the retained source", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    pane.sessionKey = state.sessionKey;
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    try {
+      const pending = pane.forkFromMessage("user-entry");
+      // A -> B -> A retains A's component, session key, and connection.
+      pane.presented = false;
+      pane.presented = true;
+      state.chatMessage = "newer source draft";
+      forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
+
+      await pending;
+      expect(navigate).not.toHaveBeenCalled();
+      expect(
+        consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
+      ).toBeNull();
+      expect(state.sessionKey).toBe("agent:main:current");
+      expect(state.chatMessage).toBe("newer source draft");
+    } finally {
+      pane.presented = false;
+    }
+  });
+
+  it.each([
+    { presentation: "hidden", returnToSource: false },
+    { presentation: "shown again", returnToSource: true },
+  ])(
+    "does not paint a stale fork error in a retained source that is $presentation",
+    async ({ returnToSource }) => {
+      const forked = createDeferred<never>();
+      const sessions = {
+        forkAtMessage: vi.fn(() => forked.promise),
+      } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+      pane.sessionKey = state.sessionKey;
+
+      try {
+        const pending = pane.forkFromMessage("user-entry");
+        pane.presented = false;
+        if (returnToSource) {
+          pane.presented = true;
+        }
+        forked.reject(new Error("stale fork failed"));
+
+        await pending;
+        expect(state.lastError).toBeNull();
+        expect(state.chatError).toBeNull();
+      } finally {
+        pane.presented = false;
+      }
+    },
+  );
+
+  it("shows a current fork error after the retained source is presented again", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockRejectedValue(new Error("current fork failed")),
+    } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    pane.sessionKey = state.sessionKey;
+
+    try {
+      pane.presented = false;
+      pane.presented = true;
+      await pane.forkFromMessage("user-entry");
+
+      expect(state.lastError).toBe("current fork failed");
+      expect(state.chatError).toBe("current fork failed");
+    } finally {
+      pane.presented = false;
+    }
   });
 });

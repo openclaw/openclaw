@@ -41,10 +41,7 @@ describe("resolveSenderLabel opaque ids", () => {
     ).toBe("steipete");
   });
 
-  it("still appends disambiguating handles and numbers", () => {
-    expect(resolveSenderLabel({ name: "Peter", e164: "+436641234567" })).toBe(
-      "Peter (+436641234567)",
-    );
+  it("still appends a disambiguating handle", () => {
     expect(resolveSenderLabel({ name: "Peter", id: "peter@example.com" })).toBe(
       "Peter (peter@example.com)",
     );

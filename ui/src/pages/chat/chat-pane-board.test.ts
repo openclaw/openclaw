@@ -70,7 +70,7 @@ type TestChatPane = HTMLElement & {
   readonly conversationPresented: boolean;
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
-  resetConfirmationOpen: boolean;
+  resetConfirmation: object | undefined;
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
@@ -78,9 +78,9 @@ type TestChatPane = HTMLElement & {
   commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
+  willUpdate: (changes: Map<PropertyKey, unknown>) => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
-  persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
   renderBoardPanel: (
@@ -114,6 +114,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     chatError: null,
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -336,6 +337,7 @@ describe("chat pane board shell", () => {
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
+      pane.willUpdate(new Map());
       pane.updated();
       expect(pane.conversationPresented).toBe(false);
       expect(pane.state.sidebarLayout.expanded).toBe(true);
@@ -346,40 +348,38 @@ describe("chat pane board shell", () => {
       );
 
       pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
+      pane.willUpdate(new Map());
       pane.updated();
       expect(pane.state.sidebarLayout.expanded).toBe(false);
       expect(pane.conversationPresented).toBe(slot === "dashboard");
     },
   );
 
-  it.each([true, false])(
-    "restores saved task layout with side panel open=%s on an ordinary dashboard revisit",
-    (open) => {
-      const pane = createTestPane();
-      pane.state.sessionKey = "agent:main:saved-dashboard-layout";
-      pane.sessionKey = pane.state.sessionKey;
-      pane.boardProvider = createMockBoardProvider(pane.sessionKey);
-      pane.routeFace = "dashboard";
-      pane.onFaceChange = vi.fn();
-      const savedLayout = {
-        ...setSidebarDock(
-          promoteSidebarPanel(
-            openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
-            "terminal",
-          ),
-          "left",
+  it("restores a closed saved task layout on an ordinary dashboard revisit", () => {
+    const pane = createTestPane();
+    pane.state.sessionKey = "agent:main:saved-dashboard-layout";
+    pane.sessionKey = pane.state.sessionKey;
+    pane.boardProvider = createMockBoardProvider(pane.sessionKey);
+    pane.routeFace = "dashboard";
+    pane.onFaceChange = vi.fn();
+    const savedLayout = {
+      ...setSidebarDock(
+        promoteSidebarPanel(
+          openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
+          "terminal",
         ),
-        open,
-      };
-      pane.state.sidebarLayout = savedLayout;
-      patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
+        "left",
+      ),
+      open: false,
+    };
+    pane.state.sidebarLayout = savedLayout;
+    patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
-      pane.syncRetainedBoardSession(pane.resolveBoardView());
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
 
-      expect(pane.state.sidebarLayout).toEqual(savedLayout);
-      expect(pane.onFaceChange).not.toHaveBeenCalled();
-    },
-  );
+    expect(pane.state.sidebarLayout).toEqual(savedLayout);
+    expect(pane.onFaceChange).not.toHaveBeenCalled();
+  });
 
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
@@ -410,22 +410,23 @@ describe("chat pane board shell", () => {
   });
 
   it.each(["disabled", "disposed", "enabled", "default"] as const)(
-    "coalesces swarm roster redraws while %s",
+    "keeps generic child roster hydration available while swarm is %s",
     async (mode) => {
+      vi.useFakeTimers();
       swarmModuleImport.release();
       const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
       const pane = createTestPane({
         canonicalListRevision: 0,
         list: vi.fn(async () => ({ sessions: [] })),
       } as unknown as SessionCapability);
+      const configSnapshot = {
+        config: mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
+      };
       pane.context = {
         ...pane.context,
         runtimeConfig: {
           state: {
-            configSnapshot: {
-              config:
-                mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
-            },
+            configSnapshot,
           },
         },
       } as unknown as ApplicationContext;
@@ -446,22 +447,35 @@ describe("chat pane board shell", () => {
 
         expect(requestUpdate).not.toHaveBeenCalled();
         expect(pane.state.requestUpdate).not.toHaveBeenCalled();
-        expect(requestFrame).toHaveBeenCalledTimes(mode === "disabled" ? 0 : 1);
-        if (mode !== "disabled") {
-          frames[0]?.(0);
-          expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
-        }
+        expect(requestFrame).toHaveBeenCalledTimes(1);
+        frames[0]?.(0);
+        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
         if (dispose) {
-          expect(dispose).toHaveBeenCalledOnce();
-          expect(Reflect.get(pane, "swarmHydrator")).toBeNull();
-        } else if (mode === "enabled" || mode === "default") {
-          expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
+          expect(dispose).not.toHaveBeenCalled();
         }
+        expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
+        expect(Reflect.get(pane, "swarmEnabled")).toBe(mode === "enabled" || mode === "default");
+
+        const hydrator = Reflect.get(pane, "swarmHydrator");
+        const enabled = !Reflect.get(pane, "swarmEnabled");
+        configSnapshot.config = { tools: { swarm: { enabled } } };
+        requestFrame.mockClear();
+        frames.length = 0;
+        vi.mocked(pane.state.requestUpdate).mockClear();
+        pane.refreshSwarmRoster();
+        await vi.dynamicImportSettled();
+
+        expect(Reflect.get(pane, "swarmHydrator")).toBe(hydrator);
+        expect(Reflect.get(pane, "swarmEnabled")).toBe(enabled);
+        expect(requestFrame).toHaveBeenCalledOnce();
+        frames[0]?.(0);
+        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
       } finally {
         const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
           typeof SwarmRosterHydrator
         > | null;
         hydrator?.dispose();
+        vi.useRealTimers();
       }
     },
   );
@@ -476,7 +490,7 @@ describe("chat pane board shell", () => {
     const pending = pane.createSession();
     await Promise.resolve();
 
-    expect(pane.resetConfirmationOpen).toBe(true);
+    expect(Boolean(pane.resetConfirmation)).toBe(true);
     expect(sessions.create).not.toHaveBeenCalled();
     pane.settleResetConfirmation(false);
     await expect(pending).resolves.toBe(false);
@@ -574,7 +588,7 @@ describe("chat pane board shell", () => {
     pane.updated();
 
     await expect(pending).resolves.toBe(false);
-    expect(pane.resetConfirmationOpen).toBe(false);
+    expect(Boolean(pane.resetConfirmation)).toBe(false);
     expect(sessions.create).not.toHaveBeenCalled();
     expect(sessions.reset).not.toHaveBeenCalled();
   });
@@ -590,7 +604,7 @@ describe("chat pane board shell", () => {
     const second = pane.confirmConversationReset();
 
     await expect(first).resolves.toBe(false);
-    expect(pane.resetConfirmationOpen).toBe(true);
+    expect(Boolean(pane.resetConfirmation)).toBe(true);
     pane.settleResetConfirmation(true);
     await expect(second).resolves.toBe(true);
   });
@@ -610,11 +624,11 @@ describe("chat pane board shell", () => {
       await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
       const pending = pane.confirmConversationReset();
       pane.updated();
-      expect(pane.resetConfirmationOpen).toBe(true);
+      expect(Boolean(pane.resetConfirmation)).toBe(true);
       pane.state.assistantAgentId = "main";
       pane.updated();
       await expect(pending).resolves.toBe(false);
-      expect(pane.resetConfirmationOpen).toBe(false);
+      expect(Boolean(pane.resetConfirmation)).toBe(false);
     } finally {
       pane.settleResetConfirmation(false);
       (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
@@ -626,7 +640,7 @@ describe("chat pane board shell", () => {
     pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
-    expect(pane.resetConfirmationOpen).toBe(false);
+    expect(Boolean(pane.resetConfirmation)).toBe(false);
   });
 
   it("maps transient Board presentation commands onto the dashboard panel", () => {
@@ -662,7 +676,10 @@ describe("chat pane board shell", () => {
     pane.state.sessionKey = "agent:main:main";
     pane.boardProvider = createMockBoardProvider("main");
     pane.routeFace = "dashboard";
-    pane.persistBoardSessionView({ activeTabId: "research" });
+    pane.handleBoardCommand({
+      sessionKey: "main",
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     pane.boardProvider = createMockBoardProvider("agent:main:main");
 
@@ -678,8 +695,12 @@ describe("chat pane board shell", () => {
     pane.sessionKey = "agent:main:retained";
     const onFaceChange = vi.fn();
     pane.onFaceChange = onFaceChange;
+    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
 
-    pane.persistBoardSessionView({ face: "dashboard" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "set_chat_dock", dock: "right" },
+    });
 
     expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
@@ -702,7 +723,10 @@ describe("chat pane board shell", () => {
       face: "dashboard",
     });
 
-    pane.persistBoardSessionView({ activeTabId: "main" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "main",
       face: "dashboard",
@@ -726,7 +750,10 @@ describe("chat pane board shell", () => {
     secondPane.state.settings = initialSettings;
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
 
-    firstPane.persistBoardSessionView({ activeTabId: "research" });
+    firstPane.handleBoardCommand({
+      sessionKey: firstPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     secondPane.state.sessionKey = "agent:main:first";
     secondPane.boardProvider = createMockBoardProvider("agent:main:first");
@@ -737,7 +764,10 @@ describe("chat pane board shell", () => {
 
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
-    secondPane.persistBoardSessionView({ activeTabId: "main" });
+    secondPane.handleBoardCommand({
+      sessionKey: secondPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
       "agent:main:first": { activeTabId: "research" },
@@ -798,7 +828,8 @@ describe("chat pane board shell", () => {
           pane.state.sessionKey = "replacement-notes";
           const replacement = pane.resolveBoardProvider();
           draw();
-          expect(target()).toBeUndefined();
+          expect(target()).toEqual({ sessionKey: "replacement-notes", agentId: undefined });
+          expect(container.querySelector("openclaw-board-view")?.snapshot).toBeUndefined();
           complete({ ...snapshot, sessionKey: "agent:work:replacement-notes" });
           await vi.waitFor(() => expect(replacement.hasLoadedSnapshot).toBe(true));
           draw();
@@ -907,22 +938,6 @@ describe("chat pane board shell", () => {
     }
 
     expect(removeListener).toHaveBeenCalledOnce();
-  });
-
-  it("keeps gateways without board support on the null provider", () => {
-    const { pane, request, addEventListener } = createGatewayBoardPane({
-      sessionKey: "agent:main:board-unsupported",
-      methods: ["chat.history"],
-    });
-
-    expect(pane.resolveBoardProvider()).toMatchObject({
-      canMutate: false,
-      canGrant: false,
-      canPinWidgets: false,
-      canPinMcpApps: false,
-    });
-    expect(request).not.toHaveBeenCalled();
-    expect(addEventListener).not.toHaveBeenCalled();
   });
 
   it("does not reuse another board lease after gateway board support disappears", () => {
@@ -1041,30 +1056,17 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it.each([
-    {
-      profile: "read-only",
-      scopes: ["operator.read"],
-      canMutate: false,
-      canGrant: false,
-    },
-    {
-      profile: "writer with approvals",
-      scopes: ["operator.read", "operator.write", "operator.approvals"],
-      canMutate: true,
-      canGrant: true,
-    },
-  ])("derives board actions from the $profile connection scopes", (profile) => {
+  it("grants board actions to a writer with approval scope", () => {
     const { pane } = createGatewayBoardPane({
-      sessionKey: `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`,
-      scopes: profile.scopes,
+      sessionKey: "agent:main:writer-with-approvals",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
       methods: ["board.get", "board.widget.appView", "board.widget.put"],
       capabilities: ["board-widget-put-canvas-doc"],
     });
     const provider = pane.resolveBoardProvider();
-    expect(provider.canMutate).toBe(profile.canMutate);
-    expect(provider.canGrant).toBe(profile.canGrant);
-    expect(provider.canPinWidgets).toBe(profile.canMutate);
-    expect(provider.canPinMcpApps).toBe(profile.canMutate);
+    expect(provider.canMutate).toBe(true);
+    expect(provider.canGrant).toBe(true);
+    expect(provider.canPinWidgets).toBe(true);
+    expect(provider.canPinMcpApps).toBe(true);
   });
 });

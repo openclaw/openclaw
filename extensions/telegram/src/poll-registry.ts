@@ -1,14 +1,8 @@
-// Telegram plugin module implements public-poll vote routing registry behavior.
-//
 // Telegram only emits `poll_answer` updates for non-anonymous (public) polls, and those
 // updates do not carry the originating chat/thread. Persist the authoritative route
 // returned by sendPoll so a later vote can enter the normal inbound turn pipeline.
 import type { Chat } from "grammy/types";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
@@ -28,26 +22,19 @@ export type TelegramPollRegistryEntry = {
   options: string[];
 };
 
-type TelegramPollRegistryStore = PluginStateKeyedStore<TelegramPollRegistryEntry>;
-
-function openPollRegistryStore(env?: NodeJS.ProcessEnv): TelegramPollRegistryStore {
-  return getTelegramRuntime().state.openKeyedStore<TelegramPollRegistryEntry>({
+function pollRegistryStoreOptions(env?: NodeJS.ProcessEnv) {
+  return {
     namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
     maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
+    overflowPolicy: "reject-new" as const,
     ...(env ? { env } : {}),
-  });
+  };
 }
 
-function openPollRegistrySyncStore(
-  env?: NodeJS.ProcessEnv,
-): PluginStateSyncKeyedStore<TelegramPollRegistryEntry> {
-  return getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>({
-    namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
-    maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    ...(env ? { env } : {}),
-  });
+function openPollRegistryStore(env?: NodeJS.ProcessEnv) {
+  return getTelegramRuntime().state.openKeyedStoreV2<TelegramPollRegistryEntry>(
+    pollRegistryStoreOptions(env),
+  );
 }
 
 // Public poll ids are globally unique, but keying by account keeps registries isolated
@@ -133,16 +120,12 @@ function normalizePollRegistryEntry(raw: unknown): TelegramPollRegistryEntry | n
   };
 }
 
-export async function recordTelegramPollRegistryEntry(params: {
-  accountId?: string;
-  pollId: string;
-  chat: TelegramPollRouteChat;
-  messageId: number;
-  threadSpec: TelegramPollRegistryEntry["threadSpec"];
-  question: string;
-  options: string[];
-  env?: NodeJS.ProcessEnv;
-}): Promise<TelegramPollRegistryEntry> {
+export async function recordTelegramPollRegistryEntry(
+  params: TelegramPollRegistryEntry & {
+    accountId?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<TelegramPollRegistryEntry> {
   const entry = createTelegramPollRegistryEntry(params);
   await openPollRegistryStore(params.env).register(
     telegramPollRegistryKey(params.accountId, params.pollId),
@@ -151,20 +134,11 @@ export async function recordTelegramPollRegistryEntry(params: {
   return entry;
 }
 
-export function createTelegramPollRegistryEntry(params: {
-  pollId: string;
-  chat: TelegramPollRouteChat;
-  messageId: number;
-  threadSpec: TelegramPollRegistryEntry["threadSpec"];
-  question: string;
-  options: string[];
-}): TelegramPollRegistryEntry {
+export function createTelegramPollRegistryEntry(
+  params: TelegramPollRegistryEntry,
+): TelegramPollRegistryEntry {
   const entry = normalizePollRegistryEntry({
-    pollId: params.pollId,
-    chat: params.chat,
-    messageId: params.messageId,
-    threadSpec: params.threadSpec,
-    question: params.question,
+    ...params,
     options: [...params.options],
   });
   if (!entry) {
@@ -181,18 +155,6 @@ export async function findTelegramPollRegistryEntry(params: {
   // Missing entries resolve to `undefined`; real store failures must propagate so
   // durable Telegram ingress can release the claim and retry the poll_answer.
   const stored = await openPollRegistryStore(params.env).lookup(
-    telegramPollRegistryKey(params.accountId, params.pollId),
-  );
-  return normalizePollRegistryEntry(stored);
-}
-
-/** Retained for hosts whose ingress monitor does not support inspectAsync. */
-export function findTelegramPollRegistryEntrySync(params: {
-  accountId?: string;
-  pollId: string;
-  env?: NodeJS.ProcessEnv;
-}): TelegramPollRegistryEntry | null {
-  const stored = openPollRegistrySyncStore(params.env).lookup(
     telegramPollRegistryKey(params.accountId, params.pollId),
   );
   return normalizePollRegistryEntry(stored);

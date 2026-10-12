@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FaceTimeHelperPeer, HelperActionResult } from "../src/helper-rpc.js";
+import type { HelperActionResult } from "../src/helper-results.js";
+import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
+import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import {
   createRuntime,
   FaceTimeHelperActionError,
@@ -48,17 +50,40 @@ function deferred() {
   return { promise, resolve };
 }
 
-function observeDeletion(state: Awaited<ReturnType<typeof pendingDialState>>) {
+function observeDeletion() {
   const deleted = deferred();
-  const compareAndApply = state.compareAndApply.bind(state);
-  vi.spyOn(state, "compareAndApply").mockImplementation(async (...args) => {
-    const result = await compareAndApply(...args);
-    if (result.status === "applied") {
-      deleted.resolve();
-    }
-    return result;
+  // oxlint-disable-next-line typescript/unbound-method -- The interceptor calls the original with the runtime store as its explicit receiver below.
+  const clear = PendingFaceTimeDialStore.prototype.clear;
+  vi.spyOn(PendingFaceTimeDialStore.prototype, "clear").mockImplementation(function (
+    this: PendingFaceTimeDialStore,
+    ...args
+  ) {
+    const clearing = clear.apply(this, args);
+    void clearing.then(
+      (applied) => {
+        if (applied) {
+          // Let the runtime publish the completed clear before observing its status.
+          queueMicrotask(deleted.resolve);
+        }
+      },
+      () => undefined,
+    );
+    return clearing;
   });
   return deleted.promise;
+}
+
+function endedCall(callUUID: string, dialID: string | undefined) {
+  return {
+    event: "ft-call-status-changed",
+    data: {
+      dial_id: dialID,
+      call_uuid: callUUID,
+      call_status: 6,
+      has_ended: true,
+      is_outgoing: true,
+    },
+  };
 }
 
 describe("FaceTime pending dial reconciliation", () => {
@@ -68,6 +93,7 @@ describe("FaceTime pending dial reconciliation", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("preserves newly identified carriers when an older absence reply arrives", async () => {
@@ -122,16 +148,7 @@ describe("FaceTime pending dial reconciliation", () => {
       );
     } finally {
       finishStaleReply(absence);
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: "approved-dial",
-          call_uuid: "identified-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
+      await mocks.helperParams?.onMessage(endedCall("identified-call", "approved-dial"));
       await vi.advanceTimersByTimeAsync(250);
       await runtime.stop();
     }
@@ -140,8 +157,8 @@ describe("FaceTime pending dial reconciliation", () => {
   it("requires two matching absence snapshots after native identity changes", async () => {
     const state = await pendingDialState();
     mocks.helper.findOutgoingCall.mockResolvedValue(topologyResult([absentPeer(originalPeer)]));
+    const deleted = observeDeletion();
     const runtime = await createRuntime(state);
-    const deleted = observeDeletion(state);
     try {
       mocks.helperParams?.onConnect(originalPeer.bundleIdentifier);
       await vi.advanceTimersByTimeAsync(0);
@@ -158,44 +175,8 @@ describe("FaceTime pending dial reconciliation", () => {
       await deleted;
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: "approved-dial",
-          call_uuid: "identified-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
+      await mocks.helperParams?.onMessage(endedCall("identified-call", "approved-dial"));
       await vi.advanceTimersByTimeAsync(250);
-      await runtime.stop();
-    }
-  });
-
-  it("persists an outbound call identity without an optional proxy identifier", async () => {
-    const state = await pendingDialState();
-    const runtime = await createRuntime(state);
-    try {
-      await mocks.helperParams?.onMessage(
-        {
-          event: "ft-outbound-call-identified",
-          data: { dial_id: "approved-dial", call_uuid: "approved-call" },
-        },
-        originalPeer,
-      );
-      expect(await state.lookup("active")).toMatchObject({ callUUID: "approved-call" });
-    } finally {
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: "approved-dial",
-          call_uuid: "approved-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
       await runtime.stop();
     }
   });
@@ -225,16 +206,7 @@ describe("FaceTime pending dial reconciliation", () => {
         "already pending",
       );
     } finally {
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: dialID,
-          call_uuid: "approved-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
+      await mocks.helperParams?.onMessage(endedCall("approved-call", dialID));
       await runtime.stop();
     }
   });
@@ -258,8 +230,8 @@ describe("FaceTime pending dial reconciliation", () => {
       }
     }
     mocks.helper.cancelOutgoingCall.mockResolvedValue(cancellation);
+    const deleted = observeDeletion();
     const runtime = await createRuntime(state);
-    const deleted = observeDeletion(state);
     const cancellationPublished = deferred();
     const register = state.register.bind(state);
     vi.spyOn(state, "register").mockImplementation(async (...args) => {
@@ -308,16 +280,7 @@ describe("FaceTime pending dial reconciliation", () => {
       expect(await state.lookup("active")).toBeUndefined();
       expect((await runtime.status()).outboundCallPending).toBeUndefined();
     } finally {
-      await mocks.helperParams?.onMessage({
-        event: "ft-call-status-changed",
-        data: {
-          dial_id: "approved-dial",
-          call_uuid: "approved-call",
-          call_status: 6,
-          has_ended: true,
-          is_outgoing: true,
-        },
-      });
+      await mocks.helperParams?.onMessage(endedCall("approved-call", "approved-dial"));
       await runtime.stop();
     }
   });

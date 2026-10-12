@@ -16,7 +16,6 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
@@ -67,22 +66,11 @@ describe("legacy Web Push Doctor migration", () => {
 
   function vapidKeys(overrides: Partial<VapidKeyPair> = {}): VapidKeyPair {
     return {
-      ...createWebPushVapidKeyPair(
-        "legacy-public-key",
-        "legacy-private-key",
-        "https://openclaw.ai",
-      ),
+      publicKey: "legacy-public-key",
+      privateKey: "legacy-private-key",
+      subject: "https://openclaw.ai",
       ...overrides,
     };
-  }
-
-  function withUnexpectedJsonFields<T extends object>(value: T) {
-    return { "": 1, later: 2, ...value };
-  }
-
-  function subscriptionStore(value: unknown) {
-    const endpoint = subscription().endpoint;
-    return { subscriptionsByEndpointHash: { [hashWebPushEndpoint(endpoint)]: value } };
   }
 
   async function writeLegacyState(params: {
@@ -130,6 +118,17 @@ describe("legacy Web Push Doctor migration", () => {
     writeConfigMachineState(WEB_PUSH_VAPID_STATE_KEY, value);
   }
 
+  function migrate(
+    stateDir: string,
+    options: Omit<Parameters<typeof migrateLegacyWebPush>[0], "stateDir" | "detected"> = {},
+  ) {
+    return migrateLegacyWebPush({
+      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+      stateDir,
+      ...options,
+    });
+  }
+
   it("detects original and interrupted-claim files only for explicit Doctor repair", async () => {
     const stateDir = useStateDir();
     const { subscriptionsPath } = await writeLegacyState({
@@ -163,24 +162,16 @@ describe("legacy Web Push Doctor migration", () => {
 
     let blocked: Awaited<ReturnType<typeof migrateLegacyWebPush>>;
     try {
-      blocked = await migrateLegacyWebPush({
-        detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-        env,
-        stateDir,
-      });
+      blocked = await migrate(stateDir, { env });
     } finally {
       await gatewayLock.release();
     }
 
-    expect(blocked.warnings[0]).toContain("Gateway or another SQLite maintenance command");
+    expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(subscriptionsPath!)).toBe(true);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
 
-    const retry = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      env,
-      stateDir,
-    });
+    const retry = await migrate(stateDir, { env });
     expect(retry.warnings).toEqual([]);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
     expect(fs.existsSync(subscriptionsPath!)).toBe(false);
@@ -189,7 +180,7 @@ describe("legacy Web Push Doctor migration", () => {
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
     const stateDir = useStateDir();
     const cfg: OpenClawConfig = {
-      agents: { entries: { "worker-1": { default: true } } },
+      agents: { entries: { "worker-1": {} } },
       session: { mainKey: "desk" },
     };
     const env = {
@@ -234,34 +225,7 @@ describe("legacy Web Push Doctor migration", () => {
     expect(fs.existsSync(paths.vapidKeysPath!)).toBe(false);
   });
 
-  it("imports subscriptions and VAPID identity in one verified operation", async () => {
-    const stateDir = useStateDir();
-    const first = subscription();
-    const second = subscription({
-      subscriptionId: "c0a80101-0000-4000-8000-000000000002",
-      endpoint: "https://push.example.com/send/second",
-    });
-    const paths = await writeLegacyState({
-      stateDir,
-      subscriptions: [first, second],
-      vapid: vapidKeys(),
-    });
-
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([first, second]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toEqual(vapidKeys());
-    expect(fs.existsSync(paths.subscriptionsPath!)).toBe(false);
-    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(false);
-  });
-
   it.each([
-    ["missing legacy subject", undefined, undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
-    ["empty legacy subject", "", undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
     ["blank injected subject", undefined, "   ", DEFAULT_WEB_PUSH_VAPID_SUBJECT],
     [
       "padded injected subject",
@@ -284,10 +248,8 @@ describe("legacy Web Push Doctor migration", () => {
     }
     await writeLegacyState({ stateDir, vapid: legacyKeys });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+    const result = await migrate(stateDir, {
       env: { ...process.env, OPENCLAW_VAPID_SUBJECT: injectedSubject },
-      stateDir,
     });
 
     expect(result.warnings).toEqual([]);
@@ -301,65 +263,13 @@ describe("legacy Web Push Doctor migration", () => {
       vapid: { ...vapidKeys(), subject: 42 },
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
+    const result = await migrate(stateDir, {
       env: { ...process.env, OPENCLAW_VAPID_SUBJECT: "mailto:fallback@example.com" },
-      stateDir,
     });
 
     expect(result.warnings[0]).toContain("VAPID keys are invalid");
     expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
     expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
-  });
-
-  it.each([
-    ["subscriptions store", false, withUnexpectedJsonFields({ subscriptionsByEndpointHash: {} })],
-    ["subscription", false, subscriptionStore(withUnexpectedJsonFields(subscription()))],
-    [
-      "subscription keys",
-      false,
-      subscriptionStore({
-        ...subscription(),
-        keys: withUnexpectedJsonFields(subscription().keys),
-      }),
-    ],
-    ["VAPID keys", true, withUnexpectedJsonFields(vapidKeys())],
-  ])("rejects unexpected JSON fields before mutation: %s", async (label, isVapid, value) => {
-    const stateDir = useStateDir();
-    const pushDir = path.join(stateDir, "push");
-    const sourcePath = path.join(
-      pushDir,
-      isVapid ? "vapid-keys.json" : "web-push-subscriptions.json",
-    );
-    await fsp.mkdir(pushDir, { recursive: true });
-    await fsp.writeFile(sourcePath, JSON.stringify(value), "utf8");
-
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings[0]).toBe(
-      `Failed reading legacy Web Push state: Error: legacy Web Push ${label} has unexpected field ""`,
-    );
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-  });
-
-  it("removes an empty valid store only after opening SQLite", async () => {
-    const stateDir = useStateDir();
-    const { subscriptionsPath } = await writeLegacyState({ stateDir, subscriptions: [] });
-
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    expect(fs.existsSync(subscriptionsPath!)).toBe(false);
   });
 
   it("rejects either malformed file without importing its valid pair", async () => {
@@ -370,10 +280,7 @@ describe("legacy Web Push Doctor migration", () => {
       vapid: { publicKey: "incomplete" },
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("VAPID keys are invalid");
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
@@ -392,10 +299,7 @@ describe("legacy Web Push Doctor migration", () => {
       JSON.stringify({ subscriptionsByEndpointHash: { forged: subscription() } }),
       "utf8",
     );
-    let result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    let result = await migrate(stateDir);
     expect(result.warnings[0]).toContain("subscription is invalid");
 
     const first = subscription();
@@ -410,10 +314,7 @@ describe("legacy Web Push Doctor migration", () => {
       }),
       "utf8",
     );
-    result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    result = await migrate(stateDir);
     expect(result.warnings[0]).toContain("duplicate subscription id");
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
   });
@@ -429,33 +330,10 @@ describe("legacy Web Push Doctor migration", () => {
     seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
     await writeLegacyState({ stateDir, subscriptions: [legacy] });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings).toEqual([]);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...canonical, createdAtMs: 100 }]);
-  });
-
-  it("updates an older SQLite row from newer legacy state", async () => {
-    const stateDir = useStateDir();
-    const canonical = subscription({ updatedAtMs: 200 });
-    const legacy = subscription({
-      keys: { p256dh: "newer-p256dh", auth: "newer-auth" },
-      createdAtMs: 500,
-      updatedAtMs: 600,
-    });
-    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    await writeLegacyState({ stateDir, subscriptions: [legacy] });
-
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([legacy]);
   });
 
   it("retries a committed newer-row merge after normalizing its creation time", async () => {
@@ -467,47 +345,46 @@ describe("legacy Web Push Doctor migration", () => {
       updatedAtMs: 600,
     });
     seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    const { subscriptionsPath } = await writeLegacyState({
+    const { subscriptionsPath, vapidKeysPath } = await writeLegacyState({
       stateDir,
       subscriptions: [legacy],
+      vapid: vapidKeys(),
     });
 
-    const first = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
+    const first = await migrate(stateDir, {
       removeSource: () => {
         throw new Error("simulated unlink failure");
       },
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(true);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(true);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
 
-    const retry = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const retry = await migrate(stateDir);
     expect(retry.warnings).toEqual([]);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
     expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(false);
+    expect(await readPersistedVapidKeyPair(stateDir)).toEqual(vapidKeys());
   });
 
   it("rolls back equal-timestamp divergence and VAPID identity conflicts", async () => {
     const stateDir = useStateDir();
     const canonical = subscription({ keys: { p256dh: "canonical", auth: "canonical" } });
     seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    seedVapid(
-      createWebPushVapidKeyPair("canonical-public", "canonical-private", "https://openclaw.ai"),
-    );
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
     const paths = await writeLegacyState({
       stateDir,
       subscriptions: [subscription()],
       vapid: vapidKeys(),
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("diverges at the same timestamp");
     expect(await listWebPushSubscriptions(stateDir)).toEqual([canonical]);
@@ -520,19 +397,18 @@ describe("legacy Web Push Doctor migration", () => {
 
   it("rolls back subscription changes when only VAPID conflicts", async () => {
     const stateDir = useStateDir();
-    seedVapid(
-      createWebPushVapidKeyPair("canonical-public", "canonical-private", "https://openclaw.ai"),
-    );
+    seedVapid({
+      publicKey: "canonical-public",
+      privateKey: "canonical-private",
+      subject: "https://openclaw.ai",
+    });
     await writeLegacyState({
       stateDir,
       subscriptions: [subscription()],
       vapid: vapidKeys(),
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("VAPID identity conflicts");
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
@@ -548,10 +424,7 @@ describe("legacy Web Push Doctor migration", () => {
       subscriptions: [legacy],
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("subscription id conflicts");
     expect(await listWebPushSubscriptions(stateDir)).toEqual([canonical]);
@@ -565,9 +438,7 @@ describe("legacy Web Push Doctor migration", () => {
       subscriptions: [subscription()],
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
+    const result = await migrate(stateDir, {
       beforeVerify: () => fs.appendFileSync(subscriptionsPath!, "\n"),
     });
 
@@ -583,9 +454,7 @@ describe("legacy Web Push Doctor migration", () => {
       subscriptions: [subscription()],
     });
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
+    const result = await migrate(stateDir, {
       beforeClaim: () => fs.appendFileSync(subscriptionsPath!, "\n"),
     });
 
@@ -593,35 +462,6 @@ describe("legacy Web Push Doctor migration", () => {
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
     expect(fs.existsSync(subscriptionsPath!)).toBe(true);
     expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
-  });
-
-  it("retains fixed claims on cleanup failure and retries idempotently", async () => {
-    const stateDir = useStateDir();
-    const paths = await writeLegacyState({
-      stateDir,
-      subscriptions: [subscription()],
-      vapid: vapidKeys(),
-    });
-    const first = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-      removeSource: () => {
-        throw new Error("simulated unlink failure");
-      },
-    });
-    expect(first.warnings[0]).toContain("legacy cleanup failed");
-    expect(fs.existsSync(`${paths.subscriptionsPath}.doctor-importing`)).toBe(true);
-    expect(fs.existsSync(`${paths.vapidKeysPath}.doctor-importing`)).toBe(true);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
-
-    const retry = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-    expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(`${paths.subscriptionsPath}.doctor-importing`)).toBe(false);
-    expect(fs.existsSync(`${paths.vapidKeysPath}.doctor-importing`)).toBe(false);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
   });
 
   it("refuses symlinked sources", async () => {
@@ -632,10 +472,7 @@ describe("legacy Web Push Doctor migration", () => {
     await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
     await fsp.symlink(outside, sourcePath);
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
     expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
@@ -662,10 +499,7 @@ describe("legacy Web Push Doctor migration", () => {
     await fsp.mkdir(stateDir, { recursive: true });
     await fsp.symlink(outside, path.join(stateDir, "push"));
 
-    const result = await migrateLegacyWebPush({
-      detected: detectLegacyWebPush({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
+    const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("Failed reading legacy Web Push state");
     expect(fs.existsSync(sourcePath)).toBe(true);

@@ -88,9 +88,9 @@ const enTranscripts = {
     requiredLocator: "Enter a non-blank value for {field}.",
     chooseProvider: "Choose a provider",
     autoStartUnavailable:
-      "Auto-start setup is unavailable for this provider. Existing fields remain editable. Check the provider's setup documentation; after enabling its plugin or restarting the Gateway, refresh health.",
+      "Auto-start setup is unavailable for this provider. Existing fields remain editable. Check the provider's setup documentation, enable its plugin, then refresh health.",
     noAutoStartProviders:
-      "No enabled provider currently advertises auto-start setup. Check the provider's setup documentation and refresh health after enabling its plugin or restarting the Gateway. Existing sources remain editable.",
+      "No enabled provider currently advertises auto-start setup. Check the provider's setup documentation, enable its plugin, then refresh health. Existing sources remain editable.",
     sourceChanged:
       "This source changed while you were editing. Cancel and reopen it to use the current draft.",
     rawDraftPending:
@@ -110,7 +110,7 @@ const enTranscripts = {
       "admitted-start-failed":
         "Capture startup failed after the transcript was created and cannot retry automatically. Saved notes are retained. Check the provider configuration and refresh health.",
       "start-failed":
-        "Capture could not start. Check the source and provider configuration, then restart the Gateway and refresh health.",
+        "Capture could not start. Check the source and provider configuration, then turn capture off and on to retry and refresh health.",
       ended:
         "The provider ended this capture attempt. Saved notes are retained. Check the provider configuration and refresh health.",
     },

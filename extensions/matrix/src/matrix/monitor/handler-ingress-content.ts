@@ -1,4 +1,5 @@
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { logInboundDrop, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
@@ -6,6 +7,7 @@ import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import { isLikelyBareFilename } from "../media-text.js";
 import { fetchMatrixPollSnapshot, type MatrixPollSnapshot } from "../poll-summary.js";
 import { resolveMatrixMonitorCommandAccess } from "./access-state.js";
+import type { createMatrixEventContextResolver } from "./event-context.js";
 import {
   isMatrixAudioMediaEnabled,
   resolveMatrixInboundBodyText,
@@ -24,11 +26,10 @@ import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import {
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
-  sendMatrixPreflightAudioTranscriptEcho,
+  matrixPreflightAudio,
 } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
-import { resolveMatrixInboundRoute } from "./route.js";
-import { logInboundDrop } from "./runtime-api.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
@@ -42,6 +43,7 @@ export async function resolveMatrixIngressContent(config: {
   eventTs?: number;
   senderId: string;
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
+  resolveThreadContext: ReturnType<typeof createMatrixEventContextResolver>;
   commitInboundEventIfClaimed: () => Promise<void>;
 }) {
   const {
@@ -55,6 +57,7 @@ export async function resolveMatrixIngressContent(config: {
     eventTs,
     senderId,
     roomHistoryTracker,
+    resolveThreadContext,
     commitInboundEventIfClaimed,
   } = config;
   const {
@@ -72,7 +75,6 @@ export async function resolveMatrixIngressContent(config: {
 
   const {
     cfg,
-    liveDmAllowFrom,
     content: accessContent,
     messageId,
     audioPreflightMode,
@@ -90,14 +92,11 @@ export async function resolveMatrixIngressContent(config: {
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,
-    botLoopProtection,
     roomMatchMeta,
     getSenderName,
     accessState,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   } = access;
-  const { messageIngress, resolveMessageIngress } = accessState;
+  const { resolveMessageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -173,7 +172,7 @@ export async function resolveMatrixIngressContent(config: {
     route: _route,
     configuredBinding: _configuredBinding,
     runtimeBindingId: _runtimeBindingId,
-  } = resolveMatrixInboundRoute({
+  } = await resolveMatrixInboundRouteAsync({
     cfg,
     accountId,
     roomId,
@@ -262,7 +261,6 @@ export async function resolveMatrixIngressContent(config: {
     cfg,
     surface: "matrix",
   });
-  const useAccessGroups = true;
   // Keep mention stripping on the command-only path so history and agent
   // prompt text continue to see the original Matrix message.
   const commandCheckText = stripMatrixMentionPrefix({
@@ -273,7 +271,7 @@ export async function resolveMatrixIngressContent(config: {
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
-    useAccessGroups,
+    useAccessGroups: true,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });
@@ -288,7 +286,7 @@ export async function resolveMatrixIngressContent(config: {
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
   }
-  const shouldRequireMention = isRoom
+  const configuredRequireMention = isRoom
     ? roomConfig?.autoReply === true
       ? false
       : roomConfig?.autoReply === false
@@ -297,6 +295,17 @@ export async function resolveMatrixIngressContent(config: {
           ? roomConfig?.requireMention
           : true
     : false;
+  const requireMentionInBotThreads =
+    roomConfig?.requireMentionInBotThreads ?? accountConfig?.requireMentionInBotThreads;
+  const threadContext =
+    isRoom && threadRootId && requireMentionInBotThreads !== undefined
+      ? await resolveThreadContext({ roomId, eventId: threadRootId })
+      : undefined;
+  const { requireMention: shouldRequireMention } = resolveBotThreadMentionPolicy({
+    isBotOwnedThread: threadContext?.senderId === selfUserId,
+    requireMentionInBotThreads,
+    requireMention: configuredRequireMention,
+  });
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       // Matrix native mention metadata lets us reliably decide absence even
@@ -343,7 +352,7 @@ export async function resolveMatrixIngressContent(config: {
     return undefined;
   }
   if (preflightAudioTranscript) {
-    await sendMatrixPreflightAudioTranscriptEcho({
+    await matrixPreflightAudio.send({
       transcript: preflightAudioTranscript,
       cfg,
       accountId,
@@ -422,39 +431,26 @@ export async function resolveMatrixIngressContent(config: {
   }
   if (_runtimeBindingId) {
     const { getSessionBindingService } = await loadSessionBindingRuntime();
-    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined, {
+    await getSessionBindingService().touchAsync(_runtimeBindingId, eventTs ?? undefined, {
       channel: "matrix",
       accountId,
     });
   }
   const preparedTrigger =
     isRoom && historyLimit > 0
-      ? reservedHistorySlot
-        ? roomHistoryTracker.prepareReservedTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            reservedHistorySlot,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
-        : roomHistoryTracker.prepareTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
+      ? roomHistoryTracker.prepareTrigger(
+          _route.agentId,
+          roomId,
+          historyLimit,
+          {
+            sender: senderName,
+            body: bodyText,
+            timestamp: eventTs ?? undefined,
+            messageId,
+          },
+          historyThreadId,
+          reservedHistorySlot,
+        )
       : undefined;
   if (reservedHistorySlot && preparedTrigger) {
     markReservedHistorySlotConsumed();
@@ -465,18 +461,12 @@ export async function resolveMatrixIngressContent(config: {
         limit: historyLimit,
       })
     : undefined;
-  const triggerSnapshot = preparedTrigger;
 
   return {
-    cfg,
-    liveDmAllowFrom,
-    messageIngress,
+    ...access,
     resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
-    roomConfig,
-    isDirectMessage,
-    isRoom,
     shouldRequireMention,
     wasMentioned,
     effectiveWasMentioned,
@@ -489,14 +479,8 @@ export async function resolveMatrixIngressContent(config: {
     commandBodyText,
     media,
     preflightAudioTranscript,
-    locationPayload,
-    messageId,
-    triggerSnapshot,
-    threadRootId,
-    thread,
-    botLoopProtection,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
+    triggerSnapshot: preparedTrigger,
+    threadContext,
   };
 }
 

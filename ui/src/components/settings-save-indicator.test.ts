@@ -2,8 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
-import "./settings-save-indicator.ts";
+import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import "./settings-save-indicator.tsx";
 
 type SettingsSaveIndicatorElement = HTMLElement & {
   props?: SettingsSaveIndicatorProps;
@@ -78,6 +78,9 @@ describe("settings save indicator", () => {
     expect(indicator.querySelector(".settings-save-indicator__claw--saved")).not.toBeNull();
     expect(indicator.querySelector(".settings-save-indicator__check")).not.toBeNull();
 
+    // Shell refreshes replace the props object without changing the save status.
+    await update(props({ status: "saved", needsApply: true }));
+    expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(1_999);
     expect(indicator.textContent).toContain("Saved");
     await vi.advanceTimersByTimeAsync(1);
@@ -105,6 +108,24 @@ describe("settings save indicator", () => {
     expect(button("Retry")).toBeUndefined();
     button("Reload")?.click();
     expect(onReload).toHaveBeenCalledOnce();
+  });
+
+  it("explains validation rejection locally with a reason and retry action", async () => {
+    const onRetry = vi.fn();
+    await update(
+      props({ status: "rejected", lastError: "logging.level: Invalid option", onRetry }),
+    );
+
+    expect(indicator.querySelector('[role="status"]')?.textContent).toContain(
+      "Settings not applied",
+    );
+    expect(indicator.textContent).toContain("Current settings are unchanged.");
+    expect(indicator.querySelector("details")?.textContent).toContain(
+      "logging.level: Invalid option",
+    );
+    expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+    button("Retry")?.click();
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it("submits the paused draft through Save instead of retrying a failed patch", async () => {
@@ -139,6 +160,7 @@ describe("settings save indicator", () => {
     expect(vi.getTimerCount()).toBe(1);
 
     indicator.remove();
+    await Promise.resolve();
 
     expect(vi.getTimerCount()).toBe(0);
   });

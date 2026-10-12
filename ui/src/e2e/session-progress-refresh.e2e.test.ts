@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProof,
   createChatFlowE2eSuite,
@@ -91,17 +92,18 @@ suite.define(() => {
         const scenario = refreshScenario();
         const gateway = await installMockGateway(page, scenario);
         await page.goto(`${suite.server.baseUrl}chat`);
-        const card = page.locator(".session-progress-card--composer");
+        const card = page.locator('[data-progress-card-placement="details"]');
+        await openChatDetails(page);
         await card.waitFor();
-        await waitForChatScrollIdle(page);
         if (collapsed) {
           await card.locator("summary").click();
         }
+        await waitForChatScrollIdle(page);
         await expect
           .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
           .toBe(!collapsed);
         await card.getByRole("button", { name: "Refresh task progress", exact: true }).waitFor();
-        const button = card.locator(".session-progress-card__refresh");
+        const button = card.locator(".session-progress-card__refresh[data-state]");
         await button.locator("svg path").first().waitFor({ state: "attached" });
         const idleIcon = await button.locator("svg").innerHTML();
         const iconBounds = await button.locator("svg").boundingBox();
@@ -140,8 +142,8 @@ suite.define(() => {
           expect(await pendingIcon.isVisible()).toBe(true);
         } else {
           expect(
-            await pendingIcon.evaluate((element) => getComputedStyle(element).animationName),
-          ).toBe("session-progress-refresh-spin");
+            await pendingIcon.evaluate((element) => element.getAnimations()[0]?.playState),
+          ).toBe("running");
         }
         expect(
           await card
@@ -160,11 +162,12 @@ suite.define(() => {
           status: "accepted",
           revision: 1,
         });
-        // Acceptance and a same-revision authoritative read are not completion.
+        // An unnumbered invalidation forces an authoritative read; returning
+        // the accepted baseline revision still must not complete the refresh.
         const reads = (await gateway.getRequests("progressCard.get")).length;
         await gateway.emitGatewayEvent("progressCard.changed", {
           sessionKey: scenario.sessionKey,
-          revision: 1,
+          revision: null,
         });
         await gateway.waitForRequest("progressCard.get", { after: reads });
         expect(await button.getAttribute("data-state")).toBe("pending");
@@ -197,6 +200,7 @@ suite.define(() => {
           !collapsed,
         );
         expect(await originalCard!.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await page.locator(".chat-details:popover-open").isVisible()).toBe(true);
         expect(await transcriptSnapshot(page)).toEqual(initial);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
@@ -217,12 +221,13 @@ suite.define(() => {
       const scenario = refreshScenario();
       const gateway = await installMockGateway(page, scenario);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(".session-progress-card--composer");
+      const card = page.locator('[data-progress-card-placement="details"]');
+      await openChatDetails(page);
       await card.waitFor();
       await waitForChatScrollIdle(page);
       const initial = await transcriptSnapshot(page);
       const timestamp = await card.locator("time").getAttribute("datetime");
-      const button = card.locator(".session-progress-card__refresh");
+      const button = card.locator(".session-progress-card__refresh[data-state]");
       await button.click();
       const request = await gateway.waitForRequest("progressCard.refresh");
       await gateway.rejectDeferred("progressCard.refresh", {

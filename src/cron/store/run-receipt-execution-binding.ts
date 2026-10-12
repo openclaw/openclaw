@@ -6,7 +6,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { CronRunReceiptHandle } from "./run-receipt-store.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 /** Binds the exact admitted execution without changing the receipt lifecycle. */
 export async function bindCronRunReceiptExecution(params: {
@@ -27,19 +27,11 @@ export async function bindCronRunReceiptExecution(params: {
     context.admission.assertCurrent();
     assertOwnerCurrent?.();
   };
-  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
-    await Promise.all([
-      import("../../state/openclaw-state-worker-store.js"),
-      import("../../infra/sqlite-worker-store.js"),
-    ]);
-  return runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "cron.bindReceiptExecution", input }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
-    },
-  );
+  const { runOpenClawStateWorkerOperation } =
+    await import("../../state/openclaw-state-worker-store.js");
+  return runOpenClawStateWorkerOperation(context, (scope) => {
+    assertCurrent();
+    // Execution may retire after dispatch; the binding still identifies that admitted run.
+    return scope.execute({ type: "cron.bindReceiptExecution", input });
+  });
 }

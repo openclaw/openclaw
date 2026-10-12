@@ -1,11 +1,12 @@
-// Formatting layer for `openclaw skills` commands; keeps discovery data separate from terminal UI.
-import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  SkillsWorkshopChangesResult,
+  SkillsWorkshopListResult,
+} from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -19,21 +20,19 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
-/** Options for rendering the skill list command. */
-export type SkillsListOptions = {
+type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
 };
 
-/** Options for rendering one skill detail view. */
-export type SkillInfoOptions = {
+type SkillInfoOptions = {
   json?: boolean;
 };
 
-/** Options for rendering skill readiness checks. */
-export type SkillsCheckOptions = {
+type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
 };
@@ -111,7 +110,24 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
     .join("; ");
 }
 
-/** Render skill discovery status as sanitized JSON or a terminal table. */
+function formatSkillCheckSection(
+  title: string,
+  skills: SkillStatusEntry[],
+  reason?: (skill: SkillStatusEntry) => string,
+): string[] {
+  return skills.length === 0
+    ? []
+    : [
+        "",
+        theme.heading(title),
+        ...skills.map((skill) => {
+          const emoji = normalizeSkillEmoji(skill.emoji);
+          const suffix = reason ? ` ${theme.muted(`(${reason(skill)})`)}` : "";
+          return `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}${suffix}`;
+        }),
+      ];
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
     skill.eligible && !skill.blockedByAgentFilter;
@@ -148,42 +164,24 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     return appendClawHubHint(message);
   }
 
-  const ready = skills.filter(isReadyForAgent);
-  const tableWidth = getTerminalTableWidth();
-  const rows = skills.map((skill) => ({
-    Status: formatSkillStatus(skill),
-    Skill: formatSkillName(skill),
-    Description: theme.muted(skill.description),
-    Source: skill.source,
-    Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
-  }));
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Skill", header: "Skill", minWidth: 22 },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 10 },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
+  return appendClawHubHint(
+    formatCliStatusTable({
+      title: "Skills",
+      ready: skills.filter(isReadyForAgent).length,
+      nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
+      sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
+      verbose: opts.verbose,
+      rows: skills.map((skill) => ({
+        Status: formatSkillStatus(skill),
+        Skill: formatSkillName(skill),
+        Description: theme.muted(skill.description),
+        Source: skill.source,
+        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+      })),
+    }),
   );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-
-  return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render one skill's status, requirements, install hints, and API-key setup details. */
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
@@ -209,22 +207,19 @@ export function formatSkillInfo(
     return formatSkillsJson(skill);
   }
 
-  const lines: string[] = [];
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const status = formatSkillStatus(skill, true);
-
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
   const safeSkillKey = sanitizeForLog(skill.skillKey);
-
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${status}`);
-  lines.push("");
-  lines.push(sanitizeForLog(skill.description));
-  lines.push("");
-
-  lines.push(theme.heading("Details:"));
-  lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
+  const lines = [
+    `${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${formatSkillStatus(skill, true)}`,
+    "",
+    sanitizeForLog(skill.description),
+    "",
+    theme.heading("Details:"),
+    `${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`,
+    `${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`,
+  ];
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
   }
@@ -241,36 +236,7 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
 
-  const requirementGroups = SKILL_REQUIREMENT_GROUPS.filter(
-    ([key]) => skill.requirements[key].length > 0,
-  );
-
-  if (requirementGroups.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    const formatRequirementStatus = (value: string, satisfied: boolean) =>
-      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
-    for (const [key, label] of requirementGroups) {
-      const required = skill.requirements[key];
-      const missing = skill.missing[key];
-      let requirementStatus: string;
-      if (key === "anyBins" || key === "os") {
-        // Missing arrays describe the whole alternative group, not individual availability.
-        const prefix = key === "anyBins" ? "any of: " : "";
-        requirementStatus = formatRequirementStatus(
-          `(${prefix}${required.join(", ")})`,
-          missing.length === 0,
-        );
-      } else {
-        requirementStatus = required
-          .map((requirement) =>
-            formatRequirementStatus(requirement, !missing.includes(requirement)),
-          )
-          .join(", ");
-      }
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
-    }
-  }
+  lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
 
   if (skill.install.length > 0 && !skill.eligible) {
     lines.push("");
@@ -301,7 +267,6 @@ export function formatSkillInfo(
   return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render aggregate setup health for all discovered skills. */
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const modelVisible = report.skills.filter((s) => s.modelVisible);
@@ -404,98 +369,57 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
   }
 
-  if (modelVisible.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready and visible to model:"));
-    for (const skill of modelVisible) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}`);
-    }
-  }
-
-  if (promptHidden.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready but hidden from model prompt:"));
-    for (const skill of promptHidden) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const reason = skill.commandVisible
+  lines.push(
+    ...formatSkillCheckSection("Ready and visible to model:", modelVisible),
+    ...formatSkillCheckSection("Ready but hidden from model prompt:", promptHidden, (skill) =>
+      skill.commandVisible
         ? "skill hides its instructions from the model; commands/cron may still use it"
-        : "skill hides its instructions from the model and is not exposed as a command";
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${reason})`)}`,
-      );
-    }
-  }
-
-  if (agentFiltered.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Excluded by agent allowlist:"));
-    for (const skill of agentFiltered) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
-      );
-    }
-  }
-
-  if (missingReqs.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Missing requirements:"));
-    for (const skill of missingReqs) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const missing = formatSkillMissingSummary(skill);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`,
-      );
-    }
-  }
+        : "skill hides its instructions from the model and is not exposed as a command",
+    ),
+    ...formatSkillCheckSection(
+      "Excluded by agent allowlist:",
+      agentFiltered,
+      () => "loaded, but this agent is not allowed to see/use it",
+    ),
+    ...formatSkillCheckSection("Missing requirements:", missingReqs, formatSkillMissingSummary),
+  );
 
   return appendClawHubHint(lines.join("\n"));
 }
 
-export function formatSkillCuratorStatus(status: SkillsCuratorCompatibleStatusResult): string {
-  const timestamp = (value: number | null) =>
-    value === null ? "never" : new Date(value).toISOString();
+export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
   const lines = [
-    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
-    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
-    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+    `${theme.muted("Agent:")} ${sanitizeForLog(result.agentId)}  ${theme.muted("Mode:")} ${result.mode}`,
+    `${theme.muted("Root:")} ${shortenHomePath(result.root)}`,
+    "",
   ];
-  if (!("inventory" in status)) {
+  if (result.skills.length === 0) {
+    lines.push("No learned skills.");
+  }
+  for (const skill of result.skills) {
+    const uses = skill.useCount === undefined ? "" : `  uses=${skill.useCount}`;
     lines.push(
-      "Legacy inventory: this Gateway reports limited coverage. Upgrade the Gateway for current Workshop inventory.",
+      `${theme.command(sanitizeForLog(skill.name))}  updated ${formatTimeAgo(Math.max(0, Date.now() - skill.updatedAtMs))}${uses}  ${sanitizeForLog(skill.description)}`,
     );
   }
-  if (status.lastError) {
-    lines.push(`Last error: ${status.lastError}`);
-  }
-  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
-  for (const review of Object.values(status.collectionReview ?? {})) {
-    lines.push(
-      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
-    );
-  }
-  for (const [workspace, review] of Object.entries(status.experienceReview ?? {})) {
-    lines.push(
-      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
-    );
-  }
-  const keyCounts = new Map<string, number>();
-  for (const skill of status.skills) {
-    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
-  }
-  for (const skill of status.skills) {
-    const pinned = skill.pinned ? " pinned" : "";
-    const lastUsed =
-      skill.lastUsedAtMs === null ? "not recorded" : new Date(skill.lastUsedAtMs).toISOString();
-    const label =
-      keyCounts.get(skill.skillKey) === 1
-        ? skill.skillKey
-        : `${skill.skillKey} (${skill.skillFile})`;
-    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
-  }
-  for (const overlap of status.overlaps) {
-    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
+  const archived = result.archived.filter((entry) => !entry.live);
+  if (archived.length > 0) {
+    lines.push("", theme.heading("Archived:"));
+    for (const entry of archived) {
+      lines.push(`${sanitizeForLog(entry.name)}  versions=${entry.versions.length}`);
+    }
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult): string {
+  if (result.changes.length === 0) {
+    return "No Workshop changes.\n";
+  }
+  return `${result.changes
+    .map((change) => {
+      const version = change.versionId ? `  version=${change.versionId}` : "";
+      return `${formatTimeAgo(Math.max(0, Date.now() - change.createdAtMs))}  ${change.actor}  ${change.action}  ${sanitizeForLog(change.skillName)}  ${sanitizeForLog(change.summary)}${version}`;
+    })
+    .join("\n")}\n`;
 }

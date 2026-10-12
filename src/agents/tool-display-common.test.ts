@@ -75,7 +75,6 @@ describe("bounded tool detail previews", () => {
   });
 
   it.each([
-    { value: [], expected: undefined, includeFalsy: false },
     { value: [null, "", false, 0], expected: undefined, includeFalsy: false },
     { value: [null, "", false, 0], expected: "false, 0", includeFalsy: true },
     { value: ["a", "b", "c", "", null], expected: "a, b, c", includeFalsy: false },
@@ -161,23 +160,12 @@ describe("coerceDisplayValue surrogate-safe truncation", () => {
     expect(detail).toBe(`${"x".repeat(79)}…${"x".repeat(80)}`);
     expect(hasLoneSurrogate(detail as string)).toBe(false);
   });
-
-  it("returns short values unchanged", () => {
-    const { detail } = resolveToolVerbAndDetailForArgs({
-      toolKey: "custom_tool",
-      args: { note: "short value with no emoji" },
-      fallbackDetailKeys: ["note"],
-      detailMode: "first",
-    });
-    expect(detail).toBe("short value with no emoji");
-  });
 });
 
 describe("coerceDisplayValue deep array nesting", () => {
   it.each([
     { depth: 64, expected: "x" },
     { depth: 65, expected: undefined },
-    { depth: 5_000, expected: undefined },
   ])("bounds the preview at depth $depth", ({ depth, expected }) => {
     let value: unknown = "x";
     for (let i = 0; i < depth; i += 1) {

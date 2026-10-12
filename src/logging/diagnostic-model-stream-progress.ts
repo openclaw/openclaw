@@ -35,10 +35,6 @@ export function createModelCallStreamProgressReporter({
       return;
     }
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-    const timelineEnabled = target.callId !== undefined && isDiagnosticsTimelineEnabled({ config });
-    if (!diagnosticsEnabled && !timelineEnabled) {
-      return;
-    }
     const fields = {
       runId: target.runId,
       ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
@@ -53,6 +49,11 @@ export function createModelCallStreamProgressReporter({
       lastEmittedAtMs !== undefined &&
       now - lastEmittedAtMs < MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS
     ) {
+      return;
+    }
+    // Timeline flags only matter when a public heartbeat can be emitted.
+    const timelineEnabled = target.callId !== undefined && isDiagnosticsTimelineEnabled({ config });
+    if (!diagnosticsEnabled && !timelineEnabled) {
       return;
     }
     lastEmittedAtMs = now;

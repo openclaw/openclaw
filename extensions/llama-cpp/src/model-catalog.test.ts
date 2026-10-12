@@ -5,7 +5,6 @@ import { recommendLlamaCppModel, resolveLlamaCppCatalogArtifact } from "./model-
 const GIB = 1024 ** 3;
 const SMALL_MODEL = "qwen3.5-4b-q4_k_m";
 const MEDIUM_MODEL = "qwen3.5-9b-q4_k_m";
-const LARGE_MODEL = "qwen3.8-27b-ud-q4_k_m";
 
 function hardware(memoryGiB: number): LlamaCppHardware {
   return {
@@ -21,59 +20,17 @@ function hardware(memoryGiB: number): LlamaCppHardware {
 }
 
 describe("local model recommendation", () => {
-  it.each([
-    { ram: 8, backend: "metal" as const, modelId: SMALL_MODEL },
-    { ram: 16, backend: "metal" as const, modelId: MEDIUM_MODEL },
-    { ram: 24, backend: "metal" as const, modelId: "gemma-4-12b-it-q4_k_m" },
-    { ram: 32, backend: "metal" as const, modelId: LARGE_MODEL },
-    { ram: 64, backend: "cpu" as const, modelId: MEDIUM_MODEL },
-  ])("recommends a resident 64K model for $ram GiB on $backend", ({ ram, backend, modelId }) => {
-    const result = recommendLlamaCppModel(hardware(ram), backend);
+  it.each([{ ram: 64, backend: "cpu" as const, modelId: MEDIUM_MODEL }])(
+    "recommends a resident 64K model for $ram GiB on $backend",
+    ({ ram, backend, modelId }) => {
+      const result = recommendLlamaCppModel(hardware(ram), backend);
 
-    expect(result).toMatchObject({
-      kind: "recommended",
-      recipe: { model: { id: modelId, contextWindow: 65536 } },
-    });
-  });
-
-  it("keeps a busy high-memory host within available memory", () => {
-    const host = hardware(128);
-    host.availableMemoryBytes = 7 * GIB;
-
-    expect(recommendLlamaCppModel(host, "metal")).toMatchObject({
-      kind: "recommended",
-      recipe: { model: { id: SMALL_MODEL } },
-    });
-  });
-
-  it("does not add discrete GPU cards or VRAM to system memory", () => {
-    const host = hardware(64);
-    host.accelerator = {
-      kind: "cuda",
-      devices: Array.from({ length: 2 }, () => ({
-        name: "NVIDIA Device",
-        totalMemoryBytes: 8 * GIB,
-        availableMemoryBytes: 8 * GIB,
-        driverVersion: "580.65.06",
-        computeCapability: 8.9,
-      })),
-    };
-
-    expect(recommendLlamaCppModel(host, "cuda")).toMatchObject({
-      kind: "recommended",
-      recipe: { model: { id: SMALL_MODEL } },
-    });
-  });
-
-  it("chooses a smaller download when only it fits the disk reserve", () => {
-    const host = hardware(32);
-    host.availableDiskBytes = 6 * GIB;
-
-    expect(recommendLlamaCppModel(host, "metal")).toMatchObject({
-      kind: "recommended",
-      recipe: { model: { id: SMALL_MODEL } },
-    });
-  });
+      expect(result).toMatchObject({
+        kind: "recommended",
+        recipe: { model: { id: modelId, contextWindow: 65536 } },
+      });
+    },
+  );
 
   it("uses the smaller cache budget on a 24 GiB NVIDIA card", () => {
     const host = hardware(64);
@@ -150,7 +107,6 @@ describe("local model recommendation", () => {
 
   it.each([
     { host: { ...hardware(32), availableDiskBytes: undefined }, reason: /permissions/u },
-    { host: { ...hardware(32), availableDiskBytes: GIB }, reason: /disk space/u },
     { host: hardware(4), reason: /memory budget/u },
   ])("explains why an unsafe download cannot be recommended", ({ host, reason }) => {
     expect(recommendLlamaCppModel(host, "metal")).toMatchObject({

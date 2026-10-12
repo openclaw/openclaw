@@ -20,8 +20,17 @@ function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
-function createSkippedVerificationReplayKey(provider: string, ctx: WebhookContext): string {
-  return `${provider}:skip:${sha256Hex(`${ctx.method}\n${ctx.url}\n${ctx.rawBody}`)}`;
+function skipWebhookVerification(
+  provider: string,
+  ctx: WebhookContext,
+  cache: ReturnType<typeof createWebhookReplayCache>,
+): WebhookVerificationResult {
+  const replayKey = `${provider}:skip:${sha256Hex(`${ctx.method}\n${ctx.url}\n${ctx.rawBody}`)}`;
+  return {
+    ok: true,
+    reason: "verification skipped (dev mode)",
+    ...reserveWebhookReplay(cache, replayKey),
+  };
 }
 
 /**
@@ -44,7 +53,6 @@ function validateTwilioSignature(
 
   const dataToSign = buildTwilioDataToSign(url, params);
 
-  // HMAC-SHA1 with auth token, then base64 encode
   const expectedSignature = crypto
     .createHmac("sha1", authToken)
     .update(dataToSign)
@@ -71,9 +79,6 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
     .join("&");
 }
 
-/**
- * Configuration for secure URL reconstruction.
- */
 interface WebhookUrlOptions {
   /**
    * Whitelist of allowed hostnames. If provided, only these hosts will be
@@ -103,25 +108,15 @@ interface WebhookUrlOptions {
   remoteIP?: string;
 }
 
-/**
- * Validate that a hostname matches RFC 1123 format.
- * Prevents injection of malformed hostnames.
- */
 function isValidHostname(hostname: string): boolean {
   if (!hostname || hostname.length > 253) {
     return false;
   }
-  // RFC 1123 hostname: alphanumeric, hyphens, dots
-  // Also allow ngrok/tunnel subdomains
   const hostnameRegex =
     /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
   return hostnameRegex.test(hostname);
 }
 
-/**
- * Safely extract hostname from a host header value.
- * Handles IPv6 addresses and prevents injection via malformed values.
- */
 function extractHostname(hostHeader: string): string | null {
   if (!hostHeader) {
     return null;
@@ -131,7 +126,7 @@ function extractHostname(hostHeader: string): string | null {
   if (hostHeader.startsWith("[")) {
     const endBracket = hostHeader.indexOf("]");
     if (endBracket === -1) {
-      return null; // Malformed IPv6
+      return null;
     }
     const suffix = hostHeader.slice(endBracket + 1);
     if (suffix && !/^:\d+$/u.test(suffix)) {
@@ -160,7 +155,6 @@ function extractHostname(hostHeader: string): string | null {
 
   const hostname = hostHeader.split(":").at(0);
 
-  // Validate the extracted hostname
   if (!hostname || !isValidHostname(hostname)) {
     return null;
   }
@@ -214,14 +208,10 @@ function formatHostnameForUrl(hostname: string): string {
 export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlOptions): string {
   const { headers } = ctx;
 
-  // SECURITY: Only trust forwarding headers if explicitly configured.
-  // Either allowedHosts must be set (for whitelist validation) or
-  // trustForwardingHeaders must be true (explicit opt-in to trust).
   const allowedHosts = normalizeAllowedHosts(options?.allowedHosts);
   const hasAllowedHosts = allowedHosts !== null;
   const explicitlyTrusted = options?.trustForwardingHeaders === true;
 
-  // Also check trusted proxy IPs if configured
   const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
@@ -233,12 +223,10 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     !hasTrustedProxyIPs ||
     (normalizedRemoteIp ? normalizedTrustedProxyIps.has(normalizedRemoteIp) : false);
 
-  // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
   const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
 
   const isAllowedForwardedHost = (host: string): boolean => !allowedHosts || allowedHosts.has(host);
 
-  // Determine protocol - only trust X-Forwarded-Proto from trusted proxies
   let proto = "https";
   if (shouldTrustForwardingHeaders) {
     const forwardedProto = getHeader(headers, "x-forwarded-proto");
@@ -247,11 +235,9 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     }
   }
 
-  // Determine host - with security validation
   let host: string | null = null;
 
   if (shouldTrustForwardingHeaders) {
-    // Try forwarding headers in priority order
     const forwardingHeaders = ["x-forwarded-host", "x-original-host", "ngrok-forwarded-host"];
 
     for (const headerName of forwardingHeaders) {
@@ -266,7 +252,6 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     }
   }
 
-  // Fallback to Host header if no valid forwarding header found
   if (!host) {
     const hostHeader = getHeader(headers, "host");
     if (hostHeader) {
@@ -277,7 +262,6 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     }
   }
 
-  // Last resort: try to extract from ctx.url
   if (!host) {
     try {
       const parsed = new URL(ctx.url);
@@ -286,16 +270,10 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
         host = extracted;
       }
     } catch {
-      // URL parsing failed - use empty string (will result in invalid URL)
       host = "";
     }
   }
 
-  if (!host) {
-    host = "";
-  }
-
-  // Extract path from the context URL (fallback to "/" on parse failure)
   let path = "/";
   try {
     const parsed = new URL(ctx.url);
@@ -304,7 +282,7 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     // URL parsing failed
   }
 
-  return `${proto}://${formatHostnameForUrl(host)}${path}`;
+  return `${proto}://${formatHostnameForUrl(host ?? "")}${path}`;
 }
 
 function buildTwilioVerificationUrl(
@@ -343,22 +321,12 @@ function redactTwilioVerificationUrlForDiagnostics(url: string): string {
   }
 }
 
-function stripPortFromUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.port) {
-      return url;
-    }
-    parsed.port = "";
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
 function setPortOnUrl(url: string, port: string): string {
   try {
     const parsed = new URL(url);
+    if (!port && !parsed.port) {
+      return url;
+    }
     parsed.port = port;
     return parsed.toString();
   } catch {
@@ -378,17 +346,12 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
   }
 }
 
-/**
- * Result of Twilio webhook verification with detailed info.
- */
 interface TwilioVerificationResult extends WebhookVerificationResult {
   /** The original URL that passed signature verification; never set on failures. */
   verificationUrl?: string;
   /** Whether we're running behind ngrok free tier */
   isNgrokFreeTier?: boolean;
 }
-
-type TelnyxVerificationResult = WebhookVerificationResult;
 
 function createTwilioReplayKey(params: {
   verificationUrl: string;
@@ -401,18 +364,6 @@ function createTwilioReplayKey(params: {
   )}`;
 }
 
-function decodeBase64OrBase64Url(input: string): Buffer {
-  // Telnyx docs say Base64; some tooling emits Base64URL. Accept both.
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padLen = (4 - (normalized.length % 4)) % 4;
-  const padded = normalized + "=".repeat(padLen);
-  return Buffer.from(padded, "base64");
-}
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
 function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
   const trimmed = publicKey.trim();
 
@@ -422,11 +373,11 @@ function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
   }
 
   // Base64-encoded raw Ed25519 key (32 bytes) or Base64-encoded DER SPKI key.
-  const decoded = decodeBase64OrBase64Url(trimmed);
+  const decoded = Buffer.from(trimmed, "base64");
   if (decoded.length === 32) {
     // JWK is the easiest portable way to import raw Ed25519 keys in Node crypto.
     return crypto.createPublicKey({
-      key: { kty: "OKP", crv: "Ed25519", x: base64UrlEncode(decoded) },
+      key: { kty: "OKP", crv: "Ed25519", x: decoded.toString("base64url") },
       format: "jwk",
     });
   }
@@ -454,14 +405,9 @@ export function verifyTelnyxWebhook(
     /** Maximum allowed clock skew (ms). Defaults to 5 minutes. */
     maxSkewMs?: number;
   },
-): TelnyxVerificationResult {
+): WebhookVerificationResult {
   if (options?.skipVerification) {
-    const replayKey = createSkippedVerificationReplayKey("telnyx", ctx);
-    return {
-      ok: true,
-      reason: "verification skipped (dev mode)",
-      ...reserveWebhookReplay(telnyxReplayCache, replayKey),
-    };
+    return skipWebhookVerification("telnyx", ctx, telnyxReplayCache);
   }
 
   if (!publicKey) {
@@ -482,7 +428,7 @@ export function verifyTelnyxWebhook(
 
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
-    const signatureBuffer = decodeBase64OrBase64Url(signature);
+    const signatureBuffer = Buffer.from(signature, "base64");
     // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
     const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
@@ -509,13 +455,10 @@ export function verifyTelnyxWebhook(
   }
 }
 
-/**
- * Verify Twilio webhook with full context and detailed result.
- */
 export function verifyTwilioWebhook(
   ctx: WebhookContext,
   authToken: string,
-  options?: {
+  options?: WebhookUrlOptions & {
     /** Override the public URL (e.g., from config) */
     publicUrl?: string;
     /**
@@ -528,36 +471,10 @@ export function verifyTwilioWebhook(
     allowNgrokFreeTierLoopbackBypass?: boolean;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /**
-     * Whitelist of allowed hostnames for host header validation.
-     * Prevents host header injection attacks.
-     */
-    allowedHosts?: string[];
-    /**
-     * Explicitly trust X-Forwarded-* headers without a whitelist.
-     * WARNING: Only enable if you trust your proxy configuration.
-     * @default false
-     */
-    trustForwardingHeaders?: boolean;
-    /**
-     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
-     * be trusted from these IPs.
-     */
-    trustedProxyIPs?: string[];
-    /**
-     * The remote IP address of the request (for proxy validation).
-     */
-    remoteIP?: string;
   },
 ): TwilioVerificationResult {
-  // Allow skipping verification for development/testing
   if (options?.skipVerification) {
-    const replayKey = createSkippedVerificationReplayKey("twilio", ctx);
-    return {
-      ok: true,
-      reason: "verification skipped (dev mode)",
-      ...reserveWebhookReplay(twilioReplayCache, replayKey),
-    };
+    return skipWebhookVerification("twilio", ctx, twilioReplayCache);
   }
 
   const signature = getHeader(ctx.headers, "x-twilio-signature");
@@ -569,7 +486,6 @@ export function verifyTwilioWebhook(
   const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
-  // Reconstruct the URL Twilio used
   const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl, {
     allowedHosts: options?.allowedHosts,
     trustForwardingHeaders: options?.trustForwardingHeaders || allowLoopbackForwarding,
@@ -577,25 +493,33 @@ export function verifyTwilioWebhook(
     remoteIP: options?.remoteIP,
   });
 
-  // Parse the body as URL-encoded params
   const params = new URLSearchParams(ctx.rawBody);
 
-  const isValid = validateTwilioSignature(authToken, signature, verificationUrl, params);
-
-  if (isValid) {
+  const verifyUrl = (candidateUrl: string): TwilioVerificationResult | undefined => {
+    if (!validateTwilioSignature(authToken, signature, candidateUrl, params)) {
+      return undefined;
+    }
     const replayKey = createTwilioReplayKey({
-      verificationUrl,
+      verificationUrl: candidateUrl,
       signature,
       requestParams: params,
     });
-    return { ok: true, verificationUrl, ...reserveWebhookReplay(twilioReplayCache, replayKey) };
+    return {
+      ok: true,
+      verificationUrl: candidateUrl,
+      ...reserveWebhookReplay(twilioReplayCache, replayKey),
+    };
+  };
+  const verified = verifyUrl(verificationUrl);
+  if (verified) {
+    return verified;
   }
 
   // Twilio webhook signatures can differ in whether port is included.
   // Retry a small, deterministic set of URL variants before failing closed.
   const variants = new Set<string>();
   variants.add(verificationUrl);
-  variants.add(stripPortFromUrl(verificationUrl));
+  variants.add(setPortOnUrl(verificationUrl, ""));
 
   if (options?.publicUrl) {
     try {
@@ -617,23 +541,12 @@ export function verifyTwilioWebhook(
     if (candidateUrl === verificationUrl) {
       continue;
     }
-    const isValidCandidate = validateTwilioSignature(authToken, signature, candidateUrl, params);
-    if (!isValidCandidate) {
-      continue;
+    const result = verifyUrl(candidateUrl);
+    if (result) {
+      return result;
     }
-    const replayKey = createTwilioReplayKey({
-      verificationUrl: candidateUrl,
-      signature,
-      requestParams: params,
-    });
-    return {
-      ok: true,
-      verificationUrl: candidateUrl,
-      ...reserveWebhookReplay(twilioReplayCache, replayKey),
-    };
   }
 
-  // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
     verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
   const diagnosticVerificationUrl = redactTwilioVerificationUrlForDiagnostics(verificationUrl);
@@ -645,13 +558,6 @@ export function verifyTwilioWebhook(
   };
 }
 
-// -----------------------------------------------------------------------------
-// Plivo webhook verification
-// -----------------------------------------------------------------------------
-
-/**
- * Result of Plivo webhook verification with detailed info.
- */
 interface PlivoVerificationResult extends WebhookVerificationResult {
   verificationUrl?: string;
   /** Signature version used for verification */
@@ -668,64 +574,27 @@ function getBaseUrlNoQuery(url: string): string {
   return `${u.protocol}//${u.host}${u.pathname}`;
 }
 
-function createPlivoV2ReplayKey(url: string, nonce: string): string {
-  return `plivo:v2:${sha256Hex(`${getBaseUrlNoQuery(url)}\n${nonce}`)}`;
-}
-
-function validatePlivoV2Signature(params: {
-  authToken: string;
-  signature: string;
-  nonce: string;
-  url: string;
-}): boolean {
-  const baseUrl = getBaseUrlNoQuery(params.url);
-  const digest = crypto
-    .createHmac("sha256", params.authToken)
-    .update(baseUrl + params.nonce)
-    .digest("base64");
-  const expected = normalizeSignatureBase64(digest);
-  const provided = normalizeSignatureBase64(params.signature);
-  return safeEqualSecret(expected, provided);
-}
-
-type PlivoParamMap = Record<string, string[]>;
-
-function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
-  const map: PlivoParamMap = {};
-  for (const [key, value] of sp.entries()) {
-    if (!map[key]) {
-      map[key] = [];
-    }
-    map[key].push(value);
-  }
-  return map;
-}
-
-function sortedPlivoParams(params: PlivoParamMap, format: "query" | "body"): string {
-  const parts: string[] = [];
-  const entries = Object.entries(params).toSorted(([left], [right]) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
-  for (const [key, entryValues] of entries) {
-    const values = [...entryValues].toSorted();
-    for (const value of values) {
-      parts.push(format === "query" ? `${key}=${value}` : `${key}${value}`);
-    }
-  }
-  return parts.join(format === "query" ? "&" : "");
+function sortedPlivoParams(params: URLSearchParams, format: "query" | "body"): string {
+  return [...params]
+    .toSorted(([leftKey, leftValue], [rightKey, rightValue]) => {
+      const left = leftKey === rightKey ? leftValue : leftKey;
+      const right = leftKey === rightKey ? rightValue : rightKey;
+      return left < right ? -1 : left > right ? 1 : 0;
+    })
+    .map(([key, value]) => (format === "query" ? `${key}=${value}` : `${key}${value}`))
+    .join(format === "query" ? "&" : "");
 }
 
 function constructPlivoV3BaseUrl(params: {
   method: "GET" | "POST";
   url: string;
-  postParams: PlivoParamMap;
+  postParams: URLSearchParams;
 }): string {
-  const hasPostParams = Object.keys(params.postParams).length > 0;
+  const hasPostParams = params.postParams.size > 0;
   const u = new URL(params.url);
   const baseNoQuery = `${u.protocol}//${u.host}${u.pathname}`;
 
-  const queryMap = toParamMapFromSearchParams(u.searchParams);
-  const queryString = sortedPlivoParams(queryMap, "query");
+  const queryString = sortedPlivoParams(u.searchParams, "query");
 
   // In the Plivo V3 algorithm, the query portion is always sorted, and if we
   // have POST params we add a '.' separator after the query string.
@@ -744,27 +613,28 @@ function constructPlivoV3BaseUrl(params: {
   return baseUrl + sortedPlivoParams(params.postParams, "body");
 }
 
-function validatePlivoV3Signature(params: {
+function verifyPlivoSignature(params: {
   authToken: string;
-  signatureHeader: string;
+  version: "v2" | "v3";
+  verificationUrl: string;
+  signatures: string[];
   nonce: string;
   baseUrl: string;
-}): boolean {
-  const hmacBase = `${params.baseUrl}.${params.nonce}`;
+}): PlivoVerificationResult {
+  const hmacBase = `${params.baseUrl}${params.version === "v3" ? "." : ""}${params.nonce}`;
   const digest = crypto.createHmac("sha256", params.authToken).update(hmacBase).digest("base64");
   const expected = normalizeSignatureBase64(digest);
-
-  // Header can contain multiple signatures separated by commas.
-  const provided = normalizeStringEntries(params.signatureHeader.split(",")).map((s) =>
-    normalizeSignatureBase64(s),
-  );
-
-  for (const sig of provided) {
-    if (safeEqualSecret(expected, sig)) {
-      return true;
-    }
+  const provided = params.signatures.map(normalizeSignatureBase64);
+  const ok = provided.some((signature) => safeEqualSecret(expected, signature));
+  const result = { ok, version: params.version, verificationUrl: params.verificationUrl };
+  if (!ok) {
+    return { ...result, reason: `Invalid Plivo ${params.version.toUpperCase()} signature` };
   }
-  return false;
+  const replayKey = `plivo:${params.version}:${sha256Hex(`${params.baseUrl}\n${params.nonce}`)}`;
+  return {
+    ...result,
+    ...reserveWebhookReplay(plivoReplayCache, replayKey),
+  };
 }
 
 /**
@@ -777,40 +647,15 @@ function validatePlivoV3Signature(params: {
 export function verifyPlivoWebhook(
   ctx: WebhookContext,
   authToken: string,
-  options?: {
+  options?: WebhookUrlOptions & {
     /** Override the public URL origin (host) used for verification */
     publicUrl?: string;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /**
-     * Whitelist of allowed hostnames for host header validation.
-     * Prevents host header injection attacks.
-     */
-    allowedHosts?: string[];
-    /**
-     * Explicitly trust X-Forwarded-* headers without a whitelist.
-     * WARNING: Only enable if you trust your proxy configuration.
-     * @default false
-     */
-    trustForwardingHeaders?: boolean;
-    /**
-     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
-     * be trusted from these IPs.
-     */
-    trustedProxyIPs?: string[];
-    /**
-     * The remote IP address of the request (for proxy validation).
-     */
-    remoteIP?: string;
   },
 ): PlivoVerificationResult {
   if (options?.skipVerification) {
-    const replayKey = createSkippedVerificationReplayKey("plivo", ctx);
-    return {
-      ok: true,
-      reason: "verification skipped (dev mode)",
-      ...reserveWebhookReplay(plivoReplayCache, replayKey),
-    };
+    return skipWebhookVerification("plivo", ctx, plivoReplayCache);
   }
 
   const signatureV3 = getHeader(ctx.headers, "x-plivo-signature-v3");
@@ -848,53 +693,28 @@ export function verifyPlivoWebhook(
       };
     }
 
-    const postParams = toParamMapFromSearchParams(new URLSearchParams(ctx.rawBody));
+    const postParams = new URLSearchParams(ctx.rawBody);
     const baseUrl = constructPlivoV3BaseUrl({ method, url: verificationUrl, postParams });
-    const ok = validatePlivoV3Signature({
+    return verifyPlivoSignature({
       authToken,
-      signatureHeader: signatureV3,
+      version: "v3",
+      verificationUrl,
+      // Only V3 permits a comma-separated list of signatures.
+      signatures: normalizeStringEntries(signatureV3.split(",")),
       nonce: nonceV3,
       baseUrl,
     });
-    if (!ok) {
-      return {
-        ok: false,
-        version: "v3",
-        verificationUrl,
-        reason: "Invalid Plivo V3 signature",
-      };
-    }
-    const replayKey = `plivo:v3:${sha256Hex(`${baseUrl}\n${nonceV3}`)}`;
-    return {
-      ok: true,
-      version: "v3",
-      verificationUrl,
-      ...reserveWebhookReplay(plivoReplayCache, replayKey),
-    };
   }
 
   if (signatureV2 && nonceV2) {
-    const ok = validatePlivoV2Signature({
+    return verifyPlivoSignature({
       authToken,
-      signature: signatureV2,
-      nonce: nonceV2,
-      url: verificationUrl,
-    });
-    if (!ok) {
-      return {
-        ok: false,
-        version: "v2",
-        verificationUrl,
-        reason: "Invalid Plivo V2 signature",
-      };
-    }
-    const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
-    return {
-      ok: true,
       version: "v2",
       verificationUrl,
-      ...reserveWebhookReplay(plivoReplayCache, replayKey),
-    };
+      signatures: [signatureV2],
+      nonce: nonceV2,
+      baseUrl: getBaseUrlNoQuery(verificationUrl),
+    });
   }
 
   return {

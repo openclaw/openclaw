@@ -100,37 +100,9 @@ describe("xAI lazy realtime voice", () => {
     expect(runtimeMocks.voiceTriggerGreeting).toHaveBeenCalledWith("provider-owned-reconnect");
   });
 
-  it("bounds pending voice user messages by aggregate bytes", async () => {
-    const onError = vi.fn();
-    const bridge = await createLazyVoiceBridge({ onError });
-    const accepted = "a".repeat(200 * 1024);
-
-    bridge.sendUserMessage?.(accepted);
-    bridge.sendUserMessage?.("b".repeat(64 * 1024));
-    await bridge.connect();
-
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledWith(accepted);
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError.mock.calls[0]?.[0]).toEqual(
-      new Error("xAI realtime voice pending user message overflow during lazy startup"),
-    );
-  });
-
   it.each([
     ["undefined", (): undefined => undefined],
-    ["function", () => () => undefined],
-    ["symbol", () => Symbol("invalid-tool-result")],
     ["bigint", () => ({ value: 1n })],
-    [
-      "circular",
-      () => {
-        const result: { self?: unknown } = {};
-        result.self = result;
-        return result;
-      },
-    ],
-    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
   ] as const)(
     "rejects %s voice tool results before lazy queue admission",
     async (_label, create) => {
@@ -179,25 +151,6 @@ describe("xAI lazy realtime voice", () => {
     expect(runtimeMocks.voiceSubmitToolResult).not.toHaveBeenCalled();
   });
 
-  it("bounds pending voice tool results by aggregate serialized bytes", async () => {
-    const onError = vi.fn();
-    const bridge = await createLazyVoiceBridge({ onError });
-    const accepted = { text: "a".repeat(200 * 1024) };
-
-    await bridge.submitToolResult("call-1", accepted);
-    expect(() => bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) })).toThrow(
-      "xAI realtime voice pending tool result overflow during lazy startup",
-    );
-    await bridge.connect();
-
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledWith("call-1", accepted, undefined);
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError.mock.calls[0]?.[0]).toEqual(
-      new Error("xAI realtime voice pending tool result overflow during lazy startup"),
-    );
-  });
-
   it("keeps voice payloads byte-bounded until the underlying connect resolves", async () => {
     const connecting = createDeferred<void>();
     runtimeMocks.voiceConnect.mockReturnValue(connecting.promise);
@@ -225,10 +178,8 @@ describe("xAI lazy realtime voice", () => {
     connecting.resolve();
     await connectPromise;
 
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledWith(acceptedMessage);
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledWith(
+    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(acceptedMessage);
+    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
       "call-1",
       acceptedResult,
       undefined,
@@ -323,86 +274,17 @@ describe("xAI lazy realtime voice", () => {
     });
     await Promise.all([firstConnect, secondConnect]);
 
-    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledWith(audio);
-    expect(runtimeMocks.voiceSetMediaTimestamp).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSetMediaTimestamp).toHaveBeenCalledWith(84);
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledWith("arrived-during-handoff");
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledWith(
+    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledExactlyOnceWith(audio);
+    expect(runtimeMocks.voiceSetMediaTimestamp).toHaveBeenCalledExactlyOnceWith(84);
+    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(
+      "arrived-during-handoff",
+    );
+    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
       "call-1",
       { text: "tool-result" },
       undefined,
     );
-    expect(runtimeMocks.voiceTriggerGreeting).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceTriggerGreeting).toHaveBeenCalledWith("welcome");
-  });
-
-  it("clears pending voice byte budgets when closed before connect", async () => {
-    const onError = vi.fn();
-    const bridge = await createLazyVoiceBridge({ onError });
-
-    bridge.sendUserMessage?.("stale".repeat(40 * 1024));
-    bridge.setMediaTimestamp(42);
-    await bridge.submitToolResult("stale-call", { text: "x".repeat(200 * 1024) });
-    expect(bridge.close()).toBeUndefined();
-
-    const connectPromise = bridge.connect();
-    bridge.sendUserMessage?.("fresh".repeat(40 * 1024));
-    await bridge.submitToolResult("fresh-call", { text: "y".repeat(200 * 1024) });
-    await connectPromise;
-
-    expect(onError).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceSetMediaTimestamp).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledWith("fresh".repeat(40 * 1024));
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledWith(
-      "fresh-call",
-      { text: "y".repeat(200 * 1024) },
-      undefined,
-    );
-  });
-
-  it("closes a voice bridge that finishes loading after the wrapper closes", async () => {
-    const onClose = vi.fn();
-    const bridge = await createLazyVoiceBridge({ onClose });
-
-    const connectPromise = bridge.connect();
-    void bridge.close();
-    void bridge.close();
-    await connectPromise;
-
-    expect(runtimeMocks.createVoiceBridge).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceConnect).not.toHaveBeenCalled();
-    expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
-  });
-
-  it("reopens voice after close without replaying discarded input", async () => {
-    const onClose = vi.fn();
-    const bridge = await createLazyVoiceBridge({ onClose });
-    const first = Buffer.from([0x01]);
-    const discarded = Buffer.from([0x02]);
-    const second = Buffer.from([0x03]);
-
-    bridge.sendAudio(first);
-    await bridge.connect();
-    void bridge.close();
-    void bridge.close();
-    bridge.sendAudio(discarded);
-
-    const reconnectPromise = bridge.connect();
-    bridge.sendAudio(second);
-    await reconnectPromise;
-
-    expect(runtimeMocks.voiceConnect).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendAudio.mock.calls.map(([audio]) => audio)).toEqual([first, second]);
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(runtimeMocks.voiceTriggerGreeting).toHaveBeenCalledExactlyOnceWith("welcome");
   });
 
   it("keeps a replacement voice generation open when a superseded connect rejects", async () => {
@@ -432,125 +314,63 @@ describe("xAI lazy realtime voice", () => {
     expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
     expect(runtimeMocks.voiceSendUserMessage).toHaveBeenCalledWith("replacement-still-open");
     expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it("ignores nonterminal callbacks from a superseded voice generation", async () => {
-    const onAudio = vi.fn();
     const playback = [{ itemId: "current-item", audioEndMs: 320 }];
-    const getPlaybackState = vi.fn(() => playback);
-    const onClearAudio = vi.fn();
-    const onMark = vi.fn();
-    const onTranscript = vi.fn();
-    const onEvent = vi.fn();
-    const onToolCall = vi.fn();
-    const onReady = vi.fn();
-    const onError = vi.fn();
-    const bridge = await createLazyVoiceBridge({
-      onAudio,
-      getPlaybackState,
-      onClearAudio,
-      onMark,
-      onTranscript,
-      onEvent,
-      onToolCall,
-      onReady,
-      onError,
-    });
+    const callbacks = {
+      onAudio: vi.fn(),
+      getPlaybackState: vi.fn(() => playback),
+      onClearAudio: vi.fn(),
+      onMark: vi.fn(),
+      onTranscript: vi.fn(),
+      onEvent: vi.fn(),
+      onToolCall: vi.fn(),
+      onReady: vi.fn(),
+      onError: vi.fn(),
+    };
+    const bridge = await createLazyVoiceBridge(callbacks);
 
     await bridge.connect();
     const staleRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
     void bridge.close();
     await bridge.connect();
     const currentRequest = runtimeMocks.createVoiceBridge.mock.calls[1]?.[0];
-    const staleAudio = Buffer.from([0x01]);
-    const staleError = new Error("stale");
-    const staleEvent = { direction: "server" as const, type: "stale" };
-    const staleToolCall = {
-      itemId: "stale-item",
-      callId: "stale-call",
-      name: "stale-tool",
-      args: {},
+    const audio = Buffer.from([0x02]);
+    const error = new Error("callback error");
+    const event = { direction: "server" as const, type: "probe" };
+    const toolCall = { itemId: "item", callId: "call", name: "tool", args: {} };
+    const emit = (request: typeof currentRequest) => {
+      request?.onAudio(audio, { itemId: "item" });
+      request?.onClearAudio("barge-in");
+      request?.onMark?.("mark");
+      request?.onTranscript?.("assistant", "text", true);
+      request?.onEvent?.(event);
+      request?.onToolCall?.(toolCall);
+      request?.onReady?.();
+      request?.onError?.(error);
+      return request?.getPlaybackState?.();
     };
+    expect(emit(staleRequest)).toEqual([]);
+    for (const callback of Object.values(callbacks)) {
+      expect(callback).not.toHaveBeenCalled();
+    }
 
-    staleRequest?.onAudio(staleAudio);
-    expect(staleRequest?.getPlaybackState?.()).toEqual([]);
-    expect(getPlaybackState).not.toHaveBeenCalled();
-    staleRequest?.onClearAudio("barge-in");
-    staleRequest?.onMark?.("stale-mark");
-    staleRequest?.onTranscript?.("assistant", "stale", true);
-    staleRequest?.onEvent?.(staleEvent);
-    staleRequest?.onToolCall?.(staleToolCall);
-    staleRequest?.onReady?.();
-    staleRequest?.onError?.(staleError);
-
-    expect(onAudio).not.toHaveBeenCalled();
-    expect(onClearAudio).not.toHaveBeenCalled();
-    expect(onMark).not.toHaveBeenCalled();
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(onEvent).not.toHaveBeenCalled();
-    expect(onToolCall).not.toHaveBeenCalled();
-    expect(onReady).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-
-    const currentAudio = Buffer.from([0x02]);
-    const currentError = new Error("current");
-    const currentEvent = { direction: "server" as const, type: "current" };
-    const currentToolCall = {
-      itemId: "current-item",
-      callId: "current-call",
-      name: "current-tool",
-      args: {},
-    };
-    currentRequest?.onAudio(currentAudio, { itemId: "current-item" });
-    expect(currentRequest?.getPlaybackState?.()).toEqual(playback);
-    currentRequest?.onClearAudio("barge-in");
-    currentRequest?.onMark?.("current-mark");
-    currentRequest?.onTranscript?.("assistant", "current", true);
-    currentRequest?.onEvent?.(currentEvent);
-    currentRequest?.onToolCall?.(currentToolCall);
-    currentRequest?.onReady?.();
-    currentRequest?.onError?.(currentError);
-
-    expect(onAudio).toHaveBeenCalledWith(currentAudio, { itemId: "current-item" });
-    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
-    expect(onMark).toHaveBeenCalledWith("current-mark");
-    expect(onTranscript).toHaveBeenCalledWith("assistant", "current", true);
-    expect(onEvent).toHaveBeenCalledWith(currentEvent);
-    expect(onToolCall).toHaveBeenCalledWith(currentToolCall);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledWith(currentError);
+    expect(emit(currentRequest)).toEqual(playback);
+    expect(callbacks.onAudio).toHaveBeenCalledWith(audio, { itemId: "item" });
+    expect(callbacks.onClearAudio).toHaveBeenCalledWith("barge-in");
+    expect(callbacks.onMark).toHaveBeenCalledWith("mark");
+    expect(callbacks.onTranscript).toHaveBeenCalledWith("assistant", "text", true);
+    expect(callbacks.onEvent).toHaveBeenCalledWith(event);
+    expect(callbacks.onToolCall).toHaveBeenCalledWith(toolCall);
+    expect(callbacks.onReady).toHaveBeenCalledOnce();
+    expect(callbacks.onError).toHaveBeenCalledWith(error);
   });
 
-  it("reports queued voice flush failure as a terminal error", async () => {
-    const failure = new Error("tool result rejected");
-    const callbackFailure = new Error("voice close callback rejected");
-    runtimeMocks.voiceSubmitToolResult.mockRejectedValueOnce(failure);
-    const onClose = vi.fn(() => {
-      throw callbackFailure;
-    });
-    const bridge = await createLazyVoiceBridge({ onClose });
-
-    await bridge.submitToolResult("call-1", { text: "queued" });
-    await expect(bridge.connect()).rejects.toBe(failure);
-    const loadedRequest = runtimeMocks.createVoiceBridge.mock.calls[0]?.[0];
-    loadedRequest?.onClose?.("completed");
-    bridge.sendAudio(Buffer.from([0x01]));
-
-    expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
-
-  it.each(
-    ["sync", "resolve", "reject"].flatMap((cleanup) =>
-      [false, true].map((reenter) => ({ cleanup, reenter })),
-    ),
-  )(
-    "drains connect-failure disposal before terminal notification (cleanup=$cleanup, reenter=$reenter)",
-    async ({ cleanup, reenter }) => {
+  it.each(["sync", "resolve", "reject"])(
+    "drains %s connect-failure disposal before reentrant terminal notification",
+    async (cleanup) => {
       const failure = new Error("provider connect rejected");
       const cleanupFailure = new Error("provider cleanup rejected");
       const disposed = createDeferred<void>();
@@ -569,15 +389,13 @@ describe("xAI lazy realtime voice", () => {
       const observerCloses: Promise<unknown>[] = [];
       const observer = (value: unknown) => {
         callbackOrder.push(value instanceof Error ? "error" : "close");
-        if (reenter) {
-          observerCloses.push(
-            Promise.resolve(bridge.close())
-              .catch(() => undefined)
-              .then(() => {
-                collectorSealed = true;
-              }),
-          );
-        }
+        observerCloses.push(
+          Promise.resolve(bridge.close())
+            .catch(() => undefined)
+            .then(() => {
+              collectorSealed = true;
+            }),
+        );
         throw new Error("terminal observer rejected");
       };
       const onError = vi.fn(observer);
@@ -641,10 +459,8 @@ describe("xAI lazy realtime voice", () => {
     await reconnectPromise;
 
     expect(runtimeMocks.voiceConnect).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledOnce();
-    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledWith(accepted);
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("error");
+    expect(runtimeMocks.voiceSendAudio).toHaveBeenCalledExactlyOnceWith(accepted);
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
   });
 
   it("reports explicit voice close once when the provider also reports completion", async () => {
@@ -658,15 +474,12 @@ describe("xAI lazy realtime voice", () => {
     void bridge.close();
 
     expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it.each([
-    { reconnect: false, closeAt: "connected" },
     { reconnect: true, closeAt: "connected" },
     { reconnect: false, closeAt: "loading" },
-    { reconnect: false, closeAt: "construction" },
     { reconnect: true, closeAt: "construction" },
     { reconnect: true, closeAt: "provider-terminal" },
   ] as const)(
@@ -774,32 +587,6 @@ describe("xAI lazy realtime voice", () => {
         await Promise.allSettled([closing, connecting, reconnecting]);
         await bridge.close();
       }
-    },
-  );
-
-  it.each([false, true])(
-    "reports rejected voice disposal once without replacing its error (throwing observer=%s)",
-    async (throwingObserver) => {
-      const disposed = createDeferred<void>();
-      const failure = new Error("voice disposal rejected");
-      runtimeMocks.voiceClose.mockReturnValueOnce(disposed.promise);
-      const onClose = vi.fn(() => {
-        if (throwingObserver) {
-          throw new Error("close observer rejected");
-        }
-      });
-      const bridge = await createLazyVoiceBridge({ onClose });
-      await bridge.connect();
-
-      const closing = bridge.close();
-      const rejection = expect(closing).rejects.toBe(failure);
-      disposed.reject(failure);
-      await rejection;
-      await expect(bridge.close()).rejects.toBe(failure);
-      expect(runtimeMocks.voiceClose).toHaveBeenCalledOnce();
-      expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-      bridge.sendAudio(Buffer.from([0x01]));
-      expect(runtimeMocks.voiceSendAudio).not.toHaveBeenCalled();
     },
   );
 

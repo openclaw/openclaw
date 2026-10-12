@@ -8,8 +8,8 @@ import {
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
@@ -44,25 +44,20 @@ import {
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
-import {
-  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  DEFAULT_PROMOTION_MIN_SCORE,
-  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  type ApplyShortTermPromotionsOptions,
-  type ApplyShortTermPromotionsResult,
-  type PromotionCandidate,
-  type PromotionRejectionCategory,
-  type ShortTermRecallEntry,
+import type {
+  ApplyShortTermPromotionsOptions,
+  ApplyShortTermPromotionsResult,
+  PromotionCandidate,
+  PromotionRejectionCategory,
+  ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
+  formatPromotedSnippetForMemory,
   isContaminatedDreamingSnippet,
-  normalizeSnippet,
-  toFiniteNonNegativeInt,
-  toFiniteScore,
+  resolvePromotionThresholds,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
   stale: 120_000,
@@ -101,43 +96,6 @@ function buildPromotionSection(
 
   lines.push("");
   return lines.join("\n");
-}
-
-function resolvePromotedSnippetCharLimit(maxTokens: number): number {
-  const tokenLimit = toFiniteNonNegativeInt(
-    maxTokens,
-    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  );
-  // This is an inexpensive display-size guard, not a tokenizer contract.
-  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-}
-
-function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
-  const limit = resolvePromotedSnippetCharLimit(maxTokens);
-  if (limit === 0 || snippet.length <= limit) {
-    return snippet;
-  }
-  const hardLimit = truncateUtf16Safe(snippet, limit);
-  const sentenceBoundary = Math.max(
-    hardLimit.lastIndexOf(". "),
-    hardLimit.lastIndexOf("! "),
-    hardLimit.lastIndexOf("? "),
-  );
-  const wordBoundary = hardLimit.lastIndexOf(" ");
-  const cutAt =
-    sentenceBoundary >= Math.floor(limit * 0.55)
-      ? sentenceBoundary + 1
-      : wordBoundary >= Math.floor(limit * 0.65)
-        ? wordBoundary
-        : limit;
-  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
-}
-
-function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
-  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
-    .replace(/^[-*+] +/, "")
-    .trim();
-  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 function consolidationCandidateFingerprint(candidate: PromotionCandidate): string {
@@ -226,19 +184,9 @@ export async function applyShortTermPromotions(
   const workspaceDir = options.workspaceDir.trim();
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : options.candidates.length;
-  const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
-  const minRecallCount = toFiniteNonNegativeInt(
-    options.minRecallCount,
-    DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  );
-  const minUniqueQueries = toFiniteNonNegativeInt(
-    options.minUniqueQueries,
-    DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  );
-  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
+  const limit = resolveNonNegativeIntegerOption(options.limit, options.candidates.length);
+  const { minScore, minRecallCount, minUniqueQueries, maxAgeDays } =
+    resolvePromotionThresholds(options);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
   const originAgentIds = options.agentId
     ? [...new Set([options.agentId, ...(options.workspaceAgentIds ?? [])])]
@@ -347,27 +295,15 @@ export async function applyShortTermPromotions(
     // contamination check, and the origin block above. Rehydration is meant to
     // reshape the snippet (capping, heading context, moved lines), so we do not
     // additionally require the rehydrated text to equal the stored recall.
-    if (
-      sourceFingerprintBefore === sourceFingerprintAfter &&
-      rehydrated &&
-      !isContaminatedDreamingSnippet(rehydrated.snippet)
-    ) {
+    if (!rehydrated) {
+      reject(candidate.key, "source rehydration", "source rehydration failed");
+    } else if (sourceFingerprintBefore !== sourceFingerprintAfter) {
+      reject(candidate.key, "source changed", "source changed during apply");
+    } else if (isContaminatedDreamingSnippet(rehydrated.snippet)) {
+      reject(candidate.key, "contamination", "contamination filter after rehydration");
+    } else {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
-    } else {
-      reject(
-        candidate.key,
-        !rehydrated
-          ? "source rehydration"
-          : sourceFingerprintBefore !== sourceFingerprintAfter
-            ? "source changed"
-            : "contamination",
-        !rehydrated
-          ? "source rehydration failed"
-          : sourceFingerprintBefore !== sourceFingerprintAfter
-            ? "source changed during apply"
-            : "contamination filter after rehydration",
-      );
     }
   }
 
@@ -403,10 +339,10 @@ export async function applyShortTermPromotions(
   );
 
   let compactedDates: string[] = [];
-  const budgetChars =
-    typeof options.memoryFileMaxChars === "number" && Number.isFinite(options.memoryFileMaxChars)
-      ? Math.max(0, Math.floor(options.memoryFileMaxChars))
-      : DEFAULT_MEMORY_FILE_MAX_CHARS;
+  const budgetChars = resolveNonNegativeIntegerOption(
+    options.memoryFileMaxChars,
+    DEFAULT_MEMORY_FILE_MAX_CHARS,
+  );
   const maxPriorEntryLossFraction = Math.max(
     0,
     Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
@@ -441,24 +377,7 @@ export async function applyShortTermPromotions(
       const authoritativeSelected: PromotionCandidate[] = [];
       for (const candidate of rehydratedSelected) {
         const entry = latestStore.entries[candidate.key];
-        if (!entry) {
-          const wasDirectCandidate =
-            !options.consolidation &&
-            plannedStoreEntryFingerprints.get(candidate.key) ===
-              recallStoreEntryFingerprint(undefined);
-          const sourceUnchanged =
-            plannedSourceFingerprints.get(candidate.key) ===
-            (await promotionSourceFingerprint(workspaceDir, candidate));
-          if (
-            wasDirectCandidate &&
-            sourceUnchanged &&
-            !isContaminatedDreamingSnippet(candidate.snippet)
-          ) {
-            authoritativeSelected.push(candidate);
-          }
-          continue;
-        }
-        if (entry.promotedAt) {
+        if (entry?.promotedAt) {
           continue;
         }
         const storeChanged =
@@ -469,8 +388,14 @@ export async function applyShortTermPromotions(
         if (storeChanged || sourceChanged) {
           continue;
         }
-        const currentCandidate = withAuthoritativeProvenance(candidate, entry.provenance);
-        if (options.consolidation && !isConsolidationCandidateEligible(currentCandidate)) {
+        const currentCandidate = entry
+          ? withAuthoritativeProvenance(candidate, entry.provenance)
+          : candidate;
+        // Direct append candidates need no store row; consolidation always does.
+        if (
+          options.consolidation &&
+          (!entry || !isConsolidationCandidateEligible(currentCandidate))
+        ) {
           continue;
         }
         if (!isContaminatedDreamingSnippet(currentCandidate.snippet)) {
@@ -484,9 +409,6 @@ export async function applyShortTermPromotions(
         existingMarkers.has(candidate.key),
       );
       toAppend = authoritativeSelected.filter((candidate) => !existingMarkers.has(candidate.key));
-      const successfulCandidates = new Map(
-        alreadyWritten.map((candidate) => [candidate.key, candidate]),
-      );
       const plannedKeys = new Set(
         consolidationPlan?.operations.map((operation) => operation.candidateKey) ?? [],
       );
@@ -535,7 +457,7 @@ export async function applyShortTermPromotions(
       if (consolidationResult && consolidationPlan) {
         // Reserve lineage before publication; release new rows only when the
         // file owner rules out a replacement or reconciles an unchanged target.
-        const rollbackOrigins = reserveMemoryEntryOrigins({
+        const rollbackOrigins = await reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
           operations: consolidationPlan.operations,
@@ -549,15 +471,11 @@ export async function applyShortTermPromotions(
             content: consolidationResult.content,
           });
           committedMemoryContent = consolidationResult.content;
-          for (const candidate of toAppend) {
-            successfulCandidates.set(candidate.key, candidate);
-          }
-          appendedCandidates = toAppend.length;
         } catch (error) {
           if (error instanceof MemoryAtomicPublicationError) {
             throw error;
           }
-          rollbackOrigins();
+          await rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)
@@ -577,10 +495,6 @@ export async function applyShortTermPromotions(
           toAppend = authoritativeSelected.filter(
             (candidate) => !existingMarkers.has(candidate.key),
           );
-          successfulCandidates.clear();
-          for (const candidate of alreadyWritten) {
-            successfulCandidates.set(candidate.key, candidate);
-          }
         }
       }
       if (!consolidationResult) {
@@ -625,14 +539,15 @@ export async function applyShortTermPromotions(
               content,
             });
             committedMemoryContent = content;
-            for (const candidate of toAppend) {
-              successfulCandidates.set(candidate.key, candidate);
-            }
             compactedDates = droppedDates;
-            appendedCandidates = toAppend.length;
           }
         }
       }
+      const written = committedMemoryContent === undefined ? [] : toAppend;
+      appendedCandidates = written.length;
+      const successfulCandidates = new Map(
+        [...alreadyWritten, ...written].map((candidate) => [candidate.key, candidate]),
+      );
       if (rewriteSkippedReason) {
         options.consolidation?.logger.warn(
           `memory-core: ${rewriteSkippedReason}; using append-only fallback.`,

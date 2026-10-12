@@ -28,6 +28,7 @@ export function resolveOpenAIRequestReasoning(
     compat?: unknown;
   },
   reasoning: string | undefined,
+  offDefault: "none" | null = "none",
 ): { effort: string | undefined; thinkingEnabled: boolean | undefined } {
   // Logical off can map to a minimum effort; native none only uses its own explicit mapping.
   const requested = normalizeOpenAIReasoningEffort(reasoning ?? "off");
@@ -39,7 +40,11 @@ export function resolveOpenAIRequestReasoning(
       : (resolveOpenAIReasoningEffortMapping(requested, resolveOpenAIReasoningEffortMap(model)) ??
         modelMapped);
   const intent =
-    mapped !== undefined ? mapped?.trim() : reasoning === undefined ? undefined : requested;
+    mapped !== undefined
+      ? mapped?.trim()
+      : reasoning === undefined || (requested === "off" && offDefault === null)
+        ? undefined
+        : requested;
   const normalizedIntent = normalizeOpenAIReasoningEffort(intent ?? "off");
   const supported = resolveOpenAIModelReasoningEfforts(model);
   const effort =
@@ -57,11 +62,14 @@ export function resolveOpenAIRequestReasoning(
             fallbackMap: { [requested]: intent },
           });
   return {
-    // Subscription routes do not inherit Platform none support from a shared model name.
+    // Sol and Luna accept none on ChatGPT; other subscription models need route metadata.
     effort:
       effort === "none" &&
       resolveOpenAIThinkingApi(model.api) === "openai-chatgpt-responses" &&
-      !supportsOpenAIReasoningEffort({ compat: model.compat }, "none")
+      !supportsOpenAIReasoningEffort(
+        model.id === "gpt-6-sol" || model.id === "gpt-6-luna" ? model : { compat: model.compat },
+        "none",
+      )
         ? undefined
         : effort,
     // Binary thinking is independent of scalar effort support.

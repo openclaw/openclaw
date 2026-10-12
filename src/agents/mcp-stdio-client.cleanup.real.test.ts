@@ -3,9 +3,17 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
 
 const fixture = vi.hoisted(() => ({
@@ -30,6 +38,13 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const clients: McpStdioClient[] = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   const relay = fixture.relay;
@@ -48,6 +63,9 @@ afterEach(async () => {
 async function createFixture(
   hold: "relay" | "blocked-relay" | "anchor" | "anchor-kill-fails" = "relay",
 ) {
+  // These faults target the retained two-process POSIX relay. The Linux native
+  // owner has no intermediate relay to hold or forcibly retire.
+  mockProcessPlatform("darwin");
   const root = tempDirs.make("mcp-relay-retirement-");
   const preload = path.join(root, "retain-relay.mjs");
   const heldPath = path.join(root, "held-anchor");
@@ -62,12 +80,14 @@ async function createFixture(
       : `import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+${fixtureReceiptClientSource(receipts.endpoint)}
 if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
   const exit = process.exit;
   process.on("SIGTERM", () => {});
   process.exit = () => {
     process.kill(0, "SIGTERM");
     fs.writeFileSync(${JSON.stringify(heldPath)}, String(process.pid));
+    sendReceipt(${JSON.stringify(heldPath)}, "held-exit");
     setInterval(() => {
       if (fs.existsSync(${JSON.stringify(releasePath)})) exit(0);
     }, 10);
@@ -115,10 +135,12 @@ if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
 }
 
 describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () => {
-  it.each(["accepted", "reported failure"] as const)(
+  it.each(["accepted", "reported failure", "blocked relay"] as const)(
     "confirms forced relay exit and permits a fresh client after graceful cleanup stalls (%s)",
     async (signalReport) => {
-      const { createClient } = await createFixture();
+      const { createClient } = await createFixture(
+        signalReport === "blocked relay" ? "blocked-relay" : "relay",
+      );
       const client = createClient();
       await expect(client.request("ping", {}, { timeoutMs: 10_000 })).resolves.toEqual({
         ok: true,
@@ -180,18 +202,9 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
     expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("kills an unresponsive relay after its anchor group has disappeared", async () => {
-    const { createClient } = await createFixture("blocked-relay");
-    const client = createClient();
-    await client.request("ping", {}, { timeoutMs: 10_000 });
-    await client.stop();
-    expect(client.cleanupResult).toMatchObject({
-      signalRequested: "SIGKILL",
-      exit: { code: null, signal: "SIGKILL" },
-    });
-  });
-
-  it("escalates and reaps an anchor whose group persists after its closing receipt", async () => {
+  it("escalates and reaps an anchor whose group persists after its closing receipt", async ({
+    signal,
+  }) => {
     const { createClient, heldPath, releasePath } = await createFixture("anchor");
     const client = createClient();
     await client.request("ping", {}, { timeoutMs: 10_000 });
@@ -203,14 +216,35 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
     void stopping.catch(() => {});
     let anchorPid = 0;
     try {
-      await vi.waitFor(async () => {
-        anchorPid = Number(await fs.readFile(heldPath, "utf8"));
-        expect(anchorPid).toBeGreaterThan(0);
-      });
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(heldPath, "held-exit"),
+          // The PID record precedes the receipt; relay exit can beat its delivery.
+          stopping.then(
+            async () => {
+              expect(Number(await fs.readFile(heldPath, "utf8"))).toBeGreaterThan(0);
+            },
+            async (error: unknown) => {
+              const held = await fs.readFile(heldPath, "utf8").catch((readError: unknown) => {
+                if (hasErrnoCode(readError, "ENOENT")) {
+                  return "";
+                }
+                throw readError;
+              });
+              if (!(Number(held) > 0)) {
+                throw error;
+              }
+            },
+          ),
+        ]),
+        signal,
+      );
+      anchorPid = Number(await fs.readFile(heldPath, "utf8"));
+      expect(anchorPid).toBeGreaterThan(0);
       // This is a real still-live process group, not a mocked absence result.
       expect(() => process.kill(-anchorPid, 0)).not.toThrow();
-      await stopping;
-      await exited;
+      await withinTest(stopping, signal);
+      await withinTest(exited, signal);
       expect(client.cleanupResult).toMatchObject({
         signalRequested: "SIGKILL",
         escalationAfterMs: expect.any(Number),

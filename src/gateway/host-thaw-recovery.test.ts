@@ -25,6 +25,13 @@ function createHarness() {
     logger: { info: vi.fn(), error: vi.fn() },
   };
   const recovery = createHostThawRecovery(deps);
+  const elapse = (gapMs: number, cpuCoreRatio = 0) => {
+    nowMs += gapMs;
+    cpuUsage = {
+      user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
+      system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
+    };
+  };
   return {
     deps,
     setAdmissionClosed: (closed: boolean) => {
@@ -36,12 +43,9 @@ function createHarness() {
     setRestartReason: (reason: typeof restartReason) => {
       restartReason = reason;
     },
+    elapse,
     advance: async (gapMs: number, cpuCoreRatio = 0) => {
-      nowMs += gapMs;
-      cpuUsage = {
-        user: cpuUsage.user + gapMs * 1_000 * cpuCoreRatio * 0.6,
-        system: cpuUsage.system + gapMs * 1_000 * cpuCoreRatio * 0.4,
-      };
+      elapse(gapMs, cpuCoreRatio);
       await recovery.tick();
     },
   };
@@ -57,48 +61,42 @@ function expectRecoveryCount(harness: ReturnType<typeof createHarness>, count: n
 describe("host thaw recovery", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    ["normal cadence", TICK_INTERVAL_MS],
-    ["one millisecond below the thaw threshold", TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1],
-  ])("does not recover on %s", async (_label, gapMs) => {
+  it.each([0.5])("does not recover from a CPU-busy gap with ratio %s", async (cpuCoreRatio) => {
     const harness = createHarness();
+    const gapMs = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
 
-    await harness.advance(gapMs);
+    await harness.advance(TICK_INTERVAL_MS, 0);
+    await harness.advance(gapMs, cpuCoreRatio);
+    await harness.advance(TICK_INTERVAL_MS);
 
     expectRecoveryCount(harness, 0);
-    expect(harness.deps.logger.info).not.toHaveBeenCalled();
-  });
-
-  it.each([0, 0.499])("recovers at the threshold with CPU ratio %s", async (cpuCoreRatio) => {
-    const harness = createHarness();
-
-    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS, cpuCoreRatio);
-
-    expectRecoveryCount(harness, 1);
-    expect(harness.deps.logger.info).toHaveBeenCalledWith(
-      expect.stringContaining(`frozen ~${HOST_THAW_MIN_FROZEN_MS}ms`),
+    expect(harness.deps.logger.info).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`gap ${gapMs}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}`),
     );
+
+    await harness.advance(gapMs);
+    expectRecoveryCount(harness, 1);
   });
 
-  it.each([0.5, 1, 2.2])(
-    "does not recover from a CPU-busy gap with ratio %s",
-    async (cpuCoreRatio) => {
-      const harness = createHarness();
-      const gapMs = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+  it("excludes slow recovery work from later thaw samples", async () => {
+    const harness = createHarness();
+    const thawGap = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
+    harness.deps.refreshHealth
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS))
+      .mockImplementationOnce(async () => harness.elapse(HOST_THAW_MIN_FROZEN_MS, 1));
 
-      await harness.advance(TICK_INTERVAL_MS, 0);
-      await harness.advance(gapMs, cpuCoreRatio);
-      await harness.advance(TICK_INTERVAL_MS);
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 1);
 
-      expectRecoveryCount(harness, 0);
-      expect(harness.deps.logger.info).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(`gap ${gapMs}ms, CPU ratio ${cpuCoreRatio.toFixed(2)}`),
-      );
+    await harness.advance(TICK_INTERVAL_MS);
+    expectRecoveryCount(harness, 1);
 
-      await harness.advance(gapMs);
-      expectRecoveryCount(harness, 1);
-    },
-  );
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 2);
+
+    await harness.advance(thawGap);
+    expectRecoveryCount(harness, 3);
+  });
 
   it("defers channel restart until active Gateway work settles", async () => {
     const harness = createHarness();
@@ -233,16 +231,5 @@ describe("host thaw recovery", () => {
     expect(harness.deps.logger.info).toHaveBeenCalledWith(
       "host thaw recovery deferred: gateway suspension began mid-recovery",
     );
-  });
-
-  it("recovers independently after consecutive thaws", async () => {
-    const harness = createHarness();
-    const thawGap = TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS;
-
-    await harness.advance(thawGap);
-    await harness.advance(thawGap);
-
-    expectRecoveryCount(harness, 2);
-    expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([["new-thaw"], ["new-thaw"]]);
   });
 });

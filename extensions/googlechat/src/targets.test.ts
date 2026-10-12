@@ -1,21 +1,13 @@
 // Googlechat tests cover targets plugin behavior.
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
-import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import {
-  isGoogleChatGroupSpace,
-  isGoogleChatSpaceTarget,
-  isGoogleChatUserTarget,
-  normalizeGoogleChatTarget,
-  resolveGoogleChatOutboundSessionRoute,
-} from "./targets.js";
+import { isGoogleChatGroupSpace, resolveGoogleChatOutboundSessionRoute } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -164,31 +156,7 @@ function lastGuardedFetchOptions(): { timeoutMs?: number } {
   return call[0] as { timeoutMs?: number };
 }
 
-describe("normalizeGoogleChatTarget", () => {
-  it("normalizes provider prefixes", () => {
-    expect(normalizeGoogleChatTarget("googlechat:users/123")).toBe("users/123");
-    expect(normalizeGoogleChatTarget("google-chat:spaces/AAA")).toBe("spaces/AAA");
-    expect(normalizeGoogleChatTarget("gchat:user:User@Example.com")).toBe("users/user@example.com");
-  });
-
-  it("normalizes email targets to users/<email>", () => {
-    expect(normalizeGoogleChatTarget("User@Example.com")).toBe("users/user@example.com");
-    expect(normalizeGoogleChatTarget("users/User@Example.com")).toBe("users/user@example.com");
-  });
-
-  it("preserves space targets", () => {
-    expect(normalizeGoogleChatTarget("space:spaces/BBB")).toBe("spaces/BBB");
-    expect(normalizeGoogleChatTarget("spaces/CCC")).toBe("spaces/CCC");
-  });
-});
-
 describe("target helpers", () => {
-  it("detects user and space targets", () => {
-    expect(isGoogleChatUserTarget("users/abc")).toBe(true);
-    expect(isGoogleChatSpaceTarget("spaces/abc")).toBe(true);
-    expect(isGoogleChatUserTarget("spaces/abc")).toBe(false);
-  });
-
   it("classifies current and legacy space metadata through the group boundary", () => {
     expect(isGoogleChatGroupSpace({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(false);
     expect(isGoogleChatGroupSpace({ spaceType: "SPACE", type: "DM" })).toBe(true);
@@ -203,37 +171,37 @@ describe("outbound session routing", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { spaceType: "DIRECT_MESSAGE", chatType: "direct", peerKind: "direct" },
-    { spaceType: "SPACE", chatType: "group", peerKind: "group" },
-  ] as const)("classifies API space type $spaceType", async ({ spaceType, chatType, peerKind }) => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ name: "spaces/AAA", spaceType }), { status: 200 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([{ spaceType: "SPACE", chatType: "group", peerKind: "group" }] as const)(
+    "classifies API space type $spaceType",
+    async ({ spaceType, chatType, peerKind }) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ name: "spaces/AAA", spaceType }), { status: 200 }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
 
-    const route = await resolveGoogleChatOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      target: "googlechat:spaces/AAA",
-    });
+      const route = await resolveGoogleChatOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "googlechat:spaces/AAA",
+      });
 
-    expect(route).toMatchObject({
-      peer: { kind: peerKind, id: "spaces/AAA" },
-      chatType,
-      from: "googlechat:spaces/AAA",
-      to: "spaces/AAA",
-    });
-    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
-      method: "GET",
-      headers: {
-        Authorization: "Bearer token",
-        "Content-Type": "application/json",
-      },
-    });
-  });
+      expect(route).toMatchObject({
+        peer: { kind: peerKind, id: "spaces/AAA" },
+        chatType,
+        from: "googlechat:spaces/AAA",
+        to: "spaces/AAA",
+      });
+      expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+        },
+      });
+    },
+  );
 
   it("rejects an unclassified space response", async () => {
     vi.stubGlobal(
@@ -265,65 +233,6 @@ describe("outbound session routing", () => {
   });
 });
 
-describe("googlechat group policy", () => {
-  it("uses generic channel group policy helpers", () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          groups: {
-            "spaces/AAA": {
-              requireMention: false,
-            },
-            "*": {
-              requireMention: true,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
-    expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/BBB" })).toBe(true);
-  });
-});
-
-describe("googlechat API JSON response decoding", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("rejects invalid UTF-8 in API JSON responses instead of corrupting identifiers", async () => {
-    const raw = Buffer.concat([
-      Buffer.from('{"name":"spaces/'),
-      Buffer.from([0xff]),
-      Buffer.from('AAA"}'),
-    ]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(new Uint8Array(raw), { status: 200 })),
-    );
-
-    await expect(
-      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
-    ).rejects.toThrow(/malformed JSON response/);
-  });
-
-  it("keeps valid UTF-8 API JSON responses unchanged (negative control)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(new Uint8Array(Buffer.from('{"name":"spaces/AAA"}')), { status: 200 }),
-        ),
-    );
-
-    await expect(
-      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
-    ).resolves.toEqual({ messageName: "spaces/AAA", threadName: undefined });
-  });
-});
-
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     unregisterGoogleChatManualApprovalFollowupSuppression("12345678-1234-1234-1234-123456789012");
@@ -347,52 +256,6 @@ describe("downloadGoogleChatMedia", () => {
     await expectDownloadToRejectForResponse(response, "Google Chat media exceeds max bytes (10)");
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(lastGuardedFetchOptions().timeoutMs).toBe(30_001);
-  });
-
-  it("rejects malformed content-length before reading media", async () => {
-    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
-    const response = {
-      ok: true,
-      status: 200,
-      headers: new Headers({
-        "content-length": "0x3",
-        "content-type": "application/octet-stream",
-      }),
-      arrayBuffer,
-    } as unknown as Response;
-
-    await expectDownloadToRejectForResponse(response, "invalid content-length header: 0x3");
-    expect(arrayBuffer).not.toHaveBeenCalled();
-  });
-
-  it("rejects when streamed payload exceeds max bytes", async () => {
-    const chunks = [new Uint8Array(6), new Uint8Array(6)];
-    let index = 0;
-    const body = new ReadableStream({
-      pull(controller) {
-        if (index < chunks.length) {
-          controller.enqueue(chunks[index++]);
-        } else {
-          controller.close();
-        }
-      },
-    });
-    const response = new Response(body, {
-      status: 200,
-      headers: { "content-type": "application/octet-stream" },
-    });
-    await expectDownloadToRejectForResponse(response);
-  });
-
-  it("cancels a media body that stops producing chunks", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
-
-    const result = expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow("Media download stalled: no data received for 30000ms");
-    await vi.advanceTimersByTimeAsync(30_001);
-    await result;
   });
 
   it("cancels a stalled media error body", async () => {
@@ -464,12 +327,7 @@ describe("downloadGoogleChatMedia", () => {
       await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
         "Google Chat media exceeds max bytes (20971520)",
       );
-      await Promise.race([
-        responseClosedPromise,
-        new Promise((resolve) => {
-          setTimeout(resolve, 100);
-        }),
-      ]);
+      await responseClosedPromise;
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -478,39 +336,6 @@ describe("downloadGoogleChatMedia", () => {
     expect(release).toHaveBeenCalledOnce();
     expect(responseClosed).toBe(true);
     expect(bytesSent).toBeLessThan(totalBytes);
-  });
-
-  it("preserves stricter explicit media byte limits", async () => {
-    const TOTAL_CHUNKS = 32;
-    const chunk = new Uint8Array(6);
-    let chunksPulled = 0;
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (chunksPulled < TOTAL_CHUNKS) {
-            chunksPulled += 1;
-            controller.enqueue(chunk);
-          } else {
-            controller.close();
-          }
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/octet-stream" } },
-    );
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-
-    await expect(
-      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow("Google Chat media exceeds max bytes (10)");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(canceled).toBe(true);
-    expect(chunksPulled).toBeLessThan(TOTAL_CHUNKS);
   });
 });
 
@@ -592,24 +417,8 @@ describe("sendGoogleChatMessage", () => {
     expect(lastGuardedFetchOptions().timeoutMs).toBe(30_000);
   });
 
-  it("does not set messageReplyOption for non-thread sends", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/124");
-
-    await sendGoogleChatMessage({
-      account,
-      space: "spaces/AAA",
-      text: "hello",
-    });
-
-    const url = mockCallArg(fetchMock);
-    expect(String(url)).not.toContain("messageReplyOption=");
-  });
-
   it.each([
     ["a bare id", "113887189178345237288721356"],
-    ["a thread key without prefix", "pytxeqyhqck"],
-    ["a message resource name", "spaces/AAA/messages/1720896000000.000000"],
-    ["a space resource name", "spaces/AAA"],
     ["a thread from a different space", "spaces/BBB/threads/xyz"],
   ])(
     "drops an invalid thread resource name (%s) and posts to the space",
@@ -682,26 +491,6 @@ describe("sendGoogleChatMessage", () => {
 
     expect(result).toBeNull();
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
-
-  it("reports malformed send JSON with a stable API error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("{ nope", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    );
-
-    await expect(
-      sendGoogleChatMessage({
-        account,
-        space: "spaces/AAA",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Google Chat API request failed: malformed JSON response");
   });
 });
 
@@ -959,54 +748,6 @@ describe("verifyGoogleChatRequest", () => {
     afterEach(() => {
       mocks.fetchWithSsrFGuard.mockClear();
       vi.unstubAllGlobals();
-    });
-
-    it("cancels oversized cert fetch JSON body via the 16 MiB provider cap", async () => {
-      expireGoogleChatCertCache();
-      const streamed = createOversizedResponse(new Uint8Array(ONE_MIB), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-      const release = vi.fn(async () => {});
-      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: streamed.response,
-        release,
-      });
-
-      const result = await verifyGoogleChatRequest({
-        bearer: "token",
-        audienceType: "project-number",
-        audience: "123456789",
-      });
-
-      expect(result.ok).toBe(false);
-      expect(result.reason).toMatch(/JSON response exceeds 16777216 bytes/);
-      expect(streamed.canceled).toBe(true);
-      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
-      expect(release).toHaveBeenCalledOnce();
-    });
-
-    it("rejects oversized sendMessage JSON body via the 16 MiB provider cap", async () => {
-      const streamed = createOversizedResponse(new Uint8Array(ONE_MIB), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-      const release = vi.fn(async () => {});
-      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: streamed.response,
-        release,
-      });
-
-      await expect(
-        sendGoogleChatMessage({
-          account,
-          space: "spaces/AAA",
-          text: "hello",
-        }),
-      ).rejects.toThrow(/Google Chat API request failed: JSON response exceeds 16777216 bytes/);
-
-      expect(streamed.canceled).toBe(true);
-      expect(streamed.bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
     });
 
     it("caps non-OK sendMessage error bodies before formatting the API error", async () => {

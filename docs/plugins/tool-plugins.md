@@ -5,7 +5,8 @@ sidebarTitle: "Tool Plugins"
 read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
-  - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need to create, generate, validate, test, or publish a tool-only plugin
+  - You need the plugin tool context's memory audience and currency guards
 ---
 
 `defineToolPlugin` builds a plugin that only adds agent-callable tools: no
@@ -39,7 +40,7 @@ npm run plugin:validate
 npm test
 ```
 
-`plugins init` scaffolds:
+`plugins init` creates these starter files:
 
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -65,7 +66,7 @@ Plugin stock-quotes is valid.
 | -------------------- | ------------------ | -------------------------------------- |
 | `--directory <path>` | `<id>`             | Output directory                       |
 | `--name <name>`      | Title-cased `<id>` | Display name                           |
-| `--type <type>`      | `tool`             | Scaffold type: `tool` or `provider`    |
+| `--type <type>`      | `tool`             | Plugin type: `tool` or `provider`      |
 | `--force`            | off                | Overwrite an existing output directory |
 
 ## Write a tool
@@ -118,6 +119,12 @@ export default defineToolPlugin({
 Tool names are the stable API. Pick names that are unique, lowercase, and
 specific enough to avoid collisions with core tools or other plugins.
 
+OpenClaw bounds tool input schemas to 128 nested schema levels, including
+expanded local references. Deeper subschemas become permissive `{}` schemas
+so the tool remains callable. A one-time warning names the affected tool;
+validation beyond the cutoff is unavailable. Keep schemas shallow enough to
+describe useful arguments to the model. This applies to MCP tools too.
+
 ## Optional and factory tools
 
 Set `optional: true` when users should explicitly allowlist the tool before it
@@ -161,6 +168,29 @@ account, thread, and local-media policy; plugins cannot retarget this helper,
 and retained copies stop working after the turn closes. The helper is unavailable
 for channels whose delivery is owned by a Gateway transport.
 
+For an admitted session turn, the optional
+`memoryAudience?: MemoryAudience` field carries the same host-resolved memory
+audience used by the selected memory provider. It is either
+`{ kind: "owner-private", agentId }` or
+`{ kind: "conversation", agentId, sessionKey, sessionId }`. The field is absent
+when the host cannot prove an audience or when no session turn exists. Plugins
+must consume this prepared value and must not infer memory authority from
+`senderIsOwner`, session-key patterns, or session lookups.
+
+Tools that retain or use `memoryAudience` across awaited work must call both
+currency guards immediately before releasing data or performing an effect:
+
+```typescript
+toolContext.assertInvocationCurrent();
+toolContext.assertMemoryAudienceCurrent?.();
+```
+
+The optional `assertMemoryAudienceCurrent?(): void` guard fails after any session
+in the captured lineage changes incarnation or lifecycle.
+`assertInvocationCurrent` separately checks the admitted tool invocation and
+plugin lifetime. Use a version 2 tool context when the tool depends on these live
+authority checks.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature
@@ -178,6 +208,15 @@ runtime properties, schemas, and display metadata come from the current factory
 context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
+
+Set `async: false` on a concrete tool the model uses to wait, as
+`sessions_yield` does. On GPT-6 Astra requests that use
+[async function calls](/providers/openai/models), OpenClaw marks other direct
+function tools async but keeps this one synchronous, so the response pauses at
+the call and the next request delivers earlier async results first. Other
+providers, Code Mode, and calls through the Tool Search catalog are unchanged;
+declare `catalogMode: "direct-only"` to keep the tool directly visible. Omitting
+the property keeps the default behavior.
 
 ### Owner-authorized continuations
 
@@ -197,15 +236,27 @@ api.registerTool(
 );
 ```
 
-The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent`.
-Carry it through awaited work and invoke it in the final synchronous write or
-request guard, before effects—not only before starting work or after returning.
-It checks the captured plugin lifetime and admitted run/worker authority; a
-continuation also checks the original owner's live exact-parent binding. Standalone
-HTTP/RPC calls use their authenticated request lifetime, while MCP tools retain
-the existing authenticated grant or loopback-runtime lifetime.
+The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent` and
+may provide `memoryAudience` with `assertMemoryAudienceCurrent`.
+Carry `assertInvocationCurrent` through awaited work and invoke it in the final
+synchronous write or request guard, before effects—not only before starting work
+or after returning. It checks the captured plugin lifetime and admitted
+run/worker authority; a continuation also checks the original owner's live
+exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
+lifetime, while MCP tools retain the existing authenticated grant or
+loopback-runtime lifetime.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
+
+Client-input tools may also receive `assertInputCommitAllowed`. Carry this
+host-bound, synchronous policy callback to the storage owner's final admission
+guard when persisting client-supplied bytes. Calling it checks the current upload
+policy even for custom tool names the Gateway cannot classify. Do not call it for
+text-only actions that do not upload bytes. It performs no database reads, so
+it can run inside worker-backed write admission. It does not replace invocation
+or mutation authority. Preserve it across awaited preparation, but do not apply
+it to already accepted results or compensating cleanup. Agent-generated input
+does not require this client-upload policy callback.
 
 Legacy function and static-tool registrations remain supported with their existing
 direct-turn context; this change introduces no removal date or shortened
@@ -321,6 +372,71 @@ that duration in the fallback warning without exposing raw error text. Return
 `partial: true` with a nonempty `results` array when usable partial results are
 available; the warning includes their count. These diagnostics do not turn an
 incomplete operation into a successful call.
+
+## Deliver the reply directly
+
+By default the model reads every tool result and writes the user-visible reply
+itself. A tool that already produces the finished reply, such as a report or a
+confirmation text, can hand it to OpenClaw instead and end the turn without
+that extra model step.
+
+Declare the capability on the tool and return the reply in
+`details.sourceReply`:
+
+```typescript
+api.registerTool({
+  name: "order_status",
+  description: "Report the status of one order.",
+  parameters: Type.Object({ orderId: Type.String() }),
+  canDeliverSourceReply: true,
+  catalogMode: "direct-only",
+  async execute(_toolCallId, params) {
+    const report = await buildOrderStatusReport(params.orderId);
+    return {
+      content: [{ type: "text", text: report.text }],
+      details: {
+        ok: true,
+        sourceReply: {
+          text: report.text,
+          mediaUrls: report.pdfPath ? [report.pdfPath] : [],
+        },
+      },
+    };
+  },
+});
+```
+
+OpenClaw waits for every tool call from the same model step to settle. The
+host skips the next model step only when the whole batch can finish without
+further model work, then delivers the admitted replies to the conversation.
+If a sibling fails, is rejected, or returns an ordinary or progress result,
+the model continues with the tool results instead; a partial success must not
+hide unfinished work or another call’s failure. Existing explicit terminal
+tools keep their own completion contract.
+
+After a successful send, delivery records the reply as the assistant turn in
+the session transcript, with the same session checks as any other delivered
+reply. A reply needs `text`, `mediaUrl`, or `mediaUrls` inside `sourceReply`;
+`attachments` ride along with them. Top-level result fields such as
+`details.message` and `details.mediaUrl` are not reply content. Removing
+`sourceReply`, leaving it empty, or returning `sourceReply.final: false` keeps
+the normal model path.
+
+OpenClaw reads the reply after tool hooks and result middleware run, so
+middleware can rewrite or withdraw it. Only the tool author can grant the
+capability: `canDeliverSourceReply` lives on the tool definition, never in a
+result. A call made from inside a Code Mode program returns to that program and
+is never delivered as a reply. On the Codex harness, declare
+`catalogMode: "direct-only"` as in the example. Catalog selection alone does not
+grant delivery: the tool call must appear directly in the native model response,
+not only as execution nested inside a program. A nested call remains ordinary
+program data even if native execution reports the direct catalog namespace.
+
+Use this capability for complete reports, confirmations, receipts, or other
+user-ready results. Leave it off for search hits, raw database rows, or
+intermediate results the model still needs to combine. Existing tools do not
+opt in automatically, and the `message` tool keeps its existing delivery
+contract.
 
 ## Configuration
 
@@ -444,7 +560,7 @@ which editors surface as migration warnings. To enforce them in CI, enable a
 type-aware rule such as
 [`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
 Oxlint is not type-aware, so it cannot enforce these annotations. The generated
-`plugins init` scaffold therefore does not add a deprecation lint config.
+`plugins init` starter files therefore do not add a deprecation lint config.
 
 `plugins validate` checks that:
 

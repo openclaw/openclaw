@@ -5,11 +5,21 @@ import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  getSqliteDatabaseAdmission,
+  openNodeSqliteDatabase,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
+const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "workboard.schema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
   return new Set(
@@ -39,12 +49,25 @@ const WORKBOARD_SCHEMA_SQL = `
       description TEXT,
       icon TEXT,
       color TEXT,
+      kind TEXT,
+      sessions_spec TEXT,
       automation_job_id TEXT,
       default_workspace_json TEXT,
       orchestration_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       archived_at INTEGER
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS workboard_session_placements (
+      board_id TEXT NOT NULL REFERENCES workboard_boards(id) ON DELETE CASCADE,
+      session_key TEXT NOT NULL,
+      column_id TEXT NOT NULL,
+      source TEXT NOT NULL CHECK(source IN ('state', 'model', 'operator')),
+      reason TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(board_id, session_key)
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_cards (
@@ -260,14 +283,13 @@ const WORKBOARD_SCHEMA_SQL = `
   `;
 
 function ensureWorkboardSchema(db: DatabaseSync): void {
+  if (getSqliteDatabaseAdmission(db, schemaAdmission)) {
+    return;
+  }
   db.exec(WORKBOARD_SCHEMA_SQL);
   ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
-  ensureColumn(
-    db,
-    "workboard_cards",
-    "lifecycle_status_source_updated_at",
-    "lifecycle_status_source_updated_at INTEGER",
-  );
+  ensureColumn(db, "workboard_boards", "kind", "kind TEXT");
+  ensureColumn(db, "workboard_boards", "sessions_spec", "sessions_spec TEXT");
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -280,6 +302,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
     ).run(migrationId, Date.now());
   }
+  publishSqliteDatabaseAdmission(db, schemaAdmission, true);
 }
 
 function chmodIfExists(targetPath: string, mode: number): void {

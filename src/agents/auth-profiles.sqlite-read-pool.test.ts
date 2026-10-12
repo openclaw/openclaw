@@ -1,11 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
+import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
-import * as kyselySync from "../infra/kysely-sync.js";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
@@ -13,13 +17,23 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import {
+  inspectAgentAuthProfileJsonCellReadOnly,
+  readAuthProfileRowsReadOnly,
+  writeAuthProfileJsonCell,
+} from "./auth-profiles/sqlite-json.js";
+import {
+  acquireAuthProfileReadDatabase,
+  closeAuthProfileReadDatabase,
+} from "./auth-profiles/sqlite-read-pool.js";
+import {
   closeAuthProfileReadPool,
-  inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { apiKeyStore, withAgentDirEnv } from "./auth-profiles/sqlite.test-support.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import { getRuntimeAuthProfileStoreSnapshotRevision } from "./auth-profiles/store.js";
+import type { PersistedAuthProfileStoreInspection } from "./auth-profiles/types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -32,121 +46,159 @@ vi.mock("../plugins/provider-external-auth-core.js", () => ({
   }),
 }));
 
+function withReaders(
+  run: (agentDir: string, open: MockInstance<typeof nodeSqlite.openNodeSqliteDatabase>) => void,
+  sibling = false,
+) {
+  return withAgentDirEnv("openclaw-auth-readers-", (agentDir) => {
+    saveAuthProfileStore(apiKeyStore("qa-main"), agentDir);
+    if (sibling) {
+      saveAuthProfileStore(apiKeyStore("qa-sibling"), `${agentDir}-sibling`);
+    }
+    closeOpenClawAgentDatabasesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    try {
+      run(agentDir, open);
+    } finally {
+      closeAuthProfileReadPool();
+      open.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+}
+
 describe("auth profile sqlite reader lifecycle", () => {
-  it("reuses path-keyed read handles until the runtime snapshot revision changes", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-read-reuse-", (agentDir) => {
-      const agentDirs = [
-        agentDir,
-        ...Array.from({ length: 63 }, (_, index) =>
-          path.join(path.dirname(path.dirname(agentDir)), `secondary-${index}`, "agent"),
-        ),
-      ];
-      for (const directory of agentDirs) {
-        saveAuthProfileStore(apiKeyStore("sk-test"), directory);
-      }
-      closeOpenClawAgentDatabasesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      const statementCacheSpy = vi.spyOn(kyselySync, "enableNodeSqliteKyselyStatementCache");
+  it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
+    const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
+    const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    const storeSchema = `CREATE TABLE auth_profile_store (
+      store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+    )`;
+    const first = { version: 1, profiles: {} };
+    const updated = { version: 1, profiles: { synthetic: { type: "api_key", key: "fixture" } } };
+    const missingTable = { status: "missing", reason: "table" } as const;
+    let observation: ReturnType<typeof observeSqliteReadSql> | undefined;
+    try {
+      writer.exec(storeSchema);
+      admitSqliteSchema(writer);
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", first),
+      );
+      observation = observeSqliteReadSql(StatementSync.prototype);
+      const reads = observation;
+      const assertRows = (
+        store: PersistedAuthProfileStoreInspection,
+        state: PersistedAuthProfileStoreInspection = missingTable,
+      ) => {
+        reads.queries.length = 0;
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(readAuthProfileRowsReadOnly(databasePath)).toMatchObject({ store, state });
+        // The batched reader closes its native handle; the next read borrows the same facts.
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(
+          reads.queries.filter((sql) => /\b(?:sqlite_master|sqlite_schema)\b/iu.test(sql)),
+        ).toEqual([]);
+      };
+
+      assertRows({ status: "readable", raw: first });
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", updated),
+      );
+      assertRows({ status: "readable", raw: updated });
+
+      writer.exec(
+        "DROP TABLE auth_profile_store; CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json",
+      );
+      assertRows({ status: "unreadable" });
+      writer.exec("DROP VIEW auth_profile_store");
+      assertRows(missingTable);
+
+      writer.exec(`${storeSchema}; CREATE TABLE auth_profile_state (
+        state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      const state = { lastGood: { fixture: "synthetic" } };
+      runSqliteImmediateTransactionSync(writer, () => {
+        writeAuthProfileJsonCell(writer, "store", "agent", updated);
+        writeAuthProfileJsonCell(writer, "state", "agent", state);
+      });
+      assertRows({ status: "readable", raw: updated }, { status: "readable", raw: state });
+    } finally {
+      observation?.restore();
+      closeAuthProfileReadDatabase(databasePath);
+      writer.close();
+    }
+  });
+
+  it("reuses format admission across pool reopen and validates a replacement file", async () => {
+    await withReaders((agentDir) => {
+      const pathname = resolveAuthProfileDatabasePath(agentDir);
+      const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+      const formatQueries = () =>
+        observed.queries.filter((sql) =>
+          /sqlite_(?:schema|master)|\bPRAGMA\s+(?:user_version|schema_version|table_info|table_xinfo|index_list|index_info|index_xinfo)\b/iu.test(
+            sql,
+          ),
+        );
       try {
-        const initialRevision = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
-        for (const directory of agentDirs) {
-          expect(loadPersistedAuthProfileStore(directory)).toMatchObject(apiKeyStore("sk-test"));
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(formatQueries()).toEqual([]);
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        const replacement = `${pathname}.replacement`;
+        copyFileSync(pathname, replacement);
+        {
+          using database = new DatabaseSync(replacement);
+          database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
         }
-        const missingAgentDir = path.join(path.dirname(path.dirname(agentDir)), "later", "agent");
-        expect(inspectPersistedAuthProfileStoreRaw(missingAgentDir)).toEqual({
-          status: "missing",
-          reason: "database",
-        });
-        for (const opened of openSpy.mock.results.filter((result) => result.type === "return")) {
-          expect(opened.value.isOpen).toBe(true);
-        }
-        for (const directory of agentDirs) {
-          expect(loadPersistedAuthProfileStore(directory)).toMatchObject(apiKeyStore("sk-test"));
-        }
-        expect(openSpy.mock.calls.filter(([, options]) => options?.readOnly === true)).toHaveLength(
-          65,
-        );
-        expect(statementCacheSpy).toHaveBeenCalledTimes(64);
-        const firstDatabase = openSpy.mock.results[0]?.value;
-        const secondDatabase = openSpy.mock.results[1]?.value;
-        expect(firstDatabase?.isOpen).toBe(true);
-        expect(secondDatabase?.isOpen).toBe(true);
-        const prepare = vi.spyOn(
-          expectDefined(firstDatabase, "first pooled auth reader"),
-          "prepare",
-        );
-        const writer = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
-        try {
-          expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("sk-test"));
-          writer
-            .prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = 'primary'")
-            .run(JSON.stringify(apiKeyStore("synthetic-external")));
-          writer
-            .prepare(
-              `INSERT INTO auth_profile_state (state_key, state_json, updated_at)
-               VALUES ('primary', ?, 1)
-               ON CONFLICT (state_key) DO UPDATE SET state_json = excluded.state_json`,
-            )
-            .run(
-              JSON.stringify({ version: 1, usageStats: { "openai:default": { lastUsed: 456 } } }),
-            );
-          expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject({
-            ...apiKeyStore("synthetic-external"),
-            usageStats: { "openai:default": { lastUsed: 456 } },
-          });
-          // Warm reads reuse statements, but each execution still observes committed rows.
-          expect(prepare).not.toHaveBeenCalled();
-        } finally {
-          prepare.mockRestore();
-          writer.close();
-        }
-
-        fs.mkdirSync(missingAgentDir, { recursive: true });
-        const created = new DatabaseSync(resolveAuthProfileDatabasePath(missingAgentDir));
-        try {
-          created.exec(
-            "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT)",
-          );
-          created
-            .prepare("INSERT INTO auth_profile_store VALUES (?, ?)")
-            .run("primary", JSON.stringify(apiKeyStore("synthetic-created")));
-        } finally {
-          created.close();
-        }
-        expect(loadPersistedAuthProfileStore(missingAgentDir)).toMatchObject(
-          apiKeyStore("synthetic-created"),
-        );
-
-        replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("sk-test") }]);
-
-        expect(getRuntimeAuthProfileStoreSnapshotRevision(agentDir)).toBeGreaterThan(
-          initialRevision,
-        );
-        expect(firstDatabase?.isOpen).toBe(false);
-        expect(secondDatabase?.isOpen).toBe(false);
-        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
-        expect(openSpy.mock.calls.filter(([, options]) => options?.readOnly === true)).toHaveLength(
-          67,
-        );
-        expect(statementCacheSpy).toHaveBeenCalledTimes(66);
+        renameSync(replacement, pathname);
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("unreadable");
+        expect(formatQueries().length).toBeGreaterThan(0);
       } finally {
-        statementCacheSpy.mockRestore();
-        openSpy.mockRestore();
+        observed.restore();
       }
     });
   });
 
+  it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
+    await withReaders((agentDir, open) => {
+      expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      const reader = expectDefined(open.mock.results[0]?.value, "pooled auth reader");
+      const writer = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      try {
+        writer
+          .prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = 'primary'")
+          .run(JSON.stringify(apiKeyStore("synthetic-external")));
+        writer
+          .prepare(
+            "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES ('primary', ?, 1)",
+          )
+          .run(JSON.stringify({ version: 1, usageStats: { "openai:default": { lastUsed: 456 } } }));
+        expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject({
+          ...apiKeyStore("synthetic-external"),
+          usageStats: { "openai:default": { lastUsed: 456 } },
+        });
+        expect(open).toHaveBeenCalledOnce();
+      } finally {
+        writer.close();
+      }
+      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("qa-main") }]);
+      expect(reader.isOpen).toBe(false);
+      expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(
+        apiKeyStore("synthetic-external"),
+      );
+      expect(open).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("closes each idle reader after thirty minutes and refreshes only reused readers", async () => {
-    await withAgentDirEnv("openclaw-auth-reader-idle-", (agentDir) => {
+    await withReaders((agentDir, open) => {
       const sibling = `${agentDir}-sibling`;
-      saveAuthProfileStore(apiKeyStore("qa-main"), agentDir);
-      saveAuthProfileStore(apiKeyStore("qa-sibling"), sibling);
-      closeOpenClawAgentDatabasesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
       vi.useFakeTimers();
       const schedule = vi.spyOn(globalThis, "setTimeout");
-      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       try {
         expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
         expect(loadPersistedAuthProfileStore(sibling)).toMatchObject(apiKeyStore("qa-sibling"));
@@ -172,22 +224,15 @@ describe("auth profile sqlite reader lifecycle", () => {
         closeAuthProfileReadPool();
         expect(vi.getTimerCount()).toBe(0);
       } finally {
-        closeAuthProfileReadPool();
-        open.mockRestore();
         schedule.mockRestore();
-        vi.useRealTimers();
       }
-    });
+    }, true);
   });
 
   it("retries failed idle closes without losing native custody or exit cleanup", async () => {
-    await withAgentDirEnv("openclaw-auth-reader-idle-retry-", (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("qa-main"), agentDir);
-      closeOpenClawAgentDatabasesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
+    await withReaders((agentDir, open) => {
       const exitListeners = process.listenerCount("exit");
       vi.useFakeTimers();
-      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
       let close: MockInstance<DatabaseSync["close"]> | undefined;
       try {
@@ -212,19 +257,13 @@ describe("auth profile sqlite reader lifecycle", () => {
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         close?.mockRestore();
-        closeAuthProfileReadPool();
         warning.mockRestore();
-        open.mockRestore();
-        vi.useRealTimers();
       }
     });
   });
 
   it("allocates unref idle timers outside request contexts and reuses them on reads", async () => {
-    await withAgentDirEnv("openclaw-auth-reader-idle-context-", (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("qa-main"), agentDir);
-      closeOpenClawAgentDatabasesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
+    await withReaders((agentDir) => {
       const requestScope = new AsyncLocalStorage<object>();
       const contexts: Array<object | undefined> = [];
       const timers: ReturnType<typeof setTimeout>[] = [];
@@ -248,86 +287,49 @@ describe("auth profile sqlite reader lifecycle", () => {
         expect(timers).toHaveLength(1);
         expect(timers[0]?.hasRef()).toBe(false);
       } finally {
-        closeAuthProfileReadPool();
         schedule.mockRestore();
         requestScope.disable();
       }
     });
   });
 
-  it("keeps exit cleanup registered when an unscoped close fails", async () => {
-    await withAgentDirEnv("openclaw-auth-reader-exit-retry-", (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("qa-main"), agentDir);
-      closeOpenClawAgentDatabasesForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
+  it.each(["unscoped", "root"] as const)("retains readers when a %s close fails", async (scope) => {
+    await withReaders((agentDir, open) => {
       const listeners = process.listeners("exit");
-      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
+      const reader = expectDefined(open.mock.results[0]?.value, "auth reader awaiting cleanup");
+      const siblingAgentDir = `${agentDir}-sibling`;
+      if (scope === "root") {
+        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
+      }
+      const closeScope =
+        scope === "root" ? { kind: "root" as const, rootPath: agentDir } : undefined;
+      const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
+        throw new Error("native close failed");
+      });
       try {
-        expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-        const reader = expectDefined(
-          open.mock.results[0]?.value,
-          "auth reader awaiting exit cleanup",
-        );
-        const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-          throw new Error("native unscoped close failed");
-        });
-        try {
-          expect(() => closeAuthProfileReadPool()).toThrow("native unscoped close failed");
-          expect(reader.isOpen).toBe(true);
+        expect(() => closeAuthProfileReadPool(closeScope)).toThrow("native close failed");
+        expect(reader.isOpen).toBe(true);
+        if (scope === "root") {
+          closeAuthProfileReadPool(closeScope);
+          const siblingReader = expectDefined(open.mock.results[1]?.value, "sibling auth reader");
+          expect(siblingReader.isOpen).toBe(true);
+          expect(loadPersistedAuthProfileStore(siblingAgentDir)).toMatchObject(
+            apiKeyStore("qa-sibling"),
+          );
+        } else {
           const exitClosers = process
             .listeners("exit")
             .filter((listener) => !listeners.includes(listener));
           expect(exitClosers).toHaveLength(1);
           expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
-          expect(reader.isOpen).toBe(false);
           expect(process.listeners("exit")).toEqual(listeners);
-        } finally {
-          close.mockRestore();
         }
+        expect(reader.isOpen).toBe(false);
       } finally {
-        closeAuthProfileReadPool();
-        open.mockRestore();
+        close.mockRestore();
       }
-    });
-  });
-
-  it("retains scoped readers for a retry when native close fails", async () => {
-    await withAgentDirEnv("openclaw-auth-reader-close-", (agentDir) => {
-      const siblingAgentDir = `${agentDir}-sibling`;
-      saveAuthProfileStore(apiKeyStore("qa-synthetic"), agentDir);
-      saveAuthProfileStore(apiKeyStore("qa-sibling"), siblingAgentDir);
-      clearRuntimeAuthProfileStoreSnapshots();
-      const openSpy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let reader: DatabaseSync | undefined;
-      try {
-        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
-        reader = openSpy.mock.results[0]?.value as DatabaseSync;
-        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
-        const siblingReader = openSpy.mock.results[1]?.value as DatabaseSync;
-        const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-          throw new Error("native close failed");
-        });
-        try {
-          expect(() => closeAuthProfileReadPool({ kind: "root", rootPath: agentDir })).toThrow(
-            "native close failed",
-          );
-          expect(reader.isOpen).toBe(true);
-          closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-          expect(reader.isOpen).toBe(false);
-          expect(siblingReader.isOpen).toBe(true);
-          expect(loadPersistedAuthProfileStore(siblingAgentDir)).toMatchObject(
-            apiKeyStore("qa-sibling"),
-          );
-        } finally {
-          close.mockRestore();
-        }
-      } finally {
-        openSpy.mockRestore();
-        if (reader?.isOpen) {
-          reader.close();
-        }
-      }
-    });
+    }, scope === "root");
   });
 
   it("retains failed admission handles without opening more readers until cleanup succeeds", async () => {

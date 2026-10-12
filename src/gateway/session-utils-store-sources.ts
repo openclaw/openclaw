@@ -1,21 +1,145 @@
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
+} from "../config/sessions/session-store-read-candidates.js";
+import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
 import {
   createExistingAgentSessionStoreTargetResolver,
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   listOpenClawRegisteredAgentDatabases,
-  readOpenClawAgentDatabaseRegistryToken,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "../state/openclaw-agent-db-registry-listing.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db-registry.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-lookup.js";
-import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
+import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
+import type {
+  GatewaySessionStoreReadSources,
+  GatewaySessionStoreSourceRequest,
+} from "./session-utils-store.types.js";
+
+type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
+
+function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
+  return withAgentRosterFactsBatch(cfg, () => ({
+    agentIds: listConfiguredSessionStoreAgentIds(cfg),
+    store: cfg.session?.store,
+    compatibilityAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+  }));
+}
+
+function sessionStoreRoutingConfig(routing: SessionStoreRouting): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: Object.fromEntries(routing.agentIds.map((agentId) => [agentId, {}])),
+      defaults: { sessionStore: { agentId: routing.compatibilityAgentId } },
+    },
+    session: { store: routing.store },
+  };
+}
+
+function storeChanged(): Error {
+  return new Error("Session store changed while preparing its metadata. Retry the request.");
+}
+
+/** Native discovery policy shared by synchronous readers and the admitted history worker. */
+export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStoreSourceRequest) {
+  const cfg = sessionStoreRoutingConfig(params.routing);
+  return withAgentRosterFactsBatch(cfg, () => {
+    const registered = params.registeredDatabases.filter(
+      (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+    );
+    const agentIds = new Set([
+      ...listConfiguredSessionStoreAgentIds(cfg),
+      ...registered.map((entry) => entry.agentId),
+    ]);
+    const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+    const resolveExistingTargets = createExistingAgentSessionStoreTargetResolver(cfg, {
+      env: params.env,
+      registeredDatabases: registered,
+      readCandidates: params.candidates,
+      isSameDatabasePath,
+    });
+    const sources = new Map<string, readonly SessionEntryReadSource[]>();
+    const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
+      if (params.candidates) {
+        assertSessionStoreReadCandidate(source.path, params.candidates);
+      }
+      isSameDatabasePath(source.path, source.path);
+      return source.agentId === params.currentSource.agentId &&
+        isSameDatabasePath(source.path, params.currentSource.path)
+        ? params.currentSource
+        : source;
+    };
+    for (const agentId of agentIds) {
+      let resolved: SessionEntryReadSource[];
+      let exactRegisteredSources = false;
+      try {
+        const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
+          ...params,
+          cfg,
+          agentId,
+          registeredDatabases: registered,
+          resolveExistingTargets,
+        });
+        resolved = [];
+        if (readSources) {
+          exactRegisteredSources = true;
+          resolved = readSources;
+        } else {
+          for (const candidate of candidates) {
+            const target = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
+              agentId: candidate.agentId,
+              defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+              env: params.env,
+              registeredDatabases: registered,
+              readCandidates: params.candidates,
+              isSameDatabasePath,
+            });
+            if (target.ownerSource === "ambiguous-registry") {
+              resolved.length = 0;
+              break;
+            }
+            resolved.push({ agentId: target.agentId ?? candidate.agentId, path: target.path });
+          }
+        }
+        const bound: SessionEntryReadSource[] = [];
+        for (const source of resolved) {
+          const current = bindCurrentSource(source);
+          if (
+            !bound.some(
+              (previous) =>
+                (!exactRegisteredSources || previous.agentId === current.agentId) &&
+                isSameDatabasePath(previous.path, current.path),
+            )
+          ) {
+            bound.push(current);
+          }
+        }
+        sources.set(agentId, bound);
+      } catch {
+        // Auxiliary lineage follows the existing unavailable-store-as-no-rows contract.
+        sources.set(agentId, []);
+        continue;
+      }
+    }
+    return {
+      sources: Object.fromEntries(sources),
+      isCurrent: () => isSameDatabasePath.isCurrent(),
+    };
+  });
+}
 
 /** Bind candidate addresses once; registry metadata uses its existing invalidation owner. */
 export function prepareGatewaySessionStoreReadSources(params: {
@@ -23,149 +147,106 @@ export function prepareGatewaySessionStoreReadSources(params: {
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-  /** Only synchronous consumers may defer binding filesystem addresses. */
-  deferSources?: boolean;
 }): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
   const registryOptions = {
     env: cloneEnvWithPlatformSemantics(params.env),
     path: params.registryPath,
     includeIncompatibleSchemaVersions: true,
   };
-  const currentSource = params.currentSource;
-  const currentSourceAgentId = currentSource.agentId;
-  const currentSourcePath = currentSource.path;
-  let discoveryIsCurrent: (() => boolean) | undefined;
-  let registryToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-  const assertCurrent = () => {
-    const currentToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
-    if (currentToken === registryToken) {
+  let discoveryIsCurrent = () => true;
+  const sources = withAgentRosterFactsBatch(params.cfg, () => {
+    let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
+    try {
+      registered = listOpenClawRegisteredAgentDatabases(registryOptions);
+    } catch {
+      return {};
+    }
+    const resolved = resolveGatewaySessionStoreReadSources({
+      routing: captureSessionStoreRouting(params.cfg),
+      currentSource: params.currentSource,
+      env: params.env,
+      registeredDatabases: registered,
+    });
+    discoveryIsCurrent = resolved.isCurrent;
+    return resolved.sources;
+  });
+  return {
+    sources,
+    assertCurrent() {
+      if (!discoveryIsCurrent()) {
+        throw storeChanged();
+      }
+    },
+  };
+}
+
+/** Capture source routing for the existing history worker; no native discovery runs here. */
+export async function prepareGatewaySessionStoreReadSourcesAsync(
+  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const routing = captureSessionStoreRouting(params.cfg);
+  const env = captureSessionTranscriptStorageEnvironment(params.env);
+  const inventory = prepareSessionStoreTargetInventory(
+    sessionStoreRoutingConfig(routing),
+    routing.agentIds,
+    env,
+  );
+  const currentSource = { ...params.currentSource };
+  const paths = createOpenClawAgentDatabasePathMatcher();
+  paths(currentSource.path, currentSource.path);
+  const candidates = new Map<string, SessionStoreReadCandidate>();
+  const capture = (candidate: SessionStoreReadCandidate) => {
+    try {
+      paths(candidate.path, candidate.path);
+    } catch (error) {
+      if (!shouldSkipDiscoveryError(error)) {
+        throw error;
+      }
       return;
     }
-    // Registration admission and metadata refreshes also rotate the memo. Keep
-    // the prepared addresses only when their original discovery facts still hold.
-    try {
-      if (discoveryIsCurrent?.()) {
-        registryToken = currentToken;
-        return;
-      }
-    } catch {
-      // An unavailable registry or locator cannot establish the captured topology.
-    }
-    throw new Error("Session store changed while preparing its metadata. Retry the request.");
+    candidates.set(JSON.stringify(candidate), candidate);
   };
-  const bindSources = () =>
-    withAgentRosterFactsBatch(params.cfg, () => {
-      let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-      try {
-        registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-      } catch {
-        return {};
+  inventory.candidates.forEach(capture);
+  capture(captureSessionStoreReadCandidate(currentSource.path));
+  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    env,
+    path: params.registryPath,
+    includeIncompatibleSchemaVersions: true,
+  });
+  const assertCurrent = () => {
+    if (!paths.isCurrent()) {
+      throw storeChanged();
+    }
+  };
+  const registry = await registryRead.read(signal);
+  const original = registry.result;
+  assertCurrent();
+  const registeredDatabases =
+    original.status === "available"
+      ? original.entries.map(({ agentId, path, schemaVersion }) => ({
+          agentId,
+          path,
+          schemaVersion,
+        }))
+      : undefined;
+  for (const registered of registeredDatabases ?? []) {
+    if (registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+      capture(captureSessionStoreReadCandidate(registered.path));
+    }
+  }
+  const request: GatewaySessionStoreSourceRequest | undefined = registeredDatabases
+    ? {
+        routing,
+        currentSource,
+        env,
+        registeredDatabases,
+        candidates: [...candidates.values()],
       }
-      const registryFacts = registered;
-      registered = registered.filter(
-        (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-      );
-      const agentIds = new Set([
-        ...listConfiguredSessionStoreAgentIds(params.cfg),
-        ...registered.map((entry) => entry.agentId),
-      ]);
-      const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-      const resolveExistingTargets = createExistingAgentSessionStoreTargetResolver(params.cfg, {
-        env: params.env,
-        registeredDatabases: registered,
-        isSameDatabasePath,
-      });
-      const sources = new Map<string, readonly SessionEntryReadSource[]>();
-      const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
-        isSameDatabasePath(source.path, source.path);
-        return source.agentId === currentSourceAgentId &&
-          isSameDatabasePath(source.path, currentSourcePath)
-          ? currentSource
-          : source;
-      };
-      for (const agentId of agentIds) {
-        try {
-          const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
-            ...params,
-            agentId,
-            registeredDatabases: registered,
-            resolveExistingTargets,
-          });
-          const resolved: SessionEntryReadSource[] = [];
-          if (readSources) {
-            for (const readSource of readSources) {
-              const source = bindCurrentSource(readSource);
-              if (
-                !resolved.some(
-                  (candidate) =>
-                    candidate.agentId === source.agentId &&
-                    isSameDatabasePath(candidate.path, source.path),
-                )
-              ) {
-                resolved.push(source);
-              }
-            }
-            sources.set(agentId, resolved);
-            continue;
-          }
-          for (const candidate of candidates) {
-            const target = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
-              agentId: candidate.agentId,
-              defaultAgentId: resolveSessionStoreCompatibilityAgentId(params.cfg),
-              env: params.env,
-              registeredDatabases: registered,
-              isSameDatabasePath,
-            });
-            if (target.ownerSource === "ambiguous-registry") {
-              resolved.length = 0;
-              break;
-            }
-            const source = bindCurrentSource({
-              agentId: target.agentId ?? candidate.agentId,
-              path: target.path,
-            });
-            if (
-              !resolved.some((resolvedSource) =>
-                isSameDatabasePath(resolvedSource.path, source.path),
-              )
-            ) {
-              resolved.push(source);
-            }
-          }
-          sources.set(agentId, resolved);
-        } catch {
-          // Auxiliary lineage follows the existing unavailable-store-as-no-rows contract.
-          sources.set(agentId, []);
-        }
-      }
-      discoveryIsCurrent = () => {
-        const current = listOpenClawRegisteredAgentDatabases(registryOptions);
-        return (
-          currentSource.agentId === currentSourceAgentId &&
-          currentSource.path === currentSourcePath &&
-          current.length === registryFacts.length &&
-          current.every((entry, index) => {
-            const previous = registryFacts[index]!;
-            return (
-              entry.agentId === previous.agentId &&
-              entry.path === previous.path &&
-              entry.schemaVersion === previous.schemaVersion
-            );
-          }) &&
-          isSameDatabasePath.isCurrent()
-        );
-      };
-      return Object.fromEntries(sources);
-    });
-  let sources = params.deferSources ? undefined : bindSources();
+    : undefined;
   return {
-    get sources() {
-      if (!sources) {
-        assertCurrent();
-        sources = bindSources();
-      }
-      return sources;
-    },
+    request,
     assertCurrent,
   };
 }

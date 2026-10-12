@@ -1,4 +1,3 @@
-// Gradium plugin module implements shared behavior.
 const DEFAULT_GRADIUM_BASE_URL = "https://api.gradium.ai";
 export const GRADIUM_API_HOSTNAME = "api.gradium.ai";
 export const DEFAULT_GRADIUM_VOICE_ID = "YTpq7expH9539ERJ";
@@ -15,10 +14,8 @@ export const GRADIUM_VOICES = [
 
 export function normalizeGradiumBaseUrl(baseUrl?: string): string {
   const raw = baseUrl?.trim() || DEFAULT_GRADIUM_BASE_URL;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     throw new Error("Gradium baseUrl must be a valid https URL");
   }
 

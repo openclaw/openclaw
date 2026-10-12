@@ -1,7 +1,8 @@
 // Narrow only rendered fields and tolerate additive fields across Gateway restarts.
 // Schema-parity tests enforce required strings without loading TypeBox at startup.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isNonEmptyProtocolString } from "../../../packages/gateway-protocol/src/protocol-value-normalization.js";
+import type { UpdateImmutableInstall } from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
@@ -13,11 +14,7 @@ function isBoundedInteger(value: unknown, minimum: number): value is number {
 const MAX_COMMITS = 5;
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
-  const snapshot = hello?.snapshot;
-  if (!isRecord(snapshot)) {
-    return null;
-  }
-  return readUpdateAvailableValue(snapshot.updateAvailable);
+  return readUpdateAvailableValue(asNullableRecord(hello?.snapshot)?.updateAvailable);
 }
 
 export function readUpdateAvailableValue(update: unknown): UpdateAvailable | null {
@@ -85,11 +82,17 @@ function readScheduleTarget(value: unknown): UpdateScheduleState["target"] | nul
 /** Optional install metadata: a malformed entry is dropped, never fatal to the status. */
 function readGitInstallMetadata(value: Record<string, unknown>): {
   currentSha?: string;
+  upstreamSha?: string;
+  repositoryUrl?: string;
   commitAtMs?: number;
   installedAtMs?: number;
 } {
   return {
     ...(isNonEmptyProtocolString(value.currentSha) ? { currentSha: value.currentSha } : {}),
+    ...(isNonEmptyProtocolString(value.upstreamSha) ? { upstreamSha: value.upstreamSha } : {}),
+    ...(isNonEmptyProtocolString(value.repositoryUrl)
+      ? { repositoryUrl: value.repositoryUrl }
+      : {}),
     ...(isBoundedInteger(value.commitAtMs, 0) ? { commitAtMs: value.commitAtMs } : {}),
     ...(isBoundedInteger(value.installedAtMs, 0) ? { installedAtMs: value.installedAtMs } : {}),
   };
@@ -160,6 +163,45 @@ function readScheduleCampaign(value: unknown): UpdateScheduleState["campaign"] |
   };
 }
 
+function readImmutableInstall(value: unknown): UpdateImmutableInstall | null {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyProtocolString(value.root) ||
+    typeof value.currentSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(value.currentSha) ||
+    !isNonEmptyProtocolString(value.currentPath)
+  ) {
+    return null;
+  }
+  let prepared: UpdateImmutableInstall["prepared"];
+  if (value.prepared !== undefined) {
+    const candidate = value.prepared;
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.sha !== "string" ||
+      !/^[a-f0-9]{40}$/.test(candidate.sha) ||
+      !isNonEmptyProtocolString(candidate.path) ||
+      typeof candidate.buildDigest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(candidate.buildDigest) ||
+      !isBoundedInteger(candidate.preparedAtMs, 0)
+    ) {
+      return null;
+    }
+    prepared = {
+      sha: candidate.sha,
+      path: candidate.path,
+      buildDigest: candidate.buildDigest,
+      preparedAtMs: candidate.preparedAtMs,
+    };
+  }
+  return {
+    root: value.root,
+    currentSha: value.currentSha,
+    currentPath: value.currentPath,
+    ...(prepared ? { prepared } : {}),
+  };
+}
+
 export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | null {
   if (
     !isRecord(value) ||
@@ -171,7 +213,10 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   const rawInstall = isRecord(value.install) ? value.install : null;
   const rawInstallKind = rawInstall?.kind;
   const installKind =
-    rawInstallKind === "package" || rawInstallKind === "git" || rawInstallKind === "unknown"
+    rawInstallKind === "package" ||
+    rawInstallKind === "git" ||
+    rawInstallKind === "immutable" ||
+    rawInstallKind === "unknown"
       ? rawInstallKind
       : undefined;
   if (value.install !== undefined && installKind === undefined) {
@@ -179,6 +224,11 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   }
   const gitStatus = rawInstall?.git === undefined ? undefined : readGitUpdateStatus(rawInstall.git);
   if (rawInstall?.git !== undefined && !gitStatus) {
+    return null;
+  }
+  const immutable =
+    rawInstall?.immutable === undefined ? undefined : readImmutableInstall(rawInstall.immutable);
+  if (rawInstall?.immutable !== undefined && !immutable) {
     return null;
   }
   const target = value.target === undefined ? undefined : readScheduleTarget(value.target);
@@ -190,7 +240,13 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
     channel: value.channel,
     autoEnabled: value.autoEnabled,
     ...(installKind
-      ? { install: { kind: installKind, ...(gitStatus ? { git: gitStatus } : {}) } }
+      ? {
+          install: {
+            kind: installKind,
+            ...(gitStatus ? { git: gitStatus } : {}),
+            ...(immutable ? { immutable } : {}),
+          },
+        }
       : {}),
     ...(target ? { target } : {}),
     ...(campaign ? { campaign } : {}),
@@ -198,9 +254,5 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
 }
 
 export function readUpdateSchedule(hello: GatewayHelloOk | null): UpdateScheduleState | null {
-  const snapshot = hello?.snapshot;
-  if (!isRecord(snapshot)) {
-    return null;
-  }
-  return readUpdateScheduleValue(snapshot.updateSchedule);
+  return readUpdateScheduleValue(asNullableRecord(hello?.snapshot)?.updateSchedule);
 }

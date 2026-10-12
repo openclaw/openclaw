@@ -1,24 +1,38 @@
+import { ok } from "@openclaw/normalization-core/result";
 import { vi } from "vitest";
+import type { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
   loadEntryReadOnly: vi.fn(),
-  reset: vi.fn(),
+  readEntry: vi.fn<() => Promise<SessionEntry | undefined>>(),
+  withEntryReader: vi.fn<typeof withSessionEntryReadOnlyInWorker>(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
   executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
 }));
 
-vi.mock("./agent-runner-session-reset.js", () => ({
-  resetReplyRunSession: (...args: unknown[]) => followupTurnTestState.reset(...args),
-}));
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const { bindSessionPendingInputSources } =
+    await import("../../config/sessions/session-accessor.pending-inputs.js");
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.sqlite-entry.js");
+  return {
+    bindSessionPendingInputSources,
+    loadSessionEntry,
+    replaceSessionEntry,
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      followupTurnTestState.loadEntryReadOnly(...args),
+  };
+});
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: (...args: unknown[]) =>
-    followupTurnTestState.loadEntryReadOnly(...args),
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  withSessionEntryReadOnlyInWorker: followupTurnTestState.withEntryReader,
 }));
 
 const { executeFollowupTurn } = await import("./followup-turn-execution.js");
@@ -92,6 +106,15 @@ export function createFollowupTurnTestTurn(
 export function resetFollowupTurnTestState() {
   vi.clearAllMocks();
   followupTurnTestState.loadEntryReadOnly.mockReturnValue(undefined);
+  followupTurnTestState.readEntry.mockResolvedValue(undefined);
+  followupTurnTestState.withEntryReader.mockImplementation(
+    async (_scope, assertCurrent, consume) => {
+      assertCurrent();
+      const entry = await followupTurnTestState.readEntry();
+      assertCurrent();
+      return consume(ok(entry), { kind: "unresolved", assertCurrent });
+    },
+  );
   followupTurnTestState.execute.mockResolvedValue({
     runId: "run-1",
     outcome: { kind: "rejected", payload: { text: "done" } },

@@ -14,20 +14,16 @@ type ChatActionOpts = {
   dbPath?: string;
   remoteHost?: string;
   service?: IMessageService;
-  region?: string;
   timeoutMs?: number;
   chatId?: number;
 };
 
-function buildChatTargetParams(
+async function runChatAction(
+  method: "typing" | "read",
   to: string,
   opts: ChatActionOpts,
-): {
-  params: Record<string, unknown>;
-  service?: IMessageService;
-  region?: string;
-  account: ResolvedIMessageAccount;
-} {
+  isTyping?: boolean,
+): Promise<void> {
   const cfg = requireRuntimeConfig(opts.cfg, "iMessage chat action");
   const account = opts.account ?? resolveIMessageAccount({ cfg, accountId: opts.accountId });
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
@@ -41,21 +37,16 @@ function buildChatTargetParams(
   } else {
     params.to = target.to;
   }
-  const service =
-    opts.service ??
-    (target.kind === "handle" ? target.service : undefined) ??
-    (account.config.service as IMessageService | undefined);
-  const region = opts.region?.trim() || account.config.region?.trim() || "US";
-  return { params, service, region, account };
-}
-
-async function runChatAction<T>(
-  method: "typing" | "read",
-  params: Record<string, unknown>,
-  opts: ChatActionOpts,
-): Promise<T> {
-  const cfg = requireRuntimeConfig(opts.cfg, "iMessage chat action");
-  const account = opts.account ?? resolveIMessageAccount({ cfg, accountId: opts.accountId });
+  if (method === "typing") {
+    params.typing = isTyping;
+    const service =
+      opts.service ??
+      (target.kind === "handle" ? target.service : undefined) ??
+      account.config.service;
+    if (service) {
+      params.service = service;
+    }
+  }
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const remoteHost = await resolveIMessageRemoteHost({
@@ -65,7 +56,7 @@ async function runChatAction<T>(
   const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   try {
-    return await client.request<T>(method, params, { timeoutMs: opts.timeoutMs });
+    await client.request(method, params, { timeoutMs: opts.timeoutMs });
   } finally {
     if (shouldClose) {
       await client.stop();
@@ -78,15 +69,9 @@ export async function sendIMessageTyping(
   isTyping: boolean,
   opts: ChatActionOpts,
 ): Promise<void> {
-  const { params, service } = buildChatTargetParams(to, opts);
-  params.typing = isTyping;
-  if (service) {
-    params.service = service;
-  }
-  await runChatAction<{ ok?: boolean }>("typing", params, opts);
+  await runChatAction("typing", to, opts, isTyping);
 }
 
 export async function markIMessageChatRead(to: string, opts: ChatActionOpts): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  await runChatAction<{ ok?: boolean }>("read", params, opts);
+  await runChatAction("read", to, opts);
 }

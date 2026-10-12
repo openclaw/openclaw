@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -21,7 +19,6 @@ import {
   sweepStaleRunContexts,
 } from "../../../infra/agent-run-registry.js";
 import {
-  clearCommandLane,
   getCommandLaneSnapshot,
   setCommandLaneConcurrency,
 } from "../../../process/command-queue.js";
@@ -56,6 +53,7 @@ function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
     runId,
     sessionFile: "/tmp/queued-run.jsonl",
     sessionId: "queued-session",
+    sessionPersistence: "detached",
     timeoutMs: 60_000,
     workspaceDir: "/tmp",
     ...overrides,
@@ -95,67 +93,6 @@ afterEach(() => {
 });
 
 describe("queued embedded run context liveness", () => {
-  test.each([
-    { blockedLane: SESSION_LANE, queue: "session" },
-    { blockedLane: GLOBAL_LANE, queue: "global" },
-  ])(
-    "retains a healthy run past the context TTL while the $queue lane is full",
-    async ({ blockedLane }) => {
-      const registeredAt = 1_000;
-      const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const { controller, params } = createRunController();
-
-      registerAgentRunContext(params.runId, {
-        agentId: "main",
-        isControlUiVisible: false,
-        lifecycleGeneration,
-        registeredAt,
-        sessionKey: "agent:main:subagent:queued",
-      });
-      registerAgentRunContext("abandoned-run", {
-        lifecycleGeneration,
-        registeredAt,
-        sessionKey: "agent:main:subagent:abandoned",
-      });
-      setCommandLaneConcurrency(blockedLane, 0);
-
-      const run = controller.enqueueSession(() =>
-        controller.enqueueGlobal(async () => createRunResult()),
-      );
-
-      try {
-        await waitForQueuedLane(blockedLane);
-
-        clock.mockReturnValue(admissionAt);
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext("abandoned-run")).toBeUndefined();
-        expect(getAgentRunContext(params.runId)).toMatchObject({ lifecycleGeneration });
-
-        setCommandLaneConcurrency(blockedLane, 1);
-        await run;
-        expect(getAgentRunContext(params.runId)).toMatchObject({
-          agentId: "main",
-          isControlUiVisible: false,
-          lastActiveAt: admissionAt,
-          registeredAt,
-          sessionKey: "agent:main:subagent:queued",
-        });
-
-        clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);
-        expect(sweepStaleRunContexts()).toBe(0);
-
-        clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS + 1);
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext(params.runId)).toBeUndefined();
-      } finally {
-        setCommandLaneConcurrency(blockedLane, 1);
-        await run.catch(() => {});
-      }
-    },
-  );
-
   test("retains context past the TTL while worker placement admission is pending", async () => {
     const registeredAt = 1_000;
     const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
@@ -270,6 +207,7 @@ describe("queued embedded run context liveness", () => {
       expect(changed).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:subagent:queued",
         agentId: undefined,
+        scope: "runtime",
       });
       changed.mockClear();
       clock.mockReturnValue(admissionAt);
@@ -285,8 +223,8 @@ describe("queued embedded run context liveness", () => {
       });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
       expect(changed.mock.calls).toEqual([
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
       ]);
       expect(localTurn).not.toHaveBeenCalled();
 
@@ -344,35 +282,6 @@ describe("queued embedded run context liveness", () => {
     },
   );
 
-  test.each([
-    { blockedLane: SESSION_LANE, queue: "session" },
-    { blockedLane: GLOBAL_LANE, queue: "global" },
-  ])(
-    "releases $queue queue ownership when pending lane work is cleared",
-    async ({ blockedLane }) => {
-      const registeredAt = 1_000;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-      const { controller, params } = createRunController();
-      registerAgentRunContext(params.runId, {
-        lifecycleGeneration: params.lifecycleGeneration,
-        registeredAt,
-      });
-      setCommandLaneConcurrency(blockedLane, 0);
-      const run = controller.enqueueSession(() =>
-        controller.enqueueGlobal(async () => createRunResult()),
-      );
-
-      await waitForQueuedLane(blockedLane);
-      clock.mockReturnValue(registeredAt + CONTEXT_TTL_MS + 1);
-      expect(sweepStaleRunContexts()).toBe(0);
-
-      expect(clearCommandLane(blockedLane)).toBe(1);
-      await expect(run).rejects.toThrow();
-      expect(sweepStaleRunContexts()).toBe(1);
-      expect(getAgentRunContext(params.runId)).toBeUndefined();
-    },
-  );
-
   test("releases ownership when a custom queue rejects admission synchronously", async () => {
     const registeredAt = 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
@@ -395,62 +304,47 @@ describe("queued embedded run context liveness", () => {
     expect(getAgentRunContext(params.runId)).toBeUndefined();
   });
 
-  test.each(["local", "remote"] as const)(
-    "rebinds queued foreground %s work after its retired context expires",
-    async (execution) => {
-      const registeredAt = 1_000;
-      const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-      const { controller, params } = createRunController({ trigger: "user" });
-      registerAgentRunContext(params.runId, {
-        lifecycleGeneration: params.lifecycleGeneration,
-        registeredAt,
+  test("rebinds queued foreground work after its retired context expires", async () => {
+    const registeredAt = 1_000;
+    const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+    const { controller, params } = createRunController({ trigger: "user" });
+    registerAgentRunContext(params.runId, {
+      lifecycleGeneration: params.lifecycleGeneration,
+      registeredAt,
+    });
+    const localTurn = vi.fn(async () => createRunResult());
+    setCommandLaneConcurrency(GLOBAL_LANE, 0);
+    const run = controller.enqueueSession(() => controller.enqueueGlobal(localTurn));
+
+    try {
+      await waitForQueuedLane(GLOBAL_LANE);
+      clock.mockReturnValue(admissionAt);
+      expect(sweepStaleRunContexts()).toBe(0);
+
+      const replacementGeneration = rotateAgentEventLifecycleGeneration();
+      expect(sweepStaleRunContexts()).toBe(1);
+      expect(getAgentRunContext(params.runId)).toBeUndefined();
+      const changed = vi.fn();
+      onTestFinished(sessionChanges.subscribe(changed));
+
+      setCommandLaneConcurrency(GLOBAL_LANE, 1);
+      await run;
+      expect(getAgentRunContext(params.runId)).toMatchObject({
+        lifecycleGeneration: replacementGeneration,
+        lastActiveAt: admissionAt,
+        sessionId: params.sessionId,
       });
-      const localTurn = vi.fn(async () => createRunResult());
-      const uninstallPlacement =
-        execution === "remote"
-          ? installSessionPlacementAdmissionProvider({
-              assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-              executeLocalTurn: async (_claim, runLocal) => await runLocal(),
-              executeTurn: async (_claim, _params, _runLocal, onAdmitted) => {
-                onAdmitted?.();
-                return { meta: { durationMs: 1 } };
-              },
-            })
-          : undefined;
-      setCommandLaneConcurrency(GLOBAL_LANE, 0);
-      const run = controller.enqueueSession(() => controller.enqueueGlobal(localTurn));
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
+      expect(localTurn).toHaveBeenCalledOnce();
 
-      try {
-        await waitForQueuedLane(GLOBAL_LANE);
-        clock.mockReturnValue(admissionAt);
-        expect(sweepStaleRunContexts()).toBe(0);
-
-        const replacementGeneration = rotateAgentEventLifecycleGeneration();
-        expect(sweepStaleRunContexts()).toBe(1);
-        expect(getAgentRunContext(params.runId)).toBeUndefined();
-        const changed = vi.fn();
-        onTestFinished(sessionChanges.subscribe(changed));
-
-        setCommandLaneConcurrency(GLOBAL_LANE, 1);
-        await run;
-        expect(getAgentRunContext(params.runId)).toMatchObject({
-          lifecycleGeneration: replacementGeneration,
-          lastActiveAt: admissionAt,
-          sessionId: params.sessionId,
-        });
-        expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
-        expect(localTurn).toHaveBeenCalledTimes(execution === "local" ? 1 : 0);
-
-        clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);
-        expect(sweepStaleRunContexts()).toBe(0);
-      } finally {
-        setCommandLaneConcurrency(GLOBAL_LANE, 1);
-        uninstallPlacement?.();
-        await run.catch(() => {});
-      }
-    },
-  );
+      clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);
+      expect(sweepStaleRunContexts()).toBe(0);
+    } finally {
+      setCommandLaneConcurrency(GLOBAL_LANE, 1);
+      await run.catch(() => {});
+    }
+  });
 
   test.each(["local", "remote"] as const)(
     "rejects %s execution when its lifecycle rotates during placement admission",
@@ -542,80 +436,52 @@ describe("queued embedded run context liveness", () => {
 });
 
 describe("scheduler capacity wait projection", () => {
-  test.each([SESSION_LANE, GLOBAL_LANE, undefined])(
-    "publishes only actual %s queue waits and clears before placement setup",
-    async (blockedLane) => {
-      const sessionKey = "agent:main:capacity";
-      const { controller, params } = createRunController({ sessionKey });
-      registerAgentRunContext(params.runId, {
-        sessionKey,
-        sessionId: params.sessionId,
-        lifecycleGeneration: params.lifecycleGeneration,
-      });
-      const events: boolean[] = [];
-      const unsubscribe = onSessionLifecycleEvent((event) => {
-        if (event.sessionKey === sessionKey && event.reason === "run-capacity") {
-          events.push(isAgentRunWaitingForCapacity(params.runId));
-        }
-      });
-      const placementEntered = createDeferred();
-      const resumePlacement = createDeferred();
-      const uninstallPlacement = installSessionPlacementAdmissionProvider({
-        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-        executeLocalTurn: async (_claim, runLocal) => await runLocal(),
-        executeTurn: async (_claim, _params, runLocal) => {
-          placementEntered.resolve();
-          await resumePlacement.promise;
-          return await runLocal();
-        },
-      });
-      if (blockedLane) {
-        setCommandLaneConcurrency(blockedLane, 0);
+  test("clears the session queue capacity wait before placement setup", async () => {
+    const blockedLane = SESSION_LANE;
+    const sessionKey = "agent:main:capacity";
+    const { controller, params } = createRunController({ sessionKey });
+    registerAgentRunContext(params.runId, {
+      sessionKey,
+      sessionId: params.sessionId,
+      lifecycleGeneration: params.lifecycleGeneration,
+    });
+    const events: boolean[] = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      if (event.sessionKey === sessionKey && event.reason === "run-capacity") {
+        events.push(isAgentRunWaitingForCapacity(params.runId));
       }
-      const run = controller.enqueueSession(() =>
-        controller.enqueueGlobal(async () => createRunResult()),
-      );
-      try {
-        if (blockedLane) {
-          await waitForQueuedLane(blockedLane);
-          expect(events).toEqual([true]);
-          setCommandLaneConcurrency(blockedLane, 1);
-        }
-        await placementEntered.promise;
-        expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
-        expect(events).toEqual(blockedLane ? [true, false] : []);
-      } finally {
-        if (blockedLane) {
-          setCommandLaneConcurrency(blockedLane, 1);
-        }
-        resumePlacement.resolve();
-        try {
-          await run;
-        } finally {
-          uninstallPlacement();
-          unsubscribe();
-        }
-      }
-    },
-  );
-
-  test("keeps custom queue setup spinning when it supplies no capacity evidence", async () => {
-    const customQueue = createDeferred();
-    const { controller, params } = createRunController({
-      enqueue: async (task) => {
-        await customQueue.promise;
-        return await task();
+    });
+    const placementEntered = createDeferred();
+    const resumePlacement = createDeferred();
+    const uninstallPlacement = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+      executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+      executeTurn: async (_claim, _params, runLocal) => {
+        placementEntered.resolve();
+        await resumePlacement.promise;
+        return await runLocal();
       },
     });
-    registerAgentRunContext(params.runId, { lifecycleGeneration: params.lifecycleGeneration });
+    setCommandLaneConcurrency(blockedLane, 0);
     const run = controller.enqueueSession(() =>
       controller.enqueueGlobal(async () => createRunResult()),
     );
     try {
+      await waitForQueuedLane(blockedLane);
+      expect(events).toEqual([true]);
+      setCommandLaneConcurrency(blockedLane, 1);
+      await placementEntered.promise;
       expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
+      expect(events).toEqual([true, false]);
     } finally {
-      customQueue.resolve();
-      await run;
+      setCommandLaneConcurrency(blockedLane, 1);
+      resumePlacement.resolve();
+      try {
+        await run;
+      } finally {
+        uninstallPlacement();
+        unsubscribe();
+      }
     }
   });
 

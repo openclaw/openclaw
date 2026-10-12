@@ -16,7 +16,10 @@ import {
   readControlCursor,
 } from "./session-catalog-parsing.js";
 import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
-import type { CodexCatalogStatusIndex } from "./session-catalog-status.js";
+import {
+  applyCodexCatalogLiveFields,
+  type CodexCatalogStatusIndex,
+} from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -103,7 +106,6 @@ export class CodexCatalogNativePages {
       const filterCwdLocally = Boolean(cwd && this.settings.hasLiveCwd());
       const ascending = position.backwards && !position.anchorThreadId;
       const pageLimit = position.anchorThreadId ? 64 : limit;
-      const statusRevision = this.status.capture();
       const page = await request.read(Number.POSITIVE_INFINITY, () =>
         options.readNative(
           {
@@ -122,7 +124,7 @@ export class CodexCatalogNativePages {
       );
       options.assertCurrent();
       for (const row of page.rows) {
-        this.status.observe(row, statusRevision);
+        this.status.observe(row);
       }
       if (cwd && !filterCwdLocally && this.settings.hasLiveCwd()) {
         continue;
@@ -169,13 +171,13 @@ export class CodexCatalogNativePages {
         {
           sessions: rows
             .flatMap((row) => row.page.sessions)
-            .map(({ status: _storedStatus, activeFlags: _storedFlags, ...session }) => {
-              const live = this.status.get(session.threadId);
-              return Object.assign(session, this.settings.get(session.threadId), {
-                status: live?.status ?? "notLoaded",
-                ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
-              });
-            })
+            .map((session) =>
+              applyCodexCatalogLiveFields(
+                session,
+                this.status.get(session.threadId),
+                this.settings.get(session.threadId),
+              ),
+            )
             .filter((session) => !cwd || session.cwd === cwd),
         },
         params.searchTerm,

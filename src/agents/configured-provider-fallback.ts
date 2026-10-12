@@ -7,19 +7,15 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.js";
-
-type ProviderModelRef = {
-  provider: string;
-  model: string;
-};
+import type { ModelRef } from "./model-ref-shared.js";
 
 /** Resolve the first configured provider/model that can replace a missing default. */
 export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
   defaultProvider: string;
   defaultModel: string | undefined;
-  excludedModel?: ProviderModelRef;
-}): ProviderModelRef | null {
+  excludedModel?: ModelRef;
+}): ModelRef | null {
   const configuredProviders = params.cfg.models?.providers;
   if (!configuredProviders || typeof configuredProviders !== "object") {
     return null;
@@ -29,14 +25,12 @@ export function resolveConfiguredProviderFallback(params: {
     params.defaultProvider,
   );
   const defaultModel = params.defaultModel?.trim();
-  const defaultProviderHasConfiguredModel =
+  if (
     Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => Boolean(model?.id));
-  const defaultProviderHasDefaultModel =
-    defaultModel !== undefined &&
-    Array.isArray(defaultProviderConfig?.models) &&
-    defaultProviderConfig.models.some((model) => model?.id === defaultModel);
-  if (defaultProviderHasConfiguredModel && (!defaultModel || defaultProviderHasDefaultModel)) {
+    defaultProviderConfig.models.some(
+      (model) => model?.id && (!defaultModel || model.id === defaultModel),
+    )
+  ) {
     return null;
   }
   // A utility-only row does not express primary intent. Keep the remaining

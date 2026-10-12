@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getZalouserRuntime } from "./runtime.js";
@@ -101,59 +100,50 @@ export function isZaloCredentialRevocation(
   );
 }
 
-function openZalouserCredentialsStore(
+export function captureZalouserCredentialsEnv(
   env: NodeJS.ProcessEnv = process.env,
-): PluginStateSyncKeyedStore<ZaloCredentialStateRecord> {
-  return getZalouserRuntime().state.openSyncKeyedStore<ZaloCredentialStateRecord>({
-    namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
-    maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    env,
-  });
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_STATE_DIR: resolveStateDir(env),
+    OPENCLAW_SUPERVISOR_MODE: env.OPENCLAW_SUPERVISOR_MODE,
+  };
 }
 
-export function loadStoredZaloCredentials(
-  profile: string,
-  env: NodeJS.ProcessEnv = process.env,
-): StoredZaloCredentials | null {
-  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const stored = openZalouserCredentialsStore(env).lookup(
-    zalouserCredentialStoreKey(normalizedProfile),
+function openZalouserCredentialsStore(env: NodeJS.ProcessEnv, assertCurrent?: () => void) {
+  return getZalouserRuntime().state.openKeyedStoreV2<ZaloCredentialStateRecord>(
+    {
+      namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
+      maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      env,
+    },
+    assertCurrent ? { assertCurrent } : undefined,
   );
-  const parsed = normalizeStoredZaloCredentials(stored, normalizedProfile);
-  return parsed?.profile === normalizedProfile ? parsed : null;
 }
 
-export function saveStoredZaloCredentials(
-  profile: string,
-  credentials: Omit<StoredZaloCredentials, "profile">,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  openZalouserCredentialsStore(env).register(zalouserCredentialStoreKey(normalizedProfile), {
-    profile: normalizedProfile,
-    ...credentials,
-  });
-}
-
-function openAsyncZalouserCredentialsStore(env: NodeJS.ProcessEnv) {
-  return getZalouserRuntime().state.openKeyedStore<ZaloCredentialStateRecord>({
-    namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
-    maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    env,
-  });
-}
-
-export async function loadStoredZaloCredentialsAsync(
+export async function loadStoredZaloCredentials(
   profile: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StoredZaloCredentials | null> {
   const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const store = openAsyncZalouserCredentialsStore(env);
+  const store = openZalouserCredentialsStore(env);
   return normalizeStoredZaloCredentials(
     await store.lookup(zalouserCredentialStoreKey(normalizedProfile)),
     normalizedProfile,
+  );
+}
+
+export async function saveStoredZaloCredentials(
+  profile: string,
+  credentials: Omit<StoredZaloCredentials, "profile">,
+  env: NodeJS.ProcessEnv = process.env,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
+  await openZalouserCredentialsStore(env, assertCurrent).register(
+    zalouserCredentialStoreKey(normalizedProfile),
+    { profile: normalizedProfile, ...credentials },
   );
 }
 
@@ -164,7 +154,7 @@ export async function refreshStoredZaloCredentials(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StoredZaloCredentials | null> {
   const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const store = openAsyncZalouserCredentialsStore(env);
+  const store = openZalouserCredentialsStore(env);
   const key = zalouserCredentialStoreKey(normalizedProfile);
   const now = new Date().toISOString();
   const prepare = (
@@ -181,18 +171,6 @@ export async function refreshStoredZaloCredentials(
       lastUsedAt: now,
     };
   };
-  if (!store.observe || !store.compareAndApply) {
-    // The plugin still supports released hosts predating atomic worker comparisons.
-    if (!store.update) {
-      throw new Error("Zalo credential refresh requires atomic plugin-state updates");
-    }
-    let saved: StoredZaloCredentials | null = null;
-    await store.update(key, (current) => {
-      saved = prepare(current);
-      return saved ?? undefined;
-    });
-    return isCurrent() ? saved : null;
-  }
   let observed = await store.observe(key);
   while (isCurrent()) {
     // Logout's durable marker also fences a refresh already dispatched to the worker.
@@ -213,23 +191,32 @@ export async function refreshStoredZaloCredentials(
   return null;
 }
 
-export function clearStoredZaloCredentials(
+export async function clearStoredZaloCredentials(
   profile: string,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
+  assertCurrent?: () => void,
+): Promise<boolean> {
   const normalizedProfile = normalizeZalouserCredentialProfile(profile);
-  const store = openZalouserCredentialsStore(env);
-  const hadCredentials =
-    normalizeStoredZaloCredentials(
-      store.lookup(zalouserCredentialStoreKey(normalizedProfile)),
-      normalizedProfile,
-    ) !== null;
-  // Keep a durable revocation marker so doctor cannot resurrect explicitly
-  // cleared credentials from an older profile file.
-  store.register(zalouserCredentialStoreKey(normalizedProfile), {
+  const store = openZalouserCredentialsStore(env, assertCurrent);
+  const key = zalouserCredentialStoreKey(normalizedProfile);
+  const revoked: ZaloCredentialRevocationRecord = {
     kind: "revoked",
     profile: normalizedProfile,
     revokedAt: new Date().toISOString(),
-  });
-  return hadCredentials;
+  };
+  let observed = await store.observe(key);
+  for (;;) {
+    const hadCredentials =
+      normalizeStoredZaloCredentials(observed.value, normalizedProfile) !== null;
+    // Revocation and the returned presence flag describe the same committed row.
+    const result = await store.compareAndApply(key, observed.comparison, {
+      operation: "update",
+      action: "set",
+      value: revoked,
+    });
+    if (result.status !== "conflict") {
+      return hadCredentials;
+    }
+    observed = result.current;
+  }
 }

@@ -31,13 +31,19 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 - `OpenClawProBackground`: grouped page background
 - `ProCard`: quiet content grouping; never Liquid Glass
-- `ProIconBadge`, `ProValuePill`: compact semantic indicators
+- `ProIconBadge`: compact semantic indicator
 - `OpenClawNoticeBanner`: shared connection and runtime notices
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls
 - `OpenClawSidebarPalette`: fixed black-sidebar colors that remain dark in every app appearance
-- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderLeadingSlot`: shared leading toolbar affordance
+- `OpenClawSidebarControlButton`, `OpenClawSidebarToolbarItem`: shared leading toolbar affordance
 - `openClawGlassButton(prominent:tint:)`: iOS 26 glass button with an iOS 18 bordered fallback
+- `OpenClawPrimaryActionButtonStyle`, `OpenClawSecondaryActionButtonStyle`, `OpenClawCloseButtonStyle`: capsule buttons built on `openClawButtonSurface`, system Liquid Glass on iOS 26 and a flat adaptive fill below
+- `openClawProminentButton()`: system prominent button filled with `OpenClawBrand.accentFill`
+
+## Accent roles
+
+`OpenClawBrand.accent` is the readable foreground accent for text, glyphs, and the app tint; it brightens in dark mode to keep 4.5:1 on dark surfaces. `OpenClawBrand.accentFill` is the darker accent for backgrounds that carry white content (prominent buttons, toggles). Never use `accent` as a fill under white text, and never use `accentFill` as text. Custom button surfaces use no gradients, sheens, or shadows; they read as a muddy halo on dark backgrounds.
 
 ## Liquid Glass rules
 

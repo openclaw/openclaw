@@ -62,9 +62,11 @@ encoding in `payloadJSON`):
 1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
 has no load average; hosts omit the field when all three readings are zero.
 Memory and disk values are non-negative integer bytes, with free or available
-bytes no greater than their total. Disk fields appear together only when the
-host can read capacity for the volume containing its home directory, independent
-of the worker's current directory.
+bytes no greater than their total. On macOS, `memoryFreeBytes` includes
+reclaimable host memory, so idle file cache is not reported as used; other
+platforms retain host-wide free-memory readings. Disk fields appear together only
+when the host can read capacity for the volume containing its home directory,
+independent of the worker's current directory.
 
 The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
@@ -127,8 +129,10 @@ sessions do not passively receive session content
   `operator.admin` by default; explicit entries such as
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
-- Status/transport events (`heartbeat`, `presence`, `tick`, connect/disconnect
-  lifecycle) stay unrestricted so transport health is observable to every
+- Presence events require operator read access (`operator.read`, also satisfied
+  by `operator.write` or `operator.admin`). Watched-session references are filtered
+  for each recipient, including in hello snapshots and `system-presence` replies.
+- Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
 - Unknown broadcast event families are scope-gated by default (fail-closed)
   unless a registered handler explicitly relaxes them.

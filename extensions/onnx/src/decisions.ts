@@ -6,26 +6,16 @@ import type {
   DecisionQuestion,
 } from "openclaw/plugin-sdk/decisions";
 import { findModel } from "./catalog.js";
-import type { ClassificationInput, ClassificationResult } from "./models/types.js";
+import type { ClassificationInput } from "./models/types.js";
 import { UnsupportedInputError } from "./models/types.js";
 import { OnnxWorkerError } from "./protocol.js";
-
-type Classifier = {
-  classify(
-    model: string,
-    inputs: ClassificationInput[],
-    signal: AbortSignal,
-  ): Promise<ClassificationResult[]>;
-};
+import type { InferenceWorkerClient } from "./worker-client.js";
 
 function render(value: DecisionEntry): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function rubric(question: DecisionQuestion): {
-  labels: string[];
-  descriptions?: Record<string, string>;
-} {
+function rubric(question: DecisionQuestion) {
   if (question.type === "choice") {
     const labels = Object.keys(question.criteria);
     const descriptions = Object.fromEntries(
@@ -70,7 +60,7 @@ function probabilities(logits: readonly number[]): number[] {
 }
 
 export function createOnnxProvider(
-  client: Classifier,
+  client: Pick<InferenceWorkerClient, "classify">,
   warn: (message: string) => void,
 ): DecisionProviderV1 {
   return {

@@ -103,13 +103,7 @@
   border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: wizard-step-spin 800ms linear infinite;
-}
-
-@keyframes wizard-step-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 800ms linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

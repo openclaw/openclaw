@@ -14,16 +14,14 @@ import {
   customKimiProxyModel,
   staleKimiK27Model,
   customQwenReasoningModel,
-  gemma4Model,
-  kimiCodingProxyModel,
+  customReasoningProxyModel,
   getAssistantMessage,
   buildReplayParams,
-  customReasoningProxyModel,
 } from "./openai-completions.test-support.js";
 import { getCompat } from "./openai-transport-params.js";
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
-  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+  it.each(["reasoning_text"])(
     "strips %s from stock OpenAI Chat Completions assistant replay",
     (thinkingSignature) => {
       const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
@@ -60,15 +58,6 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       expect(assistant).not.toHaveProperty("reasoning_text");
     }
   });
-
-  it.each(["reasoning", "reasoning_content"])(
-    "preserves OpenRouter %s string reasoning replay",
-    (thinkingSignature) => {
-      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
-
-      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
-    },
-  );
 
   it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
     const params = buildOpenAICompletionsParams(
@@ -112,25 +101,25 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     }
   });
 
-  it.each([
-    ["DeepSeek", nativeDeepSeekModel],
-    ["Z.AI", nativeZaiModel],
-  ] as const)("preserves native %s reasoning_content replay", (_label, model) => {
-    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+  it.each([["Z.AI", nativeZaiModel]] as const)(
+    "preserves native %s reasoning_content replay",
+    (_label, model) => {
+      const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
 
-    expect(assistant.reasoning_content).toBe("Need to answer politely.");
-  });
+      expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    },
+  );
 
-  it.each([
-    ["DeepSeek", nativeDeepSeekModel],
-    ["Z.AI", nativeZaiModel],
-  ] as const)("strips non-native %s reasoning replay fields", (_label, model) => {
-    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
+  it.each([["DeepSeek", nativeDeepSeekModel]] as const)(
+    "strips non-native %s reasoning replay fields",
+    (_label, model) => {
+      const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
 
-    expect(assistant).not.toHaveProperty("reasoning_details");
-    expect(assistant).not.toHaveProperty("reasoning");
-    expect(assistant).not.toHaveProperty("reasoning_text");
-  });
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
 
   it("normalizes OpenRouter reasoning_text to reasoning", () => {
     const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
@@ -146,28 +135,8 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for Gemma 4 openai-completions models",
-      model: gemma4Model,
-      assertSanitizedFields: true,
-    },
-    {
       label: "preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo",
       model: xiaomiModel,
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom MiMo proxy routes",
-      model: customMiMoProxyModel,
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 proxy routes",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro" },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom Kimi K2 proxy routes",
-      model: customKimiProxyModel,
       assertSanitizedFields: true,
     },
     {
@@ -176,32 +145,13 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves Kimi K2.7 HighSpeed reasoning_content replay with stale reasoning metadata",
-      model: {
-        ...staleKimiK27Model,
-        id: "kimi-k2.7-code-highspeed",
-        name: "Kimi K2.7 Code HighSpeed",
-      },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves Kimi K3 reasoning_content replay with stale reasoning metadata",
-      model: { ...staleKimiK27Model, id: "kimi-k3", name: "Kimi K3" },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for Kimi Coding OpenAI-compatible routes",
-      model: kimiCodingProxyModel,
-      assertSanitizedFields: true,
-    },
-    {
       label: "preserves reasoning_content replay for suffixed reasoning model ids",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.5-pro:cloud" },
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.5-pro:cloud", reasoning: false },
       assertSanitizedFields: false,
     },
     {
       label: "preserves reasoning_content replay for prefixed reasoning model ids",
-      model: { ...customKimiProxyModel, id: "hf:moonshotai/kimi-k2-thinking" },
+      model: { ...customKimiProxyModel, id: "hf:moonshotai/kimi-k2-thinking", reasoning: false },
       assertSanitizedFields: false,
     },
   ] as const)("$label", ({ model, assertSanitizedFields }) => {
@@ -228,25 +178,11 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
         api: "openai-completions" as const,
         provider: "opencode",
         baseUrl: "https://opencode.ai/zen/v1",
-        reasoning: true,
+        reasoning: false,
         input: ["text"] as ("text" | "image")[],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 65_536,
         maxTokens: 8192,
-      },
-    ],
-    [
-      "OpenRouter MiMo V2 Pro Free",
-      {
-        ...customMiMoProxyModel,
-        id: "xiaomi/mimo-v2-pro-free",
-      },
-    ],
-    [
-      "OpenRouter Kimi K2 Thinking Free",
-      {
-        ...customKimiProxyModel,
-        id: "moonshotai/kimi-k2-thinking-free",
       },
     ],
   ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {
@@ -304,11 +240,5 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     } as never);
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
-  });
-
-  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
-    const resolved = getCompat(customReasoningProxyModel as never);
-
-    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });

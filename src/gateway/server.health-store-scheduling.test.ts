@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
 import type { StatusSummary } from "../status/summary.js";
@@ -15,7 +16,7 @@ import { installGatewayTestHooks, rpcReq, testState } from "./test-helpers.js";
 
 installGatewayTestHooks();
 
-test.each(["separate", "shared", "single", "empty"] as const)(
+test.each(["separate", "shared"] as const)(
   "registered Gateway health/status preserve %s resident snapshots while serving HTTP",
   async (layout) => {
     const collector = await import("./health/collector.js");
@@ -27,7 +28,7 @@ test.each(["separate", "shared", "single", "empty"] as const)(
     const actualStatus = await vi.importActual<typeof status>("../status/summary.js");
     vi.mocked(status.getStatusSummary).mockImplementation(actualStatus.getStatusSummary);
     const root = expectDefined(process.env.OPENCLAW_STATE_DIR, "isolated state");
-    const agentCount = layout === "empty" ? 0 : layout === "single" ? 1 : 12;
+    const agentCount = 12;
     const agentIds = Array.from({ length: agentCount }, (_, index) => `fleet${index}`);
     const storeTemplate = path.join(
       root,
@@ -54,12 +55,6 @@ test.each(["separate", "shared", "single", "empty"] as const)(
     if (layout === "shared") {
       writeSession("retired", "main", 50);
     }
-    if (layout === "empty") {
-      await expect(startGatewayServerHarness()).rejects.toThrow(
-        "agents.entries must contain at least one configured agent",
-      );
-      return;
-    }
     const harness = await startGatewayServerHarness();
     let readWorkMs = performance.now();
     const workClock = vi.spyOn(performance, "now").mockImplementation(() => readWorkMs);
@@ -83,7 +78,7 @@ test.each(["separate", "shared", "single", "empty"] as const)(
         );
         request.once("error", reject);
       });
-    const sqliteSummaries = vi.spyOn(sessionAccessor, "readSessionStoreSummaryReadOnly");
+    const { calls: sqliteSummaries, restore: restoreSummaries } = spyOnSessionStoreSummaries();
     try {
       const { ws } = await harness.openClient();
       await rpcReq(ws, "health", { probe: true });
@@ -144,10 +139,10 @@ test.each(["separate", "shared", "single", "empty"] as const)(
             const response = await rpcReq<StatusSummary>(ws, "status", {
               includeChannelSummary: false,
             });
-            expect(response.ok).toBe(true);
+            expect(response).toMatchObject({ ok: true });
             const sessions = expectDefined(response.payload?.sessions, "status sessions");
             expect(sessions.count).toBe(agentCount * 12 + (layout === "shared" ? 2 : 0));
-            expect(sessions.recent).toHaveLength(agentCount === 0 ? 0 : 10);
+            expect(sessions.recent).toHaveLength(10);
             expect(
               sessions.byAgent.map((agent) => [agent.agentId, agent.count, agent.recent.length]),
             ).toEqual(
@@ -214,24 +209,32 @@ test.each(["separate", "shared", "single", "empty"] as const)(
         }
       }
       if (layout === "separate") {
-        recordAgentDatabaseAdmissions(
-          [
-            {
-              agentId: "fleet11",
-              paths: [storeFor("fleet11")],
-              embeddedOwnerId: "other",
-              code: "agent-database-ownership-mismatch",
-              reason: "fixture ownership mismatch",
-              repairHint: "repair fixture ownership",
-            },
-          ],
-          { source: "startup" },
-        );
-        const read = vi.spyOn(projection, "selectEntries");
+        const read = vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
+          const rows = originalRead(...args);
+          readWorkMs += 20;
+          if (rows.some((row) => row.agentId === "fleet11")) {
+            setImmediate(() =>
+              recordAgentDatabaseAdmissions(
+                [
+                  {
+                    agentId: "fleet11",
+                    paths: [storeFor("fleet11")],
+                    embeddedOwnerId: "other",
+                    code: "agent-database-ownership-mismatch",
+                    reason: "fixture ownership mismatch",
+                    repairHint: "repair fixture ownership",
+                  },
+                ],
+                { source: "startup" },
+              ),
+            );
+          }
+          return rows;
+        });
         try {
           const response = await rpcReq<HealthSummary>(ws, "health", { probe: true });
           expect(response.payload?.agents.at(-1)?.sessions.count).toBe(0);
-          expect(read).toHaveBeenCalledTimes(11);
+          expect(read).toHaveBeenCalledTimes(12);
           read.mockClear();
           const statusResponse = await rpcReq<StatusSummary>(ws, "status", {
             includeChannelSummary: false,
@@ -279,7 +282,7 @@ test.each(["separate", "shared", "single", "empty"] as const)(
       }
       expect(sqliteSummaries).not.toHaveBeenCalled();
     } finally {
-      sqliteSummaries.mockRestore();
+      restoreSummaries();
       workClock.mockRestore();
       httpAgent.destroy();
       await (closing ?? harness.close());

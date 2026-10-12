@@ -1,11 +1,10 @@
+import fs from "node:fs";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -16,9 +15,90 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readSessionMessagesMatchingIdAsync } from "./session-transcript-readers.js";
+import {
+  readSessionMessageByIdAsync,
+  readSessionMessageCountAsync,
+  readSessionMessagesMatchingIdAsync,
+} from "./session-transcript-readers.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps empty and reset-archive lookup results without creating a missing database", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "missing-lookup",
+      sessionKey: "agent:main:missing-lookup",
+      storePath: state.statePath("missing.sqlite"),
+    };
+    expect(await readSessionMessageCountAsync(scope)).toBe(0);
+    expect(await readSessionMessageByIdAsync(scope, "archived")).toEqual({
+      found: false,
+      oversized: false,
+    });
+    fs.writeFileSync(
+      state.statePath(`${scope.sessionId}.jsonl.reset.2026-09-23T00-00-00.000Z`),
+      [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "archived",
+          parentId: null,
+          message: { role: "user", content: "Retained reset message" },
+        },
+        {
+          type: "message",
+          id: "archived-announce",
+          parentId: "archived",
+          message: {
+            role: "user",
+            timestamp: 1000,
+            content: "Archived completion",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          },
+        },
+        {
+          type: "message",
+          id: "archived-pair",
+          parentId: "archived-announce",
+          timestamp: 1000,
+          message: { role: "assistant", content: "x".repeat(256 * 1024) },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
+    );
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived", { allowResetArchiveFallback: true }),
+    ).toMatchObject({ found: true, message: { content: "Retained reset message" } });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived", {
+        currentOnly: true,
+        maxBytes: 1024,
+        allowResetArchiveFallback: true,
+      }),
+    ).toEqual({ found: false, oversized: false });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived-pair", {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: 2000 },
+      }),
+    ).toEqual({ found: false, oversized: false, historyHidden: true });
+    expect(
+      await readSessionMessageByIdAsync(scope, "archived-pair", {
+        allowResetArchiveFallback: true,
+        historyVisibility: { sessionStartedAt: 500 },
+      }),
+    ).toEqual({ found: true, oversized: true, seq: 3 });
+    expect(await readSessionMessageCountAsync(scope)).toBe(0);
+    expect(fs.existsSync(scope.storePath)).toBe(false);
+
+    fs.writeFileSync(scope.storePath, "unreadable database");
+    await expect(readSessionMessageCountAsync(scope)).rejects.toThrow();
+    await expect(readSessionMessageByIdAsync(scope, "archived")).rejects.toThrow();
+    expect(fs.readFileSync(scope.storePath, "utf8")).toBe("unreadable database");
+  });
+});
 
 it("reads process-held incognito history by its key or explicit sentinel path", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -42,11 +122,18 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
       expect(
         await readSessionMessagesMatchingIdAsync({ ...scope, sessionKey }, "private"),
       ).toMatchObject([{ content: "Private history" }]);
+      expect(await readSessionMessageCountAsync({ ...scope, sessionKey })).toBe(1);
+      expect(await readSessionMessageByIdAsync({ ...scope, sessionKey }, "private")).toMatchObject({
+        found: true,
+        oversized: false,
+        seq: 1,
+        message: { content: "Private history" },
+      });
     }
   });
 });
 
-it("restores cold lookup bytes in a worker and keeps repeated validation off the caller thread", async () => {
+it("restores cold lookup bytes and validates selected payloads off the caller thread", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const fixture = await createSessionColdStorageFixture(
       resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
@@ -73,11 +160,17 @@ it("restores cold lookup bytes in a worker and keeps repeated validation off the
     expect(decode).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
 
-    // An unchanged projection revision is not proof that every stored payload is valid.
+    // Exact reads still validate their selected payload after an external rewrite.
     fixture
       .database()
-      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
-      .run("{malformed", fixture.scope.sessionId);
+      .prepare(
+        `UPDATE transcript_events
+         SET event_json = ?, event_zstd = NULL, event_utf8_bytes = NULL, navigation_json = NULL
+         WHERE session_id = ? AND seq = (
+           SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?
+         )`,
+      )
+      .run("{malformed", fixture.scope.sessionId, fixture.scope.sessionId, "history-assistant");
     await expect(read()).rejects.toThrow();
   });
 });

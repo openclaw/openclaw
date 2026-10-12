@@ -6,7 +6,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { z } from "zod";
 import { createReasoningTagTextPartitioner } from "../../packages/markdown-core/src/reasoning-tags.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -15,7 +15,6 @@ import { runSummaryWork } from "./summary-work.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
 
 const MODEL_SUMMARY_INPUT_MAX_CHARS = 48_000;
-const MODEL_SUMMARY_MAX_TOKENS = 1_500;
 const MODEL_SUMMARY_TIMEOUT_MS = 20_000;
 
 function boundedText(limit: number) {
@@ -100,7 +99,7 @@ export async function summarizeTranscriptsWithModel(params: {
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const run = async () => {
-    const primary = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    const primary = resolveNativeModelPrimary(params.cfg, params.agentId);
     const utility = resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId });
     const models = [utility, primary].filter((ref) => Boolean(ref?.trim()));
     if (!models.length || !params.utterances.length) {
@@ -142,6 +141,7 @@ export async function summarizeTranscriptsWithModel(params: {
         params.assertCurrent?.();
         const completion = await runSummaryWork(signal, () =>
           runIsolatedCompletion({
+            purpose: "transcript-summary",
             config: params.cfg,
             provider: selection.runtimeProvider ?? selection.provider,
             model: selection.modelId,
@@ -161,7 +161,7 @@ export async function summarizeTranscriptsWithModel(params: {
             abortSignal: signal,
             assertCurrent: params.assertCurrent,
             outputTextPolicy: "strict-visible",
-            streamParams: { maxTokens: MODEL_SUMMARY_MAX_TOKENS },
+            answerTokenBudget: 1_500,
           }),
         );
         if (signal.aborted) {

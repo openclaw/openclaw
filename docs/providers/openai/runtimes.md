@@ -1,5 +1,6 @@
 ---
-summary: "Which runtime runs an openai/* turn, and how native Codex resolves auth"
+summary: "Choose an OpenAI runtime and understand native Codex auth"
+doc-schema-version: 1
 read_when:
   - You need to know whether a turn runs on OpenClaw or the native Codex harness
   - You are mapping the openai, codex, and agentRuntime names to layers
@@ -37,6 +38,11 @@ values are typed agent-runtime controls, not authored provider request params.
 Affirmative reasoning support and native reasoning-effort metadata also preserve
 Codex selection. See [Runtime selection](/concepts/agent-runtimes#runtime-selection)
 for the supported capability values and the request overrides that remain protected.
+
+Catalog defaults added while loading configuration do not count as authored
+request overrides. File-backed API-key SecretRefs and the secret egress proxy
+also preserve compatibility with the official Platform Responses route; keep
+the official HTTPS model `baseUrl` when using that proxy.
 
 An explicit `agentRuntime.id: "openclaw"` keeps a Codex-eligible route on
 OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harness;

@@ -1,4 +1,4 @@
-// Synthetic reported destinations for the existing real TUI fixture.
+// Keep fallback projection independent of vendor policy loading.
 export const TUI_PTY_FALLBACK_FIXTURE = {
   variables: `
     let fallbackFooterRun: { runId: string; sessionKey: string; step: number } | null = null;
@@ -25,7 +25,7 @@ export const TUI_PTY_FALLBACK_FIXTURE = {
         stream: "lifecycle", seq: step + 1,
         data: {
           phase: "fallback_step", fallbackStepFinalOutcome: "next_fallback",
-          fallbackStepToModel: step === 2 ? "malformed" : "anthropic/claude-sonnet-4",
+          fallbackStepToModel: step === 2 ? "malformed" : "fixture-fallback/fixture-fallback-model",
         },
       };
       record("fallbackEvent", payload);

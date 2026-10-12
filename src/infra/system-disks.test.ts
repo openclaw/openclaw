@@ -56,75 +56,35 @@ describe("system disk snapshots", () => {
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "remaining"])(
-    "keeps one container root when a volume disappears with its directory %s",
-    async (directory) => {
-      mocks.readFile
-        .mockResolvedValueOnce(
-          "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
-        )
-        .mockResolvedValue("1 0 0:5 / / rw - overlay overlay rw");
-      mocks.statfs.mockImplementation(async (path: string) => {
-        if (path === "/data" && directory === "removed") {
-          throw new Error("ENOENT");
-        }
-        return { blocks: 2000n, frsize: 1024n, bavail: -1n };
-      });
-      const { readSystemDisks } = await import("./system-disks.js");
-      expect(await readSystemDisks()).toEqual([
-        { path: "/", totalBytes: 2_048_000, availableBytes: 0 },
-      ]);
-    },
-  );
+  it("keeps one container root when a volume disappears with its directory", async () => {
+    mocks.readFile
+      .mockResolvedValueOnce(
+        "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
+      )
+      .mockResolvedValue("1 0 0:5 / / rw - overlay overlay rw");
+    mocks.statfs.mockImplementation(async (path: string) => {
+      if (path === "/data") {
+        throw new Error("ENOENT");
+      }
+      return { blocks: 2000n, frsize: 1024n, bavail: -1n };
+    });
+    const { readSystemDisks } = await import("./system-disks.js");
+    expect(await readSystemDisks()).toEqual([
+      { path: "/", totalBytes: 2_048_000, availableBytes: 0 },
+    ]);
+  });
 
-  it.each(["tmpfs tmpfs", "nfs server:/root", "nfs4 server:/root"])(
-    "excludes a non-local Linux root (%s) without hiding local data disks",
-    async (filesystem) => {
-      mocks.readFile.mockResolvedValue(
-        `1 0 0:5 / / rw - ${filesystem} rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw`,
-      );
-      const { readSystemDisks } = await import("./system-disks.js");
-      expect((await readSystemDisks())?.map((disk) => disk.path)).toEqual(["/data"]);
-    },
-  );
-
-  it.each([
-    {
-      name: "stacked local mounts and their separate bind aliases",
-      mounts: [
-        "7 90 8:4 / /data rw - xfs /dev/upper rw",
-        "4 7 8:5 / /data/visible rw - ext4 /dev/visible rw",
-        "1 0 8:1 / / rw - ext4 /dev/root rw",
-        "90 1 8:2 / /data rw - ext4 /dev/lower rw",
-        "80 90 8:3 / /data/hidden rw - ext4 /dev/hidden rw",
-        "6 1 8:2 / /archive rw - ext4 /dev/lower rw",
-      ],
-      paths: ["/", "/archive", "/data", "/data/visible"],
-    },
-    {
-      name: "a non-local mount covering a local mount and its children",
-      mounts: [
+  it("samples only accessible filesystems under a non-local overmount", async () => {
+    mocks.readFile.mockResolvedValue(
+      [
         "4 7 8:5 / /data/visible rw - ext4 /dev/visible rw",
         "7 90 0:9 / /data rw - tmpfs tmpfs rw",
         "90 1 8:2 / /data rw - ext4 /dev/lower rw",
         "1 0 8:1 / / rw - ext4 /dev/root rw",
         "80 90 8:3 / /data/hidden rw - ext4 /dev/hidden rw",
-      ],
-      paths: ["/", "/data/visible"],
-    },
-    {
-      name: "a mount covering an ordinary directory with an older nested mount",
-      mounts: [
-        "80 1 8:3 / /data/hidden rw - ext4 /dev/hidden rw",
-        "7 1 0:9 / /data rw - tmpfs tmpfs rw",
-        "4 7 8:5 / /data/visible rw - ext4 /dev/visible rw",
-        "6 1 8:6 / /data2 rw - ext4 /dev/sibling rw",
-        "1 0 8:1 / / rw - ext4 /dev/root rw",
-      ],
-      paths: ["/", "/data/visible", "/data2"],
-    },
-  ])("samples only accessible filesystems under $name", async ({ mounts, paths }) => {
-    mocks.readFile.mockResolvedValue(mounts.join("\n"));
+      ].join("\n"),
+    );
+    const paths = ["/", "/data/visible"];
     const { readSystemDisks } = await import("./system-disks.js");
     expect((await readSystemDisks())?.map((disk) => disk.path)).toEqual(paths);
     expect(
@@ -189,62 +149,11 @@ describe("system disk snapshots", () => {
       "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:2 / /data rw - xfs /dev/sdb1 rw",
     );
     expect(await readSystemDisks()).toHaveLength(1);
-    vi.advanceTimersByTime(10_001);
+    vi.advanceTimersByTime(29_999);
+    expect(await readSystemDisks()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
     expect(await readSystemDisks()).toHaveLength(2);
   });
-
-  it("returns unavailable on probe failure and recovers on the next sample", async () => {
-    vi.useFakeTimers();
-    mocks.readFile.mockRejectedValueOnce(new Error("unavailable"));
-    const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toBeUndefined();
-    mocks.readFile.mockResolvedValue("1 0 8:1 / / rw - ext4 /dev/sda1 rw");
-    vi.advanceTimersByTime(10_001);
-    expect(await readSystemDisks()).toHaveLength(1);
-  });
-
-  it("returns unavailable when every filesystem probe fails", async () => {
-    mocks.readFile.mockResolvedValue(
-      "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:2 / /data rw - xfs /dev/sdb1 rw",
-    );
-    mocks.statfs.mockRejectedValue(new Error("unavailable"));
-    const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toBeUndefined();
-  });
-
-  it.each([
-    { blocks: 500n, frsize: 4096n, bavail: 250n, df: "/dev/disk 2000 800 1000 45% /" },
-    { blocks: 5n, frsize: 512n, bavail: 1n, df: "/dev/disk 3 2 1 67% /" },
-    { blocks: 500n, frsize: 4096n, bavail: -1n, df: "/dev/disk 2000 2004 -4 101% /" },
-    {
-      blocks: 500n,
-      frsize: 4096n,
-      bavail: 0xffffffffffffffffn,
-      df: "/dev/disk 2000 2004 -4 101% /",
-    },
-  ])(
-    "matches df -kP byte values for $df without spawning",
-    async ({ blocks, frsize, bavail, df }) => {
-      mocks.readFile.mockResolvedValue("1 0 8:1 / / rw - ext4 /dev/sda1 rw");
-      mocks.statfs.mockResolvedValue({
-        blocks,
-        frsize,
-        bavail,
-        bsize: 65536n,
-        bfree: bavail + 20n,
-      });
-      const fields = df.split(" ");
-      const { readSystemDisks } = await import("./system-disks.js");
-      expect(await readSystemDisks()).toEqual([
-        {
-          path: "/",
-          totalBytes: Number(fields[1]) * 1024,
-          availableBytes: Math.max(0, Number(fields[3]) * 1024),
-        },
-      ]);
-      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
 
   it("keeps completed disks when another filesystem probe hangs", async () => {
     vi.useFakeTimers();
@@ -260,7 +169,7 @@ describe("system disk snapshots", () => {
     expect(await pending).toEqual([
       { path: "/", totalBytes: 2_048_000, availableBytes: 1_024_000 },
     ]);
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(30_001);
     expect(await readSystemDisks()).toBeUndefined();
     expect(mocks.statfs).toHaveBeenCalledTimes(2);
   });
@@ -271,15 +180,6 @@ describe("system disk snapshots", () => {
       .mockResolvedValue("2 0 8:1 / /data rw - ext4 /dev/sda1 rw");
     const { readSystemDisks } = await import("./system-disks.js");
     expect(await readSystemDisks()).toEqual([]);
-  });
-
-  it("keeps Btrfs subvolumes whose stat device differs from mountinfo", async () => {
-    mocks.readFile.mockResolvedValue("1 0 0:39 /@ / rw - btrfs /dev/sda2 rw");
-    mocks.stat.mockResolvedValue({ dev: 44n });
-    const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toEqual([
-      { path: "/", totalBytes: 2_048_000, availableBytes: 1_024_000 },
-    ]);
   });
 
   it("bounds native work across cache refreshes while a filesystem remains blocked", async () => {
@@ -300,7 +200,7 @@ describe("system disk snapshots", () => {
       await vi.advanceTimersByTimeAsync(3000);
       expect(await pending).toBeUndefined();
       expect(mocks.statfs).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(30_001);
     }
     blocked.resolve({ blocks: 2000n, frsize: 1024n, bavail: 1000n });
     await vi.advanceTimersByTimeAsync(0);

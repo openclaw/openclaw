@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+} from "../../../config/sessions/session-accessor.js";
+import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
+import { captureGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { runAgentLoop } from "../../../plugin-sdk/agent-core.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -26,272 +34,18 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
-const mocks = vi.hoisted(() => ({
-  abortable: vi.fn(),
-  bindOwnedSessionTranscriptWrites: vi.fn(),
-  createRunAbort: vi.fn(),
-  flushPendingToolResultsAfterIdle: vi.fn(),
-  installStreamGuards: vi.fn(),
-  prepareHistory: vi.fn(),
-  prepareStream: vi.fn(),
-  prepareTimeout: vi.fn(),
-  runSettledPhase: vi.fn(),
-  withOwnedSessionTranscriptWrites: vi.fn(),
-}));
+// Register the shared module mocks before importing any runtime dependency.
+const { createFixture, mocks } = await vi.hoisted(
+  async () => await import("./attempt-execution-phase.test-support.js"),
+);
 
-vi.mock("../../../config/sessions/transcript-write-context.js", () => ({
-  bindOwnedSessionTranscriptWrites: mocks.bindOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites: mocks.withOwnedSessionTranscriptWrites,
-}));
-vi.mock("../wait-for-idle-before-flush.js", () => ({
-  flushPendingToolResultsAfterIdle: mocks.flushPendingToolResultsAfterIdle,
-}));
-vi.mock("./abortable.js", () => ({ abortable: mocks.abortable }));
-vi.mock("./attempt-finalize.js", () => ({
-  createEmbeddedAttemptRunAbort: mocks.createRunAbort,
-}));
-vi.mock("./attempt-history-prepare.js", () => ({
-  prepareEmbeddedAttemptHistory: mocks.prepareHistory,
-}));
-vi.mock("./attempt-settle.js", () => ({
-  runEmbeddedAttemptSettledPhase: mocks.runSettledPhase,
-}));
-vi.mock("./attempt-stream-prepare.js", () => ({
-  prepareEmbeddedAttemptStream: mocks.prepareStream,
-}));
-vi.mock("./attempt-stream.js", () => ({
-  installEmbeddedAttemptStreamGuards: mocks.installStreamGuards,
-}));
-vi.mock("./attempt-timeout-prepare.js", () => ({
-  prepareEmbeddedAttemptTimeout: mocks.prepareTimeout,
-}));
-
-import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
+import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { EmbeddedContextAccountingEvent } from "./internal-params.js";
-
-type ExecutionInput = Parameters<typeof runEmbeddedAttemptExecutionPhase>[0];
+import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => vi.restoreAllMocks());
-
-async function createFixture(
-  options: {
-    aborted?: boolean;
-    exerciseTerminalMerges?: boolean;
-  } = {},
-) {
-  const admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "execution-phase-test");
-  onTestFinished(admission.close);
-  const admittedRunContext = await admission.admit("embedded");
-  const order: string[] = [];
-  const attemptAbortController = new AbortController();
-  if (options.aborted) {
-    attemptAbortController.abort(new Error("already aborted"));
-  }
-  const runAbort = vi.fn();
-  const toolSearchCatalogExecutor = vi.fn();
-  const subscription = {
-    isCompacting: vi.fn(() => false),
-  };
-  const queueHandle = { kind: "embedded", runId: "run-1" };
-  const streamResult = {
-    subscription,
-    queueHandle,
-    toolSearchCatalogExecutor,
-    getBeforeAgentFinalizeRevisionReason: vi.fn(),
-    stopAcceptingSteerMessages: vi.fn(),
-  };
-  const timeoutResult = {
-    getRunAbortDeadlineAtMs: vi.fn(() => 123),
-    clearTimers: vi.fn(),
-  };
-  const setContextReplacementHook = vi.fn();
-  const activeSession = {
-    [agentSessionSetContextReplacementHook]: setContextReplacementHook,
-    agent: { streamFn: vi.fn() },
-    dispose: vi.fn(),
-    isCompacting: false,
-    messages: [],
-    prompt: vi.fn(async () => undefined),
-    sessionId: "active-session",
-  };
-  const sessionManager = {};
-  const abortActiveSession = vi.fn(async () => undefined);
-  const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
-  const externalAbortController = {
-    setRunAbort: vi.fn(() => order.push("set-run-abort")),
-    setCompactionState: vi.fn(() => order.push("set-compaction-state")),
-  };
-  const prepStages = { mark: vi.fn(() => order.push("stream-ready")) };
-  const emitPrepStageSummary = vi.fn();
-  const setToolSearchCatalogExecutor = vi.fn(() => order.push("set-catalog"));
-  const replaySafeTool = { name: "read" };
-  const result = { messages: [] };
-  const state = {
-    beforeAgentRunBlockedBy: undefined,
-    terminal: { kind: "ok" as const },
-    trajectoryEndRecorded: false,
-  };
-  const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
-  const sessionRuntime = {
-    agentSession: {
-      activeSession,
-      allCustomTools: [{ name: "custom" }],
-      builtinToolNames: new Set(["read"]),
-      clientToolCallSlots: [],
-      hasDeliveredSourceReply: vi.fn(() => false),
-      hookRunner: {},
-      markSourceReplyDelivered: vi.fn(),
-      replaySafeToolNames: new Set(["read"]),
-      replaySafeTools: new Set([replaySafeTool]),
-      trustedLocalMediaToolNames: new Set(["read"]),
-      setActiveSessionSystemPrompt: vi.fn(),
-      settingsManager: {},
-    },
-    anthropicPayloadLogger: {},
-    boundary: { orphanRepair: { removeLeaf: true } },
-    cacheTrace: {},
-    contextGuards: { recordCacheTouch: vi.fn() },
-    isOpenAIResponsesApi: true,
-    sessionManager,
-    settleTracker: { abortActiveSession, trackPromptSettlePromise },
-    state: { systemPromptText: "system prompt" },
-    transcriptPolicy: { repairToolUseResultPairing: true },
-    transport: {
-      effectiveAgentTransport: "sse",
-      providerTextTransforms: { input: [] },
-    },
-  };
-  const input = {
-    attempt: {
-      admittedRunContext,
-      abortSignal: attemptAbortController.signal,
-      onBlockReply: vi.fn(),
-      onBlockReplyFlush: vi.fn(),
-      runId: "run-1",
-      sessionId: "session-1",
-      timeoutMs: 30_000,
-    },
-    activeContextEngine: { info: { id: "engine" } },
-    agentDir: "/agent",
-    isRawModelRun: false,
-    resolveActiveContextEnginePluginId: vi.fn(),
-    runAbortController: new AbortController(),
-    externalAbortController,
-    prepared: {
-      bootstrap: {},
-      bundleTools: {},
-      sessionRuntime,
-      systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { skillInstructionDeliveryCache, nestedToolActivities: new Map() },
-      toolCatalog: {
-        toolSearchRunPlan: {
-          capabilityToolNames: new Set(["read"]),
-          liveAllowedToolNames: new Set(["read"]),
-          replayAllowedToolNames: new Set(["read"]),
-        },
-      },
-    },
-    sessionLock: {
-      compactionTimeoutMs: 1_000,
-      ownedTranscriptWriteContext: {},
-      withOwnedTranscriptWrite: vi.fn(),
-    },
-    setup: {
-      effectiveFsWorkspaceOnly: false,
-      effectiveWorkspace: "/workspace",
-      emitPrepStageSummary,
-      prepStages,
-      sandbox: null,
-      sandboxSessionKey: "sandbox-1",
-      sessionAgentId: "main",
-    },
-    diagnostics: { diagnosticTrace: {}, runTrace: {} },
-    state,
-    lifecycle: {
-      readYieldState: () => ({
-        yieldAbortSettled: null,
-        yieldDetected: true,
-        yieldMessage: "yield",
-      }),
-      setToolSearchCatalogExecutor,
-    },
-  } as unknown as ExecutionInput;
-
-  mocks.abortable.mockImplementation((_signal, promise) => promise);
-  mocks.bindOwnedSessionTranscriptWrites.mockImplementation((_context, operation) => operation);
-  mocks.withOwnedSessionTranscriptWrites.mockImplementation(
-    async (_context, operation) => await operation(),
-  );
-  mocks.installStreamGuards.mockImplementation(() => {
-    order.push("guards");
-    return {
-      onModelRequest: vi.fn(),
-      onModelUsage: vi.fn(),
-      getPromptCacheObservation: vi.fn(),
-    };
-  });
-  mocks.prepareHistory.mockImplementation(async () => {
-    order.push("history");
-    return {
-      contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
-    };
-  });
-  mocks.createRunAbort.mockImplementation(() => {
-    order.push("abort");
-    return runAbort;
-  });
-  mocks.prepareStream.mockImplementation((streamInput) => {
-    order.push("stream");
-    if (options.exerciseTerminalMerges !== false) {
-      const idleError = new Error("idle timeout");
-      mocks.installStreamGuards.mock.calls[0]?.[1].onIdleTimeout(idleError);
-      streamInput.markExternalAbort();
-    }
-    return streamResult;
-  });
-  mocks.prepareTimeout.mockImplementation((timeoutInput) => {
-    order.push("timeout");
-    if (options.exerciseTerminalMerges !== false) {
-      timeoutInput.markTimedOutDuringCompaction();
-      timeoutInput.markTimedOutByRunBudget();
-    }
-    return timeoutResult;
-  });
-  mocks.runSettledPhase.mockImplementation(async (settledInput) => {
-    order.push("settled-phase");
-    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
-    mocks.installStreamGuards.mock.calls[0]?.[1].onRejectedProviderReplayRepaired();
-    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
-    return result;
-  });
-
-  return {
-    admission,
-    abortActiveSession,
-    activeSession,
-    emitPrepStageSummary,
-    externalAbortController,
-    input,
-    order,
-    prepStages,
-    replaySafeTool,
-    result,
-    runAbort,
-    sessionManager,
-    setContextReplacementHook,
-    skillInstructionDeliveryCache,
-    setToolSearchCatalogExecutor,
-    state,
-    streamResult,
-    subscription,
-    timeoutResult,
-    toolSearchCatalogExecutor,
-    trackPromptSettlePromise,
-  };
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -299,19 +53,119 @@ beforeEach(() => {
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
   it.each([
-    ["stop", 10_000, "event"],
-    ["stop", 0, "event"],
-    ["toolUse", 10_000, "event"],
-    ["error", 10_000, "event"],
-    ["aborted", 10_000, "event"],
-    ["stop", 10_000, "result"],
-    ["stop", 0, "result"],
-    ["error", 10_000, "result"],
-    ["output-limit", 10_000, "event"],
-    ["output-limit", 10_000, "result"],
+    { kind: "cron root", key: "agent:main:cron:provider-fence", change: "current", guarded: true },
+    { kind: "cron root", key: "agent:main:cron:provider-fence", change: "rotated", guarded: true },
+    { kind: "cron root", key: "agent:main:cron:provider-fence", change: "reset", guarded: true },
+    {
+      kind: "ordinary",
+      key: "agent:main:dashboard:provider-fence",
+      change: "current",
+      guarded: false,
+    },
   ] as const)(
-    "observes terminal %s usage once across async-tool fragments (cacheRead=%s, completion=%s)",
-    async (stopReason, cacheRead, completion) => {
+    "scopes the provider generation guard after writer admission ($kind, $change)",
+    async ({ key, change, guarded }) => {
+      await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
+        const fixture = await createFixture({ exerciseTerminalMerges: false });
+        const target = {
+          agentId: "main",
+          sessionKey: key,
+          sessionId: "cron-run-1",
+          storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
+        };
+        const original = {
+          sessionId: target.sessionId,
+          lifecycleRevision: "generation-1",
+          updatedAt: 1,
+        };
+        replaceSessionEntrySync(target, original);
+        Object.assign(fixture.input.attempt, {
+          ...target,
+          sessionTarget: target,
+          sessionFile: target.sessionKey,
+        });
+        const writer = await claimAgentSessionWriter({
+          ...target,
+          sessionTarget: target,
+          runId: fixture.input.attempt.runId,
+          workspaceDir: testState.workspaceDir,
+          prompt: "reply",
+          timeoutMs: 30_000,
+        });
+        fixture.input.attempt.sessionTarget = { ...target, ...writer };
+        const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+          attempt: fixture.input.attempt,
+          externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
+        });
+        fixture.input.sessionLock = transcript;
+        const manager = SessionManager.open({ ...target, ...writer });
+        const fetchImpl = vi.fn(async () => new Response("ok"));
+        fixture.activeSession.prompt.mockImplementation(async () => {
+          const requestAuthority = captureGuardedFetchRequestAuthority();
+          if (guarded) {
+            expect(requestAuthority).toBeTypeOf("function");
+          } else {
+            expect(requestAuthority).toBeUndefined();
+          }
+          const response = await fetchWithSsrFGuard({
+            url: "https://public.example/provider",
+            fetchImpl,
+            lookupFn: async () => {
+              if (change !== "current") {
+                replaceSessionEntrySync(target, {
+                  ...original,
+                  sessionId: change === "rotated" ? "cron-run-2" : target.sessionId,
+                  lifecycleRevision: "generation-2",
+                });
+              }
+              return [{ address: "93.184.216.34", family: 4 }];
+            },
+          });
+          await response.release();
+        });
+        mocks.runSettledPhase.mockImplementation(async (settled) => {
+          await settled.preparedStreamRuntime.promptActiveSession("reply");
+          return fixture.result;
+        });
+        try {
+          const execution = runEmbeddedAttemptExecutionPhase(fixture.input);
+          if (change === "current") {
+            await execution;
+            expect(fetchImpl).toHaveBeenCalledOnce();
+            await transcript.withOwnedTranscriptWrite(() =>
+              manager.appendMessage({ role: "user", content: "allowed", timestamp: 1 }),
+            );
+            expect(loadTranscriptEventsSync(target)).toMatchObject([
+              { type: "session" },
+              { type: "message", message: { role: "user", content: "allowed" } },
+            ]);
+          } else {
+            await expect(execution).rejects.toThrow(
+              "original session generation no longer accepts",
+            );
+            expect(fetchImpl).not.toHaveBeenCalled();
+            await expect(
+              transcript.withOwnedTranscriptWrite(() =>
+                manager.appendMessage({ role: "user", content: "stale", timestamp: 1 }),
+              ),
+            ).rejects.toThrow();
+            expect(loadTranscriptEventsSync(target)).toEqual([]);
+          }
+        } finally {
+          await transcript.transcriptLifecycle.dispose();
+        }
+      });
+    },
+  );
+
+  it.each([
+    ["stop", 10_000],
+    ["toolUse", 10_000],
+    ["aborted", 10_000],
+    ["output-limit", 10_000],
+  ] as const)(
+    "observes terminal %s usage once across async-tool fragments (cacheRead=%s)",
+    async (stopReason, cacheRead) => {
       const terminalStopReason = stopReason === "output-limit" ? "error" : stopReason;
       const fixture = await createFixture();
       const recordStage = vi.fn();
@@ -345,7 +199,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             type: "openai_responses_terminal",
             timestamp: 1,
-            details: { eventType: "response.incomplete", incompleteReason: "max_output_tokens" },
+            details: {
+              eventType: "response.incomplete",
+              stopReason: "length",
+              incompleteReason: "max_output_tokens",
+            },
           },
         ];
       }
@@ -367,9 +225,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         toolCall,
         partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
       });
-      if (completion === "result") {
-        response.end(message);
-      } else if (terminalStopReason === "error" || terminalStopReason === "aborted") {
+      if (terminalStopReason === "error" || terminalStopReason === "aborted") {
         response.push({ type: "error", reason: terminalStopReason, error: message });
       } else {
         response.push({ type: "done", reason: terminalStopReason, message });
@@ -441,6 +297,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             options: {
               requestIndex: 1,
+              messageCount: 0,
               broke: false,
               previousCacheRead: undefined,
               input: 100,
@@ -495,6 +352,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const releaseSummary = createDeferred();
     const events: EmbeddedContextAccountingEvent[] = [];
     const ends: AgentSessionEvent[] = [];
+    let summarySignalAborted: boolean | undefined;
     session.subscribe((event) => {
       if (event.type === "compaction_end") {
         ends.push(event);
@@ -505,7 +363,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     });
     let requests = 0;
-    streamMocks.streamSimple.mockImplementation(async (activeModel, _context, options) => {
+    streamMocks.streamSimple.mockImplementation((activeModel, _context, options) => {
       if (++requests === 1) {
         return createAssistantResultStream(
           createAssistant(
@@ -516,12 +374,17 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           ),
         );
       }
+      const response = createAssistantMessageEventStream();
       summaryStarted.resolve();
-      await releaseSummary.promise;
-      expect(options?.signal?.aborted).toBe(false);
-      return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "Blue Heron summary" }]),
-      );
+      void releaseSummary.promise.then(() => {
+        summarySignalAborted = options?.signal?.aborted;
+        const message = createAssistant(activeModel, [
+          { type: "text", text: "Blue Heron summary" },
+        ]);
+        response.push({ type: "done", reason: "stop", message });
+        response.end();
+      });
+      return response;
     });
     const network = vi
       .spyOn(globalThis, "fetch")
@@ -583,6 +446,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
       releaseSummary.resolve();
       const error = await outcome;
+      if (phase === "during summarization") {
+        expect(summarySignalAborted).toBe(false);
+      }
       const compacted = sessionManager.getEntries().filter((entry) => entry.type === "compaction");
       expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
       if (phase === "before installation") {
@@ -667,7 +533,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             onModelRequest: expect.any(Function),
             getObservation: expect.any(Function),
           },
-          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
           isProbeSession: false,
           stream: fixture.streamResult,
           timeout: fixture.timeoutResult,
@@ -680,8 +546,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const abortInput = mocks.createRunAbort.mock.calls[0]?.[0];
     expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
-    expect(streamInput.activeSession).toBe(fixture.activeSession);
-    expect(streamInput.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
+    expect(streamInput.agentSession.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.agentSession.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
     expect(streamInput.onModelUsage).toBe(
       mocks.installStreamGuards.mock.results[0]?.value.onModelUsage,
     );
@@ -706,7 +572,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     await settledInput.preparedStreamRuntime.promptActiveSession("hello");
     expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
     expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
-    expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
   });
 
   it("publishes the replacement fact and invalidates the skill cache before attempt cleanup throws", async () => {

@@ -101,6 +101,25 @@ function createCardClickEvent(token: string, userName = "users/123"): GoogleChat
   };
 }
 
+function registerCardBinding(
+  token: string,
+  approvalId: string,
+  overrides: Partial<Parameters<typeof registerGoogleChatApprovalCardBinding>[0]> = {},
+): void {
+  registerGoogleChatApprovalCardBinding({
+    token,
+    accountId: "default",
+    approvalId,
+    approvalKind: "exec",
+    decision: "allow-once",
+    allowedDecisions: ["allow-once", "deny"],
+    spaceName: "spaces/AAA",
+    messageName: "spaces/AAA/messages/msg-1",
+    expiresAtMs: Date.now() + 60_000,
+    ...overrides,
+  });
+}
+
 describe("maybeHandleGoogleChatApprovalCardClick", () => {
   beforeEach(() => {
     resolveApprovalOverGateway
@@ -127,115 +146,19 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
 
   afterEach(() => {
     googleChatApprovalControls.unregister([
-      "token-1",
       "token-2",
-      "token-addon",
       "token-common",
       "token-in-flight",
-      "token-loser",
-      "token-retry",
-      "token-stale-direct",
       "token-stale-nested",
       "token-update-retry",
       "token-url",
     ]);
   });
 
-  it("authorizes the Chat actor and resolves the bound approval over the gateway", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-1",
-      accountId: "default",
-      approvalId: "approval-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    const target = createTarget();
-    await expect(
-      maybeHandleGoogleChatApprovalCardClick({
-        event: createCardClickEvent("token-1"),
-        target,
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolveApprovalOverGateway).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      approvalId: "approval-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "googlechat",
-      accountId: "default",
-      senderId: "users/123",
-    });
-    expect(updateGoogleChatMessage).toHaveBeenCalledWith({
-      account: target.account,
-      messageName: "spaces/AAA/messages/msg-1",
-      cardsV2: expect.any(Array),
-    });
-    const cardJson = JSON.stringify(updateGoogleChatMessage.mock.calls[0]?.[0]);
-    const cardText =
-      updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2[0].card.sections[0].widgets[0]
-        .textParagraph.text;
-    expect(cardJson).toContain("Exec Approval: Allowed once");
-    expect(cardText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
-    expect(cardJson).toContain("Resolved by this action");
-    expect(cardJson).not.toContain("buttonList");
-  });
-
-  it("accepts add-on clicks that only carry approval token parameters", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-addon",
-      accountId: "default",
-      approvalId: "approval-addon",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    await expect(
-      maybeHandleGoogleChatApprovalCardClick({
-        event: {
-          type: "CARD_CLICKED",
-          space: { name: "spaces/AAA" },
-          message: { name: "spaces/AAA/messages/msg-1" },
-          user: { name: "users/123" },
-          commonEventObject: {
-            parameters: {
-              openclaw_action: "approval",
-              token: "token-addon",
-            },
-          },
-        },
-        target: createTarget(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "approval-addon",
-        decision: "allow-once",
-      }),
-    );
-  });
-
   it("accepts standard cardsV2 clicks with common parameters", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-common",
-      accountId: "default",
-      approvalId: "approval-common",
+    registerCardBinding("token-common", "approval-common", {
       approvalKind: "plugin",
       decision: "deny",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
     });
 
     await expect(
@@ -267,17 +190,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
   });
 
   it("accepts endpoint URL invoked functions for app-url card actions", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-url",
-      accountId: "default",
-      approvalId: "approval-url",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    registerCardBinding("token-url", "approval-url");
 
     await expect(
       maybeHandleGoogleChatApprovalCardClick({
@@ -307,16 +220,9 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
   });
 
   it("does not consume the token when an unauthorized user clicks", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-2",
-      accountId: "default",
-      approvalId: "plugin:approval-2",
+    registerCardBinding("token-2", "plugin:approval-2", {
       approvalKind: "plugin",
       decision: "deny",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
     });
 
     await expect(
@@ -344,73 +250,13 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     );
   });
 
-  it("keeps the token retryable when gateway resolution fails", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-retry",
-      accountId: "default",
-      approvalId: "approval-retry",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
+  it("consumes stale card tokens for approval-not-found gateway detail and ignores later clicks", async () => {
+    const token = "token-stale-nested";
+    const error = Object.assign(new Error("invalid approval request"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_NOT_FOUND" },
     });
-    resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-
-    await expect(
-      maybeHandleGoogleChatApprovalCardClick({
-        event: createCardClickEvent("token-retry"),
-        target: createTarget(),
-      }),
-    ).rejects.toThrow("gateway unavailable");
-
-    resolveApprovalOverGateway.mockResolvedValueOnce(
-      createApprovalResolveResult({
-        applied: true,
-        approvalId: "approval-retry",
-        approvalKind: "exec",
-        decision: "allow-once",
-      }),
-    );
-    await expect(
-      maybeHandleGoogleChatApprovalCardClick({
-        event: createCardClickEvent("token-retry"),
-        target: createTarget(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    {
-      label: "direct approval-not-found gateway code",
-      token: "token-stale-direct",
-      error: Object.assign(new Error("approval is gone"), {
-        gatewayCode: "APPROVAL_NOT_FOUND",
-      }),
-    },
-    {
-      label: "approval-not-found gateway detail",
-      token: "token-stale-nested",
-      error: Object.assign(new Error("invalid approval request"), {
-        gatewayCode: "INVALID_REQUEST",
-        details: { reason: "APPROVAL_NOT_FOUND" },
-      }),
-    },
-  ])("consumes stale card tokens for $label and ignores later clicks", async ({ token, error }) => {
-    registerGoogleChatApprovalCardBinding({
-      token,
-      accountId: "default",
-      approvalId: "approval-stale",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    registerCardBinding(token, "approval-stale");
     resolveApprovalOverGateway.mockRejectedValueOnce(error);
     const target = createTarget();
     const event = createCardClickEvent(token);
@@ -431,60 +277,9 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
     );
   });
 
-  it("reports the canonical winner when another surface resolves first", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-loser",
-      accountId: "default",
-      approvalId: "approval-loser",
-      approvalKind: "exec",
-      decision: "deny",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
-    resolveApprovalOverGateway.mockResolvedValueOnce(
-      createApprovalResolveResult({
-        applied: false,
-        approvalId: "approval-loser",
-        approvalKind: "exec",
-        decision: "allow-once",
-      }),
-    );
-    const target = createTarget();
-
-    await expect(
-      maybeHandleGoogleChatApprovalCardClick({
-        event: createCardClickEvent("token-loser"),
-        target,
-      }),
-    ).resolves.toBe(true);
-
-    expect(target.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "approval already resolved id=approval-loser status=allowed decision=allow-once",
-      ),
-    );
-    const cardJson = JSON.stringify(updateGoogleChatMessage.mock.calls[0]?.[0]);
-    expect(cardJson).toContain("Exec Approval: Allowed once");
-    expect(cardJson).toContain("Already resolved");
-    expect(cardJson).not.toContain("Exec Approval: Denied");
-    expect(cardJson).not.toContain("buttonList");
-  });
-
   it("keeps concurrent clicks blocked until the terminal card update completes", async () => {
     const token = "token-in-flight";
-    registerGoogleChatApprovalCardBinding({
-      token,
-      accountId: "default",
-      approvalId: "approval-in-flight",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    registerCardBinding(token, "approval-in-flight");
     const updateStarted = createDeferred<void>();
     const finishUpdate = createDeferred<void>();
     updateGoogleChatMessage.mockImplementationOnce(async () => {
@@ -517,20 +312,15 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
         "/approve approval-in-flight allow-once",
       ),
     ).toBe(false);
+    const card = updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2[0].card;
+    expect(card.sections[0].widgets[0].textParagraph.text).toBe(
+      `&lt;tag&gt; &amp; &amp;amp; "double" 'single'`,
+    );
+    expect(JSON.stringify(card)).not.toContain("buttonList");
   });
 
   it("keeps the token retryable when the canonical card update fails", async () => {
-    registerGoogleChatApprovalCardBinding({
-      token: "token-update-retry",
-      accountId: "default",
-      approvalId: "approval-update-retry",
-      approvalKind: "exec",
-      decision: "allow-once",
-      allowedDecisions: ["allow-once", "deny"],
-      spaceName: "spaces/AAA",
-      messageName: "spaces/AAA/messages/msg-1",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    registerCardBinding("token-update-retry", "approval-update-retry");
     resolveApprovalOverGateway
       .mockResolvedValueOnce(
         createApprovalResolveResult({

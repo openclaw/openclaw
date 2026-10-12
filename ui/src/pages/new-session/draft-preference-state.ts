@@ -141,14 +141,6 @@ export class DraftPreferenceState {
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacementSessionKey
-    ) {
-      return null;
-    }
     return this.preferenceModeValue === "remote"
       ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
       : loadNewSessionPreference(this.read().gatewayUrl, agentId);
@@ -186,10 +178,7 @@ export class DraftPreferenceState {
     const accepted = expected !== undefined;
     const persist =
       !catalog.isTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
-    if (!persist && !accepted) {
-      return undefined;
-    }
-    if (!source) {
+    if ((!persist && !accepted) || !source) {
       return undefined;
     }
     const scope = this.preferenceScope;
@@ -244,7 +233,7 @@ export class DraftPreferenceState {
       }
       // Model controls share persistence, but do not replace the submitted checkout intent.
       const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel"].includes(field),
+        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
       );
       const selection = changesPlacement ? {} : writer.selection;
       writer.selection = selection;
@@ -253,9 +242,8 @@ export class DraftPreferenceState {
         return;
       }
       const isCurrent = () =>
-        accepted
-          ? ownsConnection() && writer.selection === selection
-          : ownsConnection() && this.preferenceScope === scope;
+        ownsConnection() &&
+        (accepted ? writer.selection === selection : this.preferenceScope === scope);
       // A disconnected controller must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {

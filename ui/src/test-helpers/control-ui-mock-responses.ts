@@ -1,3 +1,4 @@
+import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import type { createControlUiSessionFixtures } from "./control-ui-session-fixtures.ts";
 
 // Serialized into the page alongside the session fixture owner. Keep runtime
@@ -6,6 +7,8 @@ export function createControlUiMockResponses(
   input: {
     methodResponses: Record<string, unknown>;
     defaultAgentId: string;
+    agentModel?: string | null;
+    startupPendingResponses?: number;
     sessions: Pick<ReturnType<typeof createControlUiSessionFixtures>, "list" | "listResponse">;
     groupRenames: () => readonly { from: string; to: string | null }[];
   },
@@ -23,6 +26,75 @@ export function createControlUiMockResponses(
   };
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessions = input.sessions;
+
+  const startupPendingResponses = new Map(
+    [
+      "sessions.resolve",
+      "sessions.describe",
+      "sessions.catalog.list",
+      "sessions.list",
+      "models.list",
+    ].map((method) => [method, input.startupPendingResponses ?? 0] as const),
+  );
+
+  function startupPending(method: string) {
+    const pendingResponses = startupPendingResponses.get(method) ?? 0;
+    if (pendingResponses > 0) {
+      startupPendingResponses.set(method, pendingResponses - 1);
+      const agentId = input.defaultAgentId;
+      const reason = `Agent ${agentId} has not completed startup inspection and preparation. The 5 second foreground startup budget elapsed; inspection continues.`;
+      const repairHint = "Stop the Gateway, run openclaw doctor --fix, and restart.";
+      return {
+        __mockError: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 250,
+          message: `${reason}\n${repairHint}`,
+          details: {
+            code: "agent-database-inspection-pending",
+            agentId,
+            paths: [`/mock/state/agents/${agentId}/openclaw-agent.sqlite`],
+            reason,
+            repairHint,
+          },
+        },
+      };
+    }
+    return undefined;
+  }
+
+  function applyAgentModel(method: string, response: unknown): unknown {
+    const value =
+      method === "agents.list" && isRecord(response)
+        ? { sessionPlacement: {}, ...response }
+        : response;
+    if (!input.agentModel || !isRecord(value)) {
+      return value;
+    }
+    const applyAgentsList = (agentsList: unknown): unknown => {
+      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
+        return agentsList;
+      }
+      return {
+        ...agentsList,
+        agents: agentsList.agents.map((agent) =>
+          isRecord(agent) && !Object.hasOwn(agent, "model")
+            ? { ...agent, model: { primary: input.agentModel } }
+            : agent,
+        ),
+      };
+    };
+    if (method === "agents.list") {
+      return applyAgentsList(value);
+    }
+    return value;
+  }
+
+  function applySessionPlacement(params: unknown, response: Record<string, unknown>) {
+    return isRecord(params) && params.includeSessionPlacement === true
+      ? { sessionPlacement: {}, ...response }
+      : response;
+  }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
     if (Object.is(actual, expected)) {
@@ -100,6 +172,38 @@ export function createControlUiMockResponses(
       return { found: false };
     }
     return { found: true, value: matchingCase.response };
+  }
+
+  function sessionListResponse(
+    payload?: Parameters<ControlUiMockGateway["setSessionsListResponse"]>[0],
+  ) {
+    const rows = payload?.sessions ?? sessions.list();
+    const baseline = {
+      count: rows.length,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: rows,
+      ts: Date.now(),
+    };
+    if (!payload) {
+      return baseline;
+    }
+    const configured = configuredResponse("sessions.list", {}, false).value;
+    const previous = isRecord(configured) && Array.isArray(configured.sessions) ? configured : {};
+    return {
+      ...baseline,
+      ...previous,
+      defaults: {
+        ...baseline.defaults,
+        ...(isRecord(previous.defaults) ? previous.defaults : {}),
+      },
+      count: rows.length,
+      ...payload,
+    };
   }
 
   function scopedSearchResponse(
@@ -185,9 +289,14 @@ export function createControlUiMockResponses(
 
   return {
     select: configuredResponse,
+    startupPending,
+    applyAgentModel,
+    applySessionPlacement,
+    sessionList: sessionListResponse,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,
+    matchesExact: valuesEqual,
     search: scopedSearchResponse,
     resetSequence: (method: string) => methodResponseSequenceIndexes.delete(method),
   };

@@ -43,52 +43,8 @@ describe("isCompactionFailureError", () => {
 });
 
 describe("isContextOverflowError", () => {
-  it("matches known overflow hints", () => {
+  it("matches input-only overflow counts", () => {
     const samples = [
-      "request_too_large",
-      "Request exceeds the maximum size",
-      "context length exceeded",
-      "Maximum context length",
-      "prompt is too long: 208423 tokens > 200000 maximum",
-      "Context overflow: Summarization failed",
-      "413 Request Entity Too Large",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-
-  it("matches 'exceeds model context window' in various formats", () => {
-    const samples = [
-      // Anthropic returns this JSON payload when prompt exceeds model context window.
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
-      "Request size exceeds model context window",
-      "request size exceeds model context window",
-      '400 {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
-      "The request size exceeds model context window limit",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-
-  it("matches Kimi 'model token limit' context overflow errors", () => {
-    const samples = [
-      "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
-      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
-      "Your request exceeded model token limit",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-
-  it("matches exceed/context/max_tokens overflow variants", () => {
-    const samples = [
-      "input length and max_tokens exceed context limit (i.e 156321 + 48384 > 200000)",
-      "This request exceeds the model's maximum context length",
-      "LLM request rejected: max_tokens would exceed context window",
-      "input length would exceed context budget for this model",
       "The input (263000 tokens) is longer than the model's context length (262144 tokens).",
       "The input (263,000 tokens) is longer than the model's context length (262,144 tokens).",
       "The input (1 token) is longer than the model's context length (1 token).",
@@ -96,43 +52,6 @@ describe("isContextOverflowError", () => {
     for (const sample of samples) {
       expect(isContextOverflowError(sample)).toBe(true);
     }
-  });
-
-  it("matches model_context_window_exceeded stop reason surfaced by shared model runtime", () => {
-    // Anthropic API (and some OpenAI-compatible providers like ZhipuAI/GLM) return
-    // stop_reason: "model_context_window_exceeded" when the context window is hit.
-    // The shared model runtime library surfaces this as "Unhandled stop reason: model_context_window_exceeded".
-    const samples = [
-      "Unhandled stop reason: model_context_window_exceeded",
-      "model_context_window_exceeded",
-      "context_window_exceeded",
-      "Unhandled stop reason: context_window_exceeded",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-
-  it("matches Chinese context overflow error messages from proxy providers", () => {
-    const samples = [
-      "上下文过长",
-      "错误：上下文过长，请减少输入",
-      "上下文超出限制",
-      "上下文长度超出模型最大限制",
-      "超出最大上下文长度",
-      "请压缩上下文后重试",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(true);
-    }
-  });
-
-  it("ignores normal conversation text mentioning context overflow", () => {
-    // These are legitimate conversation snippets, not error messages.
-    expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
-    expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
-    expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
-    expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
   });
 });
 

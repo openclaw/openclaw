@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -125,8 +126,10 @@ describe("cli json stdout contract", () => {
         expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
           "availability",
           "channel",
+          "recoverySets",
           "update",
         ]);
+        expect(parsed).toHaveProperty("recoverySets", []);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");
@@ -148,7 +151,10 @@ describe("cli json stdout contract", () => {
             message: "--timeout must be a positive integer (seconds)",
           },
         });
-        expect(result.stderr).toContain("--timeout must be a positive integer (seconds)");
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).toContain(
+          "[openclaw] Reason: --timeout must be a positive integer (seconds)",
+        );
       },
       { prefix: "openclaw-update-empty-timeout-e2e-" },
     );
@@ -328,7 +334,7 @@ describe("cli json stdout contract", () => {
             expect(report.probe).toEqual({
               ok: false,
               timedOut: true,
-              error: "probe timed out after 20ms",
+              error: "check timed out after 20ms",
             });
           } else {
             expect(report.probe).toEqual({ ok: true });
@@ -427,7 +433,8 @@ describe("cli json stdout contract", () => {
             error: { type: "cli_error", message: conflict.message },
           });
           expect(result.stdout).not.toContain("[openclaw]");
-          expect(result.stderr).toContain(conflict.message);
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(conflict.message);
         }
       },
       { prefix: "openclaw-qr-json-failure-e2e-" },
@@ -498,7 +505,8 @@ describe("cli json stdout contract", () => {
             message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
           },
         });
-        expect(result.stderr).toContain(
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(
           'Sandbox explain agent "alpha" does not match session agent "beta".',
         );
       },
@@ -529,7 +537,8 @@ describe("cli json stdout contract", () => {
             message: "Docs search failed: offline fixture",
           },
         });
-        expect(result.stderr).toContain("Docs search failed: offline fixture");
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain("Docs search failed: offline fixture");
       },
       { prefix: "openclaw-docs-json-failure-e2e-" },
     );

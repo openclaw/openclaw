@@ -1,4 +1,4 @@
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -10,18 +10,49 @@ import type {
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
+import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import type { CommandPalette } from "./command-palette.ts";
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
   setConnected: (connected: boolean) => void;
-  emit: (event: string) => void;
+  emit: (event: string, payload?: unknown) => void;
 };
+
+export function registerCommandPaletteTestHooks() {
+  let restoreDialogPolyfill: () => void;
+  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    restoreDialogPolyfill = installDialogPolyfill();
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    restoreDialogPolyfill();
+    if (scrollIntoViewDescriptor) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+    } else {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+}
 
 export function createGateway(
   connected: boolean,
@@ -36,6 +67,17 @@ export function createGateway(
     // valid destination response without consuming their scripted search replies.
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
+    }
+    // The roster carries the placement policy. Keep these fixtures focused on
+    // search traffic and provide the canonical empty roster and policy.
+    if (
+      args[0] === "agents.list" &&
+      args[1] &&
+      typeof args[1] === "object" &&
+      "includeSessionPlacement" in args[1] &&
+      args[1].includeSessionPlacement === true
+    ) {
+      return { agents: [], sessionPlacement: {} };
     }
     return request(...args);
   });
@@ -60,6 +102,7 @@ export function createGateway(
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -76,16 +119,21 @@ export function createGateway(
   } satisfies ApplicationGateway;
   return {
     gateway,
-    emit(event) {
-      if (event === "config.changed" || event === "chat.metadata.changed") {
-        invalidateChatMetadataStore(client);
+    emit(event, payload = {}) {
+      if (event === "cron" || event === "config.changed") {
+        invalidateCronCatalog(client);
+      }
+      const invalidation = modelCatalogEventInvalidation({ event, payload });
+      if (invalidation) {
+        invalidateChatMetadataStore(client, undefined, undefined, invalidation);
       }
       for (const listener of events) {
-        listener({ type: "event", event, payload: {} });
+        listener({ type: "event", event, payload });
       }
     },
     setConnected(nextConnected) {
       if (!nextConnected) {
+        invalidateCronCatalog(client);
         invalidateChatMetadataStore(client);
       }
       snapshot = {

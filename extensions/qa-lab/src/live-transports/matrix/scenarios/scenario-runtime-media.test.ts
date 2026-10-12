@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const advanceMatrixQaActorCursor = vi.hoisted(() => vi.fn());
-const primeMatrixQaActorCursor = vi.hoisted(() => vi.fn());
+const primeMatrixQaDriverScenarioClient = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scenario-runtime-shared.js")>()),
   advanceMatrixQaActorCursor,
-  primeMatrixQaActorCursor,
+  primeMatrixQaDriverScenarioClient,
 }));
 
 import { runGeneratedImageDeliveryScenario, testing } from "./scenario-runtime-media.js";
@@ -83,7 +83,7 @@ describe("Matrix generated image delivery", () => {
       expect(predicate(event)).toBe(true);
       return { event, matched: true as const, since: "next" };
     });
-    primeMatrixQaActorCursor.mockResolvedValue({
+    primeMatrixQaDriverScenarioClient.mockResolvedValue({
       client: { sendTextMessage, waitForOptionalRoomEvent },
       startSince: "start",
     });
@@ -114,7 +114,7 @@ describe("Matrix generated image delivery", () => {
       type: "m.room.message",
     });
     const sendTextMessage = vi.fn(async () => "$driver-trigger");
-    primeMatrixQaActorCursor.mockResolvedValue({
+    primeMatrixQaDriverScenarioClient.mockResolvedValue({
       client: {
         sendTextMessage,
         waitForOptionalRoomEvent: vi.fn(async () => ({

@@ -20,10 +20,9 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  // IsoEnvBroker availability is the ProcessContainer readiness signal for this plugin.
-  // Binary and host readiness checks fail load with actionable remediation.
+  let mxcBinaryPath: string;
   try {
-    resolveMxcBinaryPath(config.mxcBinaryPath);
+    mxcBinaryPath = resolveMxcBinaryPath(config.mxcBinaryPath);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -31,13 +30,12 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
       { cause: err },
     );
   }
-  assertMxcReadiness();
+  assertMxcReadiness({ executablePath: mxcBinaryPath });
 
   // Advisory: warn (don't block) when the system drive lacks AppContainer
   // directory-access ACEs, which only degrades in-sandbox directory listing.
   warnMxcHostPrepIfNeeded();
 
-  // Register the backend
   const unregister = registerSandboxBackend("mxc", {
     factory: createMxcSandboxBackendFactory(config),
     manager: mxcSandboxBackendManager,

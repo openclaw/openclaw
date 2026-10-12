@@ -1,0 +1,54 @@
+.mcp-app-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-accent);
+  color: var(--text);
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  font: 13px/1.4 var(--font-body, sans-serif);
+  border-bottom: 1px solid var(--border);
+}
+.mcp-app-confirm:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.mcp-app-confirm__copy {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.mcp-app-confirm__title,
+.mcp-app-confirm__preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-app-confirm__title {
+  font-weight: 600;
+}
+.mcp-app-confirm__preview {
+  color: var(--muted);
+  margin-top: 4px;
+}
+.mcp-app-confirm__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.mcp-app-confirm__actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.mcp-app-confirm__actions .mcp-app-confirm__accept {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}

@@ -1,5 +1,5 @@
 ---
-summary: "Synthetic Slack-class channel plugin for deterministic OpenClaw QA scenarios"
+summary: "Synthetic Slack-class channel plugin for repeatable OpenClaw QA scenarios"
 title: "QA channel"
 read_when:
   - You are wiring the synthetic QA transport into a local or CI test run
@@ -7,7 +7,7 @@ read_when:
   - You are iterating on end-to-end QA automation
 ---
 
-`qa-channel` is a repo-local synthetic message transport for automated OpenClaw QA (`extensions/qa-channel`, private package, excluded from packaged installs). It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
+`qa-channel` is a repo-local synthetic message transport for automated OpenClaw QA (`extensions/qa-channel`, private package, excluded from packaged installs). It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state repeatable and fully inspectable.
 
 ## What it does
 
@@ -22,6 +22,17 @@ read_when:
 - HTTP-backed synthetic bus for inbound message injection, outbound transcript capture, thread creation, reactions, edits, deletes, and search/read actions.
 - Media-bearing streamed replies deliver attachments and the current tool trace together. A later identical text-only final is suppressed only when its caption and tool trace were already delivered successfully.
 - Host-side self-check runner that writes a Markdown report to `.artifacts/qa-e2e/`.
+
+The outbound tool trace records sanitized tool starts, including Code Mode
+wrappers and nested calls. It does not establish successful completion. QA Lab
+derives logical tool activity from correlated transcript calls and results,
+retaining call identities and wrapper lineage. Repeated executions with distinct
+identities remain separate; a Code Mode wrapper does not add another success for
+its nested tool, and a nonzero shell exit is not a successful execution. Task
+followthrough checks use this activity to prove serial reads and writes before
+the terminal reply, alongside the artifact's modification time. Scenarios that
+check the Code Mode control protocol explicitly include control activity in their
+transcript summaries.
 
 ## Config
 
@@ -75,7 +86,7 @@ Host-side self-check (writes a Markdown report under `.artifacts/qa-e2e/`):
 pnpm qa:e2e
 ```
 
-This routes through `qa-lab`, starts the in-repo QA bus, boots the `qa-channel` runtime slice, and runs a deterministic self-check.
+This routes through `qa-lab`, starts the in-repo QA bus, boots the `qa-channel` runtime slice, and runs a repeatable self-check.
 
 Full repo-backed scenario suite:
 
@@ -101,6 +112,57 @@ pnpm qa:lab:up
 ```
 
 Builds the QA site, starts the Docker-backed gateway + QA Lab stack, and prints the QA Lab URL. From there you can pick scenarios, choose the model lane, launch individual runs, and watch results live. The QA Lab debugger is separate from the shipped Control UI bundle.
+
+## Installed-candidate fixtures
+
+Private QA plugins remain excluded from the public OpenClaw package. To exercise
+an installed candidate, build their Gateway-only artifacts in a separate fixture
+workspace. The fixture profile keeps QA Lab's Gateway hooks, tools and providers,
+but leaves its scenario runner and CLI in the tooling checkout. QA Channel carries
+its pure bus protocol implementation; public SDK imports still belong to the
+installed candidate.
+
+From a complete, dependency-ready tooling checkout at the committed revision
+being tested:
+
+```bash
+fixture_root="$(mktemp -d)"
+git archive HEAD extensions/qa-lab extensions/qa-channel | tar -x -C "$fixture_root"
+mkdir "$fixture_root/artifacts"
+
+for plugin in qa-lab qa-channel; do
+  node scripts/lib/plugin-npm-runtime-build.mjs \
+    "$fixture_root/extensions/$plugin" --qa-gateway-fixture
+  OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+    node scripts/lib/plugin-npm-package-manifest.mjs \
+    --run "$fixture_root/extensions/$plugin" --qa-gateway-fixture -- \
+    npm pack --pack-destination "$fixture_root/artifacts"
+done
+```
+
+The builder writes only the copied packages' `dist` directories. The manifest
+owner restores their source metadata after packing and includes the
+QA Channel config schema. Dependency bundling is required for this portable
+fixture recipe: the profile alone does not install or bundle `typebox` and `zod`.
+Do not copy checkout `node_modules` links or overwrite another run's generated
+plugin output.
+
+Use the existing `runQaSuite` API with the tooling checkout as `repoRoot` and an
+explicit `sutOpenClawCommand` pointing to the installed candidate's runtime and
+`dist/index.js`, with `usePackagedPlugins: true`. Extract the reviewed artifacts
+into an isolated fixture directory and add those package paths through the API's
+`mutateConfig` callback to `plugins.load.paths`, preserving the other config
+fields. That callback runs for each fresh child before the candidate performs
+its own auth bootstrap and update repair. Local origin and capability-consent
+rules still apply; fixtures do not acquire official package trust.
+
+Keep the installed package unchanged. Do not set `OPENCLAW_DEV_SOURCE_ROOT` or
+replace its bundled plugin/SDK roots with the tooling checkout. Record both
+revisions and verify fixture peer/API requirements and emitted host imports
+against the **installed candidate**, not just the tooling version. Required
+proof includes actual candidate Gateway/CLI images, candidate-owned SDK
+resolution, the unchanged scenario results and complete child cleanup. A source
+QA pass alone does not establish installed-package compatibility.
 
 ## Related
 

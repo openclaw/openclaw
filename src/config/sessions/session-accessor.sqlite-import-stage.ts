@@ -13,6 +13,7 @@ import {
   transcriptRepairUserKey,
 } from "./legacy-transcript-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   scanSessionTranscriptNavigation,
   isSessionTranscriptLeafControl,
@@ -228,15 +229,7 @@ export class SqliteSessionImportStage {
             }
           }
         }
-        const metadata = { ...entry };
-        delete metadata.message;
-        // Navigation needs only these fields, never a tool result or opaque payload.
-        const navigation: Record<string, unknown> = {};
-        for (const key of ["type", "id", "parentId", "targetId", "appendParentId", "appendMode"]) {
-          if (Object.hasOwn(metadata, key)) {
-            navigation[key] = metadata[key];
-          }
-        }
+        const navigation = projectTranscriptNavigationFields(entry);
         lastEntry = navigation;
         yield { ...navigation, importSeq: row.seq };
       }

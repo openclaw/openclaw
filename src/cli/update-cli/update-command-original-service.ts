@@ -10,17 +10,15 @@ import {
   resolveServiceEntrypoint,
 } from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
-import { tryReadJson } from "../../infra/json-files.js";
 import {
-  createPackageIntegrityReader,
-  PackageIntegrityTimeoutError,
-  PackageIntegrityLimitError,
-} from "../../infra/package-update-integrity.js";
+  hasGatewayServiceDefinitionOverrides,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { tryReadJson } from "../../infra/json-files.js";
+import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import {
   captureTargetDatabaseSchemaContext,
@@ -30,13 +28,13 @@ import {
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   OriginalManagedServiceRuntime,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { readGatewayServiceStateForUpdate } from "./update-command-service-plan.js";
 
 async function nodeIdentity(nodeRunner: string): Promise<string> {
   const real = await fs.realpath(nodeRunner);
@@ -57,7 +55,7 @@ async function nodeIdentity(nodeRunner: string): Promise<string> {
   ].join(":");
 }
 
-// These mandatory reads have their own reader, never the optional tree's exhausted deadline.
+// Only runtime identity is captured; concurrent edits elsewhere in the package are best effort.
 async function readOriginalServiceFiles(params: {
   root: string;
   nodeRunner: string;
@@ -69,30 +67,19 @@ async function readOriginalServiceFiles(params: {
   assertCurrent();
   const reader = createPackageIntegrityReader(params.timeoutMs);
   const packageIdentity = await reader.directoryIdentity(root);
-  assertCurrent();
   const launcherPath = params.command && resolveServiceEntrypoint(params.command);
   if (!packageIdentity || !launcherPath) {
     throw new Error("Original service directory or launcher identity is unavailable.");
   }
   const realPath = await fs.realpath(launcherPath);
-  assertCurrent();
   const fingerprint = await reader.launcher(launcherPath);
-  assertCurrent();
   const targetFingerprint = await reader.launcher(realPath);
-  assertCurrent();
   const node = await nodeIdentity(params.nodeRunner);
-  assertCurrent();
   const buildId = (await readBuiltGatewayBuildId(root)) ?? undefined;
-  assertCurrent();
   const schemaVersions = parsePackageOpenClawSchemaVersions(
     await tryReadJson<unknown>(path.join(root, "package.json")),
   );
   assertCurrent();
-  const finalIdentity = await reader.directoryIdentity(root);
-  assertCurrent();
-  if (!isDeepStrictEqual(finalIdentity, packageIdentity)) {
-    throw new Error("Original service directory changed during mandatory reads.");
-  }
   return {
     packageIdentity,
     launcher: { path: launcherPath, realPath, fingerprint, targetFingerprint },
@@ -110,18 +97,8 @@ export function originalServiceAuthority(run: UpdateCommandOptions["run"]): () =
       "Original service recovery requires its admitted executor.",
     );
   }
-  const authority = captureUpdateCommandExecutorAuthority(executor);
-  return () => {
-    if (
-      run.executorFence !== executor ||
-      !isDeepStrictEqual(captureUpdateCommandExecutorAuthority(executor), authority)
-    ) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Original service recovery lost its admitted executor.",
-      );
-    }
-    executor.assertCurrent();
-  };
+  captureUpdateCommandExecutorAuthority(executor);
+  return () => executor.assertCurrent();
 }
 
 export async function revalidateOriginalManagedServiceRuntime(
@@ -131,13 +108,12 @@ export async function revalidateOriginalManagedServiceRuntime(
   allowOwnRebind = false,
 ) {
   assertCurrent();
-  const state = await readGatewayServiceState(resolveGatewayService(), {
-    env: original.service.serviceEnv,
-    requireEffective: true,
-    requireLoadedCommand: true,
-    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+  const state = await readGatewayServiceStateForUpdate(
+    resolveGatewayService(),
+    original.service.serviceEnv,
     timeoutMs,
-  });
+    { managerUid: original.service.serviceManagerUid, assertCurrent },
+  );
   assertCurrent();
   const definition = await fingerprintGatewayServiceDefinition(state.command);
   assertCurrent();
@@ -172,30 +148,6 @@ export async function revalidateOriginalManagedServiceRuntime(
     throw new Error("Original managed service runtime changed; compensation was refused.");
   }
   assertCurrent();
-  if (original.packageFingerprint) {
-    try {
-      const fingerprint = await createPackageIntegrityReader(timeoutMs).tree(original.root);
-      assertCurrent();
-      if (!isDeepStrictEqual(fingerprint, original.packageFingerprint)) {
-        throw new Error("Original managed service package changed; compensation was refused.");
-      }
-    } catch (error) {
-      assertCurrent();
-      if (
-        !(
-          error instanceof PackageIntegrityTimeoutError ||
-          error instanceof PackageIntegrityLimitError
-        )
-      ) {
-        throw error;
-      }
-      original.packageFingerprintWarning =
-        error instanceof PackageIntegrityTimeoutError
-          ? `Original service full package fingerprint timed out (scan budget ${error.budgetMs} ms); full package contents are unverified. Mandatory runtime identities still require revalidation.`
-          : `Original service full package fingerprint unavailable (${error.message}); full package contents are unverified. Mandatory runtime identities still require revalidation.`;
-      defaultRuntime.error(original.packageFingerprintWarning);
-    }
-  }
   const files = await readOriginalServiceFiles({
     root: original.root,
     nodeRunner: original.nodeRunner,
@@ -242,13 +194,11 @@ export async function observeOriginalManagedServiceRuntime(
       throw new Error("Original service Node or manager environment is unavailable.");
     }
     assertCurrent();
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: before.serviceEnv,
-      requireEffective: true,
-      requireLoadedCommand: true,
-      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      timeoutMs: params.updateStepTimeoutMs,
-    });
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      before.serviceEnv,
+      params.updateStepTimeoutMs,
+    );
     assertCurrent();
     const files = await readOriginalServiceFiles({
       root,
@@ -260,13 +210,9 @@ export async function observeOriginalManagedServiceRuntime(
     if (!state.command) {
       throw new Error("Original service definition is unavailable.");
     }
-    if (
-      state.command.managedOverrides ||
-      state.command.managedDefinition ||
-      state.command.reloadPending
-    ) {
+    if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
       throw new Error(
-        "Original service has overrides that cannot be restored by the canonical writer.",
+        "Original service has overrides that cannot be restored by the service writer.",
       );
     }
     const definition = {
@@ -289,36 +235,12 @@ export async function observeOriginalManagedServiceRuntime(
       },
       ...files,
     };
-    const startedAt = performance.now();
-    try {
-      original.packageFingerprint = await createPackageIntegrityReader(
-        params.updateStepTimeoutMs,
-      ).tree(root);
-      assertCurrent();
-      if (
-        original.packageFingerprint.identity !== files.packageIdentity.identity ||
-        original.packageFingerprint.version !== files.packageIdentity.version
-      ) {
-        throw new Error("Original managed service package changed during observation.");
-      }
-    } catch (error) {
-      assertCurrent();
-      if (
-        !(
-          error instanceof PackageIntegrityTimeoutError ||
-          error instanceof PackageIntegrityLimitError
-        )
-      ) {
-        throw error;
-      }
-      original.packageFingerprintWarning =
-        error instanceof PackageIntegrityTimeoutError
-          ? `Original service full package fingerprint unavailable after ${Math.round(performance.now() - startedAt)} ms (scan budget ${error.budgetMs} ms). Compensation requires directory, version and launcher revalidation; full package contents are unverified.`
-          : `Original service full package fingerprint unavailable (${error.message}). Compensation requires directory, version and launcher revalidation; full package contents are unverified.`;
-      defaultRuntime.error(original.packageFingerprintWarning);
-    }
     assertCurrent();
-    const context = await captureTargetDatabaseSchemaContext(before.serviceEnv);
+    const context = await captureTargetDatabaseSchemaContext(before.serviceEnv, {
+      configValidation: params.opts.run?.candidateAdmissionChecks?.includes("config")
+        ? "candidate"
+        : undefined,
+    });
     assertCurrent();
     original.verified = await verifyPreviousGatewayForUpdate({
       root,
@@ -332,11 +254,6 @@ export async function observeOriginalManagedServiceRuntime(
     if (!original.verified || !original.schemaVersions) {
       throw new Error("Original service readiness or schema support was not verified.");
     }
-    await revalidateOriginalManagedServiceRuntime(
-      original,
-      assertCurrent,
-      params.updateStepTimeoutMs,
-    );
     return original;
   } catch (error) {
     assertCurrent();

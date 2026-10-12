@@ -16,6 +16,10 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  controlUiE2eBuiltModuleRequest,
+  controlUiE2eRouteStylesheetRequest,
+} from "./control-ui-built-module.test-support.ts";
+import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
@@ -35,7 +39,7 @@ beforeEach(() => {
     ? createControlUiE2eArtifactDir("lazy-custom-element-recovery", railProofDirParent)
     : undefined;
 });
-const nativeTitlebarChunk = /\/assets\/macos-titlebar-controls\.runtime-[^/?]+\.js(?:\?.*)?$/u;
+const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime.ts";
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
@@ -111,10 +115,30 @@ async function retryThroughReload(page: Page, error: ReturnType<Page["locator"]>
 
 const focusedCases = [
   {
+    name: "browser",
+    label: "browser panel",
+    path: focusPath({
+      kind: "browser",
+      sessionKey,
+      tab: { target: "host", profile: "work", targetId: "existing" },
+    }),
+    modulePath: "ui/src/components/browser/browser-document.ts",
+    gateway: {
+      featureMethods: ["browser.request"],
+      operatorScopes: ["operator.read"],
+    },
+    ready: (page: Page) =>
+      page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor(),
+  },
+  {
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
-    chunk: /\/assets\/terminal-panel-registration-[^/?]+\.js(?:\?.*)?$/u,
+    modulePath: "ui/src/components/terminal/terminal-panel-registration.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
       methodResponses: {
@@ -135,7 +159,7 @@ const focusedCases = [
     name: "desktop",
     label: "desktop panel",
     path: focusPath({ kind: "desktop", control: false }),
-    chunk: /\/assets\/desktop-panel-[^/?]+\.js(?:\?.*)?$/u,
+    modulePath: "ui/src/components/desktop/desktop-panel.ts",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "desktop.observe", "environments.list"],
       methodResponses: {
@@ -150,7 +174,7 @@ const focusedCases = [
     name: "dashboard",
     label: "dashboard document",
     path: focusPath({ kind: "dashboard", path: "/dashboard/main/12345678" }),
-    chunk: /\/assets\/board-document-[^/?]+\.js(?:\?.*)?$/u,
+    modulePath: "ui/src/components/board/board-document.tsx",
     gateway: {
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
@@ -182,7 +206,7 @@ const systemBusyness = {
   name: "System busyness",
   label: "System busyness",
   tag: "openclaw-debug-overlay-content",
-  chunk: /\/assets\/debug-overlay-content-[^/?]+\.js(?:\?.*)?$/u,
+  modulePath: "ui/src/pages/debug/debug-overlay-content.ts",
   proofName: "system-busyness",
   dock: undefined,
   frame: (page: Page) => page.locator(".debug-overlay"),
@@ -205,7 +229,7 @@ const dockedCases = [
     name: `Home ${dock}`,
     label: "Assistant sidebar",
     tag: "openclaw-assistant-panel-content",
-    chunk: /\/assets\/assistant-panel-content-[^/?]+\.js(?:\?.*)?$/u,
+    modulePath: "ui/src/components/assistant-panel-content.ts",
     proofName: `home-${dock}`,
     dock,
     frame: (page: Page) => page.locator(".assistant-panel"),
@@ -222,7 +246,7 @@ const dockedCases = [
     ...systemBusyness,
     name: "System busyness frame",
     tag: "openclaw-debug-overlay",
-    chunk: /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+    modulePath: "ui/src/pages/debug/debug-overlay.tsx",
     proofName: "system-busyness-frame",
   },
 ];
@@ -292,7 +316,7 @@ suite.define(() => {
       async ({ page }) => {
         const failure = await installChunkFailure(
           page,
-          /\/assets\/login-gate-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/login-gate.ts"),
         );
         const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
         const rejectLogin = async () => {
@@ -341,6 +365,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
+          await page.clock.install();
           await page.addInitScript(() => {
             const observed = window as Window & { completedHeadFrames?: number };
             const originalFetch = window.fetch;
@@ -357,7 +382,7 @@ suite.define(() => {
           });
           const failure = await installChunkFailure(
             page,
-            /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
             { manualProbe },
           );
           await installMockGateway(page);
@@ -397,7 +422,7 @@ suite.define(() => {
             .toBe(true);
           // A generic automatic retry used to wake one second after this
           // first settled frame. Close must remain authoritative beyond it.
-          await page.waitForTimeout(1_500);
+          await page.clock.runFor(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }
@@ -426,7 +451,10 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
-          const failure = await installChunkFailure(page, testCase.chunk);
+          const failure = await installChunkFailure(
+            page,
+            controlUiE2eBuiltModuleRequest(testCase.modulePath),
+          );
           await installMockGateway(page, testCase.gateway);
           let documentRequests = 0;
           page.on("request", (request) => {
@@ -470,7 +498,7 @@ suite.define(() => {
       }
       const failure = await installChunkFailure(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -525,7 +553,7 @@ suite.define(() => {
         async ({ page }) => {
           const held = await holdModuleResponse(
             page,
-            /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.tsx"),
           );
           try {
             const composer = await installDockedScenario(page, undefined, route);
@@ -613,7 +641,7 @@ suite.define(() => {
         // so a warm stylesheet cannot conceal missing eager frame styles.
         const held = await holdModuleResponse(
           page,
-          /\/assets\/control-ui-boot-chat-[^/?]+\.css(?:\?.*)?$/u,
+          controlUiE2eRouteStylesheetRequest("chat", "new"),
         );
         try {
           const composer = await installDockedScenario(page, "right", "new");
@@ -657,7 +685,10 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
-          const held = await holdModuleResponse(page, testCase.chunk);
+          const held = await holdModuleResponse(
+            page,
+            controlUiE2eBuiltModuleRequest(testCase.modulePath),
+          );
           try {
             const composer = await installDockedScenario(page, testCase.dock);
             expect(held.requests()).toBe(0);
@@ -740,9 +771,13 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport },
       async ({ page }) => {
-        const failure = await installChunkFailure(page, testCase.chunk, {
-          automaticReload: testCase.automaticReload,
-        });
+        const failure = await installChunkFailure(
+          page,
+          controlUiE2eBuiltModuleRequest(testCase.modulePath),
+          {
+            automaticReload: testCase.automaticReload,
+          },
+        );
         const composer = await installDockedScenario(page, testCase.dock);
         const automaticReload = testCase.automaticReload
           ? page.waitForEvent("domcontentloaded")
@@ -808,11 +843,14 @@ suite.define(() => {
         });
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
-        const held = await holdModuleResponse(page, nativeTitlebarChunk);
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+        );
         try {
           const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
           expect(response?.status()).toBe(200);
-          await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
           expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
@@ -865,7 +903,10 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installNativeWebChrome(page);
-        const failure = await installChunkFailure(page, nativeTitlebarChunk);
+        const failure = await installChunkFailure(
+          page,
+          controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+        );
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
         });
@@ -873,7 +914,7 @@ suite.define(() => {
           waitUntil: "domcontentloaded",
         });
         expect(response?.status()).toBe(200);
-        await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+        await page.locator(".sidebar-rail").waitFor({ state: "attached" });
         const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
         await expect.poll(failure.headCount).toBe(1);
         expect(failure.chunkRequestCount()).toBe(1);

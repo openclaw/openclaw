@@ -1,28 +1,65 @@
+import { ok, type Result } from "@openclaw/normalization-core/result";
 // Session-store key canonicalization across default agents, main aliases, and legacy keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
 import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
+import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
+  isIncognitoSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
+
+export type SessionRoutingTarget = Omit<Parameters<typeof resolveSessionStoreIdentity>[0], "cfg">;
+
+export function readSessionRoutingFacts(
+  cfg: OpenClawConfig,
+  targets?: readonly SessionRoutingTarget[],
+) {
+  const agents = listAgentIds(cfg);
+  const identities = targets?.map((target) => resolveSessionStoreIdentity({ ...target, cfg }));
+  // Retired-agent discovery searches the roster; configured targets retain only their own route.
+  const scoped = identities?.every(({ agentId }) => agents.includes(agentId));
+  return {
+    agents: scoped ? undefined : agents,
+    identities,
+    storeOwner:
+      scoped && isPerAgentSessionStoreConfig(cfg.session?.store)
+        ? undefined
+        : resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: targets ? undefined : tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: targets ? undefined : tryResolveAmbientOwnerAgentId(cfg),
+    store: cfg.session?.store,
+    mainKey: cfg.session?.mainKey,
+    scope: cfg.session?.scope,
+  };
+}
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
@@ -44,15 +81,12 @@ function resolveLogicalSessionStoreAgentId(cfg: OpenClawConfig, sessionKey: stri
     return agentId;
   }
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
-  if (persistedOwner.kind === "retired") {
-    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
-      surface: `session key "${sessionKey}"`,
-      hint: `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`,
-    });
-  }
   throw new AgentSelectionRequiredError(listAgentIds(cfg), {
     surface: `session key "${sessionKey}"`,
-    hint: "Use an agent-prefixed session key or select an agent explicitly.",
+    hint:
+      persistedOwner.kind === "retired"
+        ? `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`
+        : "Use an agent-prefixed session key or select an agent explicitly.",
   });
 }
 
@@ -60,7 +94,7 @@ function resolveParsedSessionStoreKey(
   cfg: OpenClawConfig,
   raw: string,
   parsed: ParsedAgentSessionKey,
-  options?: { storeAgentId?: string },
+  storeAgentId?: string,
 ): { agentId: string; sessionKey: string } {
   const parsedAgentId = normalizeAgentId(parsed.agentId);
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
@@ -75,8 +109,8 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  const agentId = options?.storeAgentId
-    ? normalizeAgentId(options.storeAgentId)
+  const agentId = storeAgentId
+    ? normalizeAgentId(storeAgentId)
     : resolveLogicalSessionStoreAgentId(cfg, "main");
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };
 }
@@ -86,8 +120,12 @@ function canonicalizeParsedSessionStoreKey(
   raw: string,
   parsed: ParsedAgentSessionKey,
   storeAgentId?: string,
+  preserveQualifiedAddress = false,
 ): string {
-  const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, { storeAgentId });
+  const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, storeAgentId);
+  if (preserveQualifiedAddress && resolved.agentId === normalizeAgentId(parsed.agentId)) {
+    return resolved.sessionKey;
+  }
   return canonicalizeMainSessionAlias({
     cfg,
     agentId: resolved.agentId,
@@ -130,22 +168,34 @@ export function resolveSessionStoreKey(params: {
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
+export function resolveRequestedSessionStoreTarget(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  explicitAgentId?: string,
+): Result<{ sessionKey: string; agentId: string }, ErrorShape> {
+  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, explicitAgentId);
+  if (!requested.ok) {
+    return requested;
+  }
+  return ok({
+    sessionKey: resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: requested.agentId }),
+    agentId: requested.agentId,
+  });
+}
+
 /** Resolve ownership before a prepared agent's main alias collapses to global. */
 export function resolveSessionStoreAgentId(
   cfg: OpenClawConfig,
   canonicalKey: string,
   explicitAgentId?: string,
 ): string {
+  const parsed = parseAgentSessionKey(canonicalKey);
   if (explicitAgentId) {
-    const parsed = parseAgentSessionKey(canonicalKey);
     const sessionKey = parsed
-      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, {
-          storeAgentId: explicitAgentId,
-        }).sessionKey
+      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, explicitAgentId).sessionKey
       : canonicalKey;
     return resolveSessionAgentId({ config: cfg, sessionKey, agentId: explicitAgentId });
   }
-  const parsed = parseAgentSessionKey(canonicalKey);
   return parsed
     ? normalizeAgentId(parsed.agentId)
     : resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
@@ -156,13 +206,24 @@ export function resolveSessionStoreIdentity(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  preserveQualifiedAddress?: boolean;
 }): { agentId: string; canonicalKey: string } {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const parsed = parseAgentSessionKey(raw);
+  if (params.preserveQualifiedAddress && parsed) {
+    const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+    return {
+      agentId: resolveSessionAgentId({
+        config: params.cfg,
+        sessionKey: canonicalKey,
+        agentId: requestedAgentId,
+      }),
+      canonicalKey,
+    };
+  }
   const sessionKey = parsed
-    ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, { storeAgentId: requestedAgentId })
-        .sessionKey
+    ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, requestedAgentId).sessionKey
     : raw;
   const agentId = resolveSessionStoreAgentId(params.cfg, sessionKey, requestedAgentId);
   const canonicalKey = resolveSessionStoreKey({
@@ -180,6 +241,7 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
+  preserveQualifiedAddress?: boolean;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   if (!raw) {
@@ -191,7 +253,13 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   }
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
-    return canonicalizeParsedSessionStoreKey(params.cfg, raw, parsed, params.agentId);
+    return canonicalizeParsedSessionStoreKey(
+      params.cfg,
+      raw,
+      parsed,
+      params.agentId,
+      params.preserveQualifiedAddress,
+    );
   }
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
   if (
@@ -208,6 +276,37 @@ export function resolveStoredSessionKeyForAgentStore(params: {
     sessionKey: key,
     storeAgentId: params.agentId,
   });
+}
+
+/** Existing stored lineage wins; only absence permits the shipped main-alias lookup. */
+export function selectStoredSessionLineage<T>(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  read: (agentId: string, sessionKey: string) => T | undefined;
+  readAlias?: (agentId: string, sessionKey: string) => T | undefined;
+}): { agentId: string; key: string; value: T | undefined } {
+  const agentId = normalizeAgentId(
+    parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId,
+  );
+  const target = { cfg: params.cfg, agentId, sessionKey: params.sessionKey };
+  const storedKey = resolveStoredSessionKeyForAgentStore({
+    ...target,
+    preserveQualifiedAddress: true,
+  });
+  const value = params.read(agentId, storedKey);
+  if (value !== undefined || isIncognitoSessionKey(storedKey)) {
+    return { agentId, key: storedKey, value };
+  }
+  const key = resolveStoredSessionKeyForAgentStore(target);
+  return {
+    agentId,
+    key,
+    value:
+      key === storedKey && !params.readAlias
+        ? undefined
+        : (params.readAlias ?? params.read)(agentId, key),
+  };
 }
 
 /** Resolve the owner agent for a stored session key, returning null for global/unknown keys. */

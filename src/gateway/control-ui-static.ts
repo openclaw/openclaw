@@ -1,7 +1,6 @@
-// Control UI static-response policy: MIME types, caching, encoding, and pinned-file reads.
-import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import {
   resolveHttpContentEncodings,
@@ -10,6 +9,7 @@ import {
 } from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 
@@ -25,7 +25,6 @@ const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
   ".wasm",
   ".webmanifest",
 ]);
-const CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS = new Set([".br", ".gz"]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -51,14 +50,12 @@ export function isControlUiStaticAssetExtension(extension: string): boolean {
   return extension !== ".html" && Object.hasOwn(CONTROL_UI_CONTENT_TYPES, extension);
 }
 
-export function isControlUiPrecompressedAssetExtension(extension: string): boolean {
-  return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
-}
-
 type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";
 
 const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
+const compressBrotli = promisify(brotliCompress);
+const compressGzip = promisify(gzip);
 
 export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEncodingSelection {
   return (
@@ -69,46 +66,41 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
   );
 }
 
-type OpenedControlUiRepresentation = {
-  bodyFile: { path: string; fd: number; size: number };
+export function isControlUiCompressibleAsset(filePath: string): boolean {
+  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+type ControlUiRepresentation = {
+  file: ControlUiRootAsset["file"];
   encoding?: ControlUiContentEncoding;
 };
 
-export function resolveOpenedControlUiRepresentation(params: {
+export function resolveControlUiRepresentation(params: {
   req: IncomingMessage;
-  sourceFile: { path: string; fd: number; size: number };
+  asset: ControlUiRootAsset;
   contentPath: string;
   precompressed: boolean;
-  openPrecompressedFile: (filePath: string) => { path: string; fd: number; size: number } | null;
-}): OpenedControlUiRepresentation | null {
-  const { req, sourceFile, precompressed, openPrecompressedFile } = params;
-  const extension = path.extname(params.contentPath).toLowerCase();
+}): ControlUiRepresentation | null {
+  const { req, asset, precompressed } = params;
   const encodings = resolveHttpContentEncodings(
     req.headers?.["accept-encoding"],
-    precompressed && CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)
+    precompressed && isControlUiCompressibleAsset(params.contentPath)
       ? CONTROL_UI_DYNAMIC_ENCODINGS
       : new Set<ControlUiContentEncoding>(),
   );
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
     if (selected === "identity") {
-      return { bodyFile: sourceFile };
+      return { file: asset.file };
     }
-
-    const suffix = selected === "br" ? ".br" : ".gz";
-    let compressedFile: { path: string; fd: number; size: number } | null;
-    try {
-      compressedFile = openPrecompressedFile(`${sourceFile.path}${suffix}`);
-    } catch (error) {
-      fs.closeSync(sourceFile.fd);
-      throw error;
+    const file = asset[selected];
+    if (file instanceof Error) {
+      throw file;
     }
-    if (compressedFile) {
-      fs.closeSync(sourceFile.fd);
-      return { bodyFile: compressedFile, encoding: selected };
+    if (file) {
+      return { file, encoding: selected };
     }
   }
-  fs.closeSync(sourceFile.fd);
   return null;
 }
 
@@ -194,32 +186,7 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const callback = (error: Error | null, compressed: Buffer) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(compressed);
-    };
-    if (encoding === "br") {
-      brotliCompress(
-        body,
-        {
-          params: {
-            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
-          },
-        },
-        callback,
-      );
-      return;
-    }
-    gzip(body, { level: 6 }, callback);
-  });
-}
-
-export async function serveControlUiAsset(
+export function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
@@ -247,7 +214,10 @@ function cachedCompressedControlUiHtml(
   const compression = getOrCreatePromise(
     controlUiHtmlCompressionCache,
     key,
-    () => compressControlUiBody(Buffer.from(body), encoding),
+    () =>
+      encoding === "br"
+        ? compressBrotli(Buffer.from(body), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+        : compressGzip(Buffer.from(body), { level: 6 }),
     { cacheRejections: false },
   );
   pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
@@ -264,6 +234,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -271,43 +242,12 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
-}
-
-// Reuse the stat captured by safe open: another queued fstat adds a full
-// event-loop wait under load. Keep Node readFile's allocation and chunk limits;
-// this read ends at the pinned size, even if the file subsequently grows.
-export async function readAndCloseControlUiFile(file: {
-  fd: number;
-  size: number;
-}): Promise<Buffer> {
-  try {
-    if (file.size > 2 ** 31 - 1) {
-      throw Object.assign(new RangeError("Control UI file exceeds the 2 GiB read limit"), {
-        code: "ERR_FS_FILE_TOO_LARGE",
-      });
-    }
-    const buffer = Buffer.allocUnsafe(file.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const length = Math.min(512 * 1024, buffer.length - offset);
-      const bytesRead = await new Promise<number>((resolve, reject) => {
-        fs.read(file.fd, buffer, offset, length, null, (error, count) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(count);
-          }
-        });
-      });
-      if (bytesRead === 0) {
-        break;
-      }
-      offset += bytesRead;
-    }
-    return buffer.subarray(0, offset);
-  } finally {
-    // Release before compression waits in zlib's worker queue.
-    fs.closeSync(file.fd);
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+    return;
   }
+  res.end(encoded);
 }

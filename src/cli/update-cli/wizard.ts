@@ -1,5 +1,3 @@
-// Interactive updater entrypoint: resolves current install/channel state, prompts for
-// a target channel, then delegates the actual mutation to the non-interactive updater.
 import { confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -11,19 +9,19 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
+import { reportHostOwnedUpdate } from "./host-owned.js";
 import {
   isEmptyDir,
   isGitCheckout,
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
 
-/** Run the TTY-only update wizard and preserve `updateCommand` as the single update executor. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
@@ -33,10 +31,11 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const cancel = () => {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+  };
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
   const [updateStatus, configSnapshot] = await Promise.all([
@@ -46,6 +45,16 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     }),
     readConfigFileSnapshot({ observe: false }),
   ]);
+
+  if (updateStatus.installKind === "host") {
+    reportHostOwnedUpdate(updateStatus.installOwner ?? null, {});
+  }
+  if (updateStatus.installKind === "immutable") {
+    defaultRuntime.log(
+      "Use openclaw update for official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation runs only when explicitly enabled in the adoption record; --no-restart prepares only.",
+    );
+    return;
+  }
 
   const configChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
@@ -66,34 +75,20 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         label: `Keep current (${channelInfo.channel})`,
         hint: channelInfo.label,
       },
-      {
-        value: "stable",
-        label: "Stable",
-        hint: "Tagged releases (npm latest)",
-      },
-      {
-        value: "extended-stable",
-        label: "Extended Stable",
-        hint: "Monthly supported release (npm extended-stable)",
-      },
-      {
-        value: "beta",
-        label: "Beta",
-        hint: "Prereleases (npm beta)",
-      },
-      {
-        value: "dev",
-        label: "Dev",
-        hint: "Git main",
-      },
+      ...(
+        [
+          ["stable", "Stable", "Tagged releases (npm latest)"],
+          ["extended-stable", "Extended Stable", "Monthly supported release (npm extended-stable)"],
+          ["beta", "Beta", "Prereleases (npm beta)"],
+          ["dev", "Dev", "Git main"],
+        ] as const
+      ).map(([value, label, hint]) => ({ value, label, hint })),
     ],
     initialValue: "keep",
   });
 
   if (typeof pickedChannel === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
@@ -102,16 +97,12 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     const gitDir = resolveGitInstallDir();
     const hasGit = await isGitCheckout(gitDir);
     if (!hasGit) {
-      const dirExists = await pathExists(gitDir);
-      if (dirExists) {
-        const empty = await isEmptyDir(gitDir);
-        if (!empty) {
-          defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
+      if ((await pathExists(gitDir)) && !(await isEmptyDir(gitDir))) {
+        defaultRuntime.error(
+          `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        );
+        defaultRuntime.exit(1);
+        return;
       }
 
       const ok = await confirm({
@@ -121,9 +112,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         initialValue: true,
       });
       if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
+        return cancel();
       }
     }
   }
@@ -133,9 +122,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: true,
   });
   if (typeof restart === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   try {
@@ -148,6 +135,9 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       acceptCapabilities: opts.acceptCapabilities,
     });
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
   }

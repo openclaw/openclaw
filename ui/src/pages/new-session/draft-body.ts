@@ -6,7 +6,7 @@ import "../../styles/chat/grouped.css";
 import "../../styles/chat/working-indicator.css";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { icons } from "../../components/icons.ts";
-import { resolveIdentityAvatarView } from "../../components/identity-avatar-view.ts";
+import { renderIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
@@ -21,7 +21,10 @@ import {
   renderUserAvatarSlot,
   resolveChatDefaultAvatarPlacement,
 } from "../chat/components/chat-author-avatar.ts";
-import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
+import {
+  hasUserFileAttachments,
+  renderAssistantAttachments,
+} from "../chat/components/chat-message-attachments.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { renderMessageJson, renderMessageMarkdown } from "../chat/components/chat-message-text.ts";
@@ -65,6 +68,7 @@ export function renderNewSessionBody(options: {
   statusLabel?: string;
   completion?: { label: string; onOpen?: () => void; disabled?: boolean };
   showDraft?: boolean;
+  inChat?: boolean;
   renderDraft: () => TemplateResult;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
@@ -81,7 +85,7 @@ export function renderNewSessionBody(options: {
       ${pendingMessage ? (options.completion?.label ?? options.statusLabel ?? t("newSession.starting")) : nothing}
     </div>
     <div
-      class="new-session-page__scroll ${pendingMessage ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
+      class="${options.inChat ? "" : "new-session-page__scroll"} ${pendingMessage || options.inChat ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
       ?inert=${draftLocked}
       aria-busy=${String(options.submitting)}
       @mousedown=${beginNativeWindowDragFromTopInset}
@@ -115,9 +119,12 @@ function renderNewSessionSubmission(
   const key = "new-session-submission";
   const senderHue = normalized.sender ? resolveIdentityHue(normalized.sender) : null;
   const { images, attachments } = projectMessageMedia(message, normalized.content);
+  const hasUserFiles = hasUserFileAttachments(attachments);
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = parseMarkdownJson(markdown);
   const imageOptions = { onOpenImage };
+  const textOptions = { role: "user", isStreaming: false };
+  const markdownOptions = { codeBlockChrome: "none" } as const;
   // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
   // images have their own lightbox handler and remain interactive while pending.
   return html`<div class="new-session-page__starting chat-thread-inner">
@@ -128,15 +135,14 @@ function renderNewSessionSubmission(
     >
       ${
         normalized.sender && avatarPlacement === "gutter"
-          ? renderUserAvatarSlot(
-              resolveIdentityAvatarView(normalized.sender),
-              formatSenderLabel(normalized.sender) ?? "",
+          ? renderIdentityAvatar(normalized.sender, (view) =>
+              renderUserAvatarSlot(view, formatSenderLabel(normalized.sender) ?? ""),
             )
           : nothing
       }
       <div class="chat-group-messages">
         <div
-          class="chat-bubble ${images.length ? "chat-bubble--with-images" : ""}"
+          class="chat-bubble ${images.length || hasUserFiles ? "chat-bubble--with-images" : ""} ${hasUserFiles ? "chat-bubble--with-files" : ""}"
           data-message-id=${key}
           data-message-text=${markdown || nothing}
         >
@@ -144,19 +150,9 @@ function renderNewSessionSubmission(
           ${renderAssistantAttachments(attachments, imageOptions, undefined, undefined, false)}
           ${
             json
-              ? renderMessageJson(
-                  json,
-                  key,
-                  { role: "user", isStreaming: false },
-                  { codeBlockChrome: "none" },
-                )
+              ? renderMessageJson(json, key, textOptions, markdownOptions)
               : markdown
-                ? renderMessageMarkdown(
-                    markdown,
-                    key,
-                    { role: "user", isStreaming: false },
-                    { codeBlockChrome: "none" },
-                  )
+                ? renderMessageMarkdown(markdown, key, textOptions, markdownOptions)
                 : nothing
           }
         </div>

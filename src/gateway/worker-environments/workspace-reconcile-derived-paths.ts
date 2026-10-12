@@ -8,6 +8,7 @@ import {
 } from "../../media/staged-inputs.js";
 import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export function reconciliationEntries(
@@ -28,10 +29,6 @@ export function reconciliationDirectories(
     (directory) =>
       !isDerivedWorkspacePath(directory, isStagedInputPath(directory, stagedInputDirectories)),
   );
-}
-
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
 }
 
 async function removeDerivedWorkspaceDescendants(
@@ -87,11 +84,8 @@ async function removeDerivedWorkspaceEntry(
 }
 
 async function hasWorkspaceSymlinkAncestor(root: string, relativePath: string): Promise<boolean> {
-  const segments = relativePath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    const stats = await fs
-      .lstat(localPath(root, segments.slice(0, index).join("/")))
-      .catch(() => undefined);
+  for (const ancestor of workspacePathAncestors(relativePath)) {
+    const stats = await fs.lstat(path.join(root, ancestor)).catch(() => undefined);
     if (stats?.isSymbolicLink()) {
       return true;
     }
@@ -103,8 +97,9 @@ export async function prepareNonDirectoryTargets(
   root: string,
   entries: readonly WorkerWorkspaceManifestEntry[],
   retainedInput?: ReturnType<typeof createStagedInputPathMatcher>,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(root);
+  const workspaceRoot = await openFsSafeRoot(root, { assertBeforeMutation: assertCurrent });
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
   // Entries are an already-selected delta; an unchanged ownership marker may be absent.
   for (const entry of entries) {

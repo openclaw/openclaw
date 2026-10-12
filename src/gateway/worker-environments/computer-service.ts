@@ -137,9 +137,12 @@ export function createWorkerComputerService(
         };
         return {
           ...computer,
-          bind(run: OperationalRunInstanceRef) {
+          bind(
+            run: OperationalRunInstanceRef,
+            workerSource?: Parameters<PreparedWorkerComputer["bind"]>[1],
+          ) {
             assertOwner();
-            const transport = computer.bind(run);
+            const transport = computer.bind(run, workerSource);
             const bound: WorkerComputerTransport = {
               computerUse: transport.computerUse,
               async resolveNode(query, signal) {
@@ -219,12 +222,11 @@ export function createWorkerComputerService(
           (await prepared.catch(() => undefined))?.close("gateway-stop"),
         ),
       ]);
-      const failures = results.filter((result) => result.status === "rejected");
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
       if (failures.length) {
-        throw new AggregateError(
-          failures.map((failure) => failure.reason),
-          "Session computer cleanup failed",
-        );
+        throw new AggregateError(failures, "Session computer cleanup failed");
       }
     },
   };

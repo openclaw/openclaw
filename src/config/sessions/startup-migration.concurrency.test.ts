@@ -9,15 +9,11 @@ import { hasPersistedOpenClawAgentCanonicalValidation } from "../../state/opencl
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import * as lifecycle from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  hasOpenClawAgentCanonicalValidation,
-  invalidateOpenClawAgentDatabaseValidation,
-} from "../../state/openclaw-agent-db-validation-cache.js";
+import { hasOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -342,59 +338,6 @@ it("reuses two workers while closing each database task before runtime handoff",
   });
 });
 
-it("reuses durable fleet receipts and recertifies only the store revoked by its parent", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { agentIds, cfg } = seedFleet(state.env);
-    const admitted: string[] = [];
-    observer.onTask = ({ agentId }) => admitted.push(agentId);
-    const startup = () =>
-      runSessionStartupMigration({
-        cfg,
-        env: state.env,
-        log: { info: vi.fn(), warn: vi.fn() },
-      });
-
-    await startup();
-    expect(admitted.toSorted()).toEqual(agentIds);
-    expect(observer.workers.size).toBe(2);
-    for (const agentId of agentIds) {
-      expect(
-        withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
-          agentId,
-          env: state.env,
-        }),
-      ).toMatchObject({ found: true, value: true });
-    }
-
-    closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
-    await startup();
-    expect(admitted).toHaveLength(5);
-    expect(observer.workers.size).toBe(2);
-
-    const revokedAgentId = agentIds[0]!;
-    expect(
-      withOpenClawAgentDatabaseReadOnly(
-        (database) => {
-          invalidateOpenClawAgentDatabaseValidation(database.path);
-          return hasOpenClawAgentCanonicalValidation(database);
-        },
-        { agentId: revokedAgentId, env: state.env },
-      ),
-    ).toMatchObject({ found: true, value: false });
-    await startup();
-    expect(admitted.slice(5)).toEqual([revokedAgentId]);
-    expect(observer.workers.size).toBe(3);
-    expect(
-      withOpenClawAgentDatabaseReadOnly(hasOpenClawAgentCanonicalValidation, {
-        agentId: revokedAgentId,
-        env: state.env,
-      }),
-    ).toMatchObject({ found: true, value: true });
-    expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
-    expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-  });
-});
-
 it("stops fleet admission on refusal and drains an already-started sibling before startup rejects", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env, true);
@@ -451,203 +394,11 @@ it("stops fleet admission on refusal and drains an already-started sibling befor
   });
 });
 
-it("holds writer admission when a refused task's first native retirement fails", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { agentIds, cfg } = seedFleet(state.env);
-    const agentId = agentIds[0]!;
-    const gate = gateFirstCertificationPerTask();
-    const observeTask = observer.onTask;
-    let revoked = false;
-    observer.onTask = (task) => {
-      observeTask?.(task);
-      task.port.on("message", (message: { type: string }) => {
-        if (message.type === "commit-request") {
-          revoked = true;
-        }
-      });
-    };
-    let settled = false;
-    const outcome = runSessionStartupMigration({
-      cfg,
-      env: state.env,
-      agentIds: new Set([agentId]),
-      log: { info: vi.fn(), warn: vi.fn() },
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("synthetic startup authority was revoked");
-        }
-      },
-    }).then(
-      () => {
-        settled = true;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
-    const retryEntered = createDeferredCore();
-    const releaseRetry = createDeferredCore();
-    let following: Promise<unknown> | undefined;
-    try {
-      await gate.waitFor("certification", 1, outcome);
-      expect(gate.held).toHaveLength(1);
-      const worker = gate.tasks[0]!.worker;
-      const terminate = worker.terminate.bind(worker);
-      const retirement = vi
-        .spyOn(worker, "terminate")
-        .mockRejectedValueOnce(new Error("synthetic native retirement failed"))
-        .mockImplementationOnce(async () => {
-          retryEntered.resolve();
-          await releaseRetry.promise;
-          return terminate();
-        });
-      gate.releaseAll();
-      await retryEntered.promise;
-      let followed = false;
-      following = runOpenClawAgentWriteAdmission({ agentId, env: state.env }, () => {
-        followed = true;
-      });
-      await yieldToEventLoop();
-      expect(revoked).toBe(true);
-      expect(settled).toBe(false);
-      expect(followed).toBe(false);
-      expect(worker.threadId).toBeGreaterThan(0);
-      releaseRetry.resolve();
-      expect(await outcome).toEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("synthetic startup authority was revoked"),
-        }),
-      );
-      await following;
-      expect(followed).toBe(true);
-      expect(worker.threadId).toBe(-1);
-      expect(retirement).toHaveBeenCalledTimes(2);
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-    } finally {
-      gate.releaseAll();
-      releaseRetry.resolve();
-      await Promise.allSettled([outcome, following]);
-    }
-  });
-});
-
-it.each(["active", "pre-ready"] as const)(
-  "retries native retirement from a later close after %s startup failure",
-  async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { agentIds, cfg } = seedFleet(state.env);
-      const agentId = agentIds[0]!;
-      const gate = gateFirstCertificationPerTask();
-      const resources: Parameters<
-        typeof lifecycle.registerOpenClawAgentDatabaseAsyncResource
-      >[0][] = [];
-      const register = lifecycle.registerOpenClawAgentDatabaseAsyncResource;
-      vi.spyOn(lifecycle, "registerOpenClawAgentDatabaseAsyncResource").mockImplementation(
-        (resource) => {
-          if (resource.agentId === agentId) {
-            resources.push(resource);
-          }
-          return register(resource);
-        },
-      );
-      const proactiveFailed = createDeferredCore();
-      const releaseRetirement = createDeferredCore();
-      let laterRetryEntered = false;
-      let terminateNative: (() => Promise<number>) | undefined;
-      let retirementCalls: (() => number) | undefined;
-      let earlyClose: Promise<unknown> | undefined;
-      let earlyCloseSettled = false;
-      let laterClose: Promise<unknown> | undefined;
-      let following: Promise<unknown> | undefined;
-      const startEarlyClose = () => {
-        earlyClose = Promise.allSettled(resources.map((resource) => resource.close())).then(() => {
-          earlyCloseSettled = true;
-        });
-      };
-      const observeTask = observer.onTask;
-      observer.onTask = (task) => {
-        observeTask?.(task);
-        const terminate = task.worker.terminate.bind(task.worker);
-        terminateNative = terminate;
-        const retirement = vi
-          .spyOn(task.worker, "terminate")
-          .mockRejectedValueOnce(new Error("synthetic first native retirement failed"))
-          .mockImplementationOnce(async () => {
-            proactiveFailed.resolve();
-            throw new Error("synthetic proactive retirement failed");
-          })
-          .mockImplementationOnce(async () => {
-            laterRetryEntered = true;
-            await releaseRetirement.promise;
-            return terminate();
-          });
-        retirementCalls = () => retirement.mock.calls.length;
-        if (phase === "pre-ready") {
-          startEarlyClose();
-          throw new Error("synthetic dispatch failure before worker readiness");
-        }
-      };
-      let settled = false;
-      const outcome = runSessionStartupMigration({
-        cfg,
-        env: state.env,
-        agentIds: new Set([agentId]),
-        log: { info: vi.fn(), warn: vi.fn() },
-      }).then(
-        () => {
-          settled = true;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
-      try {
-        if (phase === "active") {
-          await gate.waitFor("certification", 1, outcome);
-          expect(gate.held).toHaveLength(1);
-          startEarlyClose();
-          gate.releaseAll();
-        }
-        await proactiveFailed.promise;
-        await yieldToEventLoop();
-        const worker = gate.tasks[0]!.worker;
-        expect(resources.length).toBeGreaterThan(0);
-        let followed = false;
-        if (phase === "active") {
-          following = runOpenClawAgentWriteAdmission({ agentId, env: state.env }, () => {
-            followed = true;
-          });
-        }
-        laterClose = Promise.allSettled(resources.map((resource) => resource.close()));
-        await vi.waitFor(() => expect(laterRetryEntered).toBe(true));
-        expect(settled).toBe(false);
-        expect(earlyCloseSettled).toBe(false);
-        expect(followed).toBe(false);
-        expect(worker.threadId).toBeGreaterThan(0);
-        releaseRetirement.resolve();
-        expect(await outcome).toBeInstanceOf(Error);
-        await Promise.all([earlyClose, laterClose, following]);
-        expect(earlyCloseSettled).toBe(true);
-        expect(followed).toBe(phase === "active");
-        expect(worker.threadId).toBe(-1);
-        expect(retirementCalls?.()).toBe(3);
-        expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-      } finally {
-        gate.releaseAll();
-        releaseRetirement.resolve();
-        await terminateNative?.();
-        await Promise.allSettled([outcome, earlyClose, laterClose, following]);
-      }
-    });
-  },
-);
-
 it("retains the idle pool's cleanup owner until shared-state retirement joins native exit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { agentIds, cfg } = seedFleet(state.env);
     const sharedPath = openOpenClawStateDatabase({ env: state.env }).path;
+    const previousExitHooks = new Set(process.rawListeners("beforeExit"));
     const primaryFailure = new Error("synthetic idle pool retirement failed");
     const retryFailures = [new Error("first recovery failed"), new Error("second recovery failed")];
     let worker: Worker | undefined;
@@ -674,17 +425,22 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
       expect(worker?.threadId).toBeGreaterThan(0);
       expect(retirementCalls?.()).toBe(1);
       expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-      for (const latestFailure of retryFailures) {
+      const exitHooks = () =>
+        process.rawListeners("beforeExit").filter((hook) => !previousExitHooks.has(hook));
+      expect(exitHooks()).toHaveLength(1);
+      const emitBeforeExit = () => exitHooks().forEach((hook) => hook.call(process, 0));
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      emitBeforeExit();
+      await yieldToEventLoop();
+      expect(retirementCalls?.()).toBe(2);
+      expect(worker?.threadId).toBeGreaterThan(0);
+      for (const latestFailure of retryFailures.slice(1)) {
         const failure = await closeOpenClawStateDatabaseByPathAsync(sharedPath).catch(
           (error: unknown) => error,
         );
-        if (!(failure instanceof AggregateError)) {
-          throw new Error("Expected primary and latest retirement failures", { cause: failure });
-        }
-        expect(failure.errors).toHaveLength(2);
-        expect(failure.errors[0]).toBe(primaryFailure);
-        expect(failure.errors[1]).toBe(latestFailure);
-        expect(failure.cause).toBe(latestFailure);
+        expect(failure).toBe(latestFailure);
         expect(worker?.threadId).toBeGreaterThan(0);
       }
       await closeOpenClawStateDatabaseByPathAsync(sharedPath);

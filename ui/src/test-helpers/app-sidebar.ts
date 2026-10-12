@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
@@ -30,8 +30,10 @@ import {
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
+import type { SessionRequestClient } from "../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
+import { seedSidebarEveryonePreference } from "./app-sidebar-setup.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -62,8 +64,7 @@ export type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   connectionStatus: GatewayStatus | null;
   lastError: string | null;
-  outboxAttentionCountForSession: (sessionKey: string) => number;
-  hasSessionDraft: (sessionKey: string) => boolean;
+  storedOutboxes: AppSidebarSessionNavigationElement["storedOutboxes"];
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -82,6 +83,7 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
+  readonly sidebarMenus: AppSidebarSessionNavigationElement["sidebarMenus"];
   findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
   findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
   readonly sessionOrganizer: SessionOrganizerController;
@@ -241,9 +243,11 @@ export function successfulSessionPatch(key: string) {
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
+  let revision = 0;
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const notify = () => {
+    revision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -310,6 +314,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
+  onTestFinished(() => scopedSessions?.dispose());
   const assignOwner = vi.fn<SessionCapability["assignOwner"]>(async (key, owner, options) => {
     const assigned = scopedSessions ? await scopedSessions.assignOwner(key, owner, options) : null;
     if (!assigned || !state.result) {
@@ -328,11 +333,18 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return assigned;
   });
   const sessions = {
+    get revision() {
+      return revision;
+    },
+    captureBootRoster: () => null,
     get state() {
       return state;
     },
     get presentation() {
       return state;
+    },
+    get eventSubscriptionError() {
+      return scopedSessions?.eventSubscriptionError ?? null;
     },
     get canonicalListRevision() {
       return canonicalListRevision;
@@ -389,12 +401,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
       return scopedSessions!.listSnapshot(scope);
     },
-    subscribeList(
-      scope: Parameters<SessionCapability["subscribeList"]>[0],
-      listener: Parameters<SessionCapability["subscribeList"]>[1],
-    ) {
-      return scopedSessions!.subscribeList(scope, listener);
-    },
+    subscribeList: (...args: Parameters<SessionCapability["subscribeList"]>) =>
+      scopedSessions!.subscribeList(...args),
     observeList: (...args: Parameters<SessionCapability["observeList"]>) =>
       scopedSessions!.observeList(...args),
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
@@ -410,6 +418,14 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     reconcile,
     captureReconcile: () => reconcile,
+    describe: (
+      params: Parameters<SessionCapability["describe"]>[0],
+      options: Parameters<SessionCapability["describe"]>[1],
+    ) =>
+      scopedSessions!.describe(params, {
+        ...options,
+        client: options?.client ? (scopedClients.get(options.client) ?? options.client) : undefined,
+      }),
     observeRow: (...args: Parameters<SessionCapability["observeRow"]>) =>
       scopedSessions!.observeRow(...args),
     inheritRow: (...args: Parameters<SessionCapability["inheritRow"]>) =>
@@ -425,7 +441,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   } as unknown as SessionCapability;
   let boundGateway: ApplicationGateway | null = null;
   let boundSelection: ApplicationContext["agentSelection"] | null = null;
-  const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
+  const scopedClients = new WeakMap<SessionRequestClient, GatewayBrowserClient>();
   sidebarSessionGatewayBindings.set(sessions, (gateway, selection) => {
     if (boundGateway === gateway && boundSelection === selection) {
       return;
@@ -518,13 +534,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   };
 }
 
-export function createGateway(client: GatewayBrowserClient): ApplicationGateway {
-  return createGatewayHarness(client).gateway;
-}
+export const createGateway = (client: GatewayBrowserClient): ApplicationGateway =>
+  createGatewayHarness(client).gateway;
 
-export function createSessions(agentId: string, keys: string[]): SessionCapability {
-  return createSessionsHarness(agentId, keys).sessions;
-}
+export const createSessions = (agentId: string, keys: string[]): SessionCapability =>
+  createSessionsHarness(agentId, keys).sessions;
 
 export function createContext(
   gateway: ApplicationGateway,
@@ -570,7 +584,7 @@ export function createContext(
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },
-      subscribe: () => () => undefined,
+      subscribe: vi.fn<ApplicationOverlays["subscribe"]>(() => () => undefined),
     } as unknown as ApplicationOverlays,
   } as unknown as ApplicationContext;
 }
@@ -596,7 +610,8 @@ export async function mountSidebarContext(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
-  sidebar.variant = variant;
+  seedSidebarEveryonePreference(context.gateway);
+  Object.assign(sidebar, { variant });
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;
   }
@@ -605,14 +620,20 @@ export async function mountSidebarContext(
   await sidebar.updateComplete;
   const sidebarWithPreloads = sidebar as unknown as {
     preloadCatalogRenderer: () => Promise<unknown>;
-    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
-    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+    sidebar.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
+  if (sidebar.querySelector("openclaw-channel-avatar")) {
+    await customElements.whenDefined("openclaw-channel-avatar");
+    const channelAvatars = sidebar.querySelectorAll<
+      HTMLElement & { updateComplete: Promise<boolean> }
+    >("openclaw-channel-avatar");
+    await Promise.all(Array.from(channelAvatars, (avatar) => avatar.updateComplete));
+  }
   return { provider, sidebar, context };
 }
 
@@ -620,6 +641,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   const gateway = createGatewayHarness(client);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -641,13 +663,7 @@ export const TWO_AGENTS = {
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
-export const manyAgents = (count: number) =>
-  ({
-    defaultId: "agent-1",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
-  }) as AgentsListResult;
+export { manyAgents } from "./app-sidebar-setup.ts";
 
 export const catalogPage = (
   sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,

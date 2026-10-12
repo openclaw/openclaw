@@ -2,14 +2,100 @@
 
 import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderMessageGroup, renderMessageGroupContent } from "./chat-message-group.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { renderStreamGroupParts } from "./chat-message-stream.ts";
+import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 
 describe("assistant message embed policy", () => {
+  it.each(["persisted", "streaming"] as const)(
+    "revokes YouTube playback on policy, source, and session changes in %s messages",
+    async (surface) => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const host = document.createElement("div");
+      document.body.append(host);
+      onTestFinished(() => {
+        render(null, host);
+        host.remove();
+        vi.unstubAllGlobals();
+      });
+      const show = async (
+        embedSandboxMode: "scripts" | "strict" = "scripts",
+        sessionKey = "agent:main:first",
+        url = "https://youtu.be/AbCdEfGhI_1",
+      ) => {
+        const text = `[embed url="${url}" title="Synthetic video" /]`;
+        const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
+        render(
+          surface === "streaming"
+            ? solidContent(StreamGroupParts, {
+                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
+                options,
+                presentation: "standalone",
+              })
+            : renderGroupedMessage(
+                prepareChatMessageRender({ role: "assistant", content: [{ type: "text", text }] }),
+                "message",
+                { ...options, isStreaming: false, showReasoning: false },
+              ),
+          host,
+        );
+        await vi.dynamicImportSettled();
+        const card = host.querySelector("openclaw-youtube-video");
+        expect(card).not.toBeNull();
+        await card!.updateComplete;
+        return card!;
+      };
+      const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
+        const button = card.querySelector<HTMLButtonElement>(
+          'button[aria-label="Play Synthetic video"]',
+        );
+        expect(button).not.toBeNull();
+        button!.click();
+        await card.updateComplete;
+        const frame = card.querySelector("iframe");
+        expect(frame).toBeInstanceOf(HTMLIFrameElement);
+        return frame!;
+      };
+
+      const first = await show();
+      expect(first.querySelector("iframe")).toBeNull();
+      const firstFrame = await play(first);
+      await show("strict");
+      expect(firstFrame.isConnected).toBe(false);
+      expect(first.querySelector("button")).toBeNull();
+      expect(first.querySelector("a")?.href).toBe("https://www.youtube.com/watch?v=AbCdEfGhI_1");
+
+      const reenabled = await show();
+      expect(reenabled.querySelector("iframe")).toBeNull();
+      const reenabledFrame = await play(reenabled);
+      const otherSession = await show("scripts", "agent:main:second");
+      expect(reenabledFrame.isConnected).toBe(false);
+      expect(otherSession.querySelector("iframe")).toBeNull();
+
+      const sessionFrame = await play(otherSession);
+      const otherSource = await show(
+        "scripts",
+        "agent:main:second",
+        "https://youtu.be/JkLmNoPqR_2",
+      );
+      expect(sessionFrame.isConnected).toBe(false);
+      expect(otherSource.querySelector("iframe")).toBeNull();
+      expect(otherSource.querySelector("a")?.href).toBe(
+        "https://www.youtube.com/watch?v=JkLmNoPqR_2",
+      );
+    },
+  );
+
   it.each(["persisted", "streaming"] as const)(
     "applies external embed policy changes to an existing %s message",
     (surface) => {
@@ -22,11 +108,11 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" as const };
         render(
           surface === "streaming"
-            ? renderStreamGroupParts(
-                [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
+            ? solidContent(StreamGroupParts, {
+                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
                 options,
-                "standalone",
-              )
+                presentation: "standalone",
+              })
             : renderGroupedMessage(prepareChatMessageRender(message), "message", {
                 ...options,
                 isStreaming: false,

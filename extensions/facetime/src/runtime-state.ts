@@ -1,6 +1,7 @@
 import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
 import { FaceTimeCallInstance } from "./call-lifecycle.js";
-import type { HelperActionResult, FaceTimeHelperPeer } from "./helper-rpc.js";
+import type { HelperActionResult } from "./helper-results.js";
+import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
 import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
 import type { FaceTimeTalkDriver } from "./talk-driver.js";
@@ -136,78 +137,30 @@ export type FaceTimeRuntimeStatus = {
   }>;
 };
 
-export function readCallUUID(event: FaceTimeCallStatusEvent): string {
-  return String(event.data.call_uuid);
-}
-
 export function updateCallStatus(call: ActiveFaceTimeCall, event: FaceTimeCallStatusEvent): void {
-  call.callStatus =
-    typeof event.data.call_status === "number" ? event.data.call_status : call.callStatus;
-  call.isSendingAudio =
-    typeof event.data.is_sending_audio === "boolean"
-      ? event.data.is_sending_audio
-      : call.isSendingAudio;
-  call.isSendingTransmission =
-    typeof event.data.is_sending_transmission === "boolean"
-      ? event.data.is_sending_transmission
-      : call.isSendingTransmission;
-  call.isUplinkMuted =
-    typeof event.data.is_uplink_muted === "boolean"
-      ? event.data.is_uplink_muted
-      : call.isUplinkMuted;
-  call.isSendingVideo =
-    typeof event.data.is_sending_video === "boolean"
-      ? event.data.is_sending_video
-      : call.isSendingVideo;
-  call.conversationUUID =
-    typeof event.data.conversation_uuid === "string"
-      ? event.data.conversation_uuid
-      : call.conversationUUID;
-  call.conversationGroupUUID =
-    typeof event.data.conversation_group_uuid === "string"
-      ? event.data.conversation_group_uuid
-      : call.conversationGroupUUID;
+  call.callStatus = event.data.call_status;
+  call.isSendingAudio = event.data.is_sending_audio ?? call.isSendingAudio;
+  call.isSendingTransmission = event.data.is_sending_transmission ?? call.isSendingTransmission;
+  call.isUplinkMuted = event.data.is_uplink_muted ?? call.isUplinkMuted;
+  call.isSendingVideo = event.data.is_sending_video ?? call.isSendingVideo;
+  call.conversationUUID = event.data.conversation_uuid ?? call.conversationUUID;
+  call.conversationGroupUUID = event.data.conversation_group_uuid ?? call.conversationGroupUUID;
   call.conversationAudioEnabled =
-    typeof event.data.conversation_audio_enabled === "boolean"
-      ? event.data.conversation_audio_enabled
-      : call.conversationAudioEnabled;
+    event.data.conversation_audio_enabled ?? call.conversationAudioEnabled;
   call.conversationVideoEnabled =
-    typeof event.data.conversation_video_enabled === "boolean"
-      ? event.data.conversation_video_enabled
-      : call.conversationVideoEnabled;
-  call.conversationAVMode =
-    typeof event.data.conversation_av_mode === "number"
-      ? event.data.conversation_av_mode
-      : call.conversationAVMode;
+    event.data.conversation_video_enabled ?? call.conversationVideoEnabled;
+  call.conversationAVMode = event.data.conversation_av_mode ?? call.conversationAVMode;
   call.conversationResolvedAudioVideoMode =
-    typeof event.data.conversation_resolved_audio_video_mode === "number"
-      ? event.data.conversation_resolved_audio_video_mode
-      : call.conversationResolvedAudioVideoMode;
-  call.localMeterLevel =
-    typeof event.data.local_meter_level === "number"
-      ? event.data.local_meter_level
-      : call.localMeterLevel;
-  call.remoteMeterLevel =
-    typeof event.data.remote_meter_level === "number"
-      ? event.data.remote_meter_level
-      : call.remoteMeterLevel;
-  if (typeof event.data.local_meter_level === "number") {
+    event.data.conversation_resolved_audio_video_mode ?? call.conversationResolvedAudioVideoMode;
+  call.localMeterLevel = event.data.local_meter_level ?? call.localMeterLevel;
+  call.remoteMeterLevel = event.data.remote_meter_level ?? call.remoteMeterLevel;
+  if (event.data.local_meter_level !== undefined) {
     call.maxLocalMeterLevel = Math.max(call.maxLocalMeterLevel ?? 0, event.data.local_meter_level);
   }
-  if (typeof event.data.remote_meter_level === "number") {
+  if (event.data.remote_meter_level !== undefined) {
     call.maxRemoteMeterLevel = Math.max(
       call.maxRemoteMeterLevel ?? 0,
       event.data.remote_meter_level,
     );
   }
-}
-
-export function createManagedCall(params: {
-  callUUID: string;
-  phase: "ringing" | "active";
-  owner: AuthenticatedFaceTimeOwner;
-  handle?: string;
-  peer?: FaceTimeHelperPeer;
-}): ActiveFaceTimeCall {
-  return new ActiveFaceTimeCall(params);
 }

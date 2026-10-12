@@ -1,10 +1,8 @@
 /** Refreshes the persisted plugin registry for mutation and doctor flows. */
-import {
-  refreshPersistedInstalledPluginIndex,
-  type InstalledPluginIndexWriteLease,
-} from "./installed-plugin-index-store-write.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
+import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
 import {
   resolveControlPlaneRegistryParams,
   type PluginRegistrySnapshot,
@@ -13,10 +11,8 @@ import {
 export async function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: InstalledPluginIndexWriteLease;
+      lease?: PluginLifecycleLeaseContext;
     },
 ): Promise<PluginRegistrySnapshot> {
-  return refreshPersistedInstalledPluginIndex(
-    params.config ? resolveControlPlaneRegistryParams(params) : params,
-  );
+  return await refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params));
 }

@@ -139,29 +139,22 @@ final class GatewayMenuStatusStore {
     {
         guard self.generation == generation, !Task.isCancelled else { return }
         self.startedTargets.insert(target)
-        let result: Result<Probe, Error>
-        do {
-            let probe = switch target {
-            case .primary: try await self.primaryProbe()
-            case .local: try await self.localProbe()
-            case let .profile(profileID): try await self.profileProbe(profileID)
-            }
-            result = .success(probe)
-        } catch {
-            result = .failure(error)
+        let probe: Probe? = switch target {
+        case .primary: try? await self.primaryProbe()
+        case .local: try? await self.localProbe()
+        case let .profile(profileID): try? await self.profileProbe(profileID)
         }
         guard self.generation == generation, !Task.isCancelled else { return }
         var facts = self.facts[target] ?? Facts()
         let now = Date()
         facts.probedAt = now
-        switch result {
-        case let .success(probe):
+        if let probe {
             facts.version = probe.version
             facts.buildId = probe.buildId
             facts.latencyMs = probe.latencyMs
             facts.health = .ok
             facts.lastSeen = now
-        case .failure:
+        } else {
             facts.health = .error
             facts.latencyMs = nil
         }

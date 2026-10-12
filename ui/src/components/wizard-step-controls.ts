@@ -20,6 +20,7 @@ type WizardStepControlsProps = {
   // The text step pairs `<label for>` with `<input id>`. The caller owns the id
   // so two step controls in one document cannot capture each other's label.
   inputId: string;
+  validationErrorId?: string;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown) => void;
   presentation?: "channels";
@@ -27,7 +28,7 @@ type WizardStepControlsProps = {
   answerLabel?: string;
   busyLabel?: string;
   confirmAffirmativeLabel?: string;
-  leadingAction?: TemplateResult;
+  leadingAction?: TemplateResult | HTMLElement;
   externalAuthInput?: boolean;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
@@ -48,6 +49,10 @@ export function renderWizardBusyButton(
 
 function stepClass(props: WizardStepControlsProps, name: string): string {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
+}
+
+function stepLabel(step: WizardStep): string {
+  return step.message || step.title || t("chat.questions.answer");
 }
 
 function renderMessage(props: WizardStepControlsProps) {
@@ -99,30 +104,42 @@ function renderSignIn(step: WizardStep) {
   `;
 }
 
-export function renderWizardSingleChoice(props: {
-  options: WizardStepOption[];
-  busy: boolean;
-  label: string;
-  value?: unknown;
-  onAnswer: (value: unknown) => void;
-}) {
-  if (props.options.length <= 2) {
-    return html`<div class="wizard-step__actions">
-      ${props.options.map((option, index) => html`<button type="button" class=${index === 0 ? "btn primary" : "btn"} ?disabled=${props.busy} @click=${() => props.onAnswer(option.value)}>${renderOptionBody(option)}</button>`)}
+function renderWizardSingleChoice(props: WizardStepControlsProps, options: WizardStepOption[]) {
+  const label = stepLabel(props.step);
+  if (props.presentation !== "channels" && options.length <= 2) {
+    return html`<div
+      class="wizard-step__actions"
+      role="group"
+      aria-label=${label}
+      aria-describedby=${props.validationErrorId ?? nothing}
+    >
+      ${options.map((option, index) => html`<button type="button" class=${index === 0 ? "btn primary" : "btn"} ?disabled=${props.busy} @click=${() => props.onAnswer(option.value)}>${renderOptionBody(option)}</button>`)}
     </div>`;
   }
-  const selectedIndex = props.options.findIndex((option) => Object.is(option.value, props.value));
-  return renderPicker({
-    label: props.label,
-    value: selectedIndex < 0 ? null : String(selectedIndex),
-    options: props.options.map((option, index) => ({
-      value: String(index),
+  const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
+  const channels =
+    props.presentation === "channels" &&
+    props.channelSelect &&
+    options.every((option) => typeof option.value === "string");
+  const picker = channels ? renderChannelPicker : renderPicker;
+  return picker({
+    label,
+    value:
+      selectedIndex < 0
+        ? null
+        : channels
+          ? String(options[selectedIndex]?.value)
+          : String(selectedIndex),
+    options: options.map((option, index) => ({
+      value: channels ? String(option.value) : String(index),
       label: option.label,
       description: option.hint,
-      kind: "neutral",
+      kind: channels ? "channel" : "neutral",
     })),
     disabled: props.busy,
-    onChange: (value) => props.onAnswer(props.options[Number(value)]?.value),
+    invalid: Boolean(props.validationErrorId),
+    describedBy: props.validationErrorId,
+    onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
   });
 }
 
@@ -170,6 +187,8 @@ function renderOption(
       class="channels-wizard__option"
       aria-pressed=${checked ? "true" : "false"}
       ?disabled=${props.busy}
+      aria-invalid=${props.validationErrorId ? "true" : nothing}
+      aria-describedby=${props.validationErrorId ?? nothing}
       @click=${() => props.onValueChange(option.value)}
     >
       ${renderOptionBody(option, props.presentation, checked)}
@@ -180,6 +199,8 @@ function renderOption(
       type="checkbox"
       .checked=${checked}
       ?disabled=${props.busy}
+      aria-invalid=${props.validationErrorId ? "true" : nothing}
+      aria-describedby=${props.validationErrorId ?? nothing}
       @change=${(event: Event) => {
         const nextValue = (event.currentTarget as HTMLInputElement).checked
           ? [...selected, option.value]
@@ -230,14 +251,13 @@ function renderTextStep(props: WizardStepControlsProps) {
     step.sensitive && props.onToggleSensitiveVisibility
       ? renderSensitiveInput({
           id: props.inputId,
-          name: "wizard-text",
           value,
           revealed: props.sensitiveRevealed === true,
-          revealLabel: t("configForm.revealValue"),
-          hideLabel: t("configForm.hideValue"),
-          inputClassName: "input",
           placeholder: step.placeholder,
           disabled: props.busy,
+          invalid: Boolean(props.validationErrorId),
+          describedBy: props.validationErrorId,
+          label: step.message ? undefined : stepLabel(step),
           onInput: props.onValueChange,
           onToggle: props.onToggleSensitiveVisibility,
         })
@@ -250,6 +270,9 @@ function renderTextStep(props: WizardStepControlsProps) {
           placeholder=${step.placeholder ?? ""}
           .value=${value}
           ?disabled=${props.busy}
+          aria-invalid=${props.validationErrorId ? "true" : nothing}
+          aria-describedby=${props.validationErrorId ?? nothing}
+          aria-label=${step.message ? nothing : stepLabel(step)}
           @input=${(event: Event) =>
             props.presentation !== "channels" &&
             props.onValueChange((event.currentTarget as HTMLInputElement).value)}
@@ -296,60 +319,35 @@ function renderTextStep(props: WizardStepControlsProps) {
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
-  const selected = multiple ? (Array.isArray(props.value) ? props.value : []) : [props.value];
-  if (!multiple && props.presentation !== "channels") {
+  if (!multiple) {
     return html`
-      ${renderMessage(props)}
-      ${renderWizardSingleChoice({ options, busy: props.busy, label: props.step.message ?? "", value: props.value, onAnswer: props.onAnswer })}
-      ${props.leadingAction ?? nothing}
-    `;
-  }
-  if (props.presentation === "channels" && !multiple) {
-    const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
-    const channels =
-      props.channelSelect && options.every((option) => typeof option.value === "string");
-    const picker = channels ? renderChannelPicker : renderPicker;
-    return html`
-      ${renderMessage(props)}
-      ${picker({
-        label: props.step.message ?? "",
-        value:
-          selectedIndex < 0
-            ? null
-            : channels
-              ? String(options[selectedIndex]?.value)
-              : String(selectedIndex),
-        options: options.map((option, index) => ({
-          value: channels ? String(option.value) : String(index),
-          label: option.label,
-          description: option.hint,
-          kind: channels ? "channel" : "neutral",
-        })),
-        disabled: props.busy,
-        onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
-      })}
+      ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
       ${
-        props.busy
-          ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
-          : nothing
+        props.presentation !== "channels"
+          ? (props.leadingAction ?? nothing)
+          : props.busy
+            ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
+            : nothing
       }
     `;
   }
-  const answer = multiple
-    ? props.presentation === "channels"
-      ? [...selected]
-      : selected
-    : props.value;
+  const selected = Array.isArray(props.value) ? props.value : [];
+  const answer = props.presentation === "channels" ? [...selected] : selected;
   return html`
     ${renderMessage(props)}
-    <div class=${stepClass(props, "options")} role=${multiple ? nothing : "radiogroup"}>
+    <div
+      class=${stepClass(props, "options")}
+      role="group"
+      aria-label=${stepLabel(props.step)}
+      aria-describedby=${props.validationErrorId ?? nothing}
+    >
       ${options.map((option) => renderOption(props, option, selected))}
     </div>
     ${renderAnswerButton(
       props,
       t("modelSetup.wizard.continue"),
       () => props.onAnswer(answer),
-      props.busy || (!multiple && props.value === undefined),
+      props.busy,
     )}
   `;
 }
@@ -405,8 +403,11 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
-    // These show whatever the step supplies behind a single Continue.
     case "note":
+      return props.busy && (props.step.externalUrl || props.step.deviceCode)
+        ? renderProgressStep(props)
+        : renderContinueStep(props);
+    // Actions require the user's acknowledgement even when they open a browser.
     case "action":
       return renderContinueStep(props);
   }

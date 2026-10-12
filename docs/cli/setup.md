@@ -15,6 +15,10 @@ title: "Setup CLI"
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
 
+Baseline setup (`--baseline`) requires the local Gateway to be stopped and holds
+exclusive ownership while creating agent state. Stop the Gateway through its
+service owner, wait for it to exit, then rerun the command.
+
 Routing order:
 
 1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
@@ -126,10 +130,20 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without
-running onboarding. It accepts `--workspace` and harmless output controls, but
+running onboarding. It accepts `--workspace`, `--skip-bootstrap`, and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
 it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
+
+Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
+as a local config override, preserves existing workspace files and included config files,
+and remains enabled on later baseline runs that omit the flag.
+If the `skipBootstrap` value itself comes from an `$include`, edit that included
+file directly instead of replacing its pointer through baseline setup.
+When also changing `--workspace`, update an included per-agent workspace or an
+exact workspace-file include first; baseline setup rejects that combined change
+before writing either config or workspace files.
 
 ## Examples
 

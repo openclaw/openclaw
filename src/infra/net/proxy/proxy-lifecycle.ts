@@ -2,18 +2,17 @@ import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 // Managed proxy lifecycle installs Proxyline, injects process proxy env, and
 // restores inherited/direct routing when owner handles stop.
-import {
-  installGlobalProxy,
-  type ProxylineBypassPolicy,
-  type ProxylineHandle,
-  type ProxylineUndiciOptions,
+import type {
+  ProxylineBypassPolicy,
+  ProxylineHandle,
+  ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
+import { loadProxyline } from "../proxyline-runtime.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,
-  getActiveManagedProxyUrl,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
   type ActiveManagedProxyRegistration,
@@ -50,18 +49,10 @@ const ALL_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS, ...PROXY_AC
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
 
-let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 let proxylineHandle: ProxylineHandle | null = null;
 const MANAGED_PROXY_UNDICI_OPTIONS = Object.freeze({
   allowH2: false,
 }) satisfies ProxylineUndiciOptions;
-
-/** Resets process-wide proxy lifecycle state between tests that share a worker. */
-export function resetProxyLifecycleForTests(): void {
-  baseProxyEnvSnapshot = null;
-  proxylineHandle?.stop();
-  proxylineHandle = null;
-}
 
 function captureProxyEnv(): ProxyEnvSnapshot {
   return {
@@ -75,16 +66,6 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     OPENCLAW_PROXY_LOOPBACK_MODE: process.env["OPENCLAW_PROXY_LOOPBACK_MODE"],
     OPENCLAW_PROXY_CA_FILE: process.env["OPENCLAW_PROXY_CA_FILE"],
   };
-}
-
-function injectProxyEnv(
-  proxyUrl: string,
-  loopbackMode: ProxyLoopbackMode,
-  proxyCaFile: string | undefined,
-): ProxyEnvSnapshot {
-  const snapshot = captureProxyEnv();
-  applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
-  return snapshot;
 }
 
 function applyProxyEnv(
@@ -132,23 +113,27 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   ensureInheritedManagedProxyRoutingActive();
 }
 
-function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): void {
-  restoreInactiveProxyRuntime(restoreSnapshot);
-  baseProxyEnvSnapshot = null;
-}
-
-function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistration): void {
+function stopActiveProxyRegistration(
+  registration: ActiveManagedProxyRegistration,
+  snapshot: ProxyEnvSnapshot,
+): void {
   if (registration.stopped) {
     return;
   }
   stopActiveManagedProxyRegistration(registration);
-  if (getActiveManagedProxyUrl()) {
-    return;
-  }
+  restoreInactiveProxyRuntime(snapshot);
+}
 
-  const restoreSnapshot = baseProxyEnvSnapshot ?? captureProxyEnv();
-  baseProxyEnvSnapshot = null;
-  restoreInactiveProxyRuntime(restoreSnapshot);
+function createProxyHandle(
+  proxyUrl: string,
+  registration: ActiveManagedProxyRegistration,
+  snapshot: ProxyEnvSnapshot,
+): ProxyHandle {
+  return {
+    proxyUrl,
+    stop: async () => stopActiveProxyRegistration(registration, snapshot),
+    kill: () => stopActiveProxyRegistration(registration, snapshot),
+  };
 }
 
 function resolveProxyUrl(config: ProxyConfig | undefined): string {
@@ -169,12 +154,7 @@ function resolveProxyUrl(config: ProxyConfig | undefined): string {
 }
 
 function redactProxyUrlForLog(value: string): string {
-  try {
-    const url = new URL(value);
-    return url.origin;
-  } catch {
-    return "<invalid proxy URL>";
-  }
+  return URL.parse(value)?.origin ?? "<invalid proxy URL>";
 }
 
 /** Reinstalls Proxyline routing in child processes that inherited active proxy env. */
@@ -192,7 +172,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   });
   const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
   applyProxyEnv(proxyUrl, getActiveManagedProxyLoopbackMode() ?? "gateway-only", proxyCaFile);
-  proxylineHandle = installGlobalProxy({
+  proxylineHandle = loadProxyline().installGlobalProxy({
     mode: "managed",
     proxyUrl,
     ...(proxyTls ? { proxyTls } : {}),
@@ -216,32 +196,15 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   const loopbackMode = config?.loopbackMode ?? "gateway-only";
   const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
-  const activeProxyUrl = getActiveManagedProxyUrl();
-  if (activeProxyUrl) {
-    // Nested starts share the existing process-wide proxy when URL, loopback
-    // mode, and TLS options match; each caller still receives its own handle.
-    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
-      loopbackMode,
-      proxyTls,
-    });
-    const handle: ProxyHandle = {
-      proxyUrl,
-      stop: async () => {
-        stopActiveProxyRegistration(registration);
-      },
-      kill: () => {
-        stopActiveProxyRegistration(registration);
-      },
-    };
-    return handle;
-  }
-  baseProxyEnvSnapshot ??= captureProxyEnv();
-  const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let registration: ActiveManagedProxyRegistration | null = null;
+  const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+    loopbackMode,
+    proxyTls,
+  });
+  const lifecycleBaseEnvSnapshot = captureProxyEnv();
 
   try {
-    injectProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
-    proxylineHandle = installGlobalProxy({
+    applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
+    proxylineHandle = loadProxyline().installGlobalProxy({
       mode: "managed",
       proxyUrl,
       ...(proxyTls ? { proxyTls } : {}),
@@ -250,15 +213,9 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
     forceResetGlobalDispatcher({ preserveProxylineManaged: true });
-    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
-      loopbackMode,
-      proxyTls,
-    });
   } catch (err) {
-    if (registration) {
-      stopActiveManagedProxyRegistration(registration);
-    }
-    restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
+    stopActiveManagedProxyRegistration(registration);
+    restoreInactiveProxyRuntime(lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
       cause: err,
     });
@@ -268,21 +225,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
     `proxy: routing process HTTP traffic through external proxy ${redactProxyUrlForLog(proxyUrl)}`,
   );
 
-  const handle: ProxyHandle = {
-    proxyUrl,
-    stop: async () => {
-      if (registration) {
-        stopActiveProxyRegistration(registration);
-      }
-    },
-    kill: () => {
-      if (registration) {
-        stopActiveProxyRegistration(registration);
-      }
-    },
-  };
-
-  return handle;
+  return createProxyHandle(proxyUrl, registration, lifecycleBaseEnvSnapshot);
 }
 
 /** Stops a managed proxy handle if one was started. */
@@ -294,16 +237,15 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
 }
 
 function isLoopbackProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
-    return (
-      (isHttpUrl(url) || isWebSocketUrl(url)) &&
-      (hostname === "localhost" || isLoopbackIpAddress(hostname))
-    );
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return false;
   }
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+  return (
+    (isHttpUrl(url) || isWebSocketUrl(url)) &&
+    (hostname === "localhost" || isLoopbackIpAddress(hostname))
+  );
 }
 
 function assertManagedProxyAllowsLoopback(url: string, surface: string): void {

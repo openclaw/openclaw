@@ -8,9 +8,11 @@ import { describe, expect, inject, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -118,9 +120,18 @@ async function captureFinalStatus(
     )
     .toBeGreaterThan(0);
 
+  // Gateway readiness does not join its background UI build; dashboard --json intentionally
+  // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
+  const document = await waitForControlUiDocument({
+    url: `http://127.0.0.1:${fixture.gateway.port}/`,
+    timeoutMs: 60_000,
+  });
+  expect(document.ready, JSON.stringify(document)).toBe(true);
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
-  expect(dashboard.code, dashboard.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+  const { browserUrl, reason }: { browserUrl: string; reason?: string } = JSON.parse(
+    dashboard.stdout,
+  );
+  expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
   const browser = await chromium.launch({
@@ -162,7 +173,7 @@ async function captureFinalStatus(
     );
     await page.addInitScript(() => {
       localStorage.setItem(
-        "openclaw:control-ui:community-invite",
+        "openclaw:control-ui:community-invite:v2",
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
@@ -330,7 +341,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
-            const auxiliary = await fetch(`${provider.baseUrl}/v1/responses`, {
+            const auxiliary = await provider.fetch("/v1/responses", {
               method: "POST",
               headers: {
                 "content-type": "application/json",
@@ -349,7 +360,11 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             .filter((request) => request.path.endsWith("/responses"));
           const primaryInference = inference.filter(({ body }) => {
             const request: unknown = JSON.parse(body ?? "{}");
-            return isRecord(request) && request.model === "gpt-5.5";
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
           observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
@@ -368,7 +383,17 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
             const refreshed = await catalogRefresh;
             observations.push({ action: "held-catalog-refresh", result: refreshed });
-            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            // Recovery changes availability, so the held generation must not publish stale facts.
+            expect(refreshed, evidence()).toMatchObject({
+              ok: false,
+              error: {
+                name: "GatewayClientRequestError",
+                code: "UNAVAILABLE",
+                retryable: true,
+                retryAfterMs: 0,
+                message: expect.stringContaining("catalog generation was superseded"),
+              },
+            });
             let published: ModelsListResult | undefined;
             await expect
               .poll(async () => {

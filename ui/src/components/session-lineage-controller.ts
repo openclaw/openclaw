@@ -56,8 +56,6 @@ type DescriptorBinding = LineageScope & {
 };
 
 type LineageRequest = {
-  identity: ReturnType<typeof resolveUiConversationIdentity>;
-  sourceRevision: number;
   publishingSelected: boolean;
   promise: Promise<void>;
 };
@@ -371,11 +369,6 @@ export class SessionLineageController {
           this.publish(binding, outcome.row);
           return { status: "selected", row: outcome.row };
         }
-        if (outcome.status === "invalidated") {
-          this.loaded = null;
-          this.owner.requestSessionDataUpdate();
-          return { status: "selected", row: binding.observation?.row ?? null };
-        }
         this.synchronize();
         return { status: "selected", row: null };
       },
@@ -432,8 +425,6 @@ export class SessionLineageController {
         : null);
     const childScope = this.childScope();
     const request: LineageRequest = {
-      identity,
-      sourceRevision: sessions.canonicalListRevision,
       publishingSelected: false,
       promise: Promise.resolve(),
     };
@@ -448,6 +439,7 @@ export class SessionLineageController {
         (globalBinding ? this.bindingIsCurrent(globalBinding) : childScope === this.childScope());
       const lineage = await fetchSessionLineage({
         client,
+        sessions,
         sessionKey: key,
         captureReconcile: sessions.captureReconcile,
         knownRows: collectKnownSessionRows(
@@ -490,14 +482,7 @@ export class SessionLineageController {
           this.clearPresentation();
         }
       } else {
-        publishActiveSessionLineage(
-          this.owner,
-          key,
-          lineage,
-          request.sourceRevision,
-          sessions.inheritRow,
-          isCurrent,
-        );
+        publishActiveSessionLineage(this.owner, key, lineage, sessions.inheritRow, isCurrent);
       }
       if (!isCurrent()) {
         return;
@@ -529,36 +514,36 @@ export class SessionLineageController {
     if (observation.row && !binding.refreshRequested) {
       return observation.row;
     }
-    // Invalidated receipts reissue within the existing descriptor request.
-    // Failures leave through fetchSessionLineage's existing retry policy.
-    while (isCurrent()) {
-      binding.refreshRequested = false;
-      const reconcile = observation.captureReconcile();
-      const described = await binding.client
-        .request<{ session?: GatewaySessionRow | null }>("sessions.describe", {
+    const refresh = binding.refreshRequested;
+    binding.refreshRequested = false;
+    const reconcile = observation.captureReconcile();
+    const described = await binding.sessions
+      .describe(
+        {
           key: binding.key,
           ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        })
-        .catch((error: unknown) => {
-          binding.refreshRequested = true;
-          throw error;
-        });
-      if (!isCurrent()) {
-        return undefined;
-      }
-      const outcome = reconcile(
-        described?.session ? { ...described.session, runtimeSampledAt: Date.now() } : undefined,
-      );
-      if (outcome.status === "invalidated") {
-        continue;
-      }
-      if (outcome.status === "retired") {
-        this.synchronize();
-        return undefined;
-      }
-      this.publish(binding, outcome.row);
-      return outcome.row ?? undefined;
+        },
+        { client: binding.client, refresh },
+      )
+      .catch((error: unknown) => {
+        binding.refreshRequested = true;
+        throw error;
+      });
+    if (!isCurrent()) {
+      return undefined;
     }
-    return undefined;
+    const outcome = reconcile(
+      described?.session
+        ? {
+            ...described.session,
+            runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+          }
+        : undefined,
+    );
+    if (outcome.status !== "current") {
+      return observation.row ?? undefined;
+    }
+    this.publish(binding, outcome.row);
+    return outcome.row ?? undefined;
   }
 }

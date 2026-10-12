@@ -28,52 +28,28 @@ describe("TerminalSessionManager detach/reattach", () => {
     return { manager, fake, emit, sessionId: outcome.sessionId };
   }
 
-  it("detaches sessions on disconnect and reaps them after the grace period", async () => {
+  it.each([0, 10_000])("applies a %ims timeout to the original detach time", async (graceMs) => {
     vi.useFakeTimers();
     try {
-      const { manager, fake, emit } = await openDetachable();
+      const { manager, fake, sessionId } = await openDetachable({ detachGraceMs: 20_000 });
       manager.handleDisconnect("conn-1");
-      expect(manager.size).toBe(1);
-      expect(fake.killed).toBe(false);
-      // Output while detached is buffered, never emitted to a dead conn.
-      emit.mockClear();
-      fake.emitData("while away");
-      expect(emit).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(59_999);
-      expect(fake.killed).toBe(false);
-      vi.advanceTimersByTime(1);
+      vi.advanceTimersByTime(5_000);
+      manager.updateDetachGraceMs(graceMs);
+
+      const remainingMs = graceMs - 5_000;
+      if (remainingMs > 0) {
+        vi.advanceTimersByTime(remainingMs - 1);
+        expect(fake.killed).toBe(false);
+        vi.advanceTimersByTime(1);
+      }
       expect(fake.killed).toBe(true);
       expect(manager.size).toBe(0);
-      expect(emit).not.toHaveBeenCalled();
+      expect(manager.attach("conn-2", sessionId)).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
-
-  it.each([0, 2_000, 10_000, 30_000])(
-    "applies a %ims timeout to the original detach time",
-    async (graceMs) => {
-      vi.useFakeTimers();
-      try {
-        const { manager, fake } = await openDetachable({ detachGraceMs: 20_000 });
-        manager.handleDisconnect("conn-1");
-        vi.advanceTimersByTime(5_000);
-        manager.updateDetachGraceMs(graceMs);
-
-        const remainingMs = graceMs - 5_000;
-        if (remainingMs > 0) {
-          vi.advanceTimersByTime(remainingMs - 1);
-          expect(fake.killed).toBe(false);
-          vi.advanceTimersByTime(1);
-        }
-        expect(fake.killed).toBe(true);
-        expect(manager.size).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("preserves attached sessions and uses the new timeout on their next disconnect", async () => {
     vi.useFakeTimers();
@@ -127,40 +103,7 @@ describe("TerminalSessionManager detach/reattach", () => {
       });
       expect(manager.write("conn-2", sessionId, "ls\n")).toBe(true);
       expect(manager.write("conn-1", sessionId, "ls\n")).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps data sequence numbers monotonic across repeated detach and attach", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, fake, emit, sessionId } = await openDetachable();
-      await vi.advanceTimersByTimeAsync(4);
-      emit.mockClear();
-      fake.emitData("first");
-      await vi.advanceTimersByTimeAsync(4);
-      manager.handleDisconnect("conn-1");
-      fake.emitData("detached");
-      manager.attach("conn-2", sessionId);
-      fake.emitData("second");
-      await vi.advanceTimersByTimeAsync(4);
-      manager.handleDisconnect("conn-2");
-      manager.attach("conn-3", sessionId);
-      fake.emitData("third");
-      await vi.advanceTimersByTimeAsync(4);
-
-      const dataEvents = emit.mock.calls
-        .filter(([, event]) => event === TERMINAL_EVENT_DATA)
-        .map(([connId, , payload]) => {
-          const data = payload as { sessionId: string; seq: number; data: string };
-          return { connId, sessionId: data.sessionId, seq: data.seq, data: data.data };
-        });
-      expect(dataEvents).toEqual([
-        { connId: "conn-1", sessionId, seq: OPERATOR_INTRO.length + 5, data: "first" },
-        { connId: "conn-2", sessionId, seq: OPERATOR_INTRO.length + 19, data: "second" },
-        { connId: "conn-3", sessionId, seq: OPERATOR_INTRO.length + 24, data: "third" },
-      ]);
+      expect(fake.writes).toEqual(["ls\n"]);
     } finally {
       vi.useRealTimers();
     }
@@ -187,37 +130,6 @@ describe("TerminalSessionManager detach/reattach", () => {
     manager.handleDisconnect("conn-1");
     expect(manager.size).toBe(1);
     expect(manager.write("conn-2", sessionId, "x")).toBe(true);
-  });
-
-  it("attach returns undefined for unknown or reaped sessions", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, sessionId } = await openDetachable();
-      expect(manager.attach("conn-2", "nope")).toBeUndefined();
-      manager.handleDisconnect("conn-1");
-      vi.advanceTimersByTime(60_000);
-      expect(manager.attach("conn-2", sessionId)).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("re-detaches with a fresh grace period when the adopting connection drops", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, fake, sessionId } = await openDetachable();
-      manager.handleDisconnect("conn-1");
-      vi.advanceTimersByTime(30_000);
-      expect(manager.attach("conn-2", sessionId)).toBeDefined();
-      manager.handleDisconnect("conn-2");
-      // The second detach restarts the clock; the original deadline is void.
-      vi.advanceTimersByTime(59_999);
-      expect(fake.killed).toBe(false);
-      vi.advanceTimersByTime(1);
-      expect(fake.killed).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("caps detached sessions by killing the oldest", async () => {

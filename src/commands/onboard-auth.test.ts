@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 // Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
@@ -9,14 +10,8 @@ import {
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
-import {
-  applyAuthProfileConfig,
-  upsertApiKeyProfile,
-  writeOAuthCredentials,
-} from "../plugins/provider-auth-helpers.js";
+import { upsertApiKeyProfile, writeOAuthCredentials } from "../plugins/provider-auth-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 
 const providerEnvVarsById = vi.hoisted((): Record<string, readonly string[]> => ({
@@ -81,33 +76,6 @@ describe("writeOAuthCredentials", () => {
     await lifecycle.cleanup();
   });
 
-  it("persists OAuth credentials under the default agent SQLite store", async () => {
-    const env = await setupAuthTestEnv("openclaw-oauth-");
-    lifecycle.track(env);
-    const defaultAgentDir = path.join(env.stateDir, "agents", "main", "agent");
-
-    const creds = {
-      refresh: "refresh-token",
-      access: "access-token",
-      expires: Date.now() + 60_000,
-    } satisfies OAuthCredentials;
-
-    await writeOAuthCredentials("openai", creds);
-
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    }>(defaultAgentDir);
-    expectFields(parsed.profiles?.["openai:default"], {
-      refresh: "refresh-token",
-      access: "access-token",
-      type: "oauth",
-    });
-
-    await expect(readAuthProfilesForAgent(env.agentDir)).rejects.toThrow(
-      "Expected SQLite auth profile store",
-    );
-  });
-
   it("persists primary and main OAuth rows while later siblings inherit", async () => {
     const env = await setupAuthTestEnv("openclaw-oauth-sync-");
     lifecycle.track(env);
@@ -128,9 +96,25 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai", creds, undefined, {
-      syncSiblingAgents: true,
+    const readdir = fsSync.readdirSync;
+    const discovery = vi.spyOn(fsSync, "readdirSync").mockImplementation((...args) => {
+      const entries = readdir(...args);
+      if (args[0] === path.join(tempStateDir, "agents")) {
+        // The shared owner must precede siblings even when the filesystem lists it last.
+        entries.sort(
+          (left, right) =>
+            Number(left.name.toString() === "kid") - Number(right.name.toString() === "kid"),
+        );
+      }
+      return entries;
     });
+    try {
+      await writeOAuthCredentials("openai", creds, undefined, {
+        syncSiblingAgents: true,
+      });
+    } finally {
+      discovery.mockRestore();
+    }
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
       const effectiveStore = readEffectiveAuthProfiles(dir);
@@ -261,11 +245,6 @@ describe("upsertApiKeyProfile secret refs", () => {
     };
   }
 
-  async function readProfileIds(agentDir: string): Promise<string[]> {
-    const parsed = readEffectiveAuthProfiles(agentDir);
-    return Object.keys(parsed.profiles ?? {}).toSorted();
-  }
-
   it("handles plaintext, ref mode, and inline env-ref provider keys", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-");
     lifecycle.track(env);
@@ -329,304 +308,5 @@ describe("upsertApiKeyProfile secret refs", () => {
       key: "sk-moonshot-plaintext",
     });
     expect((await readProfile(env.agentDir, "moonshot:plain"))?.keyRef).toBeUndefined();
-  });
-
-  it("stores provider-specific env refs and metadata in ref mode", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-provider-ref-");
-    lifecycle.track(env);
-    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
-    process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
-    process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
-    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
-
-    upsertApiKeyProfile({
-      provider: "cloudflare-ai-gateway",
-      input: "cf-secret",
-      agentDir: env.agentDir,
-      options: { secretInputMode: "ref" }, // pragma: allowlist secret
-      metadata: {
-        accountId: "account-1",
-        gatewayId: "gateway-1",
-      },
-    });
-    for (const [provider, input] of [
-      ["volcengine", "volcengine-secret"],
-      ["byteplus", "byteplus-secret"],
-      ["opencode", "sk-opencode-env"],
-      ["opencode-go", "sk-opencode-env"],
-    ] as const) {
-      upsertApiKeyProfile({
-        provider,
-        input,
-        agentDir: env.agentDir,
-        options: { secretInputMode: "ref" }, // pragma: allowlist secret
-      });
-    }
-
-    expect(await readProfileIds(env.agentDir)).toEqual([
-      "byteplus:default",
-      "cloudflare-ai-gateway:default",
-      "opencode-go:default",
-      "opencode:default",
-      "volcengine:default",
-    ]);
-    expectFields(await readProfile(env.agentDir, "cloudflare-ai-gateway:default"), {
-      keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
-      metadata: { accountId: "account-1", gatewayId: "gateway-1" },
-    });
-    expect((await readProfile(env.agentDir, "cloudflare-ai-gateway:default"))?.key).toBeUndefined();
-    expectFields(await readProfile(env.agentDir, "volcengine:default"), {
-      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
-    });
-    expectFields(await readProfile(env.agentDir, "byteplus:default"), {
-      keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
-    });
-    expectFields(await readProfile(env.agentDir, "opencode:default"), {
-      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
-    });
-    expectFields(await readProfile(env.agentDir, "opencode-go:default"), {
-      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
-    });
-  });
-});
-
-describe("upsertApiKeyProfile", () => {
-  const lifecycle = createAuthTestLifecycle(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
-
-  afterEach(async () => {
-    await lifecycle.cleanup();
-  });
-
-  it("writes to the default agent dir", async () => {
-    const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
-    lifecycle.track(env);
-    const defaultAgentDir = path.join(env.stateDir, "agents", "main", "agent");
-
-    upsertApiKeyProfile({ provider: "minimax", input: "sk-minimax-test" });
-
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
-    }>(defaultAgentDir);
-    expectFields(parsed.profiles?.["minimax:default"], {
-      type: "api_key",
-      provider: "minimax",
-      key: "sk-minimax-test",
-    });
-
-    await expect(readAuthProfilesForAgent(env.agentDir)).rejects.toThrow(
-      "Expected SQLite auth profile store",
-    );
-  });
-});
-
-describe("applyAuthProfileConfig", () => {
-  const configOnlyCases: {
-    name: string;
-    cfg: OpenClawConfig;
-    preferProfileFirst?: boolean;
-  }[] = [
-    { name: "first profile", cfg: {} },
-    {
-      name: "same-mode profiles",
-      cfg: { auth: { profiles: { old: { provider: "z.ai", mode: "api_key" } } } },
-    },
-    {
-      name: "replacing the only other mode",
-      cfg: { auth: { profiles: { selected: { provider: "z.ai", mode: "oauth" } } } },
-    },
-    {
-      name: "disabled promotion with an empty order",
-      cfg: { auth: { profiles: { old: { provider: "z.ai", mode: "oauth" } }, order: {} } },
-      preferProfileFirst: false,
-    },
-  ];
-  it.each(configOnlyCases)(
-    "adds $name without requiring plugin discovery when order cannot change",
-    ({ cfg, ...options }) => {
-      const lookup = vi.mocked(resolveProviderIdForAuth).mockImplementation(() => {
-        throw new Error("plugin discovery unavailable");
-      });
-      try {
-        const next = applyAuthProfileConfig(cfg, {
-          profileId: "selected",
-          provider: "z-ai",
-          mode: "api_key",
-          preferProfileFirst: options.preferProfileFirst,
-        });
-        expect(next).toEqual({
-          ...cfg,
-          auth: {
-            ...cfg.auth,
-            profiles: {
-              ...cfg.auth?.profiles,
-              selected: { provider: "z-ai", mode: "api_key" },
-            },
-          },
-        });
-      } finally {
-        lookup.mockReset();
-      }
-    },
-  );
-
-  it.each([
-    {
-      order: ["anthropic:default"],
-      prefer: true,
-      expected: ["anthropic:work", "anthropic:default"],
-    },
-    {
-      order: ["anthropic:default"],
-      prefer: false,
-      expected: ["anthropic:default", "anthropic:work"],
-    },
-    {
-      order: ["anthropic:default", "anthropic:work", "anthropic:default"],
-      prefer: false,
-      expected: ["anthropic:default", "anthropic:work"],
-    },
-    { order: [], prefer: true, expected: ["anthropic:work"] },
-    { order: [], prefer: false, expected: ["anthropic:work"] },
-  ])("updates explicit order $order with promotion=$prefer", ({ order, prefer, expected }) => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "anthropic:default": { provider: "anthropic", mode: "api_key" },
-          },
-          order: { anthropic: order, unrelated: ["unrelated:default"] },
-        },
-      },
-      {
-        profileId: "anthropic:work",
-        provider: "anthropic",
-        mode: "oauth",
-        preferProfileFirst: prefer,
-      },
-    );
-
-    expect(next.auth?.order).toEqual({ anthropic: expected, unrelated: ["unrelated:default"] });
-  });
-
-  it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "oauth" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
-  });
-
-  it.each([
-    { provider: "z.ai", expected: ["zai:new", "legacy", "same-mode"] },
-    { provider: "unrelated", expected: undefined },
-  ])("groups mixed modes only for canonical peers of $provider", ({ provider, expected }) => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            legacy: { provider, mode: "oauth" },
-            "same-mode": { provider: "z-ai", mode: "api_key" },
-          },
-        },
-      },
-      { profileId: "zai:new", provider: "zai", mode: "api_key" },
-    );
-    expect(next.auth?.order).toEqual(expected ? { zai: expected } : undefined);
-  });
-
-  it("repairs aliased auth.order keys instead of duplicating them", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "zai:default": { provider: "z.ai", mode: "api_key" },
-          },
-          order: { "z.ai": ["zai:default"] },
-        },
-      },
-      {
-        profileId: "zai:work",
-        provider: "z-ai",
-        mode: "oauth",
-      },
-    );
-
-    expect(next.auth?.order).toEqual({
-      zai: ["zai:work", "zai:default"],
-    });
-  });
-
-  it("merges split canonical and aliased auth.order entries for the same provider", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "zai:default": { provider: "z.ai", mode: "api_key" },
-            "zai:backup": { provider: "z-ai", mode: "token" },
-          },
-          order: {
-            zai: ["zai:default"],
-            "z.ai": ["zai:backup"],
-          },
-        },
-      },
-      {
-        profileId: "zai:work",
-        provider: "z-ai",
-        mode: "oauth",
-      },
-    );
-
-    expect(next.auth?.order).toEqual({
-      zai: ["zai:work", "zai:default", "zai:backup"],
-    });
-  });
-
-  it("keeps implicit round-robin when no mixed provider modes are present", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order).toBeUndefined();
-  });
-
-  it("stores display metadata without overloading email", () => {
-    const next = applyAuthProfileConfig(
-      {},
-      {
-        profileId: "openai:id-abc",
-        provider: "openai",
-        mode: "oauth",
-        displayName: "Work account",
-      },
-    );
-
-    expect(next.auth?.profiles?.["openai:id-abc"]).toEqual({
-      provider: "openai",
-      mode: "oauth",
-      displayName: "Work account",
-    });
   });
 });

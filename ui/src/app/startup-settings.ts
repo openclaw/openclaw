@@ -3,9 +3,9 @@ import {
   normalizeGatewayClientMode,
 } from "@openclaw/gateway-protocol/client-info";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-// Control UI startup settings resolve native auth handoff and URL parameters.
+import type { RouteLocation } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
@@ -13,16 +13,12 @@ import {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
+import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
 import { resolveGatewayCredentialsForUrlEdit, type UiSettings } from "./settings.ts";
-
-type ApplicationStartupLocation = {
-  pathname: string;
-  search: string;
-  hash: string;
-};
 
 type NativeControlAuth = {
   gatewayUrl?: string | null;
+  nativeConnectAuth?: boolean;
   token?: string | null;
   password?: string | null;
   client?: {
@@ -37,21 +33,14 @@ type NativeControlAuth = {
 
 type NativeGatewayClientOptions = Pick<
   GatewayBrowserClientOptions,
-  "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+  | "clientName"
+  | "mode"
+  | "platform"
+  | "deviceFamily"
+  | "instanceId"
+  | "scopes"
+  | "nativeConnectAuth"
 >;
-
-type ApplicationStartupSettings = {
-  settings: UiSettings;
-  password: string | null;
-  pendingGatewayUrl: string | null;
-  pendingGatewayToken: string | null;
-  pendingBootstrapToken: string | null;
-  pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
-  queryTokenUsed: boolean;
-  nativeClient: NativeGatewayClientOptions | null;
-  location: ApplicationStartupLocation;
-  changed: boolean;
-};
 
 declare global {
   interface Window {
@@ -60,9 +49,9 @@ declare global {
 }
 
 export function normalizeLegacyTerminalViewLocation(
-  location: ApplicationStartupLocation,
+  location: RouteLocation,
   basePath: string,
-): ApplicationStartupLocation {
+): RouteLocation {
   const applicationRoot = basePath ? `${basePath}/` : "/";
   if (location.pathname !== applicationRoot) {
     return location;
@@ -82,8 +71,8 @@ export function normalizeLegacyTerminalViewLocation(
 
 export function resolveApplicationStartupSettings(
   initialSettings: UiSettings,
-  location: ApplicationStartupLocation,
-): ApplicationStartupSettings {
+  location: RouteLocation,
+) {
   let settings = initialSettings;
   let changed = false;
   let password: string | null = null;
@@ -91,7 +80,6 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let queryTokenUsed = false;
   let nativeClient: NativeGatewayClientOptions | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -105,8 +93,17 @@ export function resolveApplicationStartupSettings(
     changed = true;
   };
 
-  const nativeAuth =
+  const injectedNativeAuth =
     typeof window === "undefined" ? undefined : window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+  // Older Android WebViews cannot inject at document start. This public marker
+  // selects native-only auth immediately; authority arrives over a main-frame port.
+  // Keep the marker in the URL so a reload cannot start a browser pairing flow.
+  const nativePortGateway = new URLSearchParams(location.hash.replace(/^#/, "")).get(
+    "nativeControlAuth",
+  );
+  const nativeAuth =
+    injectedNativeAuth ??
+    (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
   if (nativeAuth) {
     try {
       delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
@@ -124,14 +121,12 @@ export function resolveApplicationStartupSettings(
         })
       : null;
     const client = nativeAuth.client;
-    const clientName = normalizeGatewayClientId(normalizeOptionalString(client?.id));
-    const mode = normalizeGatewayClientMode(normalizeOptionalString(client?.mode));
+    const clientName = normalizeGatewayClientId(client?.id);
+    const mode = normalizeGatewayClientMode(client?.mode);
     const platform = normalizeOptionalString(client?.platform);
     const deviceFamily = normalizeOptionalString(client?.deviceFamily);
     const instanceId = normalizeOptionalString(client?.instanceId);
-    const scopes = Array.isArray(client?.scopes)
-      ? uniqueStrings(client.scopes.flatMap((scope) => normalizeOptionalString(scope) ?? []))
-      : [];
+    const scopes = normalizeUniqueTrimmedStringList(client?.scopes);
     if (clientName && mode && platform && deviceFamily && scopes.length > 0) {
       nativeClient = {
         clientName,
@@ -142,17 +137,26 @@ export function resolveApplicationStartupSettings(
         scopes,
       };
     }
+    if (nativeAuth.nativeConnectAuth === true && gatewayUrl) {
+      nativeClient = {
+        nativeConnectAuth: createNativeGatewayConnectAuth(gatewayUrl, {
+          messagePort: !injectedNativeAuth && Boolean(nativePortGateway),
+        }),
+      };
+    }
     updateSettings({
       ...(gatewayUrl ? { gatewayUrl } : {}),
       // An explicit null retires shared-owner auth for the native browser sign-in
       // route; an omitted token still preserves the selected Gateway's credentials.
-      ...(nativeAuth.token === null || token
-        ? { token: token ?? "" }
-        : credentials
-          ? { token: credentials.token }
-          : {}),
+      ...(nativeAuth.nativeConnectAuth === true
+        ? { token: "" }
+        : nativeAuth.token === null || token
+          ? { token: token ?? "" }
+          : credentials
+            ? { token: credentials.token }
+            : {}),
     });
-    if (nativePassword) {
+    if (nativePassword && nativeAuth.nativeConnectAuth !== true) {
       password = nativePassword;
     }
   }
@@ -165,7 +169,6 @@ export function resolveApplicationStartupSettings(
       pendingGatewayToken,
       pendingBootstrapToken,
       pendingBootstrapProfile,
-      queryTokenUsed,
       nativeClient,
       location,
       changed,
@@ -187,7 +190,6 @@ export function resolveApplicationStartupSettings(
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
   const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
-  const hasBootstrapProfileParam = hashParams.has(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
   const bootstrapProfile = normalizeOptionalString(
     hashParams.get(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM),
   );
@@ -196,16 +198,8 @@ export function resolveApplicationStartupSettings(
     inferBasePathFromPathname(location.pathname),
   );
   const shouldResetSessionForToken = Boolean(token && !sessionPath && !gatewayUrlChanged);
-  let shouldCleanUrl = false;
-
-  if (params.has("token")) {
-    params.delete("token");
-    shouldCleanUrl = true;
-  }
-
   if (hasTokenParam) {
     if (queryToken != null) {
-      queryTokenUsed = true;
       console.warn(
         "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
       );
@@ -215,8 +209,6 @@ export function resolveApplicationStartupSettings(
     } else if (token) {
       updateSettings({ token });
     }
-    hashParams.delete("token");
-    shouldCleanUrl = true;
   }
 
   if (hasBootstrapTokenParam) {
@@ -225,12 +217,6 @@ export function resolveApplicationStartupSettings(
       bootstrapToken && bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
         ? CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT
         : null;
-    hashParams.delete("bootstrapToken");
-    shouldCleanUrl = true;
-  }
-  if (hasBootstrapProfileParam) {
-    hashParams.delete(CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
-    shouldCleanUrl = true;
   }
 
   if (shouldResetSessionForToken) {
@@ -240,22 +226,25 @@ export function resolveApplicationStartupSettings(
     });
   }
 
-  if (params.has("password") || hashParams.has("password")) {
-    params.delete("password");
-    hashParams.delete("password");
-    shouldCleanUrl = true;
-  }
-
   if (gatewayUrlRaw != null) {
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    if (!gatewayUrlChanged) {
-      pendingGatewayToken = null;
-    } else if (pendingBootstrapToken) {
+    if (!gatewayUrlChanged || pendingBootstrapToken) {
       pendingGatewayToken = null;
     }
-    params.delete("gatewayUrl");
-    hashParams.delete("gatewayUrl");
-    shouldCleanUrl = true;
+  }
+
+  let shouldCleanUrl = false;
+  for (const source of [params, hashParams]) {
+    const keys = ["token", "password", "gatewayUrl"];
+    if (source === hashParams) {
+      keys.push("bootstrapToken", CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM);
+    }
+    for (const key of keys) {
+      if (source.has(key)) {
+        source.delete(key);
+        shouldCleanUrl = true;
+      }
+    }
   }
 
   if (shouldCleanUrl) {
@@ -271,7 +260,6 @@ export function resolveApplicationStartupSettings(
     pendingGatewayToken,
     pendingBootstrapToken,
     pendingBootstrapProfile,
-    queryTokenUsed,
     nativeClient,
     location: shouldCleanUrl
       ? {

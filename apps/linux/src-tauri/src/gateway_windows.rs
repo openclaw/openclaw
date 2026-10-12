@@ -29,11 +29,41 @@ struct Route {
     auth_script: Option<String>,
 }
 
+impl Route {
+    fn retained_destination(&self, previous_base: &Url, current: &Url) -> Option<Url> {
+        (self.url == *previous_base && matches_route(current, &self.url)).then(|| current.clone())
+    }
+}
+
+pub(crate) struct PrimarySelection {
+    follows: bool,
+    auth_script: Option<String>,
+}
+
+impl PrimarySelection {
+    pub(crate) fn follows_primary(&self) -> bool {
+        self.follows
+    }
+
+    pub(crate) fn install(
+        self,
+        replace: impl FnOnce(Option<String>) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if !self.follows {
+            return Ok(false);
+        }
+        replace(self.auth_script)?;
+        Ok(true)
+    }
+}
+
 #[derive(Clone)]
 struct Document {
     lifetime: String,
     nonce: Option<String>,
     url: Url,
+    navigation_url: Url,
+    native_auth: bool,
     phase: NavigationPhase,
     navigation: u64,
     native_navigation: Option<u64>,
@@ -153,6 +183,7 @@ struct Intent {
     generation: u64,
     source: Option<DocumentAuthority>,
     source_url: Option<Url>,
+    navigation_url: Option<Url>,
     target: String,
 }
 
@@ -217,6 +248,107 @@ struct Routing {
 }
 
 impl Routing {
+    fn select_primary(
+        &mut self,
+        url: &Url,
+        auth_script: Option<String>,
+        accepted: Option<String>,
+        ownership: GatewayOwnership,
+    ) -> (PrimarySelection, Vec<Intent>) {
+        // The initial main replacement must consume the same accepted script
+        // published to routing; a later identical Up callback will not reload it.
+        let auth_script = accepted.or(auth_script);
+        let (follows, reconnects) =
+            self.publish_primary(url, auth_script.clone(), ownership, false);
+        (
+            PrimarySelection {
+                follows,
+                auth_script,
+            },
+            reconnects,
+        )
+    }
+
+    fn publish_primary(
+        &mut self,
+        url: &Url,
+        auth_script: Option<String>,
+        ownership: GatewayOwnership,
+        refresh_main: bool,
+    ) -> (bool, Vec<Intent>) {
+        let changed = self
+            .primary
+            .as_ref()
+            .is_none_or(|previous| previous.url != *url || previous.auth_script != auth_script);
+        if changed {
+            self.primary_generation = self.primary_generation.wrapping_add(1);
+        }
+        self.primary = Some(Route {
+            url: url.clone(),
+            auth_script,
+        });
+        self.primary_ownership = Some(ownership);
+        let mut labels = if changed {
+            self.primary_refresh_targets()
+        } else {
+            Vec::new()
+        };
+        // Normal primary selection replaces main in DesktopState. A later hello
+        // is a credential transition, so this routing owner replaces main too.
+        if changed
+            && refresh_main
+            && !labels.iter().any(|label| label == "main")
+            && self.windows.get("main").is_some_and(|route| {
+                route.target == PRIMARY
+                    && route.pending.is_none()
+                    && route.recovery.is_none()
+                    && route
+                        .document
+                        .as_ref()
+                        .is_some_and(|doc| matches_route(&doc.navigation_url, &doc.url))
+            })
+        {
+            labels.push("main".into());
+        }
+        let reconnects = labels
+            .into_iter()
+            .map(|label| self.refresh_primary(&label).intent.clone())
+            .collect();
+        (self.follows_primary(), reconnects)
+    }
+
+    fn primary_route(
+        &self,
+        client: Option<&crate::gateway_ws::GatewayClient>,
+    ) -> Result<Route, String> {
+        let mut route = self
+            .primary
+            .clone()
+            .ok_or("The Primary Gateway is not ready yet.")?;
+        if self.primary_ownership == Some(GatewayOwnership::Remote) {
+            let client = client.ok_or("Native Gateway connection is unavailable.")?;
+            route.auth_script = Some(client.with_native_control_bootstrap(
+                client.generation(),
+                |dashboard, script| {
+                    if dashboard != route.url {
+                        return Err(STALE.into());
+                    }
+                    Ok(script)
+                },
+            )?);
+        }
+        Ok(route)
+    }
+
+    fn native_document(&self, label: &str, lifetime: &str, url: &Url) -> bool {
+        self.windows.get(label).is_some_and(|route| {
+            route.target == PRIMARY
+                && route.document.as_ref().is_some_and(|doc| {
+                    doc.native_auth && doc.lifetime == lifetime && matches_route(url, &doc.url)
+                })
+        })
+    }
+
     fn document_navigation(&mut self, label: &str, lifetime: &str, url: &Url) -> bool {
         if self.closing {
             return false;
@@ -235,15 +367,53 @@ impl Routing {
         if doc.phase == NavigationPhase::Failed {
             return false;
         }
+        // An installed initialization script belongs to this document's Primary
+        // projection. Block a reload before it can replay retired credentials.
+        if self.native_document(label, lifetime, url)
+            && self.windows[label].primary_generation != Some(self.primary_generation)
+        {
+            return false;
+        }
         self.retire_initial_document(label);
         let route = self.windows.get_mut(label).expect("current document");
         route.generation = route.generation.wrapping_add(1);
         route.pending = None;
         let doc = route.document.as_mut().expect("current document");
         doc.navigation = doc.navigation.wrapping_add(1);
+        doc.navigation_url = url.clone();
         doc.phase = NavigationPhase::Active;
         doc.nonce = None;
         true
+    }
+
+    fn admit_document_navigation(
+        &mut self,
+        label: &str,
+        lifetime: &str,
+        url: &Url,
+    ) -> (bool, Option<Intent>) {
+        if self.document_navigation(label, lifetime, url) {
+            return (true, None);
+        }
+        let replace = !self.closing
+            && self.native_document(label, lifetime, url)
+            && self.windows.get(label).is_some_and(|route| {
+                route
+                    .document
+                    .as_ref()
+                    .is_some_and(|doc| doc.phase == NavigationPhase::Active)
+                    && route.primary_generation != Some(self.primary_generation)
+                    && route
+                        .pending
+                        .as_ref()
+                        .is_none_or(|pending| pending.intent.target == PRIMARY)
+            });
+        let replacement = replace.then(|| {
+            let pending = self.refresh_primary(label);
+            pending.intent.navigation_url = Some(url.clone());
+            pending.intent.clone()
+        });
+        (false, replacement)
     }
 
     fn document_event(&self, label: &str, lifetime: &str) -> Option<DocumentEvent> {
@@ -282,9 +452,7 @@ impl Routing {
         let navigation = doc.native_navigation.take()?;
         let mut event = self.document_event(label, lifetime)?;
         event.navigation = navigation;
-        if !self.document_event_current(&event) {
-            return None;
-        }
+        self.current_document(&event)?;
         if matches!(native, NavigationEvent::Failed) {
             self.document_failed(label, lifetime)
         } else {
@@ -292,20 +460,21 @@ impl Routing {
         }
     }
 
-    fn document_event_current(&self, event: &DocumentEvent) -> bool {
-        !self.closing
-            && self.windows.get(&event.label).is_some_and(|route| {
-                route.lifetime == event.window_lifetime
-                    && route.document.as_ref().is_some_and(|doc| {
-                        doc.lifetime == event.document_lifetime
-                            && doc.navigation == event.navigation
-                    })
-            })
+    fn current_document(&self, event: &DocumentEvent) -> Option<(&WindowRoute, &Document)> {
+        if self.closing {
+            return None;
+        }
+        let route = self.windows.get(&event.label)?;
+        let doc = route.document.as_ref()?;
+        (route.lifetime == event.window_lifetime
+            && doc.lifetime == event.document_lifetime
+            && doc.navigation == event.navigation)
+            .then_some((route, doc))
     }
 
     fn document_failed(&mut self, label: &str, lifetime: &str) -> Option<DocumentEvent> {
         let event = self.document_event(label, lifetime)?;
-        if !self.document_event_current(&event) {
+        if self.closing {
             return None;
         }
         let doc = self.windows.get_mut(label)?.document.as_mut()?;
@@ -318,14 +487,9 @@ impl Routing {
     }
 
     fn failed_document(&self, event: &DocumentEvent) -> bool {
-        self.document_event_current(event)
-            && self.windows.get(&event.label).is_some_and(|route| {
-                route.pending.is_none()
-                    && route
-                        .document
-                        .as_ref()
-                        .is_some_and(|doc| doc.phase == NavigationPhase::Failed)
-            })
+        self.current_document(event).is_some_and(|(route, doc)| {
+            route.pending.is_none() && doc.phase == NavigationPhase::Failed
+        })
     }
 
     fn begin_document_recovery(&mut self, event: &DocumentEvent) -> Option<(Intent, bool)> {
@@ -341,13 +505,9 @@ impl Routing {
             .take()
             .unwrap_or_default();
         let present = completion.presents(self.selection_sequence);
-        let intent = self.begin(&event.label, &target, None);
-        self.windows
-            .get_mut(&event.label)?
-            .pending
-            .as_mut()?
-            .completion = completion;
-        Some((intent, present))
+        let pending = self.begin(&event.label, &target, None);
+        pending.completion = completion;
+        Some((pending.intent.clone(), present))
     }
 
     fn complete_document(
@@ -355,9 +515,7 @@ impl Routing {
         event: &DocumentEvent,
         url: &Url,
     ) -> Option<(Document, SelectionCompletion, Option<String>)> {
-        if !self.document_event_current(event) {
-            return None;
-        }
+        self.current_document(event)?;
         let route = self.windows.get_mut(&event.label)?;
         let doc = route.document.as_mut()?;
         if doc.phase != NavigationPhase::Active || !matches_route(url, &doc.url) {
@@ -410,7 +568,7 @@ impl Routing {
                 nonce: document.nonce.clone()?,
             })
         };
-        let mut intent = self.begin("main", INITIAL_SELECTION, source);
+        let mut intent = self.begin("main", INITIAL_SELECTION, source).intent.clone();
         intent.source_url = local_url;
         self.initial_selection = InitialSelection::Restoring {
             generation: intent.generation,
@@ -428,7 +586,10 @@ impl Routing {
             return None;
         }
         if let Some(target) = target {
-            let mut next = self.begin("main", target, intent.source.clone());
+            let mut next = self
+                .begin("main", target, intent.source.clone())
+                .intent
+                .clone();
             next.source_url = intent.source_url.clone();
             self.initial_selection = InitialSelection::Restoring {
                 generation: next.generation,
@@ -504,7 +665,12 @@ impl Routing {
         })
     }
 
-    fn begin(&mut self, label: &str, target: &str, source: Option<DocumentAuthority>) -> Intent {
+    fn begin(
+        &mut self,
+        label: &str,
+        target: &str,
+        source: Option<DocumentAuthority>,
+    ) -> &mut PendingSelection {
         let route = self.windows.entry(label.to_string()).or_default();
         route.generation = route.generation.wrapping_add(1);
         let intent = Intent {
@@ -513,6 +679,7 @@ impl Routing {
             generation: route.generation,
             source,
             source_url: None,
+            navigation_url: None,
             target: target.to_string(),
         };
         let completion = if route.target == target {
@@ -520,67 +687,56 @@ impl Routing {
         } else {
             SelectionCompletion::Automatic
         };
-        route.pending = Some(PendingSelection {
-            intent: intent.clone(),
+        let pending = route.pending.insert(PendingSelection {
+            intent,
             completion,
             action: PendingAction::Switch,
         });
         if let Some(doc) = &mut route.document {
             doc.completion = None;
         }
-        intent
+        pending
     }
 
     fn begin_promotion(&mut self, label: &str, target: &str, source: DocumentAuthority) -> Intent {
-        let intent = self.begin(label, target, Some(source));
-        self.windows
-            .get_mut(label)
-            .expect("reserved window")
-            .pending
-            .as_mut()
-            .expect("reserved promotion")
-            .action = PendingAction::Promote;
-        intent
+        let pending = self.begin(label, target, Some(source));
+        pending.action = PendingAction::Promote;
+        pending.intent.clone()
     }
 
-    fn refresh_primary(&mut self, label: &str) -> Intent {
-        let inherited = self
-            .windows
-            .get(label)
-            .and_then(|route| route.pending.as_ref())
-            .map(|pending| (pending.intent.clone(), pending.completion));
-        let document_completion = self
-            .windows
-            .get(label)
-            .and_then(|route| route.document.as_ref())
-            .and_then(|doc| doc.completion);
-        let mut next = self.begin(
-            label,
-            PRIMARY,
-            inherited
-                .as_ref()
-                .and_then(|(intent, _)| intent.source.clone()),
+    fn refresh_primary(&mut self, label: &str) -> &mut PendingSelection {
+        let route = self.windows.get(label);
+        let inherited = route.and_then(|route| route.pending.as_ref());
+        let document = route.and_then(|route| route.document.as_ref());
+        let source_url = inherited.map_or_else(
+            || document.map(|doc| doc.navigation_url.clone()),
+            |pending| pending.intent.source_url.clone(),
         );
-        if let Some((previous, completion)) = inherited {
-            next.source_url = previous.source_url;
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.intent = next.clone();
-                pending.completion = completion;
-            }
-        } else if let Some(completion) = document_completion {
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = completion;
-            }
+        let destination = inherited
+            .and_then(|pending| pending.intent.navigation_url.as_ref())
+            .or_else(|| document.map(|doc| &doc.navigation_url));
+        let previous_base = route
+            .filter(|route| route.target == PRIMARY)
+            .and(document)
+            .map(|doc| &doc.url);
+        let navigation_url = previous_base
+            .zip(destination)
+            .and_then(|(base, destination)| {
+                self.primary
+                    .as_ref()
+                    .and_then(|primary| primary.retained_destination(base, destination))
+            });
+        let completion = inherited
+            .map(|pending| pending.completion)
+            .or_else(|| document.and_then(|doc| doc.completion));
+        let source = inherited.and_then(|pending| pending.intent.source.clone());
+        let pending = self.begin(label, PRIMARY, source);
+        pending.intent.source_url = source_url;
+        pending.intent.navigation_url = navigation_url;
+        if let Some(completion) = completion {
+            pending.completion = completion;
         }
-        next
+        pending
     }
 
     fn primary_refresh_targets(&self) -> Vec<String> {
@@ -685,25 +841,21 @@ impl Routing {
             self.upgrade_selection(&intent, explicit);
             return SelectionDisposition::Pending;
         }
-        let loading = self.windows.get(label).is_some_and(|route| {
-            route.target == target
-                && route.document.as_ref().is_some_and(|doc| {
-                    doc.completion.is_some()
-                        && doc.nonce.is_none()
-                        && doc.phase != NavigationPhase::Failed
-                })
-        });
-        if loading {
+        let loading = self
+            .windows
+            .get_mut(label)
+            .filter(|route| route.target == target)
+            .and_then(|route| route.document.as_mut())
+            .filter(|doc| {
+                doc.completion.is_some()
+                    && doc.nonce.is_none()
+                    && doc.phase != NavigationPhase::Failed
+            });
+        if let Some(doc) = loading {
             if explicit {
                 self.selection_sequence = self.selection_sequence.wrapping_add(1);
                 self.selection_target = Some(target.to_string());
-                if let Some(doc) = self
-                    .windows
-                    .get_mut(label)
-                    .and_then(|route| route.document.as_mut())
-                {
-                    doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
-                }
+                doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
             }
             return SelectionDisposition::Pending;
         }
@@ -736,29 +888,26 @@ impl Routing {
         }
     }
 
-    fn remember_edited_selection(&mut self, intent: &Intent) {
-        if self.current(intent) {
-            if let Some(pending) = self
-                .windows
-                .get_mut(&intent.label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = SelectionCompletion::RestoreEdited(self.selection_sequence);
-            }
+    fn begin_profile_edit(&mut self, label: &str, target: &str, remember: bool) -> Intent {
+        let completion = (remember && !self.closing)
+            .then_some(SelectionCompletion::RestoreEdited(self.selection_sequence));
+        let pending = self.begin(label, target, None);
+        if let Some(completion) = completion {
+            pending.completion = completion;
         }
+        pending.intent.clone()
     }
 
     fn remembers_edited_target(&self, id: &str) -> bool {
         self.windows.values().any(|route| {
             (route.target == id
-                && (route
-                    .recovery
-                    .is_some_and(|completion| completion.remembers(self.selection_sequence))
-                    || route
-                        .document
-                        .as_ref()
-                        .and_then(|doc| doc.completion)
-                        .is_some_and(|completion| completion.remembers(self.selection_sequence))))
+                && [
+                    route.recovery,
+                    route.document.as_ref().and_then(|doc| doc.completion),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|completion| completion.remembers(self.selection_sequence)))
                 || route.pending.as_ref().is_some_and(|pending| {
                     pending.intent.target == id
                         && self
@@ -837,7 +986,7 @@ impl Routing {
         if self.closing || target == PRIMARY {
             return None;
         }
-        let mut intent = self.begin("main", &target, None);
+        let mut intent = self.begin("main", &target, None).intent.clone();
         intent.source_url = Some(source_url);
         Some(intent)
     }
@@ -909,14 +1058,39 @@ impl DocumentRegistration {
     pub fn configure(&self, builder: WebviewBuilder<tauri::Wry>) -> WebviewBuilder<tauri::Wry> {
         let registration = self.clone();
         let builder = builder.on_navigation(move |url| {
-            registration
-                .app
-                .state::<GatewayWindows>()
+            let app = &registration.app;
+            let owner = app.state::<GatewayWindows>();
+            let native = owner.routing.lock().is_ok_and(|state| {
+                state.native_document(&registration.label, &registration.lifetime, url)
+            });
+            if native {
+                let Some(client) = app.try_state::<crate::gateway_ws::GatewayClient>() else {
+                    return false;
+                };
+                // Revalidate here even before a queued connection-state callback:
+                // a reload must not execute the old installed startup script.
+                if owner
+                    .refresh_primary_native_auth(app, &client, client.generation())
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            let (allowed, replacement) = owner
                 .routing
                 .lock()
-                .is_ok_and(|mut state| {
-                    state.document_navigation(&registration.label, &registration.lifetime, url)
+                .map(|mut state| {
+                    state.admit_document_navigation(
+                        &registration.label,
+                        &registration.lifetime,
+                        url,
+                    )
                 })
+                .unwrap_or((false, None));
+            if let Some(intent) = replacement {
+                schedule_selection(app, intent);
+            }
+            allowed
         });
         #[cfg(target_os = "windows")]
         if let Some(data) = &self.browser_data {
@@ -1087,7 +1261,7 @@ fn isolated_browser_document(label: &str, target: &str) -> bool {
     label != "main" || target != PRIMARY
 }
 
-fn matches_route(candidate: &Url, expected: &Url) -> bool {
+pub(crate) fn matches_route(candidate: &Url, expected: &Url) -> bool {
     if !crate::external_browser_url_allowed(candidate) || candidate.origin() != expected.origin() {
         return false;
     }
@@ -1124,46 +1298,79 @@ impl GatewayWindows {
         url: &Url,
         auth_script: Option<String>,
         ownership: GatewayOwnership,
-    ) -> Result<bool, String> {
-        let (follows, reconnects) = {
+    ) -> Result<PrimarySelection, String> {
+        let (selection, reconnects) = {
             let mut state = self.routing.lock().map_err(|_| STALE)?;
-            let changed = state
-                .primary
-                .as_ref()
-                .is_none_or(|previous| previous.url != *url || previous.auth_script != auth_script);
-            if changed {
-                state.primary_generation = state.primary_generation.wrapping_add(1);
-            }
-            state.primary = Some(Route {
-                url: url.clone(),
-                auth_script,
-            });
-            state.primary_ownership = Some(ownership);
-            let labels = if changed {
-                state.primary_refresh_targets()
+            // A fast native hello may precede this route's publication. Sample
+            // its accepted binding here as well as in the later Up callback.
+            let accepted = if ownership == GatewayOwnership::Remote {
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .and_then(|client| {
+                        client
+                            .with_native_control_bootstrap(
+                                client.generation(),
+                                |dashboard, script| {
+                                    if dashboard != *url {
+                                        return Err(STALE.into());
+                                    }
+                                    Ok(script)
+                                },
+                            )
+                            .ok()
+                    })
             } else {
-                Vec::new()
+                None
             };
-            let reconnects = labels
-                .into_iter()
-                .map(|label| state.refresh_primary(&label))
-                .collect::<Vec<_>>();
-            (state.follows_primary(), reconnects)
+            state.select_primary(url, auth_script, accepted, ownership)
         };
         for intent in reconnects {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let label = intent.label.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    show_error(&app, &label, &error);
-                }
-            });
+            schedule_selection(app, intent);
         }
         self.publish(app);
-        Ok(follows)
+        Ok(selection)
     }
 
-    pub fn main_is_primary(&self, _app: &AppHandle) -> bool {
+    pub(crate) fn refresh_primary_native_auth(
+        &self,
+        app: &AppHandle,
+        client: &crate::gateway_ws::GatewayClient,
+        generation: crate::gateway_ws::GatewayGeneration,
+    ) -> Result<(), String> {
+        let reconnects = {
+            // Same routing -> native config/session lock order as connectAuth.
+            let mut state = self.routing.lock().map_err(|_| STALE)?;
+            // History API transitions do not necessarily trigger a navigation
+            // callback. Capture the live destination before fencing replacement.
+            for (label, route) in &mut state.windows {
+                if let (Some(document), Some(url)) = (
+                    route.document.as_mut(),
+                    app.get_webview(label).and_then(|view| view.url().ok()),
+                ) {
+                    document.navigation_url = url;
+                }
+            }
+            client.with_native_control_bootstrap(generation, |dashboard, script| {
+                if state.primary_ownership != Some(GatewayOwnership::Remote)
+                    || state
+                        .primary
+                        .as_ref()
+                        .is_none_or(|route| route.url != dashboard)
+                {
+                    return Err(STALE.into());
+                }
+                Ok(state
+                    .publish_primary(&dashboard, Some(script), GatewayOwnership::Remote, true)
+                    .1)
+            })?
+        };
+        for intent in reconnects {
+            schedule_selection(app, intent);
+        }
+        self.publish(app);
+        Ok(())
+    }
+
+    pub fn main_is_primary(&self) -> bool {
         self.routing
             .lock()
             .is_ok_and(|state| state.follows_primary())
@@ -1308,6 +1515,8 @@ impl GatewayWindows {
         {
             let mut state = self.routing.lock().map_err(|_| STALE)?;
             let primary_generation = (target_id == PRIMARY).then_some(state.primary_generation);
+            let native_auth =
+                target_id == PRIMARY && state.primary_ownership == Some(GatewayOwnership::Remote);
             let route = state.windows.entry(label.to_string()).or_default();
             let completion = route
                 .pending
@@ -1331,6 +1540,8 @@ impl GatewayWindows {
                 lifetime: lifetime.clone(),
                 nonce: None,
                 url: url.clone(),
+                navigation_url: Url::parse("about:blank").expect("blank URL"),
+                native_auth,
                 phase: NavigationPhase::Preparing,
                 navigation: 0,
                 native_navigation: None,
@@ -1480,16 +1691,12 @@ impl GatewayWindows {
                 None => Err(tunnel),
             }
         };
-        match transferred {
-            Ok(retired) => {
-                retire_tunnel(app, retired);
-                Ok(())
-            }
-            Err(unpublished) => {
-                retire_tunnel(app, unpublished);
-                Err(STALE.into())
-            }
-        }
+        let (retired, result) = match transferred {
+            Ok(retired) => (retired, Ok(())),
+            Err(unpublished) => (unpublished, Err(STALE.to_string())),
+        };
+        retire_tunnel(app, retired);
+        result
     }
 
     pub fn shutdown(&self, app: &AppHandle) {
@@ -1618,7 +1825,7 @@ async fn on_main<T: Send + 'static>(
 
 struct Prepared {
     route: Route,
-    profile: Option<SavedGateway>,
+    profile_revision: Option<String>,
     primary_generation: Option<u64>,
     tunnel: Option<SshTunnel>,
 }
@@ -1664,38 +1871,33 @@ impl Drop for WindowWork {
 
 fn prepare(app: &AppHandle, intent: &Intent) -> Result<Prepared, String> {
     let owner = app.state::<GatewayWindows>();
-    if !owner.routing.lock().map_err(|_| STALE)?.current(intent) {
+    let state = owner.routing.lock().map_err(|_| STALE)?;
+    if !state.current(intent) {
         return Err(STALE.into());
     }
-    if intent.target == PRIMARY {
-        let state = owner.routing.lock().map_err(|_| STALE)?;
+    let primary = intent.target == PRIMARY;
+    let route = if primary {
+        Some(
+            state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?,
+        )
+    } else {
+        state.discovered.get(&intent.target).map(|(_, url)| Route {
+            url: url.clone(),
+            auth_script: None,
+        })
+    };
+    if let Some(route) = route {
         return Ok(Prepared {
-            route: state
-                .primary
-                .clone()
-                .ok_or("The Primary Gateway is not ready yet.")?,
-            profile: None,
-            primary_generation: Some(state.primary_generation),
+            route,
+            profile_revision: None,
+            primary_generation: primary.then_some(state.primary_generation),
             tunnel: None,
         });
     }
-    if let Some((_, url)) = owner
-        .routing
-        .lock()
-        .map_err(|_| STALE)?
-        .discovered
-        .get(&intent.target)
-    {
-        return Ok(Prepared {
-            route: Route {
-                url: url.clone(),
-                auth_script: None,
-            },
-            profile: None,
-            primary_generation: None,
-            tunnel: None,
-        });
-    }
+    drop(state);
     let profile = owner.profiles.get(&intent.target)?;
     let request = &profile.request;
     remote_gateway::validate_request(request)?;
@@ -1717,22 +1919,22 @@ fn prepare(app: &AppHandle, intent: &Intent) -> Result<Prepared, String> {
     };
     let url = remote_gateway::dashboard_url(&gateway)?;
     let auth_script = Some(crate::native_auth_initialization_script(
-        &url, &gateway, request,
+        &url, &gateway, request, false,
     )?);
     Ok(Prepared {
         route: Route { url, auth_script },
-        profile: Some(profile),
+        profile_revision: Some(profile.revision),
         primary_generation: None,
         tunnel,
     })
 }
 
-fn revision_current(owner: &GatewayWindows, profile: Option<&SavedGateway>) -> bool {
-    profile.is_none_or(|saved| {
+fn revision_current(owner: &GatewayWindows, id: &str, revision: Option<&str>) -> bool {
+    revision.is_none_or(|revision| {
         owner
             .profiles
-            .get(&saved.id)
-            .is_ok_and(|current| current.revision == saved.revision)
+            .get(id)
+            .is_ok_and(|current| current.revision == revision)
     })
 }
 
@@ -1749,60 +1951,14 @@ fn source_current(app: &AppHandle, owner: &GatewayWindows, intent: &Intent) -> b
     })
 }
 
-async fn select(
-    app: AppHandle,
-    label: String,
-    target: String,
-    source: Option<DocumentAuthority>,
-    remember: bool,
-) -> Result<(), String> {
-    let intent = on_main(&app, move |app| {
-        let owner = app.state::<GatewayWindows>();
-        if app.get_window(&label).is_none() {
-            return Err(STALE.into());
+fn schedule_selection(app: &AppHandle, intent: Intent) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let label = intent.label.clone();
+        if let Err(error) = select_intent(app.clone(), intent).await {
+            show_error(&app, &label, &error);
         }
-        if let Some(source) = &source {
-            let view = app.get_webview(&source.label).ok_or(STALE)?;
-            if owner.authorize(&view, &source.nonce)?.lifetime != source.lifetime {
-                return Err(STALE.into());
-            }
-        }
-        if remember || source.is_some() {
-            owner
-                .routing
-                .lock()
-                .map_err(|_| STALE)?
-                .explicit_selection();
-        }
-        let disposition = owner
-            .routing
-            .lock()
-            .map_err(|_| STALE)?
-            .admit_selection(&label, &target, !remember, remember);
-        match disposition {
-            SelectionDisposition::Pending => return Ok(None),
-            SelectionDisposition::Reuse => {
-                if let Err(error) = owner.remember_now(if target.starts_with("manual-") {
-                    Some(&target)
-                } else {
-                    None
-                }) {
-                    show_error(app, &label, &error);
-                }
-                return Ok(None);
-            }
-            SelectionDisposition::Replace => {}
-        }
-        let mut state = owner.routing.lock().map_err(|_| STALE)?;
-        let intent = state.begin(&label, &target, source);
-        state.upgrade_selection(&intent, remember);
-        Ok(Some(intent))
-    })
-    .await?;
-    match intent {
-        Some(intent) => select_intent(app, intent).await,
-        None => Ok(()),
-    }
+    });
 }
 
 async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
@@ -1817,8 +1973,7 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     let mut prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            report_selection_failure(&app, &intent, &error).await;
-            cancel_intent(&app, &intent);
+            fail_selection(&app, &intent, &error).await;
             return Err(error);
         }
     };
@@ -1836,21 +1991,29 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
         };
         if !current
             || !source_current(app, &owner, &intent)
-            || !revision_current(&owner, prepared.profile.as_ref())
+            || !revision_current(&owner, &intent.target, prepared.profile_revision.as_deref())
             || app.get_window(&intent.label).is_none()
         {
             return Err(STALE.into());
         }
-        if intent.label == "main" {
-            crate::replace_dashboard_webview(
-                app,
-                prepared.route.url,
-                prepared.route.auth_script,
-                &intent.target,
-            )?
-        } else {
-            replace_auxiliary(app, &intent.label, &intent.target, prepared.route)?
-        };
+        if intent.target == PRIMARY {
+            let state = owner.routing.lock().map_err(|_| STALE)?;
+            prepared.route = state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?;
+        }
+        if intent
+            .navigation_url
+            .as_ref()
+            .is_some_and(|url| !matches_route(url, &prepared.route.url))
+        {
+            return Err(STALE.into());
+        }
+        let view = replace_document(app, &intent.label, &intent.target, prepared.route)?;
+        if let Some(url) = intent.navigation_url {
+            owner.navigate_document(&view, url)?;
+        }
         owner.commit_tunnel(
             app,
             &intent.label,
@@ -1862,11 +2025,8 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     .await;
     let leftover = pending.lock().map_err(|_| STALE)?.take();
     retire_tunnel(&app, leftover);
-    if result.is_err() {
-        if let Err(error) = &result {
-            report_selection_failure(&app, &cleanup, error).await;
-        }
-        cancel_intent(&app, &cleanup);
+    if let Err(error) = &result {
+        fail_selection(&app, &cleanup, error).await;
     }
     result
 }
@@ -1907,24 +2067,12 @@ fn finish_document(
     let owner = app.state::<GatewayWindows>();
     let (target, profile_revision) = {
         let state = owner.routing.lock().map_err(|_| STALE)?;
-        if !state.document_event_current(&event) {
+        let Some((route, doc)) = state.current_document(&event) else {
             return Ok(());
-        }
-        let route = &state.windows[&event.label];
-        (
-            route.target.clone(),
-            route
-                .document
-                .as_ref()
-                .and_then(|doc| doc.profile_revision.clone()),
-        )
+        };
+        (route.target.clone(), doc.profile_revision.clone())
     };
-    if profile_revision.as_ref().is_some_and(|expected| {
-        !owner
-            .profiles
-            .get(&target)
-            .is_ok_and(|profile| profile.revision == *expected)
-    }) {
+    if !revision_current(&owner, &target, profile_revision.as_deref()) {
         let failed =
             owner.routing.lock().ok().and_then(|mut state| {
                 state.document_failed(&event.label, &event.document_lifetime)
@@ -2012,26 +2160,27 @@ fn schedule_document_failure(app: &AppHandle, event: DocumentEvent) {
     });
 }
 
-async fn report_selection_failure(app: &AppHandle, intent: &Intent, error: &str) {
-    let intent = intent.clone();
+async fn fail_selection(app: &AppHandle, intent: &Intent, error: &str) {
+    let failed = intent.clone();
     let error = error.to_string();
     let _ = on_main(app, move |app| {
         let owner = app.state::<GatewayWindows>();
         {
             let mut state = owner.routing.lock().map_err(|_| STALE)?;
-            if !state.current(&intent) {
+            if !state.current(&failed) {
                 return Ok(());
             }
-            let route = state.windows.get_mut(&intent.label).ok_or(STALE)?;
+            let route = state.windows.get_mut(&failed.label).ok_or(STALE)?;
             if route.recovery.is_none() {
                 return Ok(());
             }
             route.notice = Some(error);
         }
-        publish_recovery(app, &intent.label);
+        publish_recovery(app, &failed.label);
         Ok(())
     })
     .await;
+    cancel_intent(app, intent);
 }
 
 fn publish_recovery(app: &AppHandle, label: &str) {
@@ -2148,13 +2297,7 @@ fn open_profile_recovery(app: &AppHandle, intent: &Intent, error: &str) -> Resul
         app.state::<crate::native_browser_bridge::NativeBrowserBridgeState>()
             .clear(app);
     }
-    if let Some(previous) = app.get_webview(label) {
-        crate::window_chrome::loading(&previous);
-        crate::native_browser_platform::detach_surface(&previous)?;
-        previous
-            .close()
-            .map_err(|_| "Could not close the retired Gateway document.")?;
-    }
+    retire_document(app, label, "Could not close the retired Gateway document.")?;
     let capability = CapabilityBuilder::new(format!("gateway-recovery-{}", uuid::Uuid::new_v4()))
         .local(true)
         .webview(label)
@@ -2208,7 +2351,10 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
             return Ok(());
         }
         (
-            state.primary.clone().ok_or(STALE)?,
+            state.primary_route(
+                app.try_state::<crate::gateway_ws::GatewayClient>()
+                    .as_deref(),
+            )?,
             state
                 .windows
                 .get(label)
@@ -2217,45 +2363,54 @@ fn reconcile_primary(app: &AppHandle, label: &str) -> Result<(), String> {
         )
     };
     let current = app.get_webview(label).and_then(|view| view.url().ok());
-    let allowed = current.is_some_and(|url| match &document_url {
-        Some(expected) => matches_route(&url, expected),
+    let destination = document_url
+        .as_ref()
+        .zip(current.as_ref())
+        .and_then(|(base, current)| route.retained_destination(base, current));
+    let allowed = current.as_ref().is_some_and(|url| match &document_url {
+        Some(expected) => matches_route(url, expected),
         None => {
             label == "main"
                 && app
                     .state::<crate::DesktopState>()
-                    .main_window_has_local_url(&url)
+                    .main_window_has_local_url(url)
                 && !app
                     .state::<crate::DesktopState>()
-                    .main_window_has_connection_settings_url(&url)
+                    .main_window_has_connection_settings_url(url)
         }
     });
     if !allowed {
         return Ok(());
     }
-    if label == "main" {
-        crate::replace_dashboard_webview(app, route.url, route.auth_script, PRIMARY)?;
-    } else {
-        replace_auxiliary(app, label, PRIMARY, route)?;
+    let view = replace_document(app, label, PRIMARY, route)?;
+    if let Some(destination) = destination {
+        owner.navigate_document(&view, destination)?;
     }
     owner.commit_tunnel(app, label, None)?;
     Ok(())
 }
 
-fn replace_auxiliary(
+fn retire_document(app: &AppHandle, label: &str, error: &str) -> Result<(), String> {
+    if let Some(previous) = app.get_webview(label) {
+        crate::window_chrome::loading(&previous);
+        crate::native_browser_platform::detach_surface(&previous)?;
+        previous.close().map_err(|_| error)?;
+    }
+    Ok(())
+}
+
+fn replace_document(
     app: &AppHandle,
     label: &str,
     target: &str,
     route: Route,
 ) -> Result<Webview, String> {
+    if label == "main" {
+        return crate::replace_dashboard_webview(app, route.url, route.auth_script, target);
+    }
     let owner = app.state::<GatewayWindows>();
     let window = app.get_window(label).ok_or(STALE)?;
-    if let Some(previous) = app.get_webview(label) {
-        crate::window_chrome::loading(&previous);
-        crate::native_browser_platform::detach_surface(&previous)?;
-        previous
-            .close()
-            .map_err(|_| "Could not replace the Gateway dashboard.")?;
-    }
+    retire_document(app, label, "Could not replace the Gateway dashboard.")?;
     let size = window
         .inner_size()
         .map_err(|_| "Could not measure the Gateway window.")?;
@@ -2296,14 +2451,29 @@ fn replace_auxiliary(
     Ok(view)
 }
 
-async fn open_window(
+enum WindowSelection {
+    Current { label: String, remember: bool },
+    New,
+    Reuse,
+}
+
+async fn select_window(
     app: AppHandle,
     target: String,
-    reuse: bool,
     source: Option<DocumentAuthority>,
+    selection: WindowSelection,
 ) -> Result<(), String> {
     let (label, intent, created) = on_main(&app, move |app| {
         let owner = app.state::<GatewayWindows>();
+        let remember = match &selection {
+            WindowSelection::Current { label, remember } => {
+                if app.get_window(label).is_none() {
+                    return Err(STALE.into());
+                }
+                *remember
+            }
+            WindowSelection::New | WindowSelection::Reuse => true,
+        };
         if let Some(source) = &source {
             let view = app.get_webview(&source.label).ok_or(STALE)?;
             if owner.authorize(&view, &source.nonce)?.lifetime != source.lifetime {
@@ -2315,71 +2485,76 @@ async fn open_window(
             .lock()
             .map_err(|_| STALE)?
             .explicit_selection();
-        if reuse {
-            let existing = owner
-                .routing
-                .lock()
-                .map_err(|_| STALE)?
-                .window_for_target(&target);
-            if let Some(label) = existing {
-                if let Some(window) = app.get_window(&label) {
-                    let force = !owner.ready_document(app, &label);
-                    let disposition = owner
+        let (label, focus, created) = match selection {
+            WindowSelection::Current { label, .. } => (label, None, false),
+            WindowSelection::New | WindowSelection::Reuse => {
+                let existing = if matches!(selection, WindowSelection::Reuse) {
+                    owner
                         .routing
                         .lock()
                         .map_err(|_| STALE)?
-                        .admit_selection(&label, &target, force, true);
-                    match disposition {
-                        SelectionDisposition::Pending => return Ok((label, None, false)),
-                        SelectionDisposition::Reuse => {
-                            window
-                                .show()
-                                .map_err(|_| "Could not show the Gateway window.")?;
-                            let _ = window.unminimize();
-                            window
-                                .set_focus()
-                                .map_err(|_| "Could not focus the Gateway window.")?;
-                            if let Err(error) =
-                                owner.remember_now(if target.starts_with("manual-") {
-                                    Some(&target)
-                                } else {
-                                    None
-                                })
-                            {
-                                show_error(app, &label, &error);
-                            }
-                            return Ok((label, None, false));
-                        }
-                        SelectionDisposition::Replace => {
-                            let mut state = owner.routing.lock().map_err(|_| STALE)?;
-                            let intent = state.begin(&label, &target, source);
-                            state.upgrade_selection(&intent, true);
-                            return Ok((label, Some(intent), false));
-                        }
-                    }
+                        .window_for_target(&target)
+                } else {
+                    None
+                };
+                if let Some(window) = existing.and_then(|label| app.get_window(&label)) {
+                    (window.label().to_string(), Some(window), false)
+                } else {
+                    let label = format!("gateway-{}", uuid::Uuid::new_v4());
+                    let name = if target == PRIMARY {
+                        "Primary Gateway".to_string()
+                    } else if let Ok(profile) = owner.profiles.get(&target) {
+                        profile.name
+                    } else {
+                        owner
+                            .routing
+                            .lock()
+                            .map_err(|_| STALE)?
+                            .discovered
+                            .get(&target)
+                            .map(|(name, _)| name.clone())
+                            .ok_or("That Gateway is no longer available.")?
+                    };
+                    create_gateway_window(app, &label, &name)?;
+                    (label, None, true)
                 }
             }
-        }
-        let label = format!("gateway-{}", uuid::Uuid::new_v4());
-        let name = if target == PRIMARY {
-            "Primary Gateway".to_string()
-        } else if let Ok(profile) = owner.profiles.get(&target) {
-            profile.name
+        };
+        let disposition = if created {
+            SelectionDisposition::Replace
         } else {
+            let force = if focus.is_some() {
+                !owner.ready_document(app, &label)
+            } else {
+                !remember
+            };
             owner
                 .routing
                 .lock()
                 .map_err(|_| STALE)?
-                .discovered
-                .get(&target)
-                .map(|(name, _)| name.clone())
-                .ok_or("That Gateway is no longer available.")?
+                .admit_selection(&label, &target, force, remember)
         };
-        create_gateway_window(app, &label, &name)?;
-        let mut state = owner.routing.lock().map_err(|_| STALE)?;
-        let intent = state.begin(&label, &target, source);
-        state.upgrade_selection(&intent, true);
-        Ok((label, Some(intent), true))
+        let intent = match disposition {
+            SelectionDisposition::Pending => None,
+            SelectionDisposition::Reuse => {
+                if let Some(window) = focus {
+                    present_window(&window, "Gateway")?;
+                }
+                if let Err(error) =
+                    owner.remember_now(target.starts_with("manual-").then_some(&target))
+                {
+                    show_error(app, &label, &error);
+                }
+                None
+            }
+            SelectionDisposition::Replace => {
+                let mut state = owner.routing.lock().map_err(|_| STALE)?;
+                let intent = state.begin(&label, &target, source).intent.clone();
+                state.upgrade_selection(&intent, remember);
+                Some(intent)
+            }
+        };
+        Ok((label, intent, created))
     })
     .await?;
     let Some(intent) = intent else {
@@ -2399,10 +2574,7 @@ async fn open_window(
                     route.document.is_none() && route.pending.is_none() && route.recovery.is_none()
                 });
             if unused {
-                owner.closed(app, &label);
-                if let Some(window) = app.get_window(&label) {
-                    let _ = window.close();
-                }
+                close_window(app, &label);
             }
             Ok(())
         })
@@ -2423,9 +2595,21 @@ fn create_gateway_window(app: &AppHandle, label: &str, name: &str) -> Result<(),
         .map_err(|_| "Could not prepare Gateway window controls.".to_string())
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn show_primary_url(app: &AppHandle, target: Url) -> Result<(), String> {
-    show_primary_route(app, Some(target))
+fn present_window(window: &tauri::Window, name: &str) -> Result<(), String> {
+    window
+        .show()
+        .map_err(|_| format!("Could not show the {name} window."))?;
+    let _ = window.unminimize();
+    window
+        .set_focus()
+        .map_err(|_| format!("Could not focus the {name} window."))
+}
+
+fn close_window(app: &AppHandle, label: &str) {
+    app.state::<GatewayWindows>().closed(app, label);
+    if let Some(window) = app.get_window(label) {
+        let _ = window.close();
+    }
 }
 
 pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
@@ -2444,17 +2628,17 @@ pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
     show_primary_route(app, None)
 }
 
-fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
+pub(crate) fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
     let owner = app.state::<GatewayWindows>();
     let (primary, generation, existing) = {
         let mut state = owner.routing.lock().map_err(|_| STALE)?;
         if state.closing {
             return Err(STALE.into());
         }
-        let primary = state
-            .primary
-            .clone()
-            .ok_or("The Primary Gateway is not ready yet.")?;
+        let primary = state.primary_route(
+            app.try_state::<crate::gateway_ws::GatewayClient>()
+                .as_deref(),
+        )?;
         if target
             .as_ref()
             .is_some_and(|target| !matches_route(target, &primary.url))
@@ -2488,11 +2672,7 @@ fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), St
             }
         }
         let view = if replace || app.get_webview(&label).is_none() {
-            if label == "main" {
-                crate::replace_dashboard_webview(app, primary.url, primary.auth_script, PRIMARY)?
-            } else {
-                replace_auxiliary(app, &label, PRIMARY, primary)?
-            }
+            replace_document(app, &label, PRIMARY, primary)?
         } else {
             app.get_webview(&label).ok_or(STALE)?
         };
@@ -2513,22 +2693,13 @@ fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), St
                 owner.navigate_document(&view, target)?;
             }
         }
-        view.window()
-            .show()
-            .map_err(|_| "Could not show the Primary Gateway window.")?;
-        let _ = view.window().unminimize();
-        view.window()
-            .set_focus()
-            .map_err(|_| "Could not focus the Primary Gateway window.")?;
+        present_window(&view.window(), "Primary Gateway")?;
         owner.publish(app);
         Ok(())
     })();
     if let Err(error) = &result {
         if created {
-            owner.closed(app, &label);
-            if let Some(window) = app.get_window(&label) {
-                let _ = window.close();
-            }
+            close_window(app, &label);
         }
         show_error(app, "main", error);
     }
@@ -2583,7 +2754,7 @@ pub(crate) async fn open_discovered(app: AppHandle, url: Url, name: String) -> R
         Ok(())
     })
     .await?;
-    open_window(app, target, true, None).await
+    select_window(app, target, None, WindowSelection::Reuse).await
 }
 
 fn local_settings_url(url: &Url) -> bool {
@@ -2627,6 +2798,27 @@ pub(crate) fn open_settings(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn authorize_control_auth(
+    state: &Routing,
+    source: &DocumentAuthority,
+    url: &Url,
+) -> Result<(), String> {
+    let route = state.windows.get(&source.label).ok_or(STALE)?;
+    let doc = route.document.as_ref().ok_or(STALE)?;
+    if state.closing
+        || state.primary_ownership != Some(GatewayOwnership::Remote)
+        || route.target != PRIMARY
+        || route.primary_generation != Some(state.primary_generation)
+        || doc.phase != NavigationPhase::Active
+        || doc.lifetime != source.lifetime
+        || doc.nonce.as_deref() != Some(&source.nonce)
+        || !matches_route(url, &doc.url)
+    {
+        return Err(STALE.into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) async fn gateway_request(
     app: AppHandle,
@@ -2646,29 +2838,61 @@ pub(crate) async fn gateway_request(
         .unwrap_or(PRIMARY)
         .to_string();
     match action {
+        "connectAuth" => {
+            let challenge: crate::gateway_control_auth::Challenge = serde_json::from_value(
+                message
+                    .get("challenge")
+                    .cloned()
+                    .ok_or("Missing native authentication challenge.")?,
+            )
+            .map_err(|_| "Invalid native authentication challenge.")?;
+            challenge.validate()?;
+            let client = app
+                .state::<crate::gateway_ws::GatewayClient>()
+                .inner()
+                .clone();
+            let generation = client.generation();
+            {
+                let owner = app.state::<GatewayWindows>();
+                let state = owner.routing.lock().map_err(|_| STALE)?;
+                authorize_control_auth(&state, &source, &webview.url().map_err(|_| STALE)?)?;
+            }
+            client.activate(app.clone());
+            client.wait_for_native_control_auth(generation).await?;
+            return on_main(&app, move |app| {
+                let owner = app.state::<GatewayWindows>();
+                let view = app.get_webview(&source.label).ok_or(STALE)?;
+                let url = view.url().map_err(|_| STALE)?;
+                let state = owner.routing.lock().map_err(|_| STALE)?;
+                authorize_control_auth(&state, &source, &url)?;
+                // Routing is UI-thread owned; keep it held until the live RPC owner signs.
+                let result = client.native_control_auth(generation, &url, &challenge)?;
+                Ok(json!({"id":challenge.id,"result":result}))
+            })
+            .await;
+        }
         "select" | "reconnect" => {
-            let remember = action == "select";
-            select(app, label, target, Some(source), remember).await?;
+            let selection = WindowSelection::Current {
+                label,
+                remember: action == "select",
+            };
+            select_window(app, target, Some(source), selection).await?;
         }
         "open-window" => {
-            open_window(app, target, false, Some(source)).await?;
+            select_window(app, target, Some(source), WindowSelection::New).await?;
         }
-        "reconnect-cancel" => {
+        "reconnect-cancel" | "open-settings" => {
+            let settings = action == "open-settings";
             on_main(&app, move |app| {
                 let view = app.get_webview(&label).ok_or(STALE)?;
                 let owner = app.state::<GatewayWindows>();
                 owner.authorize(&view, &source.nonce)?;
-                owner.cancel_pending(app, &label);
-                Ok(())
-            })
-            .await?
-        }
-        "open-settings" => {
-            on_main(&app, move |app| {
-                let view = app.get_webview(&label).ok_or(STALE)?;
-                app.state::<GatewayWindows>()
-                    .authorize(&view, &source.nonce)?;
-                open_settings(app)
+                if settings {
+                    open_settings(app)
+                } else {
+                    owner.cancel_pending(app, &label);
+                    Ok(())
+                }
             })
             .await?
         }
@@ -2686,17 +2910,9 @@ pub(crate) async fn gateway_request(
                 let owner = app.state::<GatewayWindows>();
                 let view = app.get_webview(&label).ok_or(STALE)?;
                 owner.authorize(&view, &source.nonce)?;
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                let intent = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .begin_promotion(&label, &target, source);
-                Ok(intent)
+                let mut state = owner.routing.lock().map_err(|_| STALE)?;
+                state.explicit_selection();
+                Ok(state.begin_promotion(&label, &target, source))
             })
             .await?;
             let guard = PromotionGuard {
@@ -2717,7 +2933,13 @@ pub(crate) async fn gateway_request(
                     }
                 })
                 .await?;
-                crate::promote_gateway_profile(&app, profile.request, guard).await
+                app.state::<crate::GatewayOperationQueue>()
+                    .execute(crate::GatewayOperation::PromoteProfile {
+                        request: profile.request,
+                        guard,
+                    })
+                    .await
+                    .map(|_| ())
             }
             .await;
             cancel_intent(&app, &intent);
@@ -2751,7 +2973,7 @@ pub(crate) async fn gateway_profile_request(
             .to_string();
         app.state::<GatewayWindows>().profiles.get(&id)?;
         if label == SETTINGS {
-            open_window(app, id, false, None).await?;
+            select_window(app, id, None, WindowSelection::New).await?;
         } else {
             let intent = on_main(&app, move |app| {
                 let view = app.get_webview(&label).ok_or(STALE)?;
@@ -2762,7 +2984,7 @@ pub(crate) async fn gateway_profile_request(
                 let url = view.url().map_err(|_| STALE)?;
                 let mut state = owner.routing.lock().map_err(|_| STALE)?;
                 state.explicit_selection();
-                let mut intent = state.begin(&label, &id, None);
+                let mut intent = state.begin(&label, &id, None).intent.clone();
                 intent.source_url = Some(url);
                 state.upgrade_selection(&intent, true);
                 Ok(intent)
@@ -2778,14 +3000,16 @@ pub(crate) async fn gateway_profile_request(
             return Err(STALE.into());
         }
         let owner = app.state::<GatewayWindows>();
+        if action == "list" {
+            let result =
+                json!({"profiles":owner.profiles.list()?,"selectedId":owner.profiles.selected()?});
+            owner.publish(app);
+            return Ok((result, Vec::new()));
+        }
         let id = message.get("id").and_then(Value::as_str);
-        let mut affected = Vec::new();
         let mut replacement = None;
         let mut remember_edited = false;
         let result = match action.as_str() {
-            "list" => {
-                json!({"profiles":owner.profiles.list()?,"selectedId":owner.profiles.selected()?})
-            }
             "save" => {
                 let name = message
                     .get("name")
@@ -2813,16 +3037,6 @@ pub(crate) async fn gateway_profile_request(
                     owner.routing.lock().map_err(|_| STALE)?.selection_target =
                         Some(profile.id.clone());
                 }
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                affected = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .invalidate_profile(id.unwrap_or(&profile.id));
                 replacement = Some(profile.id.clone());
                 serde_json::to_value(profile)
                     .map_err(|_| "Could not read saved Gateway details.")?
@@ -2830,41 +3044,26 @@ pub(crate) async fn gateway_profile_request(
             "remove" => {
                 let id = id.ok_or("Choose a saved Gateway.")?;
                 owner.profiles.remove(id)?;
-                owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .explicit_selection();
-                affected = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .invalidate_profile(id);
                 Value::Null
             }
             _ => return Err("Unknown saved Gateway action.".into()),
         };
+        let affected = {
+            let mut state = owner.routing.lock().map_err(|_| STALE)?;
+            state.explicit_selection();
+            state.invalidate_profile(id.or(replacement.as_deref()).expect("changed profile"))
+        };
         let mut reconnects = Vec::new();
         for label in affected {
             if replacement.is_none() && label != "main" {
-                owner.closed(app, &label);
-                if let Some(window) = app.get_window(&label) {
-                    let _ = window.close();
-                }
+                close_window(app, &label);
             } else {
                 let target = replacement.as_deref().unwrap_or(PRIMARY);
-                let retiring = owner
-                    .routing
-                    .lock()
-                    .map_err(|_| STALE)?
-                    .begin(&label, target, None);
-                if remember_edited {
-                    owner
-                        .routing
-                        .lock()
-                        .map_err(|_| STALE)?
-                        .remember_edited_selection(&retiring);
-                }
+                let retiring = owner.routing.lock().map_err(|_| STALE)?.begin_profile_edit(
+                    &label,
+                    target,
+                    remember_edited,
+                );
                 if let Err(error) = open_profile_recovery(app, &retiring, "") {
                     show_error(app, view.label(), &error);
                     continue;
@@ -2874,25 +3073,19 @@ pub(crate) async fn gateway_profile_request(
                         .routing
                         .lock()
                         .map_err(|_| STALE)?
-                        .begin(&label, target, None),
+                        .begin(&label, target, None)
+                        .intent
+                        .clone(),
                 );
             }
         }
-        if matches!(action.as_str(), "save" | "remove") {
-            publish_profile_catalog(app, &label, id, replacement.as_deref());
-        }
+        publish_profile_catalog(app, &label, id, replacement.as_deref());
         owner.publish(app);
         Ok((result, reconnects))
     })
     .await?;
     for intent in reconnects {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let label = intent.label.clone();
-            if let Err(error) = select_intent(app.clone(), intent).await {
-                show_error(&app, &label, &error);
-            }
-        });
+        schedule_selection(&app, intent);
     }
     Ok(result)
 }
@@ -2942,22 +3135,19 @@ fn fill_menu(app: &AppHandle, menu: &Submenu<tauri::Wry>, snapshot: &Value) -> t
             let (Some(id), Some(name)) = (gateway["id"].as_str(), gateway["name"].as_str()) else {
                 continue;
             };
-            let accelerator = (index < 9).then(|| format!("CmdOrCtrl+{}", index + 1));
-            menu.append(&MenuItem::with_id(
-                app,
-                format!("gateway-focus:{id}"),
-                name,
-                true,
-                accelerator,
-            )?)?;
-            let accelerator = (index < 9).then(|| format!("CmdOrCtrl+Alt+{}", index + 1));
-            menu.append(&MenuItem::with_id(
-                app,
-                format!("gateway-new:{id}"),
-                format!("Open {name} in New Window"),
-                true,
-                accelerator,
-            )?)?;
+            for (action, name, modifier) in [
+                ("focus", name.to_string(), ""),
+                ("new", format!("Open {name} in New Window"), "Alt+"),
+            ] {
+                let accelerator = (index < 9).then(|| format!("CmdOrCtrl+{modifier}{}", index + 1));
+                menu.append(&MenuItem::with_id(
+                    app,
+                    format!("gateway-{action}:{id}"),
+                    name,
+                    true,
+                    accelerator,
+                )?)?;
+            }
         }
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
@@ -2995,17 +3185,17 @@ pub(crate) fn handle_menu(app: &AppHandle, id: &str) -> bool {
         }
         return true;
     }
-    let (target, reuse) = if let Some(id) = id.strip_prefix("gateway-focus:") {
-        (id, true)
+    let (target, selection) = if let Some(id) = id.strip_prefix("gateway-focus:") {
+        (id, WindowSelection::Reuse)
     } else if let Some(id) = id.strip_prefix("gateway-new:") {
-        (id, false)
+        (id, WindowSelection::New)
     } else {
         return false;
     };
     let app = app.clone();
     let target = target.to_string();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = open_window(app.clone(), target, reuse, None).await {
+        if let Err(error) = select_window(app.clone(), target, None, selection).await {
             show_error(&app, "main", &error);
         }
     });
@@ -3100,26 +3290,17 @@ pub(crate) fn startup(app: &AppHandle) {
             Ok(next)
         })
         .await;
-        match resolved {
-            Ok(Some(intent)) => {
-                let completion = intent.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    if error != STALE {
-                        show_error(&app, "main", &error);
-                    }
-                }
-                if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
-                    state.finish_initial_selection(&completion);
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
-                    state.finish_initial_selection(&completion);
-                }
-                if error != STALE {
-                    show_error(&app, "main", &error);
-                }
+        let (completion, result) = match resolved {
+            Ok(Some(intent)) => (intent.clone(), select_intent(app.clone(), intent).await),
+            Ok(None) => return,
+            Err(error) => (completion, Err(error)),
+        };
+        if let Ok(mut state) = app.state::<GatewayWindows>().routing.lock() {
+            state.finish_initial_selection(&completion);
+        }
+        if let Err(error) = result {
+            if error != STALE {
+                show_error(&app, "main", &error);
             }
         }
     });
@@ -3188,6 +3369,8 @@ mod tests {
             lifetime: lifetime.into(),
             nonce: Some("ready-nonce".into()),
             url: Url::parse("https://gateway.example/team").unwrap(),
+            navigation_url: Url::parse("https://gateway.example/team").unwrap(),
+            native_auth: false,
             phase: NavigationPhase::Active,
             navigation: 1,
             native_navigation: None,
@@ -3205,6 +3388,362 @@ mod tests {
             completion: Some(completion),
             ..document(lifetime)
         }
+    }
+
+    #[test]
+    fn fast_native_hello_installs_accepted_auth_in_the_first_main_document() {
+        let url = Url::parse("https://gateway.example/control").unwrap();
+        let gateway = Url::parse("wss://gateway.example/control").unwrap();
+        for legacy_auth in [
+            json!({"token": "accepted-token"}),
+            json!({"password": "accepted-password"}),
+        ] {
+            let mut routing = Routing::default();
+            let initial =
+                crate::gateway_control_auth::initialization_script(&url, &gateway).unwrap();
+            let accepted = crate::gateway_control_auth::initialization_script_with_legacy_auth(
+                &url,
+                &gateway,
+                legacy_auth.clone(),
+            )
+            .unwrap();
+            let (selection, reconnects) = routing.select_primary(
+                &url,
+                Some(initial),
+                Some(accepted.clone()),
+                GatewayOwnership::Remote,
+            );
+            assert!(reconnects.is_empty());
+            let mut installed_script = None;
+            assert!(selection
+                .install(|script| {
+                    installed_script = script;
+                    Ok(())
+                })
+                .unwrap());
+            // Execute the script handed to the native replacement seam, not the routing cache.
+            let runner = r#"
+                const window = {addEventListener() {}, __TAURI_INTERNALS__: {invoke() {}}};
+                window.top = window;
+                new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example', pathname: '/control'});
+                const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+                const expected = JSON.parse(process.argv[2]);
+                if (!auth?.nativeConnectAuth) throw new Error('native auth marker lost');
+                for (const [field, value] of Object.entries(expected)) {
+                    if (auth[field] !== value) throw new Error('accepted credential not installed: ' + field);
+                }
+                if ('password' in expected && auth.token !== null) throw new Error('cached token not retired');
+                if ('token' in expected && 'password' in auth) throw new Error('unexpected password');
+            "#;
+            let result = std::process::Command::new("node")
+                .args([
+                    "-e",
+                    runner,
+                    installed_script.as_deref().unwrap(),
+                    &legacy_auth.to_string(),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(
+                routing
+                    .publish_primary(&url, Some(accepted), GatewayOwnership::Remote, true)
+                    .1
+                    .is_empty(),
+                "the delayed Up callback cannot be relied on to install the same cached script"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_publication_does_not_install_over_an_independent_main_selection() {
+        let url = document("primary").url;
+        for selected in ["saved-profile", "pending-profile"] {
+            let mut routing = Routing::default();
+            if selected == "saved-profile" {
+                routing.windows.insert(
+                    "main".into(),
+                    WindowRoute {
+                        target: selected.into(),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                routing.begin("main", selected, None);
+            }
+            let (selection, _) = routing.select_primary(
+                &url,
+                Some("native-only".into()),
+                Some("accepted".into()),
+                GatewayOwnership::Remote,
+            );
+            assert!(!selection
+                .install(|_| panic!("independent main must not be replaced"))
+                .unwrap());
+        }
+    }
+
+    #[test]
+    fn native_hello_and_rotation_replace_primary_documents_without_touching_saved_profiles() {
+        for ready_before_publication in [false, true] {
+            let mut state = Routing::default();
+            let url = document("initial").url;
+            let initial = if ready_before_publication {
+                "accepted-token"
+            } else {
+                "native-only"
+            };
+            state.publish_primary(&url, Some(initial.into()), GatewayOwnership::Remote, false);
+            for (label, target) in [
+                ("main", PRIMARY),
+                ("aux", PRIMARY),
+                ("saved", "independent"),
+            ] {
+                state.windows.insert(
+                    label.into(),
+                    WindowRoute {
+                        target: target.into(),
+                        primary_generation: (target == PRIMARY).then_some(state.primary_generation),
+                        document: Some(document(label)),
+                        ..Default::default()
+                    },
+                );
+            }
+            let saved = state.windows["saved"]
+                .document
+                .as_ref()
+                .unwrap()
+                .lifetime
+                .clone();
+            let first = state
+                .publish_primary(
+                    &url,
+                    Some("accepted-token".into()),
+                    GatewayOwnership::Remote,
+                    true,
+                )
+                .1;
+            assert_eq!(first.len(), if ready_before_publication { 0 } else { 2 });
+            assert_eq!(
+                state.primary.as_ref().unwrap().auth_script.as_deref(),
+                Some("accepted-token")
+            );
+            let rotated = state
+                .publish_primary(
+                    &url,
+                    Some("rotated-password".into()),
+                    GatewayOwnership::Remote,
+                    true,
+                )
+                .1;
+            let labels: HashSet<_> = rotated.iter().map(|intent| intent.label.as_str()).collect();
+            assert_eq!(labels, HashSet::from(["main", "aux"]));
+            assert!(first.iter().all(|intent| !state.current(intent)));
+            for label in ["main", "aux"] {
+                assert!(
+                    authorize_control_auth(
+                        &state,
+                        &DocumentAuthority {
+                            label: label.into(),
+                            lifetime: label.into(),
+                            nonce: "ready-nonce".into(),
+                        },
+                        &url
+                    )
+                    .is_err(),
+                    "old document cannot use authority after credential rotation"
+                );
+            }
+            assert_eq!(
+                state.windows["saved"].document.as_ref().unwrap().lifetime,
+                saved
+            );
+            assert!(state.windows["saved"].pending.is_none());
+        }
+    }
+
+    #[test]
+    fn native_credential_refresh_preserves_primary_destinations_only_for_the_same_route() {
+        let mut state = Routing::default();
+        let base = Url::parse("https://gateway.example/team").unwrap();
+        state.publish_primary(
+            &base,
+            Some("accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        let destinations = [
+            (
+                "main",
+                "https://gateway.example/team/settings/providers?tab=oauth#account",
+            ),
+            (
+                "aux",
+                "https://gateway.example/team/chat?session=agent%3Amain%3Akept",
+            ),
+        ];
+        for (label, destination) in destinations {
+            state.windows.insert(
+                label.into(),
+                WindowRoute {
+                    primary_generation: Some(state.primary_generation),
+                    document: Some(Document {
+                        navigation_url: Url::parse(destination).unwrap(),
+                        native_auth: true,
+                        ..document(label)
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        // A fast reconnect can supersede an uninstalled disconnect projection.
+        for auth in ["native-only", "rotated-token"] {
+            let replacements = state
+                .publish_primary(&base, Some(auth.into()), GatewayOwnership::Remote, true)
+                .1;
+            assert_eq!(replacements.len(), 2);
+            for replacement in replacements {
+                let expected = Url::parse(
+                    destinations
+                        .iter()
+                        .find(|(label, _)| *label == replacement.label)
+                        .unwrap()
+                        .1,
+                )
+                .unwrap();
+                assert_eq!(replacement.source_url, Some(expected.clone()));
+                assert_eq!(replacement.navigation_url, Some(expected));
+                assert!(state.current(&replacement));
+            }
+        }
+        let replacements = state
+            .publish_primary(
+                &Url::parse("https://gateway.example/other").unwrap(),
+                Some("other-owner".into()),
+                GatewayOwnership::Remote,
+                true,
+            )
+            .1;
+        assert_eq!(replacements.len(), 2);
+        assert!(replacements
+            .iter()
+            .all(|intent| intent.navigation_url.is_none()));
+    }
+
+    #[test]
+    fn primary_window_reads_cannot_use_cached_auth_without_its_native_owner() {
+        let mut state = Routing::default();
+        let url = document("primary").url;
+        state.publish_primary(
+            &url,
+            Some("retired-accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        let client = crate::gateway_ws::GatewayClient::new();
+        assert!(state.primary_route(Some(&client)).is_err());
+        assert!(state.primary_route(None).is_err());
+        state.publish_primary(
+            &url,
+            Some("local-cli-owned-script".into()),
+            GatewayOwnership::Local,
+            false,
+        );
+        assert_eq!(
+            state.primary_route(None).unwrap().auth_script.as_deref(),
+            Some("local-cli-owned-script"),
+            "local CLI-owned bootstrap must not depend on the remote native signer"
+        );
+    }
+
+    #[test]
+    fn native_auth_refresh_preserves_connection_settings_and_retired_reload_is_blocked() {
+        let mut state = Routing::default();
+        let url = document("primary").url;
+        state.publish_primary(
+            &url,
+            Some("accepted-token".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        for label in ["main", "aux"] {
+            state.windows.insert(
+                label.into(),
+                WindowRoute {
+                    primary_generation: Some(state.primary_generation),
+                    document: Some(Document {
+                        native_auth: true,
+                        ..document(label)
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        let settings = Url::parse("tauri://localhost/index.html?mode=connectionSettings").unwrap();
+        assert!(state.document_navigation("main", "main", &settings));
+        let reconnects = state
+            .publish_primary(
+                &url,
+                Some("native-only".into()),
+                GatewayOwnership::Remote,
+                true,
+            )
+            .1;
+        assert_eq!(
+            reconnects
+                .iter()
+                .map(|intent| intent.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aux"],
+            "connection settings must keep its document and unsaved input"
+        );
+        assert!(state.windows["main"].pending.is_none());
+        assert_eq!(
+            state.windows["main"].document.as_ref().unwrap().lifetime,
+            "main"
+        );
+        assert!(
+            !state.document_navigation("aux", "aux", &url),
+            "reload cannot replay the retired startup script"
+        );
+        assert!(
+            state.current(&reconnects[0]),
+            "blocked reload must not cancel the replacement"
+        );
+        let destination = Url::parse("https://gateway.example/team/chat?session=kept").unwrap();
+        let (allowed, replacement) = state.admit_document_navigation("main", "main", &destination);
+        assert!(!allowed);
+        let replacement = replacement
+            .expect("explicit settings return replaces the retired initialization script");
+        assert_eq!(replacement.source_url, Some(settings.clone()));
+        assert_eq!(replacement.navigation_url, Some(destination));
+        assert!(state.current(&replacement));
+        assert!(state.document_navigation("main", "main", &settings));
+        assert!(
+            !state.current(&replacement),
+            "a newer settings navigation wins over the deferred return"
+        );
+        state.begin("aux", "saved-profile", None);
+        let (_, replacement) = state.admit_document_navigation("aux", "aux", &url);
+        assert!(
+            replacement.is_none(),
+            "reload cannot overtake an independent saved selection"
+        );
+        state.primary_ownership = Some(GatewayOwnership::Local);
+        assert!(
+            state.native_document("aux", "aux", &url),
+            "switching Primary must not forget an old installed native script"
+        );
+        assert!(!state.document_navigation("aux", "aux", &url));
+        state.closing = true;
+        assert!(state
+            .admit_document_navigation("main", "main", &url)
+            .1
+            .is_none());
     }
 
     #[test]
@@ -3328,7 +3867,7 @@ mod tests {
         state
             .enter_profile_recovery(&recovery, Some("saved-b"))
             .unwrap();
-        let retry = state.begin("main", "saved-b", None);
+        let retry = state.begin("main", "saved-b", None).intent.clone();
         let completion = state.selection_completion(&retry);
         assert!(completion.remembers(state.selection_sequence));
         assert!(
@@ -3400,7 +3939,7 @@ mod tests {
             },
         );
         let failed = state.document_failed("main", "failed").unwrap();
-        let newer = state.begin("main", "saved-c", None);
+        let newer = state.begin("main", "saved-c", None).intent.clone();
         state.upgrade_selection(&newer, true);
         assert!(state.begin_document_recovery(&failed).is_none());
         assert!(state.current(&newer));
@@ -3429,7 +3968,7 @@ mod tests {
                 state.admit_selection("gateway-b", "saved-b", true, true),
                 SelectionDisposition::Pending
             );
-            let other = state.begin("gateway-c", "saved-c", None);
+            let other = state.begin("gateway-c", "saved-c", None).intent.clone();
             state.upgrade_selection(&other, true);
             let newer_sequence = state.selection_sequence;
             assert_eq!(
@@ -3462,10 +4001,9 @@ mod tests {
         state.selection_sequence = 7;
         for target in ["saved-b", "saved-c"] {
             state.selection_target = Some(target.into());
-            let edited = state.begin("main", target, None);
-            state.remember_edited_selection(&edited);
+            let edited = state.begin_profile_edit("main", target, true);
             state.enter_profile_recovery(&edited, Some(target)).unwrap();
-            let retry = state.begin("main", target, None);
+            let retry = state.begin("main", target, None).intent.clone();
             let completion = state.selection_completion(&retry);
             assert!(completion.remembers(7));
             assert!(!completion.presents(7));
@@ -3482,10 +4020,10 @@ mod tests {
                 .unwrap();
             assert!(state.remembers_edited_target(target));
         }
-        let newer = state.begin("gateway-other", "saved-d", None);
+        let newer = state.begin("gateway-other", "saved-d", None).intent.clone();
         state.upgrade_selection(&newer, true);
         assert!(!state.remembers_edited_target("saved-c"));
-        let retry = state.begin("main", "saved-c", None);
+        let retry = state.begin("main", "saved-c", None).intent.clone();
         assert!(!state
             .selection_completion(&retry)
             .remembers(state.selection_sequence));
@@ -3502,25 +4040,31 @@ mod tests {
                 ..Default::default()
             },
         );
-        let first = state.begin(
-            "main",
-            "alpha",
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "first".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
-        let other = state.begin("gateway-other", "gamma", None);
-        let last = state.begin(
-            "main",
-            "beta",
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "first".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
+        let first = state
+            .begin(
+                "main",
+                "alpha",
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "first".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
+        let other = state.begin("gateway-other", "gamma", None).intent.clone();
+        let last = state
+            .begin(
+                "main",
+                "beta",
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "first".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
         assert!(!state.current(&first));
         assert!(state.current(&last));
         assert!(state.current(&other));
@@ -3545,15 +4089,18 @@ mod tests {
                     ..Default::default()
                 },
             );
-            let pending = state.begin(
-                "main",
-                "alpha",
-                Some(DocumentAuthority {
-                    label: "main".into(),
-                    lifetime: "first".into(),
-                    nonce: "ready-nonce".into(),
-                }),
-            );
+            let pending = state
+                .begin(
+                    "main",
+                    "alpha",
+                    Some(DocumentAuthority {
+                        label: "main".into(),
+                        lifetime: "first".into(),
+                        nonce: "ready-nonce".into(),
+                    }),
+                )
+                .intent
+                .clone();
             match change {
                 "navigate" => {
                     state
@@ -3625,8 +4172,11 @@ mod tests {
             lifetime: "first".into(),
             nonce: "ready-nonce".into(),
         };
-        let requested = state.begin("gateway-new", "saved", Some(source));
-        let independent = state.begin("gateway-menu", "saved", None);
+        let requested = state
+            .begin("gateway-new", "saved", Some(source))
+            .intent
+            .clone();
+        let independent = state.begin("gateway-menu", "saved", None).intent.clone();
         assert!(state.current(&requested));
         state.windows.remove("main");
         assert!(
@@ -3656,9 +4206,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        let selection = state.begin("main", "saved", None);
+        let selection = state.begin("main", "saved", None).intent.clone();
         assert!(!state.follows_primary());
-        let unrelated = state.begin("gateway-other", "other", None);
+        let unrelated = state.begin("gateway-other", "other", None).intent.clone();
         assert!(state.invalidate_profile("saved").is_empty());
         assert!(!state.current(&selection));
         assert!(state.current(&unrelated));
@@ -3693,15 +4243,18 @@ mod tests {
                 tls_fingerprint: None,
             },
         };
-        let intent = state.begin(
-            "main",
-            &profile.id,
-            Some(DocumentAuthority {
-                label: "main".into(),
-                lifetime: "confirmed".into(),
-                nonce: "ready-nonce".into(),
-            }),
-        );
+        let intent = state
+            .begin(
+                "main",
+                &profile.id,
+                Some(DocumentAuthority {
+                    label: "main".into(),
+                    lifetime: "confirmed".into(),
+                    nonce: "ready-nonce".into(),
+                }),
+            )
+            .intent
+            .clone();
         let guard = PromotionGuard {
             intent,
             profile_id: profile.id.clone(),
@@ -3802,7 +4355,10 @@ mod tests {
                     .unwrap();
             }
             state.explicit_selection();
-            let chosen = state.begin("gateway-other", "explicit", None);
+            let chosen = state
+                .begin("gateway-other", "explicit", None)
+                .intent
+                .clone();
             assert!(
                 !state.current(&startup),
                 "late startup work cannot overwrite an explicit auxiliary choice"
@@ -3985,7 +4541,7 @@ mod tests {
             nonce: "ready-nonce".into(),
         };
         state.invalidate_profile("saved");
-        let edited = state.begin("main", "saved", None);
+        let edited = state.begin("main", "saved", None).intent.clone();
         assert!(state.current(&edited));
         assert!(!state.source_current(&original));
         state
@@ -4002,7 +4558,7 @@ mod tests {
             !state.follows_primary(),
             "Primary updates must preserve the profile recovery editor"
         );
-        let retry = state.begin("main", "saved", None);
+        let retry = state.begin("main", "saved", None).intent.clone();
         assert!(state.current(&retry));
     }
 
@@ -4012,7 +4568,10 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "manual-direct-studio".into();
         state.windows.get_mut("main").unwrap().document = Some(document("direct-principal"));
         state.invalidate_profile("manual-direct-studio");
-        let ssh_edit = state.begin("main", "manual-ssh-studio", None);
+        let ssh_edit = state
+            .begin("main", "manual-ssh-studio", None)
+            .intent
+            .clone();
         state
             .enter_profile_recovery(&ssh_edit, Some("manual-ssh-studio"))
             .unwrap();
@@ -4031,7 +4590,7 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "removed-profile".into();
         state.windows.get_mut("main").unwrap().document = Some(document("old-principal"));
         state.invalidate_profile("removed-profile");
-        let pending = state.begin("main", "removed-profile", None);
+        let pending = state.begin("main", "removed-profile", None).intent.clone();
         state.invalidate_profile("removed-profile");
         assert!(
             state
@@ -4039,7 +4598,7 @@ mod tests {
                 .is_err(),
             "deletion retires pending recovery too"
         );
-        let fallback = state.begin("main", PRIMARY, None);
+        let fallback = state.begin("main", PRIMARY, None).intent.clone();
         state.enter_profile_recovery(&fallback, None).unwrap();
         assert_eq!(state.windows["main"].target, PRIMARY);
         assert!(state.windows["main"].document.is_none());
@@ -4074,7 +4633,7 @@ mod tests {
         state.windows.get_mut("main").unwrap().target = "direct-profile".into();
         state.windows.get_mut("main").unwrap().document = Some(document("old-authentication"));
         state.invalidate_profile("direct-profile");
-        let edit = state.begin("main", "ssh-profile", None);
+        let edit = state.begin("main", "ssh-profile", None).intent.clone();
         state
             .enter_profile_recovery(&edit, Some("ssh-profile"))
             .unwrap();
@@ -4082,7 +4641,7 @@ mod tests {
             state.windows["main"].document.is_none(),
             "save retires the old principal before SSH preparation"
         );
-        let slow = state.begin("main", "ssh-profile", None);
+        let slow = state.begin("main", "ssh-profile", None).intent.clone();
         state.cancel("main");
         assert!(!state.current(&slow));
         assert!(state.windows["main"].recovery.is_some());
@@ -4112,7 +4671,7 @@ mod tests {
     #[test]
     fn explicit_primary_selection_rebuilds_its_recovery_editor() {
         let mut state = starting_primary();
-        let removed = state.begin("main", PRIMARY, None);
+        let removed = state.begin("main", PRIMARY, None).intent.clone();
         state.enter_profile_recovery(&removed, None).unwrap();
         assert!(
             !state.needs_primary_refresh("main"),
@@ -4129,7 +4688,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().document = Some(document("ready-primary"));
         state.windows.get_mut("main").unwrap().primary_generation = Some(state.primary_generation);
-        let pending = state.begin("main", "saved-b", None);
+        let pending = state.begin("main", "saved-b", None).intent.clone();
         assert_eq!(
             state.admit_selection("main", PRIMARY, false, true),
             SelectionDisposition::Reuse
@@ -4138,7 +4697,7 @@ mod tests {
             !state.current(&pending),
             "focusing visible A must retire pending B"
         );
-        let same = state.begin("main", "saved-b", None);
+        let same = state.begin("main", "saved-b", None).intent.clone();
         assert_eq!(
             state.admit_selection("main", "saved-b", false, true),
             SelectionDisposition::Pending
@@ -4229,7 +4788,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-b".into();
         state.windows.get_mut("main").unwrap().document = Some(document("saved-b-document"));
-        let old = state.begin("main", "saved-c", None);
+        let old = state.begin("main", "saved-c", None).intent.clone();
         state.suspend_document("main");
         assert_eq!(state.windows["main"].target, "saved-b");
         assert!(state.windows["main"].document.is_none());
@@ -4267,14 +4826,17 @@ mod tests {
     fn primary_reuse_excludes_an_uncommitted_auxiliary_opening_a_different_gateway() {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-main".into();
-        let independent = state.begin("gateway-pending-ssh", "saved-ssh", None);
+        let independent = state
+            .begin("gateway-pending-ssh", "saved-ssh", None)
+            .intent
+            .clone();
         assert!(state.primary_window().is_none());
         assert!(state.window_for_target(PRIMARY).is_none());
         assert!(state.current(&independent));
         state.windows.get_mut("main").unwrap().target = PRIMARY.into();
         state.windows.get_mut("main").unwrap().primary_generation = Some(state.primary_generation);
         state.windows.get_mut("main").unwrap().document = Some(document("committed-primary"));
-        let main_switch = state.begin("main", "another-saved", None);
+        let main_switch = state.begin("main", "another-saved", None).intent.clone();
         assert_eq!(state.primary_window(), Some(("main".into(), false)));
         assert_eq!(
             state.admit_selection("main", PRIMARY, false, true),
@@ -4291,7 +4853,7 @@ mod tests {
     fn joining_automatic_reconnect_upgrades_only_its_successful_completion() {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().target = "saved-b".into();
-        let automatic = state.begin("main", "saved-b", None);
+        let automatic = state.begin("main", "saved-b", None).intent.clone();
         assert!(!matches!(
             state.selection_completion(&automatic),
             SelectionCompletion::Explicit(_)
@@ -4335,10 +4897,13 @@ mod tests {
             lifetime: "source".into(),
             nonce: "ready-nonce".into(),
         };
-        let old = state.begin("gateway-primary", PRIMARY, Some(source));
+        let old = state
+            .begin("gateway-primary", PRIMARY, Some(source))
+            .intent
+            .clone();
         state.upgrade_selection(&old, true);
         let sequence = state.selection_sequence;
-        let refreshed = state.refresh_primary("gateway-primary");
+        let refreshed = state.refresh_primary("gateway-primary").intent.clone();
         assert_eq!(
             state.selection_sequence, sequence,
             "automatic reprepare must preserve the admitted selection order"
@@ -4390,7 +4955,10 @@ mod tests {
             lifetime: "source".into(),
             nonce: "ready-nonce".into(),
         };
-        let expired = state.begin("gateway-pending", "saved-b", Some(source.clone()));
+        let expired = state
+            .begin("gateway-pending", "saved-b", Some(source.clone()))
+            .intent
+            .clone();
         state.windows.get_mut("main").unwrap().document = None;
         assert!(!state.current(&expired));
         state.cancel_intent(&expired);
@@ -4398,12 +4966,18 @@ mod tests {
             state.windows["gateway-pending"].pending.is_none(),
             "lost source authority must not leave a dead pending slot"
         );
-        let stale = state.begin("gateway-pending", "saved-b", Some(source));
+        let stale = state
+            .begin("gateway-pending", "saved-b", Some(source))
+            .intent
+            .clone();
         assert_eq!(
             state.admit_selection("gateway-pending", "saved-b", true, true),
             SelectionDisposition::Replace
         );
-        let fresh = state.begin("gateway-pending", "saved-b", None);
+        let fresh = state
+            .begin("gateway-pending", "saved-b", None)
+            .intent
+            .clone();
         state.cancel_intent(&stale);
         assert!(
             state.current(&fresh),
@@ -4426,7 +5000,7 @@ mod tests {
             state.needs_primary_refresh("main"),
             "opening the manager cancels restoration without discarding ready Primary navigation"
         );
-        let newer = state.begin("main", "saved-choice", None);
+        let newer = state.begin("main", "saved-choice", None).intent.clone();
         state.finish_initial_selection(&lookup);
         assert!(!state.needs_primary_refresh("main"));
         assert!(
@@ -4452,14 +5026,14 @@ mod tests {
                 lifetime: "saved-b".into(),
                 nonce: "ready-nonce".into(),
             };
-            let old = state.begin(label, PRIMARY, Some(source));
+            let old = state.begin(label, PRIMARY, Some(source)).intent.clone();
             state.upgrade_selection(&old, true);
             state.primary_generation += 1;
             assert!(
                 state.primary_refresh_targets().contains(&label.to_string()),
                 "{label} must follow its pending Primary choice even though B is still displayed"
             );
-            let new = state.refresh_primary(label);
+            let new = state.refresh_primary(label).intent.clone();
             assert!(!state.current(&old));
             assert!(state.current(&new));
             assert!(matches!(
@@ -4480,7 +5054,7 @@ mod tests {
         let mut state = starting_primary();
         state.windows.get_mut("main").unwrap().document = Some(document("main-source"));
         state.windows.get_mut("main").unwrap().primary_generation = Some(0);
-        let main = state.begin("main", PRIMARY, None);
+        let main = state.begin("main", PRIMARY, None).intent.clone();
         assert!(
             !state.follows_primary(),
             "pending owner must complete instead of a second root-main replacement"
@@ -4541,3 +5115,7 @@ mod tests {
         assert_eq!(state.main_presentation(), MainPresentation::Preserve);
     }
 }
+
+#[cfg(test)]
+#[path = "gateway_control_auth_route_tests.rs"]
+mod native_control_auth_tests;

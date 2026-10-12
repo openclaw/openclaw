@@ -32,6 +32,10 @@ function restoreCredential(root, directory) {
   });
   assert.equal(packed.status, 0, packed.stderr);
   const archive = fs.readFileSync(archivePath);
+  const emptyPath = path.join(root, "empty-path");
+  fs.mkdirSync(emptyPath);
+  // These layout cases skip discovery; telegram-runtime and the credential real-UV case cover it.
+  const hostEnv = { PATH: emptyPath };
   const previousUmask = process.umask(0o022);
   try {
     return restoreTelegramTestCredential(
@@ -48,6 +52,7 @@ function restoreCredential(root, directory) {
         tdlibVersion: "1.8.67",
       },
       path.join(directory, "state"),
+      hostEnv,
     );
   } finally {
     process.umask(previousUmask);
@@ -141,6 +146,15 @@ async function fixture() {
   };
 }
 
+// A held lease heartbeats every 30 s, so a stalled host can add heartbeats before release.
+function assertHeldLeaseCalls(methods, final) {
+  const held = final ? methods.slice(0, -1) : methods;
+  assert.ok(held.length > 0 && held.every((method) => method === "heartbeat"), methods.join(","));
+  if (final) {
+    assert.equal(methods.at(-1), final);
+  }
+}
+
 test("release removes its receipt but preserves unknown sibling files", async () => {
   const f = await fixture();
   try {
@@ -154,34 +168,62 @@ test("release removes its receipt but preserves unknown sibling files", async ()
     assert.equal(fs.readFileSync(path.join(f.directory, "operator-notes"), "utf8"), "keep");
     assert.equal(result.code, 0, result.stderr);
     assert.equal(fs.existsSync(f.receipt), false);
-    assert.deepEqual(f.methods, ["heartbeat", "release"]);
+    assertHeldLeaseCalls(f.methods, "release");
   } finally {
     await f.close();
   }
 });
 
-test("cleanup recovers an actual restored archive with ordinary directory modes", async () => {
+test("cleanup recovers a restored archive after TDLib and uv wrote ordinary modes", async () => {
   const f = await fixture();
   try {
     const restored = restoreCredential(f.root, f.directory);
     assert.equal(fs.statSync(path.join(restored.userDriverDir, "db")).mode & 0o777, 0o755);
+    // TDLib 1.8.67 creates its database with the inherited umask (0644 under 022).
+    const database = path.join(restored.userDriverDir, "db", "db_test.sqlite");
+    fs.writeFileSync(database, "tdlib-database");
+    fs.chmodSync(database, 0o644);
+    const cache = path.join(restored.stateRoot, "runtime", "uv-cache", "tool-created");
+    fs.mkdirSync(cache);
+    fs.chmodSync(cache, 0o755);
+    fs.writeFileSync(path.join(cache, "CACHEDIR.TAG"), "ordinary cache metadata", { mode: 0o644 });
     fs.writeFileSync(
       path.join(f.root, "uv"),
       `#!${process.execPath}
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-assert.equal(process.argv[4], "cleanup-group");
+const command = ["cleanup-forum", "cleanup-group"].find((name) => process.argv.includes(name));
+assert.ok(command);
 assert.equal(fs.readFileSync(path.join(process.env.TELEGRAM_USER_DRIVER_STATE_DIR, "db", "td_test.binlog"), "utf8"), "tdlib-session");
-console.log(JSON.stringify({ ok: true, cleaned: true }));
+console.log(JSON.stringify({ ok: true, command }));
 `,
       { mode: 0o700 },
     );
-    const result = await f.run(f.directory, "cleanup-group");
+    const result = await f.run(f.directory, "cleanup");
     assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { ok: true, cleaned: true, leaseReleased: true });
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true,
+      forum: { ok: true, command: "cleanup-forum" },
+      group: { ok: true, command: "cleanup-group" },
+      leaseReleased: true,
+    });
     assert.equal(fs.existsSync(f.directory), false);
-    assert.deepEqual(f.methods, ["heartbeat", "release"]);
+    assertHeldLeaseCalls(f.methods, "release");
+  } finally {
+    await f.close();
+  }
+});
+
+test("recovery accepts another spelling of the configured temporary root", async () => {
+  const f = await fixture();
+  try {
+    const alias = path.join(f.root, "tmp-alias");
+    fs.symlinkSync(f.temp, alias);
+    const result = await f.run(path.join(alias, path.basename(f.directory)), "status");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).leaseHealthy, true);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }
@@ -196,6 +238,7 @@ for (const layout of [
   "public-directory",
   "public-state",
   "public-user-driver",
+  "public-runtime",
   "public-receipt",
 ]) {
   test(`recovery rejects ${layout} before broker access or deletion`, async () => {
@@ -225,6 +268,7 @@ for (const layout of [
           "public-directory": f.directory,
           "public-state": restored.stateRoot,
           "public-user-driver": restored.userDriverDir,
+          "public-runtime": path.join(restored.stateRoot, "runtime"),
           "public-receipt": f.receipt,
         }[layout];
         fs.chmodSync(boundary, layout === "public-receipt" ? 0o644 : 0o755);
@@ -258,7 +302,7 @@ test("a replaced lease cannot clean up retained credential state or release its 
   try {
     const restored = restoreCredential(f.root, f.directory);
     f.replaceLease();
-    const result = await f.run(f.directory, "cleanup-group");
+    const result = await f.run(f.directory, "cleanup");
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /LEASE_NOT_OWNER/);
     assert.equal(fs.existsSync(f.receipt), true);
@@ -281,13 +325,13 @@ test("status revalidates a retained broker receipt after credential state was re
       leaseReleased: false,
     });
     assert.equal(fs.existsSync(f.receipt), true);
-    assert.deepEqual(f.methods, ["heartbeat"]);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }
 });
 
-test("failed group cleanup preserves both credential state and recovery receipt", async () => {
+test("failed fixture cleanup preserves both credential state and recovery receipt", async () => {
   const f = await fixture();
   try {
     const { stateRoot: state } = restoreCredential(f.root, f.directory);
@@ -296,12 +340,12 @@ test("failed group cleanup preserves both credential state and recovery receipt"
       "#!/bin/sh\necho 'unconfirmed group creation' >&2\nexit 1\n",
       { mode: 0o700 },
     );
-    const result = await f.run(f.directory, "cleanup-group");
+    const result = await f.run(f.directory, "cleanup");
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /unconfirmed group creation/);
     assert.equal(fs.existsSync(f.receipt), true);
     assert.equal(fs.existsSync(state), true);
-    assert.deepEqual(f.methods, ["heartbeat"]);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }

@@ -14,7 +14,7 @@ import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveJidToE164 } from "./targets-runtime.js";
@@ -52,21 +52,7 @@ const WhatsAppCallToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type WhatsAppCallToolParams = {
-  action: "status" | "call";
-  message?: string;
-};
-
-type WhatsAppCallToolDependencies = {
-  detectMeowCaller: () => Promise<boolean>;
-  resolveStateDir: (accountId: string) => string;
-};
-
-const defaultDependencies: WhatsAppCallToolDependencies = {
-  detectMeowCaller: () => detectBinary(MEOWCALLER_COMMAND),
-  resolveStateDir: (accountId) =>
-    path.join(resolveOAuthDir(), "whatsapp-calls", normalizeAccountId(accountId)),
-};
+type WhatsAppCallToolParams = Static<typeof WhatsAppCallToolSchema>;
 
 async function isRegularFile(filePath: string): Promise<boolean> {
   try {
@@ -148,11 +134,7 @@ async function resolveRequesterE164(params: {
 }): Promise<string | null> {
   const senderId = params.requesterSenderId.trim();
   if (!senderId.includes("@")) {
-    try {
-      return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
-    } catch {
-      return null;
-    }
+    return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
   }
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
@@ -174,7 +156,7 @@ async function resolveLinkedWhatsAppSelfE164(params: {
     return null;
   }
   if (identity.e164) {
-    return normalizeE164(identity.e164);
+    return identity.e164;
   }
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   const lidLookup = controller.getCurrentSock()?.signalRepository.lidMapping;
@@ -188,10 +170,9 @@ function resolveRuntimeConfig(api: OpenClawPluginApi, context: OpenClawPluginToo
   return context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? api.config;
 }
 
-function createWhatsAppCallToolWithDependencies(
+function createWhatsAppCallTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext,
-  dependencies: WhatsAppCallToolDependencies,
 ): AnyAgentTool | null {
   const cfg = resolveRuntimeConfig(api, context);
   const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
@@ -205,7 +186,7 @@ function createWhatsAppCallToolWithDependencies(
   }
 
   const accountId = normalizeAccountId(context.agentAccountId);
-  const stateDir = dependencies.resolveStateDir(accountId);
+  const stateDir = path.join(resolveOAuthDir(), "whatsapp-calls", accountId);
   const sessionStorePath = path.join(stateDir, SESSION_DATABASE);
 
   return {
@@ -216,7 +197,7 @@ function createWhatsAppCallToolWithDependencies(
     parameters: WhatsAppCallToolSchema,
     async execute(_toolCallId, rawParams, signal) {
       const params = rawParams as WhatsAppCallToolParams;
-      const binaryFound = await dependencies.detectMeowCaller();
+      const binaryFound = await detectBinary(MEOWCALLER_COMMAND);
       const sessionStoreFound = await isRegularFile(sessionStorePath);
       if (params.action === "status") {
         return jsonResult({
@@ -330,13 +311,6 @@ function createWhatsAppCallToolWithDependencies(
       }
     },
   };
-}
-
-function createWhatsAppCallTool(
-  api: OpenClawPluginApi,
-  context: OpenClawPluginToolContext,
-): AnyAgentTool | null {
-  return createWhatsAppCallToolWithDependencies(api, context, defaultDependencies);
 }
 
 export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {

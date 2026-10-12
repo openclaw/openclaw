@@ -1,5 +1,4 @@
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
@@ -13,6 +12,7 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
@@ -35,6 +35,7 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -43,88 +44,94 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-};
-
-/** Returns the config snapshot used by channel/plugin startup maintenance. */
-export function resolveGatewayStartupMaintenanceConfig(params: {
-  cfgAtStart: OpenClawConfig;
-  startupRuntimeConfig: OpenClawConfig;
-}): OpenClawConfig {
-  // Early config recovery may supply channel blocks after the start snapshot; startup
-  // maintenance needs those owner configs even when the original snapshot was sparse.
-  return params.cfgAtStart.channels === undefined &&
-    params.startupRuntimeConfig.channels !== undefined
-    ? {
-        ...params.cfgAtStart,
-        channels: params.startupRuntimeConfig.channels,
-      }
-    : params.cfgAtStart;
-}
-
-/** Runs channel, session, and pairing maintenance before plugin bootstrap. */
-export async function runGatewayStartupMaintenance(params: {
-  cfgAtStart: OpenClawConfig;
-  startupRuntimeConfig: OpenClawConfig;
-  minimalTestGateway: boolean;
-  log: GatewayPluginBootstrapLog;
+/** Best-effort repair runs under the Gateway's existing post-ready maintenance lifetime. */
+export async function runGatewayPostReadyStartupMaintenance(params: {
+  getConfig: () => OpenClawConfig;
+  getPluginRegistry: () => PluginRegistry;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "registrySource">;
+  databases: readonly import("./server-startup-session-migration.js").PreparedStartupSessionDatabase[];
+  signal: AbortSignal;
+  log: Pick<GatewayPluginBootstrapLog, "info" | "warn">;
+  startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
-  const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
-    cfgAtStart: params.cfgAtStart,
-    startupRuntimeConfig: params.startupRuntimeConfig,
-  });
-
-  const shouldRunStartupMaintenance =
-    !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
-  if (shouldRunStartupMaintenance) {
-    const { runChannelPluginStartupMaintenance } =
-      await import("../channels/plugins/lifecycle-startup.js");
-    const startupTasks = [
-      runChannelPluginStartupMaintenance({
-        cfg: startupMaintenanceConfig,
-        env: process.env,
-        log: params.log,
-      }),
-    ];
-    if (!params.minimalTestGateway) {
-      const { migrateLegacyDesktopStreamOptOuts } =
-        await import("../infra/device-pairing-node-desktop-migration.js");
-      const retiredDesktopApprovals =
-        await migrateLegacyDesktopStreamOptOuts(startupMaintenanceConfig);
-      if (retiredDesktopApprovals > 0) {
-        params.log.warn(
-          `Preserved disabled desktop access for ${retiredDesktopApprovals} paired node(s); approve their updated desktop capability to enable sharing.`,
+  const tasks = [
+    [
+      "plugin-registry",
+      async () => {
+        if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
+          return;
+        }
+        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+          await Promise.all([
+            import("../plugins/plugin-lifecycle-lease.js"),
+            import("../plugins/registry-refresh.js"),
+          ]);
+        await withPluginLifecycleLease(
+          {
+            signal: params.signal,
+            assertCurrent: () => params.signal.throwIfAborted(),
+            processBound: true,
+          },
+          (lease) =>
+            refreshPluginRegistryAfterConfigMutation({
+              reason: "source-changed",
+              lease,
+              invalidateRuntimeCache: false,
+              logger: params.log,
+            }),
         );
+      },
+    ],
+    [
+      "channels",
+      async () => {
+        const { runChannelPluginStartupMaintenance } =
+          await import("../channels/plugins/lifecycle-startup.js");
+        params.signal.throwIfAborted();
+        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+          runChannelPluginStartupMaintenance({
+            cfg: params.getConfig(),
+            env: process.env,
+            log: params.log,
+          }),
+        );
+      },
+    ],
+    [
+      "sessions",
+      async () => {
+        const { runGatewaySessionStartupMaintenance } =
+          await import("./server-startup-session-migration.js");
+        params.signal.throwIfAborted();
+        await runGatewaySessionStartupMaintenance(params);
+      },
+    ],
+    [
+      "pairing",
+      async () => {
+        const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
+        params.signal.throwIfAborted();
+        const files = await listLegacyPairingStoreFiles();
+        if (files.length > 0) {
+          params.log.warn(
+            `Legacy pairing stores require repair: ${files.join(", ")}. Stop the Gateway and run openclaw doctor --fix.`,
+          );
+        }
+      },
+    ],
+  ] as const;
+  await Promise.all(
+    tasks.map(async ([name, run]) => {
+      try {
+        params.signal.throwIfAborted();
+        await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
+      } catch (error) {
+        if (!params.signal.aborted) {
+          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
+        }
       }
-      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
-      startupTasks.push(
-        runStartupSessionMigration({
-          cfg: params.cfgAtStart,
-          env: process.env,
-          log: params.log,
-        }),
-      );
-      const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
-      startupTasks.push(
-        listLegacyPairingStoreFiles().then(
-          (files) => {
-            if (files.length > 0) {
-              params.log.warn(
-                `Legacy pairing stores require repair: ${files.join(", ")}. Stop the Gateway and run openclaw doctor --fix.`,
-              );
-            }
-          },
-          (error: unknown) => {
-            params.log.warn(
-              `Legacy pairing store inspection failed: ${String(error)}. Stop the Gateway and run openclaw doctor --fix.`,
-            );
-          },
-        ),
-      );
-    }
-    await Promise.all(startupTasks);
-  }
+    }),
+  );
 }
 
 /** Builds plugin startup state and gateway method lists before the server binds. */
@@ -138,7 +145,6 @@ export async function prepareGatewayPluginBootstrap(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.
@@ -326,7 +332,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
-  startupTrace?: GatewayStartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
   pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
@@ -388,6 +394,12 @@ export async function loadGatewayStartupPluginRuntime(params: {
     ).catch((error: unknown) => {
       params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
+    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
+    const { settlePluginNativeAdmissions } =
+      await import("../plugins/plugin-native-admission-state.js");
+    await settlePluginNativeAdmissions(
+      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
+    );
     return loaded;
   } catch (error) {
     loaded.retireGatewayRuntimeBindings();

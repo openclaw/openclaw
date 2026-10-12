@@ -21,21 +21,30 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
+function mockRequests(responses: Record<string, () => unknown>) {
+  const handlers = new Map(Object.entries(responses));
+  return vi.fn(async (method: string) => {
+    const respond = handlers.get(method);
+    if (!respond) {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return respond();
+  });
+}
+
 function createCommandSessionCapability(client: GatewayBrowserClient): SessionCapability {
   const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
-  const list: SessionCapability["list"] = async (options = {}) =>
-    (await client.request<SessionsListResult | undefined>("sessions.list", options)) ?? null;
   const patch: SessionCapability["patch"] = async (key, sessionPatch, options) =>
     await client.request<SessionsPatchResult>("sessions.patch", {
       key,
       ...(options?.agentId ? { agentId: options.agentId } : {}),
       ...sessionPatch,
     });
-  return Object.assign(sessions, { list, patch });
+  return Object.assign(sessions, { patch });
 }
 
 function executeSlashCommand(
@@ -127,10 +136,9 @@ describe("executeSlashCommand directives", () => {
   it("keeps unknown partial thinking support under server validation", async () => {
     const key = "agent:main:main";
     const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
+      if (method === "sessions.describe") {
         return {
-          ...createSessionsResult([row(key, { model: "model" })]),
-          defaults: { model: "other", modelProvider: "openai", contextTokens: null },
+          session: row(key, { model: "model" }),
         };
       }
       if (method === "sessions.patch") {
@@ -266,15 +274,12 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("does not patch through a replacement connection after loading session state", async () => {
-    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return await listResult;
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const { promise: description, resolve: resolveDescription } = createDeferred<{
+      session: GatewaySessionRow;
+    }>();
+    const request = mockRequests({
+      "sessions.describe": async () => await description,
+      "sessions.patch": () => ({ ok: true }),
     });
     const client = createTestGatewayClient(request);
     let current = true;
@@ -283,13 +288,11 @@ describe("executeSlashCommand directives", () => {
       isCurrent: () => current,
     });
     current = false;
-    resolveList?.(
-      createSessionsResult([
-        row("agent:main:main", {
-          thinkingOptions: ["off", "low", "high"],
-        }),
-      ]),
-    );
+    resolveDescription({
+      session: row("agent:main:main", {
+        thinkingOptions: ["off", "low", "high"],
+      }),
+    });
 
     const result = await pending;
     expect(result.failed).toBe(true);
@@ -297,15 +300,12 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("rechecks live scopes before patching after loading session state", async () => {
-    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return await listResult;
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const { promise: description, resolve: resolveDescription } = createDeferred<{
+      session: GatewaySessionRow;
+    }>();
+    const request = mockRequests({
+      "sessions.describe": async () => await description,
+      "sessions.patch": () => ({ ok: true }),
     });
     const client = createTestGatewayClient(request);
     let snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> = {
@@ -323,13 +323,11 @@ describe("executeSlashCommand directives", () => {
       isCurrent: () => true,
     });
     snapshot = restrictedSnapshot(client, ["sessions.patch"]);
-    resolveList?.(
-      createSessionsResult([
-        row("agent:main:main", {
-          thinkingOptions: ["off", "low", "high"],
-        }),
-      ]),
-    );
+    resolveDescription({
+      session: row("agent:main:main", {
+        thinkingOptions: ["off", "low", "high"],
+      }),
+    });
 
     const result = await pending;
     expect(result.failed).toBe(true);
@@ -337,23 +335,15 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("resolves the legacy main alias for bare /model", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "openai", model: "default-model" },
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-            }),
-          ],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          model: "gpt-4.1-mini",
+        }),
+      }),
+      "models.list": () => ({
+        models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+      }),
     });
 
     const result = await executeSlashCommand(createTestGatewayClient(request), "main", "model", "");
@@ -367,7 +357,10 @@ describe("executeSlashCommand directives", () => {
         }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
+      key: "main",
+      agentId: "main",
+    });
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       sessionKey: "main",
       agentId: "main",
@@ -375,100 +368,11 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("omits unavailable catalog entries from bare /model output", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "openai", model: "gpt-5.5" },
-          sessions: [row("main", { model: "gpt-5.5", modelProvider: "openai" })],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "main",
-      "model",
-      "",
-      {
-        chatModelCatalog: [
-          {
-            id: "gpt-5.5",
-            name: "GPT-5.5",
-            provider: "openai",
-            available: true,
-          },
-          {
-            id: "gpt-5.3-codex-spark",
-            name: "GPT-5.3 Codex Spark",
-            provider: "codex",
-            available: false,
-          },
-        ],
-      },
-    );
-
-    expect(result.content).toBe(
-      [
-        t("chat.commandResults.model.current", { model: "`gpt-5.5`" }),
-        t("chat.commandResults.model.available", { models: "`gpt-5.5`", remaining: "" }),
-      ].join("\n"),
-    );
-    expectNoRequestCall(request, "models.list");
-  });
-
-  it("scopes bare /model session reads to the selected agent", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "openai", model: "work-default" },
-          sessions: [
-            row("agent:work:main", {
-              model: "work-model",
-              modelProvider: "openai",
-            }),
-          ],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "model",
-      "",
-      {
-        agentId: "work",
-      },
-    );
-
-    expect(result.content).toContain(
-      t("chat.commandResults.model.current", { model: "`work-model`" }),
-    );
-    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
-    expect(request).toHaveBeenCalledWith("models.list", {
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      view: "configured",
-    });
-  });
-
   it("does not report global model defaults for an agent without a session row", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "anthropic", model: "global-default" },
-          sessions: [],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: null,
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -493,14 +397,12 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("reports global model defaults for a configured default agent", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "openai", model: "work-default" },
-          sessions: [],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({ session: null }),
+      "sessions.list": () => ({
+        defaults: { modelProvider: "openai", model: "work-default" },
+        sessions: [],
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -526,108 +428,15 @@ describe("executeSlashCommand directives", () => {
         }),
       ].join("\n"),
     );
-  });
-
-  it("uses a matching cached agent row when the scoped model list is temporarily empty", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: { modelProvider: "anthropic", model: "global-default" },
-          sessions: [],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const sessionsResult: SessionsListResult = {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: {
-        modelProvider: "anthropic",
-        model: "global-default",
-        contextTokens: null,
-      },
-      sessions: [
-        row("agent:work:main", {
-          model: "work-model",
-          modelProvider: "openai",
-        }),
-      ],
-    };
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "model",
-      "",
-      {
-        agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", available: true },
-        ],
-        sessionsResult,
-        sessionsResultAgentId: "work",
-      },
-    );
-
-    expect(result.content).toContain(
-      t("chat.commandResults.model.current", { model: "`work-model`" }),
-    );
-  });
-
-  it.each(["gpt-5-mini", "openai/gpt-5-mini", "nvidia/moonshotai/kimi-k2.5"])(
-    "patches %s without rebuilding a second model cache",
-    async (model) => {
-      const request = vi.fn(async (method: string, _payload?: unknown) => {
-        if (method === "sessions.patch") {
-          return createResolvedModelPatch("gpt-5-mini", "openai");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-
-      const result = await executeSlashCommand(
-        createTestGatewayClient(request),
-        "main",
-        "model",
-        model,
-      );
-
-      expect(request).toHaveBeenCalledWith("sessions.patch", {
-        key: "main",
-        model,
-      });
-      expect(result.modelChanged).toBe(true);
-      expectNoRequestCall(request, "models.list");
-    },
-  );
-
-  it("passes selected-agent scope for global model changes", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return createResolvedModelPatch("gpt-5-mini", "openai");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await executeSlashCommand(createTestGatewayClient(request), "global", "model", "gpt-5-mini", {
+    expect(requireRequestCall(request, "sessions.list").payload).toMatchObject({
+      limit: 1,
+      rowMode: "compact",
       agentId: "work",
-      chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
-    });
-
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "global",
-      agentId: "work",
-      model: "gpt-5-mini",
     });
   });
 
   it("refreshes successful compaction without a duplicate command message", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.compact") {
-        return { ok: true, compacted: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = mockRequests({ "sessions.compact": () => ({ ok: true, compacted: true }) });
 
     const result = await executeSlashCommand(
       createTestGatewayClient(request),
@@ -647,15 +456,12 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("surfaces terminal compaction failures instead of reporting a skip", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.compact") {
-        return {
-          ok: false,
-          compacted: false,
-          reason: "codex app-server compaction timed out",
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.compact": () => ({
+        ok: false,
+        compacted: false,
+        reason: "codex app-server compaction timed out",
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -673,56 +479,18 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("resolves the legacy main alias for /usage", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-              inputTokens: 1200,
-              outputTokens: 300,
-              totalTokens: 1500,
-              contextTokens: 4000,
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(createTestGatewayClient(request), "main", "usage", "");
-
-    expect(result.content).toBe(
-      [
-        `**${t("chat.commandResults.usage.title")}**`,
-        t("chat.commandResults.usage.inputTokens", { count: "**1.2k**" }),
-        t("chat.commandResults.usage.outputTokens", { count: "**300**" }),
-        t("chat.commandResults.usage.totalTokens", { count: "**1.5k**" }),
-        t("chat.commandResults.usage.context", { percent: "**38%**", total: "4k" }),
-        t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
-      ].join("\n"),
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-  });
-
   it("keeps /usage context hidden when the context snapshot is stale", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-              inputTokens: 1200,
-              outputTokens: 300,
-              totalTokens: 1500,
-              totalTokensFresh: false,
-              contextTokens: 4000,
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          model: "gpt-4.1-mini",
+          inputTokens: 1200,
+          outputTokens: 300,
+          totalTokens: 1500,
+          totalTokensFresh: false,
+          contextTokens: 4000,
+        }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -741,25 +509,23 @@ describe("executeSlashCommand directives", () => {
         t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
+      key: "agent:main:main",
+      agentId: "main",
+    });
   });
 
   it("uses the context snapshot for /usage while preserving cumulative total display", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-4.1-mini",
-              inputTokens: 1200,
-              outputTokens: 300,
-              totalTokens: 1250,
-              contextTokens: 4000,
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          model: "gpt-4.1-mini",
+          inputTokens: 1200,
+          outputTokens: 300,
+          totalTokens: 1250,
+          contextTokens: 4000,
+        }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -779,246 +545,10 @@ describe("executeSlashCommand directives", () => {
         t("chat.commandResults.usage.model", { model: "`gpt-4.1-mini`" }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-  });
-
-  it("reports unknown thinking metadata instead of guessing from the model", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              modelProvider: "openai",
-              model: "gpt-4.1-mini",
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "",
-      {
-        chatModelCatalog: [
-          {
-            id: "gpt-4.1-mini",
-            name: "GPT-4.1 Mini",
-            provider: "openai",
-            reasoning: true,
-          },
-        ],
-      },
-    );
-
-    expect(result.content).toBe(
-      [
-        t("chat.commandResults.thinking.current", { level: "Unknown" }),
-        t("chat.commandResults.options", {
-          options: "Unknown",
-        }),
-      ].join("\n"),
-    );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
-    expectNoRequestCall(request, "models.list");
-  });
-
-  it("scopes bare /think session reads to the selected agent", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:work:main", {
-              modelProvider: "openai",
-              model: "work-model",
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await executeSlashCommand(createTestGatewayClient(request), "agent:work:main", "think", "", {
-      agentId: "work",
-      chatModelCatalog: [
-        {
-          id: "work-model",
-          name: "Work Model",
-          provider: "openai",
-          reasoning: true,
-        },
-      ],
-    });
-
-    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
-  });
-
-  it("does not report global thinking defaults for an agent without a session row", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "anthropic",
-            model: "global-default",
-            thinkingDefault: "high",
-            thinkingOptions: ["off", "high", "xhigh"],
-          },
-          sessions: [],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "think",
-      "",
-      {
-        agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", reasoning: true },
-        ],
-      },
-    );
-
-    expect(result.content).toBe(
-      [
-        t("chat.commandResults.thinking.current", { level: "Unknown" }),
-        t("chat.commandResults.options", {
-          options: "Unknown",
-        }),
-      ].join("\n"),
-    );
-  });
-
-  it("reports global thinking defaults for a configured default agent", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "openai",
-            model: "work-default",
-            thinkingDefault: "high",
-            thinkingOptions: ["off", "low", "high"],
-          },
-          sessions: [],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "think",
-      "",
-      {
-        agentId: "work",
-        defaultAgentId: "work",
-        chatModelCatalog: [
-          { id: "work-default", name: "Work Default", provider: "openai", reasoning: true },
-        ],
-      },
-    );
-
-    expect(result.content).toBe(
-      [
-        t("chat.commandResults.thinking.current", { level: "high" }),
-        t("chat.commandResults.options", { options: "default, off, low, high" }),
-      ].join("\n"),
-    );
-  });
-
-  it("accepts minimal and xhigh thinking levels", async () => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              thinkingOptions: ["off", "minimal", "low", "medium", "high", "xhigh"],
-            }),
-          ],
-        };
-      }
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const minimal = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "minimal",
-    );
-    const xhigh = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "xhigh",
-    );
-
-    expect(minimal.content).toBe(t("chat.commandResults.thinking.set", { level: "**minimal**" }));
-    expect(xhigh.content).toBe(t("chat.commandResults.thinking.set", { level: "**xhigh**" }));
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
       key: "agent:main:main",
-      thinkingLevel: "minimal",
+      agentId: "main",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.list", { agentId: "main" });
-    expect(request).toHaveBeenNthCalledWith(4, "sessions.patch", {
-      key: "agent:main:main",
-      thinkingLevel: "xhigh",
-    });
-  });
-
-  it("accepts a thinking level advertised only by the active model catalog", async () => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              model: "gpt-5.6-sol",
-              modelProvider: "openai",
-            }),
-          ],
-        };
-      }
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "ultra",
-      {
-        chatModelCatalog: [
-          {
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
-            provider: "openai",
-            reasoning: true,
-            thinkingLevels: [{ id: "ultra", label: "ultra" }],
-          },
-        ],
-      },
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**ultra**" }));
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:main:main",
-      thinkingLevel: "ultra",
-    });
-    expectNoRequestCall(request, "models.list");
   });
 
   it("clears thinking override for /think default", async () => {
@@ -1046,6 +576,9 @@ describe("executeSlashCommand directives", () => {
 
   it("uses default thinking options when the active session is absent", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.describe") {
+        return { session: null };
+      }
       if (method === "sessions.list") {
         return {
           defaults: {
@@ -1146,110 +679,18 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("prefers session model over defaults when models differ (#76482)", async () => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "anthropic",
-            model: "claude-sonnet-4-6",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "minimal", label: "minimal" },
-              { id: "low", label: "low" },
-              { id: "medium", label: "medium" },
-              { id: "high", label: "high" },
-            ],
-            thinkingOptions: ["off", "minimal", "low", "medium", "high"],
-            thinkingDefault: "off",
-          },
-          sessions: [
-            row("agent:main:main", {
-              modelProvider: "deepseek",
-              model: "deepseek-v4-pro",
-              thinkingDefault: "low",
-              thinkingLevels: [
-                { id: "off", label: "off" },
-                { id: "minimal", label: "minimal" },
-                { id: "low", label: "low" },
-                { id: "medium", label: "medium" },
-                { id: "high", label: "high" },
-                { id: "xhigh", label: "xhigh" },
-                { id: "max", label: "max" },
-              ],
-            }),
-          ],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "deepseek-v4-pro", provider: "deepseek", reasoning: true }],
-        };
-      }
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const status = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "",
-    );
-    const setMax = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "think",
-      "max",
-    );
-
-    expect(status.content).toBe(
-      [
-        t("chat.commandResults.thinking.current", { level: "low" }),
-        t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high, xhigh, max",
+  it("reports unknown thinking when the descriptor omits model metadata", async () => {
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          // thinkingLevels intentionally absent — lightweight row
         }),
-      ].join("\n"),
-    );
-    expect(setMax.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
-  });
-
-  it("does not borrow another model's defaults when thinking metadata is absent (#76482)", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "deepseek",
-            model: "deepseek-v4-pro",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "minimal", label: "minimal" },
-              { id: "low", label: "low" },
-              { id: "medium", label: "medium" },
-              { id: "high", label: "high" },
-              { id: "xhigh", label: "xhigh" },
-              { id: "max", label: "max" },
-            ],
-            thinkingOptions: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-            thinkingDefault: "high",
-          },
-          sessions: [
-            row("agent:main:main", {
-              modelProvider: "anthropic",
-              model: "claude-sonnet-4-6",
-              // thinkingLevels intentionally absent — lightweight row
-            }),
-          ],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "claude-sonnet-4-6", provider: "anthropic", reasoning: true }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+      }),
+      "models.list": () => ({
+        models: [{ id: "claude-sonnet-4-6", provider: "anthropic", reasoning: true }],
+      }),
     });
 
     const status = await executeSlashCommand(
@@ -1269,97 +710,36 @@ describe("executeSlashCommand directives", () => {
     );
   });
 
-  it("does not report global thinkingDefault for a session with a different model", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          defaults: {
-            modelProvider: "minimax",
-            model: "MiniMax-M2.7",
-            thinkingDefault: "off",
-          },
-          sessions: [
-            row("agent:main:main", {
-              modelProvider: "deepseek",
-              model: "deepseek-v4-flash",
-            }),
-          ],
-        };
-      }
-      if (method === "models.list") {
-        return {
-          models: [{ id: "deepseek-v4-flash", provider: "deepseek", reasoning: true }],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+  it("rejects thinking levels when the selected model advertises empty support", async () => {
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          modelProvider: "thinking-fixture",
+          model: "selected",
+          thinkingLevels: [],
+        }),
+      }),
+      "sessions.patch": () => ({ ok: true }),
     });
 
-    const status = await executeSlashCommand(
+    const result = await executeSlashCommand(
       createTestGatewayClient(request),
       "agent:main:main",
       "think",
-      "",
+      "high",
     );
 
-    expect(status.content).toBe(
-      [
-        t("chat.commandResults.thinking.current", { level: "Unknown" }),
-        t("chat.commandResults.options", {
-          options: "Unknown",
-        }),
-      ].join("\n"),
+    expect(result.content).toBe(
+      t("chat.commandResults.thinking.unsupported", { level: "high", options: "none" }),
     );
+    expectNoRequestCall(request, "sessions.patch");
   });
-
-  it.each([true, false])(
-    "keeps known empty thinking support distinct from unknown support (empty: %s)",
-    async (empty) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.list") {
-          return createSessionsResult([
-            row("agent:main:main", {
-              modelProvider: "thinking-fixture",
-              model: "selected",
-              ...(empty ? { thinkingLevels: [] } : {}),
-            }),
-          ]);
-        }
-        if (method === "sessions.patch") {
-          return { ok: true };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-
-      const result = await executeSlashCommand(
-        createTestGatewayClient(request),
-        "agent:main:main",
-        "think",
-        "high",
-      );
-
-      if (empty) {
-        expect(result.content).toBe(
-          t("chat.commandResults.thinking.unsupported", { level: "high", options: "none" }),
-        );
-        expectNoRequestCall(request, "sessions.patch");
-      } else {
-        expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**high**" }));
-        expect(request).toHaveBeenCalledWith("sessions.patch", {
-          key: "agent:main:main",
-          thinkingLevel: "high",
-        });
-      }
-    },
-  );
 
   it("reports the current verbose level for bare /verbose", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [row("agent:main:main", { verboseLevel: "full" })],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", { verboseLevel: "full" }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -1375,17 +755,17 @@ describe("executeSlashCommand directives", () => {
         t("chat.commandResults.options", { options: "on, full, off" }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
+      key: "agent:main:main",
+      agentId: "main",
+    });
   });
 
   it("reports the current fast mode for bare /fast", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [row("agent:main:main", { fastMode: true })],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", { fastMode: true }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -1405,17 +785,17 @@ describe("executeSlashCommand directives", () => {
         }),
       ].join("\n"),
     );
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", {
+      key: "agent:main:main",
+      agentId: "main",
+    });
   });
 
   it("reports auto fast mode for bare /fast", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [row("agent:main:main", { fastMode: "auto" })],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", { fastMode: "auto" }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -1438,19 +818,14 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("reports effective model-default auto fast mode for bare /fast", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          sessions: [
-            row("agent:main:main", {
-              effectiveFastMode: "auto",
-              effectiveFastModeSource: "config",
-              fastAutoOnSeconds: 30,
-            }),
-          ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "sessions.describe": () => ({
+        session: row("agent:main:main", {
+          effectiveFastMode: "auto",
+          effectiveFastModeSource: "config",
+          fastAutoOnSeconds: 30,
+        }),
+      }),
     });
 
     const result = await executeSlashCommand(
@@ -1532,12 +907,7 @@ describe("executeSlashCommand directives", () => {
 
 describe("executeSlashCommand /steer (soft inject)", () => {
   it("sends the selected session without resolving a run or leaf", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-1" };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = mockRequests({ "chat.send": () => ({ status: "started", runId: "run-1" }) });
 
     const result = await executeSlashCommand(
       createTestGatewayClient(request),
@@ -1562,14 +932,8 @@ describe("executeSlashCommand /steer (soft inject)", () => {
   });
 
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main", { status: "running" })] };
-      }
-      if (method === "chat.send") {
-        return { status: "ok", runId: "run-ok", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "chat.send": () => ({ status: "ok", runId: "run-ok", messageSeq: 2 }),
     });
 
     const result = await executeSlashCommand(
@@ -1591,11 +955,8 @@ describe("executeSlashCommand /steer (soft inject)", () => {
   ] as const)(
     "reports terminal %s ACK without marking the current run pending",
     async (status, expectedKey) => {
-      const request = vi.fn(async (method: string, _payload?: unknown) => {
-        if (method === "chat.send") {
-          return { status, runId: `run-${status}`, summary: "aborted" };
-        }
-        throw new Error(`unexpected method: ${method}`);
+      const request = mockRequests({
+        "chat.send": () => ({ status, runId: `run-${status}`, summary: "aborted" }),
       });
 
       const result = await executeSlashCommand(
@@ -1612,32 +973,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       expect(chatSend.payload.deliver).toBe(false);
     },
   );
-
-  it("passes selected-agent scope when steering the selected global session", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-global", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "global",
-      "steer",
-      "try a different approach",
-      { agentId: "work" },
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.steer.succeeded"));
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload).toMatchObject({
-      sessionKey: "global",
-      agentId: "work",
-      message: "try a different approach",
-      deliver: false,
-    });
-  });
 
   it("returns steer usage when no message is provided", async () => {
     const request = vi.fn();
@@ -1672,108 +1007,9 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 });
 
 describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
-  it("calls chat.send interrupt to abort and restart the current session", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main")] };
-      }
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-1", messageSeq: 2, interruptedActiveRun: true };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "redirect",
-      "start over with a new plan",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
-    expect(result.trackRunId).toBe("run-1");
-    expect(request).toHaveBeenCalledWith("chat.send", {
-      sessionKey: "agent:main:main",
-      message: "start over with a new plan",
-      queueMode: "interrupt",
-      idempotencyKey: expect.any(String),
-    });
-  });
-
-  it("does not track a pending run when chat.send returns terminal ok", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status: "ok", runId: "run-ok", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "redirect",
-      "start over with a new plan",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
-    expect(result.trackRunId).toBeUndefined();
-  });
-
-  it.each([
-    ["timeout", "chat.commandResults.redirect.timeout"],
-    ["error", "chat.commandResults.redirect.failed"],
-  ] as const)("reports terminal %s ACK from chat.send", async (status, expectedKey) => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status, runId: `run-${status}`, summary: "aborted" };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "redirect",
-      "start over with a new plan",
-    );
-
-    expect(result.content).toBe(t(expectedKey));
-    expect(result.trackRunId).toBeUndefined();
-  });
-
-  it("passes selected-agent scope when redirecting the selected global session", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-global", messageSeq: 2 };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "global",
-      "redirect",
-      "start over",
-      { agentId: "work" },
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
-    expect(result.trackRunId).toBe("run-global");
-    expect(request).toHaveBeenCalledWith("chat.send", {
-      sessionKey: "global",
-      agentId: "work",
-      message: "start over",
-      queueMode: "interrupt",
-      idempotencyKey: expect.any(String),
-    });
-  });
-
   it("treats subagent-looking redirect prefixes as current-session message text", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "chat.send") {
-        return { status: "started", runId: "run-3", messageSeq: 1 };
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = mockRequests({
+      "chat.send": () => ({ status: "started", runId: "run-3", messageSeq: 1 }),
     });
 
     const result = await executeSlashCommand(
@@ -1792,52 +1028,15 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       idempotencyKey: expect.any(String),
     });
   });
-
-  it("returns redirect usage when no message is provided", async () => {
-    const request = vi.fn();
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "redirect",
-      "",
-    );
-
-    expect(result.content).toBe(t("chat.commandResults.redirect.usage"));
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("returns redirect error message on RPC failure", async () => {
-    const request = vi.fn(async (method: string, _payload?: unknown) => {
-      if (method === "sessions.list") {
-        return { sessions: [row("agent:main:main")] };
-      }
-      throw new Error("connection lost");
-    });
-
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:main:main",
-      "redirect",
-      "try again",
-    );
-
-    expect(result.content).toBe(
-      t("chat.commandResults.redirect.requestFailed", { error: "connection lost" }),
-    );
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 it("reports the last-run prompt budget through /usage", async () => {
   const request = vi.fn(async () => ({
-    sessions: [
-      row("agent:main:main", {
-        totalTokens: 160_000,
-        contextTokens: 200_000,
-        contextBudgetStatus: contextBudgetStatusFixture(),
-      }),
-    ],
+    session: row("agent:main:main", {
+      totalTokens: 160_000,
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatusFixture(),
+    }),
   }));
   const result = await executeSlashCommand(
     createTestGatewayClient(request),

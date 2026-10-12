@@ -1,46 +1,31 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
-import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { isSkillPromptVisible } from "../discovery/skill-index.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { compactSkillsPromptForContext, escapeSkillXml, type Skill } from "./skill-contract.js";
+import { compactSkillsPromptForContext, escapeSkillXml } from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
 import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
-type WorkspaceSkillBuildOptions = {
-  executionWorkspaceDir?: string;
-  librarySelections?: SkillSnapshot["librarySelections"];
-  config?: OpenClawConfig;
-  managedSkillsDir?: string;
-  bundledSkillsDir?: string;
-  entries?: SkillEntry[];
-  agentId?: string;
-  skillFilter?: string[];
-  skillOverrides?: Record<string, boolean>;
-  eligibility?: SkillEligibilityContext;
+type WorkspaceSkillBuildOptions = NonNullable<
+  Parameters<typeof resolveWorkspaceSkillPromptEntries>[1]
+> & {
   preserveEntryOrder?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  assertCurrent?: () => void;
 };
 
-async function resolveWorkspaceSkillPromptState(
+export async function buildSkillSnapshot(
   workspaceDir: string,
-  opts?: WorkspaceSkillBuildOptions,
-): Promise<{
-  eligible: SkillEntry[];
-  prompt: string;
-  resolvedSkills: Skill[];
-  skillFilter?: string[];
-}> {
+  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
+): Promise<SkillSnapshot> {
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
-  const promptEntries = filterPromptVisibleSkillEntries(eligible);
+  const promptEntries = eligible.filter(isSkillPromptVisible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const limits = opts?.config?.skills?.limits;
@@ -57,27 +42,13 @@ async function resolveWorkspaceSkillPromptState(
   });
   const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
   return {
-    eligible,
     prompt: prepared.prompt,
-    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
-    skillFilter,
-  };
-}
-
-export async function buildSkillSnapshot(
-  workspaceDir: string,
-  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
-): Promise<SkillSnapshot> {
-  const { eligible, prompt, resolvedSkills, skillFilter } = await resolveWorkspaceSkillPromptState(
-    workspaceDir,
-    opts,
-  );
-  return {
-    prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
-      gatewayFilePath: entry.skill.fileHost === "gateway" ? entry.skill.filePath : undefined,
-      skillKey: resolveSkillKey(entry.skill, entry),
+      source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },
+      gatewayFilePath:
+        resolveSkillFileHost(entry.skill) === "gateway" ? entry.skill.filePath : undefined,
+      skillKey: resolveSkillKey(entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -86,7 +57,8 @@ export async function buildSkillSnapshot(
     ...(opts?.eligibility?.nodeSkills
       ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
       : {}),
-    resolvedSkills,
+    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    discoverySkills: resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
@@ -113,12 +85,8 @@ async function buildSkillsPromptFromEntries(
     return "";
   }
   const { prompt } = await buildSkillSnapshot(params.workspaceDir, {
+    ...params,
     entries,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: params.eligibility,
-    preserveEntryOrder: params.preserveEntryOrder,
-    assertCurrent: params.assertCurrent,
   });
   return prompt.trim() ? prompt : "";
 }
@@ -133,7 +101,7 @@ async function rebuildAfterUnsafeSnapshot(
   );
   const sourceEntries = params.entries ?? (await params.loadEntries?.());
   const entries = sourceEntries?.filter(
-    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry.skill, entry)),
+    (entry) => !isSkillSecretOwnerUnavailable(resolveSkillKey(entry)),
   );
   return buildSkillsPromptFromEntries(params, entries);
 }

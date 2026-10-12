@@ -1,12 +1,19 @@
 /** Executes an already-prepared model without importing model/auth preparation. */
+import { randomUUID } from "node:crypto";
 import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import {
   prepareHeadersForSimpleCompletion,
   prepareModelForSimpleCompletion,
 } from "@openclaw/ai/transports";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveProviderThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import {
   bindModelLlmRuntime,
   getModelCompletionOwner,
@@ -15,6 +22,8 @@ import {
 } from "../llm/model-runtime-binding.js";
 import { completeSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
+import { createModelLifecycle } from "./embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.js";
+import { createModelObserver } from "./embedded-agent-runner/run/attempt.model-diagnostic-observation.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
 
 type SimpleCompletionModelOptions = {
@@ -69,14 +78,21 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       apiRegistry: runtime?.registry ?? defaultApiRegistry,
       model: params.model,
       cfg: params.cfg,
+      auth: { mode: params.auth.mode, authFlow: params.auth.authFlow },
     });
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
   const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
-  const reasoning =
-    rawReasoning === "adaptive" ? "medium" : rawReasoning === "ultra" ? "max" : rawReasoning;
-  const headers = prepareHeadersForSimpleCompletion(completionModel, options);
+  const providerReasoning = resolveProviderThinkingLevel({
+    provider: params.model.provider,
+    model: params.model.id,
+    catalog: [params.model],
+    agentRuntime: "openclaw",
+    level: rawReasoning,
+  });
+  const reasoning = providerReasoning === "adaptive" ? "medium" : providerReasoning;
+  const headers = prepareHeadersForSimpleCompletion(params.model, options);
   const completionOptions: SimpleStreamOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
@@ -86,10 +102,53 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
   }
-  return await completeSimple(
-    completionModel,
-    params.context,
-    completionOptions,
-    params.assertCurrent,
-  );
+  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners()) {
+    return await completeSimple(
+      completionModel,
+      params.context,
+      completionOptions,
+      params.assertCurrent,
+    );
+  }
+  // The prepared completion boundary is shared by metadata and plugin requests.
+  // Usage remains owned by their callers; this lifecycle records only the request.
+  const callId = randomUUID();
+  const lifecycle = createModelLifecycle({
+    ctx: {
+      config: params.cfg,
+      runId: callId,
+      provider: params.model.provider,
+      model: params.model.id,
+      api: params.model.api,
+      transport: "auto",
+      trace: getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
+      nextCallId: () => callId,
+      suppressPluginHooks: true,
+    },
+    options: completionOptions,
+    createObserver: (capturePromptStats) =>
+      createModelObserver({
+        config: params.cfg,
+        streamContext: params.context,
+        capturePromptStats,
+        suppressPluginHooks: true,
+      }),
+  });
+  try {
+    if (strictReasoningTags) {
+      reasoningTagTextPolicy.markStrict(lifecycle.propagatedOptions);
+    }
+    const result = await completeSimple(
+      completionModel,
+      params.context,
+      lifecycle.propagatedOptions,
+      params.assertCurrent,
+    );
+    lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
+    lifecycle.emitCompleted();
+    return result;
+  } catch (error) {
+    lifecycle.emitError(error);
+    throw error;
+  }
 }

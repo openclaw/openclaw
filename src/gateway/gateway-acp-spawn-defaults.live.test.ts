@@ -194,11 +194,10 @@ async function waitForAcpBackendReady(timeoutMs = CONNECT_TIMEOUT_MS): Promise<v
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
-    await runtime?.probeAvailability?.().catch(() => {});
+    await backend?.runtime.doctor?.().catch(() => {});
     if (backend && (!backend.healthy || backend.healthy())) {
       return;
     }
@@ -388,17 +387,16 @@ function createConfig(params: {
 
   return {
     agents: {
-      list: params.includePrimaryOnlyAcpAgent
-        ? [
-            {
-              id: "codex-acp-primary-only",
+      entries: params.includePrimaryOnlyAcpAgent
+        ? {
+            "codex-acp-primary-only": {
               runtime: {
                 type: "acp",
                 acp: { agent: params.acpAgentId },
               },
               model: "anthropic/claude-sonnet-4-6",
             },
-          ]
+          }
         : undefined,
       defaults: {
         model: {

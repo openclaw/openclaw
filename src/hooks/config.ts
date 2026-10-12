@@ -1,4 +1,3 @@
-// Hook config helpers read, normalize, and update hook configuration.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import {
   evaluateRuntimeEligibility,
@@ -30,51 +29,29 @@ export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): bo
   return Boolean(process.env[envName]?.trim() || hookConfig?.env?.[envName]?.trim());
 }
 
-function evaluateHookRuntimeEligibility(params: {
-  entry: HookPolicyEntry;
-  config?: OpenClawConfig;
-  hookConfig?: HookConfig;
-  eligibility?: HookEligibilityContext;
-}): boolean {
-  const { entry, config, hookConfig, eligibility } = params;
-  const remote = eligibility?.remote;
-  // Hook metadata uses the same requirement language as plugins, but hook env
-  // can also come from the per-hook config block.
-  const base = {
-    os: entry.metadata?.os,
-    remotePlatforms: remote?.platforms,
-    always: entry.metadata?.always,
-    requires: entry.metadata?.requires,
-    hasRemoteBin: remote?.hasBin,
-    hasAnyRemoteBin: remote?.hasAnyBin,
-  };
-  return evaluateRuntimeEligibility({
-    ...base,
-    hasBin: hasBinary,
-    hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
-    isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),
-  });
-}
-
-/** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
   entry: HookPolicyEntry;
   config?: OpenClawConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
-  const hookConfig = resolveHookConfig(
-    config,
-    params.entry.metadata?.hookKey ?? params.entry.hook.name,
-  );
+  const hookConfig = resolveHookConfig(config, entry.metadata?.hookKey ?? entry.hook.name);
   if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
     return false;
   }
 
-  return evaluateHookRuntimeEligibility({
-    entry,
-    config,
-    hookConfig,
-    eligibility,
+  const remote = eligibility?.remote;
+  // Hook metadata uses the same requirement language as plugins, but hook env
+  // can also come from the per-hook config block.
+  return evaluateRuntimeEligibility({
+    os: entry.metadata?.os,
+    remotePlatforms: remote?.platforms,
+    always: entry.metadata?.always,
+    requires: entry.metadata?.requires,
+    hasRemoteBin: remote?.hasBin,
+    hasAnyRemoteBin: remote?.hasAnyBin,
+    hasBin: hasBinary,
+    hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
+    isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),
   });
 }

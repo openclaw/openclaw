@@ -1,5 +1,4 @@
 // Qa Lab tests cover bounded Crabline provider responses and failed-body cleanup.
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
@@ -9,23 +8,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createSelection() {
-  return {
-    capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-    channel: "telegram",
-    channelDriver: "crabline",
-    providerReadinessArtifactPath: "crabline-provider-readiness.json",
-  } as const satisfies OpenClawCrablineChannelDriverSelection;
+const inbound = {
+  conversation: { id: "-1001234567890", kind: "group" },
+  senderId: "100001",
+  senderName: "Alice",
+  text: "Telegram response marker.",
+} as const;
+
+async function withTransport(
+  run: (transport: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>) => Promise<void>,
+) {
+  await withTempDir("qa-crabline-transport-", async (outputDir) => {
+    const transport = await createQaCrablineTransportAdapter({
+      outputDir,
+      selection: {
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
+      },
+      state: createQaBusState(),
+    });
+    try {
+      await run(transport);
+    } finally {
+      await transport.cleanupAfterGatewayStop();
+    }
+  });
 }
 
 describe("crabline transport responses", () => {
   it("rejects oversized successful inbound responses before parsing provider metadata", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
+    await withTransport(async (transport) => {
       vi.stubGlobal(
         "fetch",
         vi.fn(
@@ -38,28 +52,14 @@ describe("crabline transport responses", () => {
         ),
       );
 
-      try {
-        await expect(
-          transport.sendInbound({
-            conversation: { id: "-1001234567890", kind: "group" },
-            senderId: "100001",
-            senderName: "Alice",
-            text: "Oversized response marker.",
-          }),
-        ).rejects.toThrow("JSON response exceeds 1048576 bytes");
-      } finally {
-        await transport.cleanupAfterGatewayStop();
-      }
+      await expect(transport.sendInbound(inbound)).rejects.toThrow(
+        "JSON response exceeds 1048576 bytes",
+      );
     });
   });
 
   it("cancels a failed inbound response before surfacing the provider error", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
+    await withTransport(async (transport) => {
       const cancel = vi.fn(() => {
         throw new Error("cancel failed");
       });
@@ -73,19 +73,10 @@ describe("crabline transport responses", () => {
         ),
       );
 
-      try {
-        await expect(
-          transport.sendInbound({
-            conversation: { id: "-1001234567890", kind: "group" },
-            senderId: "100001",
-            senderName: "Alice",
-            text: "Telegram failure marker.",
-          }),
-        ).rejects.toThrow("Crabline telegram inbound injection failed with HTTP 503");
-        expect(cancel).toHaveBeenCalledOnce();
-      } finally {
-        await transport.cleanupAfterGatewayStop();
-      }
+      await expect(transport.sendInbound(inbound)).rejects.toThrow(
+        "Crabline telegram inbound injection failed with HTTP 503",
+      );
+      expect(cancel).toHaveBeenCalledOnce();
     });
   });
 });

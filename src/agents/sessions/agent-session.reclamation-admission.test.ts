@@ -14,7 +14,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -41,21 +41,26 @@ vi.mock(
       >();
     return {
       ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
         actual.withSqliteReclamationWorker(
           options,
           claim,
           async (worker) => {
             const originalRun = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
-              originalRun({
+            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+              let started = false;
+              return originalRun({
                 ...params,
-                onCommitRequest: () => {
-                  checkpoint.startForeground?.();
-                  return params.onCommitRequest();
-                },
-              }),
-            );
+                withWriteAdmission: (admit, diagnostics) =>
+                  params.withWriteAdmission(async (refusal) => {
+                    if (params.plan.kind === "entry" && !started) {
+                      started = true;
+                      checkpoint.startForeground?.();
+                    }
+                    return admit(refusal);
+                  }, diagnostics),
+              });
+            });
             try {
               return await run(worker);
             } finally {
@@ -63,6 +68,7 @@ vi.mock(
             }
           },
           assertRequestCurrent,
+          signal,
         )) satisfies typeof actual.withSqliteReclamationWorker,
     };
   },
@@ -191,7 +197,7 @@ describe("agent session persistence during reclamation", () => {
     }
   });
 
-  it("queues an unrelated custom-message append behind worker commit authorization", async () => {
+  it("queues an unrelated custom-message append behind reclamation writer admission", async () => {
     const sessionKey = "agent:main:reclamation-transcript";
     const sessionId = "reclamation-transcript";
     // Automatic retention remains enabled while the real archive Worker starts.
@@ -218,7 +224,7 @@ describe("agent session persistence during reclamation", () => {
         published.push(event.message.customType);
       }
     });
-    checkpoint.startForeground = () => {
+    checkpoint.startForeground = vi.fn(() => {
       const message = {
         customType: "admission-proof",
         content: "The unrelated transcript write must settle.",
@@ -229,7 +235,7 @@ describe("agent session persistence during reclamation", () => {
       message.content = "Caller changed the input after submission.";
       // Publication must wait for this operation's writer admission to settle.
       publishedDuringCommitAuthorization = [...published];
-    };
+    });
     const deletion = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       commitGuard: () => {},
@@ -241,6 +247,7 @@ describe("agent session persistence during reclamation", () => {
     );
     const outcomes = await Promise.allSettled(write ? [write] : []);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(checkpoint.startForeground).toHaveBeenCalledOnce();
     expect(outcomes).toEqual([{ status: "fulfilled", value: undefined }]);
     expect(publishedDuringCommitAuthorization).toEqual([]);
     expect(published).toEqual(["admission-proof"]);

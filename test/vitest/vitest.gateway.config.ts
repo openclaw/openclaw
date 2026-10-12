@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 import { createGatewayDatabaseWorkersVitestConfig } from "./vitest.gateway-database-workers.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
@@ -25,9 +26,9 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
     dir: ".",
     env,
     exclude: [
+      ...databaseWorkerCoreTestFiles,
       ...gatewayDatabaseWorkerTestFiles,
       "src/gateway/gateway.test.ts",
-      "src/gateway/server.startup-matrix-migration.integration.test.ts",
       ...gatewayMethodsIsolatedTestFiles,
       ...gatewayServerIsolatedTestFiles,
     ],

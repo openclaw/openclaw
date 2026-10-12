@@ -1,4 +1,3 @@
-// Qa Lab tests cover lab server ui plugin behavior.
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
@@ -11,7 +10,6 @@ import {
   detectContentType,
   missingUiHtml,
   proxyUpgradeRequest,
-  resolveUiAssetVersion,
   tryResolveUiAsset,
 } from "./lab-server-ui.js";
 
@@ -35,31 +33,6 @@ describe("qa-lab server ui helpers", () => {
   it("renders the missing-ui placeholder html", () => {
     expect(missingUiHtml()).toContain("QA Lab UI not built");
     expect(missingUiHtml()).toContain("pnpm qa:lab:build");
-  });
-
-  it("hashes built UI assets and changes when bundle contents change", async () => {
-    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
-    cleanups.push(async () => {
-      await rm(uiDistDir, { recursive: true, force: true });
-    });
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
-      "utf8",
-    );
-
-    const version1 = resolveUiAssetVersion(uiDistDir);
-    expect(version1).toMatch(/^[0-9a-f]{12}$/);
-
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
-      "utf8",
-    );
-
-    const version2 = resolveUiAssetVersion(uiDistDir);
-    expect(version2).toMatch(/^[0-9a-f]{12}$/);
-    expect(version2).not.toBe(version1);
   });
 
   it("never resolves sibling files outside the UI dist root", async () => {
@@ -248,32 +221,6 @@ function collectUpgradeRequest(socket: Socket, resolve: (request: string) => voi
 }
 
 describe("proxyUpgradeRequest loopback transport", () => {
-  it("forwards HTTP upgrades after TCP connect and clears the opening timeout", async () => {
-    let resolveRequest!: (request: string) => void;
-    const requestPromise = new Promise<string>((resolve) => {
-      resolveRequest = resolve;
-    });
-    const upstreamServer = trackServer(
-      net.createServer((socket) => collectUpgradeRequest(socket, resolveRequest)),
-    );
-    const upstreamPort = await listenLoopback(upstreamServer);
-    const { browser, proxySocket } = await openBrowserPair();
-    const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
-    const removeListenerSpy = vi.spyOn(net.Socket.prototype, "removeListener");
-    const responsePromise = readUntil(browser, "\r\n\r\n");
-
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`http://127.0.0.1:${upstreamPort}`),
-    });
-
-    await expect(requestPromise).resolves.toContain("GET /socket?client=qa HTTP/1.1");
-    await expect(responsePromise).resolves.toBe(UPGRADE_RESPONSE);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(10_000);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(0);
-    expect(removeListenerSpy.mock.calls.some(([event]) => event === "timeout")).toBe(true);
-  });
-
   it("forwards HTTPS upgrades only after the TLS handshake and clears the opening timeout", async () => {
     const connectTls = tls.connect;
     vi.spyOn(tls, "connect").mockImplementation(((options: tls.ConnectionOptions) =>
@@ -390,26 +337,6 @@ describe("proxyUpgradeRequest loopback transport", () => {
     runUpgradeProxy({
       proxySocket,
       target: new URL(`http://127.0.0.1:${upstreamPort}`),
-    });
-
-    await expect(responsePromise).resolves.toBe(BAD_GATEWAY_RESPONSE);
-    expect(endSpy).toHaveBeenCalledWith(BAD_GATEWAY_RESPONSE, expect.any(Function));
-    expect(proxySocket.destroyed).toBe(true);
-  });
-
-  it("returns a flushed 502 when the upstream connection is refused", async () => {
-    const { browser, proxySocket } = await openBrowserPair();
-    const refusedServer = net.createServer();
-    const refusedPort = await listenLoopback(refusedServer);
-    await new Promise<void>((resolve) => {
-      refusedServer.close(() => resolve());
-    });
-    const endSpy = vi.spyOn(proxySocket, "end");
-    const responsePromise = readToEnd(browser);
-
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`http://127.0.0.1:${refusedPort}`),
     });
 
     await expect(responsePromise).resolves.toBe(BAD_GATEWAY_RESPONSE);

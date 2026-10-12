@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +11,12 @@ import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { updateWorkspaceResultRefs } from "./workspace-result-git.js";
 import {
+  deleteWorkerWorkspaceResultCleanupRefs,
+  hasWorkerWorkspaceResultRef,
+  moveStagedWorkerWorkspaceResultToCleanup,
+  preparedWorkerWorkspaceResultRef,
   withStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
@@ -20,25 +26,68 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   await drainGlobalSingletonLifecycleState();
+  vi.unstubAllEnvs();
 });
 
 const manifestRef = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
 
+async function git(root: string, args: string[]) {
+  const result = await commandRuntime.runCommandWithTimeout(
+    ["git", "-c", "core.longpaths=true", "-C", root, ...args],
+    { timeoutMs: 10_000 },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
 async function stagedFixture(
   fileCount = 64,
-  options: { largeFileBytes?: number; objectFormat?: "sha1" | "sha256" } = {},
+  options: { largeFileBytes?: number; objectFormat?: "sha1" | "sha256"; linked?: boolean } = {},
 ) {
   const root = await fs.realpath(tempDirs.make("workspace-staged-reads-"));
-  const repository = path.join(root, "repository");
+  let repository = path.join(
+    root,
+    options.linked
+      ? (process.platform === "win32" ? "repository-" : "repository-\n").padEnd(
+          190 - root.length - 1,
+          "r",
+        )
+      : "repository",
+  );
   const input = path.join(root, "input");
   await Promise.all([fs.mkdir(repository), fs.mkdir(input)]);
-  if (options.objectFormat === "sha256") {
-    const initialized = await commandRuntime.runCommandWithTimeout(
-      ["git", "-C", repository, "init", "--quiet", "--template=", "--object-format=sha256"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code, initialized.stderr).toBe(0);
+  if (options.objectFormat === "sha256" || options.linked) {
+    await git(repository, [
+      "init",
+      "--quiet",
+      "--template=",
+      `--object-format=${options.objectFormat ?? "sha1"}`,
+    ]);
   }
+  if (options.linked) {
+    await git(repository, ["config", "core.longpaths", "false"]);
+    await git(repository, [
+      "-c",
+      "user.name=Workspace Test",
+      "-c",
+      "user.email=workspace@example.invalid",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "base",
+    ]);
+    const linked = path.join(
+      root,
+      process.platform === "win32" ? "linked-result-worktree" : "linked\nresult-worktree",
+    );
+    await git(repository, ["worktree", "add", "--quiet", "--detach", "--", linked, "HEAD"]);
+    vi.stubEnv("GIT_COMMON_DIR", path.relative(linked, path.join(repository, ".git")));
+    repository = linked;
+  }
+  const originalHead = options.linked ? await git(repository, ["rev-parse", "HEAD"]) : undefined;
   const files = new Map<string, Buffer>();
   for (let index = 0; index < fileCount; index++) {
     files.set(`file-${String(index).padStart(3, "0")}.txt`, Buffer.from(`payload ${index}\n`));
@@ -76,8 +125,11 @@ async function stagedFixture(
     baseCommit: null,
     entries,
   });
-  const stagedResultRef = workerWorkspaceResultRef("read-batch");
-  await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+  const publishedRef = workerWorkspaceResultRef("f4c0d91b-491b-4be0-901d-419e277338af");
+  const stagedResultRef = options.linked
+    ? preparedWorkerWorkspaceResultRef(publishedRef)
+    : workerWorkspaceResultRef("read-batch");
+  const commit = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root: repository,
     stagingRoot: input,
     stagedResultRef,
@@ -86,18 +138,36 @@ async function stagedFixture(
     baseManifestRef: manifestRef(baseManifestRaw),
     currentManifestRef: manifestRef(currentManifestRaw),
   });
-  return { repository, stagedResultRef, files, entries, binaryPath };
+  return {
+    repository,
+    stagedResultRef,
+    publishedRef,
+    originalHead,
+    commit,
+    files,
+    entries,
+    binaryPath,
+  };
 }
 
 it.each([
-  { fileCount: 64, maxReads: 4, largeFileBytes: 0, objectFormat: "sha1" as const },
-  { fileCount: 300, maxReads: 6, largeFileBytes: 0, objectFormat: "sha1" as const },
-  { fileCount: 0, maxReads: 4, largeFileBytes: 9 * 1024 * 1024, objectFormat: "sha1" as const },
-  { fileCount: 0, maxReads: 4, largeFileBytes: 0, objectFormat: "sha256" as const },
+  { fileCount: 64, maxReads: 4, largeFileBytes: 0, objectFormat: "sha1" as const, linked: true },
+  { fileCount: 300, maxReads: 6, largeFileBytes: 0, objectFormat: "sha1" as const, linked: false },
+  {
+    fileCount: 0,
+    maxReads: 4,
+    largeFileBytes: 9 * 1024 * 1024,
+    objectFormat: "sha1" as const,
+    linked: false,
+  },
+  { fileCount: 0, maxReads: 4, largeFileBytes: 0, objectFormat: "sha256" as const, linked: false },
 ])(
-  "materializes $fileCount files with $largeFileBytes large-file bytes in $objectFormat using bounded Git reads",
+  "materializes $fileCount files with $largeFileBytes large-file bytes in $objectFormat using bounded Git reads (linked=$linked)",
   async ({ fileCount, maxReads, ...fixtureOptions }) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
+    expect(fixture.commit).toBe(
+      await git(fixture.repository, ["rev-parse", `${fixture.stagedResultRef}^{commit}`]),
+    );
     const gitReads: string[][] = [];
     const runBuffered = commandRuntime.runCommandBuffered;
     vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
@@ -129,7 +199,8 @@ it.each([
           if (entry.type === "symlink") {
             expect(await fs.readlink(target)).toBe(entry.target);
           } else {
-            expect(await fs.readFile(target)).toEqual(fixture.files.get(entry.path));
+            // Node compares Buffer bytes without Vitest's per-byte object traversal.
+            assert.deepStrictEqual(await fs.readFile(target), fixture.files.get(entry.path));
             if (process.platform !== "win32") {
               expect((await fs.stat(target)).mode & 0o777).toBe(entry.mode);
             }
@@ -147,6 +218,34 @@ it.each([
       gitReads.length,
       JSON.stringify({ entries: fixture.entries.length, gitReads }),
     ).toBeLessThanOrEqual(maxReads);
+    if (fixtureOptions.linked) {
+      await updateWorkspaceResultRefs(fixture.repository, [
+        { ref: fixture.publishedRef, objectId: fixture.commit },
+        { ref: fixture.stagedResultRef },
+      ]);
+      await expect(
+        hasWorkerWorkspaceResultRef({
+          root: fixture.repository,
+          stagedResultRef: fixture.stagedResultRef,
+        }),
+      ).resolves.toBe(false);
+      const cleanupRef = await moveStagedWorkerWorkspaceResultToCleanup({
+        root: fixture.repository,
+        stagedResultRef: fixture.publishedRef,
+      });
+      await expect(
+        hasWorkerWorkspaceResultRef({ root: fixture.repository, stagedResultRef: cleanupRef }),
+      ).resolves.toBe(true);
+      await deleteWorkerWorkspaceResultCleanupRefs({ root: fixture.repository });
+      await expect(
+        hasWorkerWorkspaceResultRef({ root: fixture.repository, stagedResultRef: cleanupRef }),
+      ).resolves.toBe(false);
+      expect(await fs.readdir(fixture.repository)).toEqual([".git"]);
+      expect(await git(fixture.repository, ["rev-parse", "HEAD"])).toBe(fixture.originalHead);
+      expect(await git(fixture.repository, ["config", "--local", "--get", "core.longpaths"])).toBe(
+        "false",
+      );
+    }
   },
 );
 
@@ -254,12 +353,13 @@ it("authenticates the singleton blob returned by checkpoint previews", async () 
     if (
       argv[argv.indexOf("-C") + 1] !== fixture.repository ||
       args[0] !== "cat-file" ||
-      args[1] !== "blob"
+      args[1] !== "--batch"
     ) {
       return result;
     }
     const stdout = Buffer.from(result.stdout);
-    stdout[0] = stdout[0]! ^ 0xff;
+    const contentStart = stdout.indexOf(0x0a) + 1;
+    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
     corrupted++;
     return { ...result, stdout };
   });

@@ -19,6 +19,8 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
+// Keep cold source transformation of mandatory startup code outside behavior-test deadlines.
+import "./server-reload-managed.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
@@ -108,6 +110,16 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     auditReadiness.add(writer.ready);
     return writer;
   });
+  const health = await import("./server/event-loop-health.js");
+  const createHealthMonitor = health.createGatewayEventLoopHealthMonitor;
+  const healthFactory = vi
+    .spyOn(health, "createGatewayEventLoopHealthMonitor")
+    .mockImplementation((...args) => {
+      const monitor = createHealthMonitor(...args);
+      // Real CPU sampling can arm timeouts after callers install a controlled clock.
+      monitor.stop();
+      return monitor;
+    });
   setActivePluginRegistry(createEmptyPluginRegistry());
   return {
     state,
@@ -149,7 +161,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
           port,
           auth: { mode: "token", token },
           controlUi: { enabled: false },
-          reload: { mode: "off" },
+          reload: config.gateway?.reload ?? { mode: "off" },
         },
       });
       const factory = vi
@@ -194,6 +206,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         restoreActivePluginRegistrySnapshot(original);
         await state.cleanup();
       } finally {
+        healthFactory.mockRestore();
         auditFactory.mockRestore();
       }
     },

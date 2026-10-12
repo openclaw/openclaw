@@ -174,9 +174,14 @@ export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
   delta: string,
   materialize: (slot: TSlot) => void,
 ): void {
+  const offset = slot.pendingText?.length ?? 0;
   slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
   const priorText = slot.collapseCandidate?.block.text ?? "";
-  if (priorText.startsWith(slot.pendingText) || slot.pendingText.startsWith(priorText)) {
+  // Earlier deltas already matched; only compare the new overlap with the prior item.
+  if (
+    offset >= priorText.length ||
+    priorText.startsWith(delta.slice(0, priorText.length - offset), offset)
+  ) {
     return;
   }
   // Divergence means this is a distinct message; materialize its withheld delta.
@@ -191,38 +196,33 @@ export function readResponsesOutputIndex(event: object): number | undefined {
 }
 
 export function createResponsesOutputSlotTracker<TSlot extends { type: string }>() {
-  const indexed = new Map<number, TSlot>();
-  let unindexed: TSlot | undefined;
+  const slots = new Map<number | undefined, TSlot>();
   return {
     register(event: object, slot: TSlot): void {
       const outputIndex = readResponsesOutputIndex(event);
-      if (outputIndex === undefined) {
-        if (unindexed) {
-          throw new Error("Responses stream added overlapping unindexed output items");
-        }
-        unindexed = slot;
-        return;
+      if (slots.has(outputIndex)) {
+        throw new Error(
+          outputIndex === undefined
+            ? "Responses stream added overlapping unindexed output items"
+            : `Responses stream reused active output index ${outputIndex}`,
+        );
       }
-      if (indexed.has(outputIndex)) {
-        throw new Error(`Responses stream reused active output index ${outputIndex}`);
-      }
-      indexed.set(outputIndex, slot);
+      slots.set(outputIndex, slot);
     },
     resolve<TType extends TSlot["type"]>(
       event: object,
       type: TType,
     ): Extract<TSlot, { type: TType }> | undefined {
       const outputIndex = readResponsesOutputIndex(event);
-      let slot = outputIndex === undefined ? unindexed : indexed.get(outputIndex);
+      let slot = slots.get(outputIndex);
       if (outputIndex === undefined && !slot) {
-        const matches = [...indexed.values()].filter((candidate) => candidate.type === type);
+        const matches = [...slots.values()].filter((candidate) => candidate.type === type);
         slot = matches.length === 1 ? matches[0] : undefined;
       }
       return slot?.type === type ? (slot as Extract<TSlot, { type: TType }>) : undefined;
     },
     get(event: object): TSlot | undefined {
-      const outputIndex = readResponsesOutputIndex(event);
-      return outputIndex === undefined ? unindexed : indexed.get(outputIndex);
+      return slots.get(readResponsesOutputIndex(event));
     },
     resolveOutputItem(event: object, item: { type: string }): TSlot | undefined {
       if (item.type === "reasoning") {
@@ -234,15 +234,15 @@ export function createResponsesOutputSlotTracker<TSlot extends { type: string }>
       return readResponsesOutputIndex(event) === undefined ? undefined : this.get(event);
     },
     values(): TSlot[] {
-      return [...new Set([...indexed.values(), ...(unindexed ? [unindexed] : [])])];
+      // Unindexed slots follow indexed slots regardless of admission order.
+      const indexed = [...slots].filter(([index]) => index !== undefined).map(([, slot]) => slot);
+      const unindexed = slots.get(undefined);
+      return [...new Set([...indexed, ...(unindexed ? [unindexed] : [])])];
     },
     forget(slot: TSlot): void {
-      if (unindexed === slot) {
-        unindexed = undefined;
-      }
-      for (const [outputIndex, candidate] of indexed) {
+      for (const [outputIndex, candidate] of slots) {
         if (candidate === slot) {
-          indexed.delete(outputIndex);
+          slots.delete(outputIndex);
         }
       }
     },

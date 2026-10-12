@@ -60,17 +60,6 @@ describe("sendVoiceMessageDiscord", () => {
     });
   });
 
-  it("validates runtime config before materializing voice media", async () => {
-    await expect(
-      sendVoiceMessageDiscord("273512430271856640", "https://example.com/voice.ogg", {
-        cfg: undefined as never,
-      }),
-    ).rejects.toThrow(/requires a resolved runtime config/i);
-
-    expect(loadWebMediaRawMock).not.toHaveBeenCalled();
-    await expect(fs.readdir(tempPathMocks.rootDir)).resolves.toEqual([]);
-  });
-
   it("cleans materialized voice media when pre-send conversion fails", async () => {
     const { rest } = makeDiscordRest();
     voiceMocks.ensureOggOpus.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
@@ -84,24 +73,6 @@ describe("sendVoiceMessageDiscord", () => {
     ).rejects.toThrow("ffmpeg unavailable");
 
     await expect(fs.readdir(tempPathMocks.rootDir)).resolves.toEqual([]);
-  });
-
-  it("treats bare numeric voice targets as channels", async () => {
-    const { rest } = makeDiscordRest();
-
-    const result = await sendVoiceMessageDiscord(
-      "273512430271856640",
-      "https://example.com/voice.ogg",
-      {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-      },
-    );
-
-    expect(result.channelId).toBe("273512430271856640");
-    expect(voiceMocks.sendDiscordVoiceMessage).toHaveBeenCalledTimes(1);
-    expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[1]).toBe("273512430271856640");
   });
 
   it("records the native reply target in voice receipts", async () => {
@@ -118,6 +89,9 @@ describe("sendVoiceMessageDiscord", () => {
       },
     );
 
+    expect(result.channelId).toBe("273512430271856640");
+    expect(voiceMocks.sendDiscordVoiceMessage).toHaveBeenCalledTimes(1);
+    expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[1]).toBe("273512430271856640");
     expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[4]).toBe("reply-1");
     expect(result.receipt.replyToId).toBe("reply-1");
     expect(result.receipt.parts[0]?.replyToId).toBe("reply-1");

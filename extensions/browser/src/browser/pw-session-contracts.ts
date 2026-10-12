@@ -8,7 +8,7 @@ import type {
   Request,
 } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
-import type { PlaywrightDownload } from "./pw-download-capture.js";
+import type { BrowserEngineId } from "./engines/types.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -17,7 +17,6 @@ export type BrowserConsoleMessage = {
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
 };
 
-/** Page error captured from a Playwright page. */
 export type BrowserPageError = {
   message: string;
   name?: string;
@@ -25,7 +24,6 @@ export type BrowserPageError = {
   timestamp: string;
 };
 
-/** Network request record captured from a Playwright page. */
 export type BrowserNetworkRequest = {
   id: string;
   timestamp: string;
@@ -37,7 +35,6 @@ export type BrowserNetworkRequest = {
   failureText?: string;
 };
 
-/** Observed browser dialog record tracked for agent-visible state. */
 export type BrowserObservedDialogRecord = {
   id: string;
   type: string;
@@ -48,18 +45,13 @@ export type BrowserObservedDialogRecord = {
   closedBy?: "agent" | "armed" | "auto" | "timeout" | "remote";
 };
 
-/** Pending and recent dialog state for a page. */
-type BrowserObservedDialogState = {
-  pending: BrowserObservedDialogRecord[];
-  recent: BrowserObservedDialogRecord[];
-};
-
-/** Browser state currently observable by agent responses. */
 export type BrowserObservedState = {
-  dialogs: BrowserObservedDialogState;
+  dialogs: {
+    pending: BrowserObservedDialogRecord[];
+    recent: BrowserObservedDialogRecord[];
+  };
 };
 
-/** Raised when an action is blocked by an observed modal dialog. */
 export class BrowserObservedDialogBlockedError extends Error {
   readonly browserState: BrowserObservedState;
 
@@ -70,7 +62,6 @@ export class BrowserObservedDialogBlockedError extends Error {
   }
 }
 
-/** Type guard for observed-dialog blocked errors. */
 export function isBrowserObservedDialogBlockedError(
   err: unknown,
 ): err is BrowserObservedDialogBlockedError {
@@ -91,11 +82,8 @@ export type ArmedDialogResponse = {
 export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
+  engine?: BrowserEngineId;
   onDisconnected?: () => void;
-};
-
-export type DownloadPayload = PlaywrightDownload & {
-  path?: () => Promise<string>;
 };
 
 export type ActionDownloadCapture = {
@@ -137,23 +125,17 @@ export type PageState = {
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
-  roleRefsFrameSelector?: string;
   roleRefsFrame?: Frame;
   /** Target-cache entry owned by the current role refs. */
   roleRefsTargetKey?: string;
-  /** Cache generation restored or stored by this Page. */
-  roleRefsTargetGeneration?: number;
-  /** Main-frame navigation observed before this Page could be bound to its target. */
-  roleRefsInvalidBeforeGeneration?: number;
-  /** Any frame changed before target binding; invalidates only page-wide aria refs. */
-  roleRefsAriaInvalidBeforeGeneration?: number;
+  /** Navigation observed before target discovery invalidates the eventual cache entry. */
+  roleRefsInvalidated?: boolean;
 };
 
 export type RoleRefs = NonNullable<PageState["roleRefs"]>;
 export type RoleRefsCacheEntry = {
   refs: RoleRefs;
   mode?: NonNullable<PageState["roleRefsMode"]>;
-  generation: number;
 };
 
 export type ContextState = {
@@ -170,11 +152,6 @@ export const MAX_NETWORK_REQUESTS = 500;
 export const MAX_RECENT_DIALOGS = 20;
 export const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
-export type PendingBrowserConnection = {
-  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
-  promise: Promise<ConnectedBrowser>;
-};
-
 export type PlaywrightConnectionRetirement = {
   readonly retired: boolean;
   /** Capture handles created by already-admitted work before cleanup begins. */
@@ -183,8 +160,7 @@ export type PlaywrightConnectionRetirement = {
 };
 
 export const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
-export const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
-export const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
+export const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 export const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
 export const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 export const blockedTargetsByCdpUrl = new Set<string>();

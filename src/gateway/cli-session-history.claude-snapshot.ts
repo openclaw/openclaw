@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Worker } from "node:worker_threads";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
@@ -31,6 +31,10 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
       if ((type !== "user" && type !== "assistant") || !message || message.role !== type) {
         parentPort.postMessage(null);
       } else {
+        // An oversized tool result stays a tool result; as plain text it would render as a user turn.
+        const blocks = Array.isArray(message.content) ? message.content : [];
+        const toolResultsOnly = type === "user" && blocks.length > 0 &&
+          blocks.every((block) => block?.type === "tool_result" && boundedString(block.tool_use_id, 1_024));
         const rawUsage = message.usage;
         const usage = rawUsage && typeof rawUsage === "object"
           ? Object.fromEntries(
@@ -48,7 +52,14 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
           isVisibleInTranscriptOnly: entry.isVisibleInTranscriptOnly === true,
           message: {
             role: type,
-            content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
+            content: toolResultsOnly
+              ? blocks.slice(0, 64).map((block) => ({
+                  type: "tool_result",
+                  tool_use_id: block.tool_use_id,
+                  ...(block.is_error === true ? { is_error: true } : {}),
+                  content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
+                }))
+              : ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
             model: boundedString(message.model, 256),
             stop_reason: boundedString(message.stop_reason, 128),
             usage,
@@ -61,57 +72,19 @@ const OVERSIZED_ENTRY_WORKER_SOURCE = `
   });
 `;
 type Message = Record<string, unknown>;
-type HistoryParams = {
+export type ClaudeCliHistoryParams = {
   cliSessionId: string;
   homeDir?: string;
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
 };
-let snapshotCache: { key: string; pending: Promise<readonly Message[]> } | undefined;
-
-function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
-  if (!isRecord(value) || (value.type !== "user" && value.type !== "assistant")) {
-    return null;
-  }
-  const message = value.message;
-  if (!isRecord(message) || message.role !== value.type) {
-    return null;
-  }
-  const usage = isRecord(message.usage) ? message.usage : undefined;
-  return {
-    type: value.type,
-    ...(typeof value.timestamp === "string" ? { timestamp: value.timestamp } : {}),
-    ...(typeof value.uuid === "string" ? { uuid: value.uuid } : {}),
-    ...(value.isSidechain === true ? { isSidechain: true } : {}),
-    ...(value.isMeta === true ? { isMeta: true } : {}),
-    ...(value.isCompactSummary === true ? { isCompactSummary: true } : {}),
-    ...(value.isVisibleInTranscriptOnly === true ? { isVisibleInTranscriptOnly: true } : {}),
-    message: {
-      role: value.type,
-      content: OVERSIZED_HISTORY_PLACEHOLDER,
-      ...(typeof message.model === "string" ? { model: message.model } : {}),
-      ...(typeof message.stop_reason === "string" ? { stop_reason: message.stop_reason } : {}),
-      ...(usage
-        ? {
-            usage: {
-              input_tokens: usage.input_tokens,
-              output_tokens: usage.output_tokens,
-              cache_read_input_tokens: usage.cache_read_input_tokens,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens,
-            },
-          }
-        : {}),
-    },
-  };
-}
-
 async function decodeOversizedClaudeEntry(
   worker: Worker,
   line: string,
 ): Promise<ClaudeCliProjectEntry | null> {
   return await new Promise((resolve) => {
     let settled = false;
-    const finish = (value: unknown) => {
+    const finish = (value: ClaudeCliProjectEntry | null) => {
       if (settled) {
         return;
       }
@@ -119,7 +92,7 @@ async function decodeOversizedClaudeEntry(
       worker.off("message", finish);
       worker.off("error", fail);
       worker.off("exit", fail);
-      resolve(normalizeOversizedEntry(value));
+      resolve(value);
     };
     const fail = () => finish(null);
     worker.once("message", finish);
@@ -133,13 +106,9 @@ async function decodeOversizedClaudeEntry(
   });
 }
 
-function fingerprint(stats: fs.Stats): string {
-  return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
-}
-
-async function resolveSource(
-  params: HistoryParams,
-): Promise<readonly [filePath: string, cacheKey: string] | undefined> {
+export async function resolveClaudeCliHistorySource(
+  params: ClaudeCliHistoryParams,
+): Promise<readonly [filePath: string, cacheKey: string, byteLength: number] | undefined> {
   const candidate = await resolveClaudeCliSessionFilePathAsync(params);
   if (!candidate) {
     return undefined;
@@ -147,7 +116,9 @@ async function resolveSource(
   try {
     const filePath = await fs.promises.realpath(candidate);
     const stats = await fs.promises.stat(filePath);
-    const sourceFingerprint = fingerprint(stats);
+    const sourceFingerprint = [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(
+      ":",
+    );
     const cacheKey = JSON.stringify([
       filePath,
       sourceFingerprint,
@@ -155,17 +126,28 @@ async function resolveSource(
       params.localSessionId?.trim() || null,
       normalizeCliSessionReseedReceipt(params.reseedReceipt),
     ]);
-    return [filePath, cacheKey];
+    return [filePath, cacheKey, stats.size];
   } catch {
     return undefined;
   }
 }
 
-async function parseSnapshot(filePath: string, params: HistoryParams): Promise<readonly Message[]> {
+export async function visitClaudeCliSessionMessages(
+  filePath: string,
+  params: ClaudeCliHistoryParams,
+  visit: (message: Message) => void,
+  byteLength?: number,
+): Promise<void> {
+  if (byteLength === 0) {
+    return;
+  }
   const messages: Message[] = [];
   const toolNames = new Map<string, string>();
   const lines = readline.createInterface({
-    input: fs.createReadStream(filePath, { encoding: "utf8" }),
+    input: fs.createReadStream(filePath, {
+      encoding: "utf8",
+      ...(byteLength === undefined ? {} : { end: byteLength - 1 }),
+    }),
     crlfDelay: Number.POSITIVE_INFINITY,
   });
   const reseedState = createClaudeReseedImportState(params);
@@ -188,13 +170,14 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
           continue;
         }
       }
+      let parsedMessage: Message | null = null;
       try {
         // Keep large valid user/assistant records visible through a bounded projection;
         // unsupported external records are still ignored, but JSON.parse runs off-loop.
         let entry: ClaudeCliProjectEntry | null;
         if (oversized) {
           if (!worker || worker.threadId === -1) {
-            worker = new Worker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
+            worker = createCpuTrackedWorker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
             // Isolate failures between records remain local to this history import.
             worker.on("error", () => {});
           }
@@ -205,59 +188,27 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
         if (!entry) {
           continue;
         }
-        const message = parseClaudeCliHistoryEntry(
+        parsedMessage = parseClaudeCliHistoryEntry(
           entry,
           params.cliSessionId,
           lineNumber,
           toolNames,
           { reseedMode: "recover", reseedState },
         );
-        if (message) {
-          appendCoalescedClaudeCliToolMessage(messages, message);
-        }
       } catch {
         // Ignore malformed external history entries.
+      }
+      if (parsedMessage) {
+        appendCoalescedClaudeCliToolMessage(messages, parsedMessage);
+        if (messages.length > 1) {
+          visit(redactClaudeCliHistoryMessage(messages.shift()!));
+        }
       }
     }
   } finally {
     await worker?.terminate();
   }
-  const redacted: Message[] = [];
-  for (const [index, message] of messages.entries()) {
-    if (index % 32 === 0) {
-      await yieldToEventLoop();
-    }
-    redacted.push(redactClaudeCliHistoryMessage(message));
+  for (const message of messages) {
+    visit(redactClaudeCliHistoryMessage(message));
   }
-  return Object.freeze(redacted);
-}
-
-export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): Promise<Message[]> {
-  const source = await resolveSource(params);
-  if (!source) {
-    return [];
-  }
-  const [filePath, cacheKey] = source;
-  if (snapshotCache?.key !== cacheKey) {
-    snapshotCache = { key: cacheKey, pending: parseSnapshot(filePath, params) };
-  }
-  const pending = snapshotCache.pending;
-  let snapshot: readonly Message[];
-  try {
-    snapshot = await pending;
-  } catch {
-    if (snapshotCache?.pending === pending) {
-      snapshotCache = undefined;
-    }
-    return [];
-  }
-  const messages: Message[] = [];
-  for (const [index, message] of snapshot.entries()) {
-    if (index % 32 === 0) {
-      await yieldToEventLoop();
-    }
-    // The process cache owns redacted objects; callers receive isolated mutable copies.
-    messages.push(structuredClone(message));
-  }
-  return messages;
 }

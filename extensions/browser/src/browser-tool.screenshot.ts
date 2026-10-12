@@ -1,93 +1,68 @@
 /** Browser tool screenshot capture, private vision output, and explicit sharing hints. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
-  browserScreenshotAction,
-  describeImageFile,
-  getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
   readStringParam,
-  readStringValue,
-  resolveRuntimeImageSanitization,
-  saveMediaBuffer,
-  stageBrowserScreenshotForSharing,
-} from "./browser-tool.runtime.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import { wrapBrowserExternalContent } from "./browser-tool.snapshot.js";
+import { browserScreenshotAction } from "./browser/client-actions.js";
+import type { BrowserClientTarget } from "./browser/client-request.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
-import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
-import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
-import { wrapExternalContent } from "./sdk-security-runtime.js";
+import { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
+import { describeBrowserScreenshot } from "./browser/vision.js";
 
-export type BrowserScreenshotOptions = {
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
+export type BrowserScreenshotOptions = Pick<
+  Parameters<typeof describeBrowserScreenshot>[0],
+  "agentId" | "agentDir" | "workspaceDir" | "activeModel" | "mediaScope"
+> & {
   screenshotResultMode?: "image" | "path";
   persistScreenshot?: (params: {
     sourcePath: string;
     type: "png" | "jpeg";
     targetId?: string;
   }) => Promise<string>;
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
 };
-
-function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
-}
 
 const SCREENSHOT_SHARE_UNAVAILABLE =
   "[Screenshot sharing is unavailable because an outbound copy could not be prepared.]";
 
 export async function executeScreenshotAction({
   input: params,
-  baseUrl,
+  target,
   profile,
   requestedTimeoutMs,
-  proxyRequest,
   signal,
   onTabActivity,
   opts,
 }: {
   input: Record<string, unknown>;
-  baseUrl?: string;
+  target: BrowserClientTarget;
   profile?: string;
   requestedTimeoutMs?: number;
-  proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity: (targetId: string | undefined) => void;
+  onTabActivity: (targetId: string | undefined) => void | Promise<void>;
   opts?: BrowserScreenshotOptions;
 }): Promise<AgentToolResult<unknown>> {
   const targetId = readStringParam(params, "targetId");
-  const fullPage = Boolean(params.fullPage);
-  const ref = readStringParam(params, "ref");
-  const element = readStringParam(params, "element");
-  const labels = typeof params.labels === "boolean" ? params.labels : undefined;
   const type = params.type === "jpeg" ? "jpeg" : "png";
-  const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
-  const request = {
+  const result = await browserScreenshotAction(target, {
     targetId,
-    fullPage,
-    ref,
-    element,
+    fullPage: Boolean(params.fullPage),
+    ref: readStringParam(params, "ref"),
+    element: readStringParam(params, "element"),
     type,
-    labels,
-    timeoutMs: effectiveTimeoutMs,
-  } satisfies Parameters<typeof browserScreenshotAction>[1];
-  const result = await browserScreenshotAction(proxyRequest ?? baseUrl, {
-    ...request,
+    labels: typeof params.labels === "boolean" ? params.labels : undefined,
+    timeoutMs: requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
     profile,
     signal,
   });
-  onTabActivity(readStringValue(result.targetId) ?? targetId);
+  await onTabActivity(readStringValue(result.targetId) ?? targetId);
   if (opts?.screenshotResultMode === "path") {
     const artifactPath = opts.persistScreenshot
       ? await opts.persistScreenshot({
@@ -121,7 +96,7 @@ export async function executeScreenshotAction({
       screenshotPath,
       imageSanitization?.maxDimensionPx,
     );
-    shareHint = formatScreenshotShareHint(sharePath);
+    shareHint = `[Screenshot saved to ${JSON.stringify(sharePath)}. A sanitized outbound copy is ready at this path for explicit sharing.]`;
   } catch {
     // Screenshot viewing remains useful when optional outbound staging fails.
   }
@@ -133,23 +108,16 @@ export async function executeScreenshotAction({
   };
   let extraText = shareHint;
   try {
-    const described = await describeBrowserScreenshot(
-      {
-        cfg: screenshotCfg,
-        filePath: screenshotPath,
-        agentDir: opts?.agentDir,
-        agentId: opts?.agentId,
-        workspaceDir: opts?.workspaceDir,
-        activeModel: opts?.activeModel,
-        mediaScope: opts?.mediaScope,
-        imageSanitization,
-      },
-      {
-        describeImageFile,
-        normalizeBrowserScreenshot,
-        saveMediaBuffer,
-      },
-    );
+    const described = await describeBrowserScreenshot({
+      cfg: screenshotCfg,
+      filePath: screenshotPath,
+      agentDir: opts?.agentDir,
+      agentId: opts?.agentId,
+      workspaceDir: opts?.workspaceDir,
+      activeModel: opts?.activeModel,
+      mediaScope: opts?.mediaScope,
+      imageSanitization,
+    });
     if (described) {
       const analyzedBy =
         described.provider && described.model
@@ -158,40 +126,28 @@ export async function executeScreenshotAction({
       // Vision model descriptions contain web page content which is
       // untrusted external input — wrap it the same way snapshot and
       // tabs results are wrapped to mitigate prompt injection.
-      const wrappedDescription = wrapExternalContent(
-        neutralizeMediaDirectives(described.text.trim()),
-        {
-          source: "browser",
-          includeWarning: true,
-        },
-      );
+      const wrappedDescription = wrapBrowserExternalContent(described.text.trim(), true);
       const text = `[analyzed by ${analyzedBy}]\n${wrappedDescription}\n${shareHint}`;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          ...result,
-          // Do NOT include details.media here — the vision path returns
-          // a text description as the deliverable output. Exposing the raw
-          // screenshot as media would cause channel delivery to auto-send
-          // potentially sensitive page content. The text block carries the
-          // staged outbound-copy path for an explicit outbound-delivery send.
-          vision: {
-            provider: described.provider,
-            model: described.model,
-            decision: described.decision,
-          },
+      return textResult(text, {
+        ...result,
+        // Do NOT include details.media here — the vision path returns
+        // a text description as the deliverable output. Exposing the raw
+        // screenshot as media would cause channel delivery to auto-send
+        // potentially sensitive page content. The text block carries the
+        // staged outbound-copy path for an explicit outbound-delivery send.
+        vision: {
+          provider: described.provider,
+          model: described.model,
+          decision: described.decision,
         },
-      };
+      });
     }
   } catch (err) {
     // Fall back to returning the raw image block so the agent loop can
     // still recover. Provider/runtime errors are untrusted page input;
     // preserve their trust boundary and defang reply-media directives.
     const rawReason = err instanceof Error ? err.message : String(err);
-    const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
-      source: "browser",
-      includeWarning: false,
-    });
+    const reason = wrapBrowserExternalContent(rawReason, false);
     extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
   }
   return await imageResultFromFile({

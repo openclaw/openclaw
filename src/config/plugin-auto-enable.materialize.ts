@@ -19,11 +19,10 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
+import { copyConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-export function resolvePluginAutoEnableCandidateReason(
-  candidate: PluginAutoEnableCandidate,
-): string {
+function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandidate): string {
   switch (candidate.kind) {
     case "channel-configured":
       return `${candidate.channelId} configured`;
@@ -35,6 +34,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.providerId} speech provider selected`;
     case "worker-provider-selected":
       return `${candidate.providerId} worker provider selected`;
+    case "storage-provider-selected":
+      return `${candidate.providerId} storage provider selected`;
     case "decision-provider-selected":
       return `${candidate.providerId} decision provider selected`;
     case "agent-harness-runtime-configured":
@@ -114,11 +115,6 @@ function disableImplicitPreferredOverPlugin(params: {
   };
 }
 
-function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  return asOptionalRecord(channels?.[channelId])?.enabled === true;
-}
-
 function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
@@ -129,37 +125,27 @@ function resolveAutoEnableChannelId(params: {
   const plugin = params.manifestRegistry.plugins.find(
     (record) => record.id === params.entry.pluginId,
   );
-  if (plugin && plugin.origin !== "bundled") {
-    if (params.entry.kind !== "channel-configured") {
-      return null;
-    }
-    const channelId = normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId;
-    if ((plugin.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId)) {
-      return null;
-    }
-  }
-  const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
-  if (builtInChannelId) {
-    return builtInChannelId;
-  }
-  if (params.entry.kind !== "channel-configured") {
+  const channelId =
+    params.entry.kind === "channel-configured"
+      ? (normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId)
+      : null;
+  const claimsChannel =
+    channelId !== null &&
+    (plugin?.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId);
+  if (plugin && plugin.origin !== "bundled" && (channelId === null || claimsChannel)) {
     return null;
   }
-  if (plugin?.origin !== "bundled") {
-    return null;
-  }
-  const channelId = normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId;
-  return (plugin.channels ?? []).some((id) => (normalizeChatChannelId(id) ?? id) === channelId)
-    ? channelId
-    : null;
+  return (
+    normalizeChatChannelId(params.entry.pluginId) ??
+    (plugin?.origin === "bundled" && claimsChannel ? channelId : null)
+  );
 }
 
 function registerPluginEntry(
   cfg: OpenClawConfig,
   entry: PluginAutoEnableCandidate,
-  manifestRegistry: PluginManifestRegistry,
+  builtInChannelId: string | null,
 ): OpenClawConfig {
-  const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
     const channels = cfg.channels;
     return {
@@ -247,25 +233,17 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   return next;
 }
 
-function resolveChannelAutoEnableDisplayLabel(
-  entry: Extract<PluginAutoEnableCandidate, { kind: "channel-configured" }>,
-  manifestRegistry: PluginManifestRegistry,
-): string | undefined {
-  const builtInChannelId = normalizeChatChannelId(entry.channelId);
-  const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
-  return (
-    (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
-    plugin?.channelConfigs?.[entry.channelId]?.label ??
-    plugin?.channelCatalogMeta?.label
-  );
-}
-
 function formatAutoEnableChange(
   entry: PluginAutoEnableCandidate,
   manifestRegistry: PluginManifestRegistry,
 ): string {
   if (entry.kind === "channel-configured") {
-    const label = resolveChannelAutoEnableDisplayLabel(entry, manifestRegistry);
+    const builtInChannelId = normalizeChatChannelId(entry.channelId);
+    const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
+    const label =
+      (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
+      plugin?.channelConfigs?.[entry.channelId]?.label ??
+      plugin?.channelCatalogMeta?.label;
     if (label) {
       return `${label} configured, enabled automatically.`;
     }
@@ -281,7 +259,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 }): PluginAutoEnableResult {
   let next = params.config ?? {};
   const changes: string[] = [];
-  const autoEnabledReasons = new Map<string, string[]>();
+  const autoEnabledReasons: Record<string, string[]> = Object.create(null);
 
   if (
     next.plugins?.enabled === false ||
@@ -344,21 +322,20 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
-        ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
+        ? asOptionalRecord(next.channels?.[builtInChannelId])?.enabled === true
         : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
 
-    next = registerPluginEntry(next, entry, params.manifestRegistry);
+    next = registerPluginEntry(next, entry, builtInChannelId);
     if (hasRestrictiveAllowlist) {
       next = ensurePluginAllowlisted(next, entry.pluginId);
     }
     const reason = resolvePluginAutoEnableCandidateReason(entry);
-    autoEnabledReasons.set(entry.pluginId, [
-      ...(autoEnabledReasons.get(entry.pluginId) ?? []),
-      reason,
-    ]);
+    if (!isBlockedObjectKey(entry.pluginId)) {
+      (autoEnabledReasons[entry.pluginId] ??= []).push(reason);
+    }
     changes.push(formatAutoEnableChange(entry, params.manifestRegistry));
   }
 
@@ -368,12 +345,13 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     manifestRegistry: params.manifestRegistry,
   });
 
-  const autoEnabledReasonRecord: Record<string, string[]> = Object.create(null);
-  for (const [pluginId, reasons] of autoEnabledReasons) {
-    if (!isBlockedObjectKey(pluginId)) {
-      autoEnabledReasonRecord[pluginId] = [...reasons];
-    }
+  if (next !== params.config) {
+    // Auto-enable rebuilds the touched config sections, so the result reaches callers
+    // without the loader's unresolved-reference facts. Credential consumers (for example
+    // A2A peer tokens on the message CLI path) read those facts to tell an unset `${VAR}`
+    // from literal text, so carry them over for every path the rewrite left untouched.
+    copyConfigResolutionFactsThroughRewrite(params.config, next);
   }
 
-  return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
+  return { config: next, changes, autoEnabledReasons };
 }

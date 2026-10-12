@@ -50,7 +50,7 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 
 - **Implicit (spawn edges).** When a session spawns a sub-agent or ACP child, the parent's cursor is seeded automatically at the child's spawn version. Parents never subscribe manually.
 - **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`. Routing a room into main needs no watch, because it already shares the main conversation.
-- **Explicit (`sessions_send watch: true`).** Any coordinator can watch a non-spawned target. Pass `watch: true` on `sessions_send`. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
+- **Explicit (`sessions_send watch: true`).** A coordinator with normal status visibility can watch a non-spawned target. Pass `watch: true` on `sessions_send`. A per-agent `tools.agentToAgent.send` rule alone does not grant watch access to otherwise hidden sessions. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
@@ -113,6 +113,10 @@ The notice tells the watcher exactly what to do. `session_status` with `changesS
 ## Storage and limits
 
 History lives in the shared state database, bounded to 30 days and 50,000 rows. Per-session heads stay monotonic after pruning. Recording is best-effort. A failed append is logged and never fails the originating turn. `stateVersion` is therefore a signal-log head, not a transactional change-data-capture version.
+
+Child-run outcomes are recorded asynchronously, so waiting for the shared database does not block Gateway event handling. Completion joins the recording work, and a replaced or provisional run owner cannot claim the run's first terminal event.
+
+Recording rechecks the session's ownership after waiting for write admission. Concurrent metadata updates or writes to other sessions do not discard an otherwise current event.
 
 Current limits:
 

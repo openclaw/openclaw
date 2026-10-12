@@ -16,7 +16,6 @@ import {
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
@@ -46,15 +45,9 @@ import {
   type WizardConfigWriteOptions,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
-import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
+import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
-type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
-
-const loadConfigLoggingModule = createLazyRuntimeModule(() => import("../config/logging.js"));
-
-const loadOnboardConfigModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-config.js"),
-);
+type SetupFlowChoice = WizardFlow | "import" | "keep-model";
 
 export async function runSetupWizard(
   opts: OnboardOptions,
@@ -85,7 +78,7 @@ async function runSetupWizardOnce(
     : {};
   let setupConfigMergeBase = structuredClone(baseConfig);
   baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
-  // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
+  // Ordinary onboard reruns must preserve existing agents.entries / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
   const commitSetupConfigFile = async (
@@ -226,15 +219,11 @@ async function runSetupWizardOnce(
   let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
-    const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
+  while (opts.importFrom || flow === "import") {
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
       migrationOutcome = await runSetupMigrationImport({
-        opts: {
-          ...opts,
-          ...(importFrom ? { importFrom } : {}),
-        },
+        opts: { ...opts },
         baseConfig,
         ...migrationDiscovery,
         prompter,
@@ -325,46 +314,36 @@ async function runSetupWizardOnce(
 
   const localPort = quickstartGateway.port;
   const localUrl = `ws://127.0.0.1:${localPort}`;
-  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  try {
-    const resolvedGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: quickstartGateway.token,
-      path: "gateway.auth.token",
-      env: process.env,
-    });
-    if (resolvedGatewayToken) {
-      localGatewayToken = resolvedGatewayToken;
+  const resolveLocalProbeSecret = async (
+    key: "token" | "password",
+    fallback: string | undefined,
+  ) => {
+    const field = `gateway.auth.${key}`;
+    try {
+      return (
+        (await resolveSetupSecretInputString({
+          config: baseConfig,
+          value: quickstartGateway[key],
+          path: field,
+          env: process.env,
+        })) || fallback
+      );
+    } catch (error) {
+      await prompter.note(
+        [t("wizard.setup.secretRefProbeFailed", { field }), formatErrorMessage(error)].join("\n"),
+        t("wizard.gateway.auth"),
+      );
+      return fallback;
     }
-  } catch (error) {
-    await prompter.note(
-      [
-        t("wizard.setup.secretRefProbeFailed", { field: "gateway.auth.token" }),
-        formatErrorMessage(error),
-      ].join("\n"),
-      t("wizard.gateway.auth"),
-    );
-  }
-  let localGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-  try {
-    const resolvedGatewayPassword = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: quickstartGateway.password,
-      path: "gateway.auth.password",
-      env: process.env,
-    });
-    if (resolvedGatewayPassword) {
-      localGatewayPassword = resolvedGatewayPassword;
-    }
-  } catch (error) {
-    await prompter.note(
-      [
-        t("wizard.setup.secretRefProbeFailed", { field: "gateway.auth.password" }),
-        formatErrorMessage(error),
-      ].join("\n"),
-      t("wizard.gateway.auth"),
-    );
-  }
+  };
+  const localGatewayToken = await resolveLocalProbeSecret(
+    "token",
+    process.env.OPENCLAW_GATEWAY_TOKEN,
+  );
+  const localGatewayPassword = await resolveLocalProbeSecret(
+    "password",
+    process.env.OPENCLAW_GATEWAY_PASSWORD,
+  );
 
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
@@ -420,7 +399,7 @@ async function runSetupWizardOnce(
     : null;
   if (remoteProbeAuth?.warning) {
     await prompter.note(
-      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+      ["Could not resolve remote gateway SecretRef for setup check.", remoteProbeAuth.warning].join(
         "\n",
       ),
       "Gateway auth",
@@ -431,6 +410,7 @@ async function runSetupWizardOnce(
         url: remoteUrl,
         config: baseConfig,
         originScopedDeviceAuth: true,
+        configuredRemote: !remoteUrlChanged,
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })
@@ -465,8 +445,8 @@ async function runSetupWizardOnce(
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } =
       remoteOnboard ?? (await import("../commands/onboard-remote.js"));
-    const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
-    const { logConfigUpdated } = await loadConfigLoggingModule();
+    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
+    const { logConfigUpdated } = await import("../config/logging.js");
     let nextConfig = await promptRemoteGatewayConfig(remoteSeedConfig, prompter, {
       secretInputMode: opts.secretInputMode,
       ...(opts.remoteUrl !== undefined ? { remoteOriginUrl: storedRemoteUrl } : {}),
@@ -489,6 +469,8 @@ async function runSetupWizardOnce(
       : await prompter.text({
           message: t("wizard.setup.workspaceDirectory"),
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
+          validate: (value) =>
+            validateSetupWorkspacePath(value.trim() || onboardHelpers.DEFAULT_WORKSPACE),
         }));
 
   const requestedWorkspaceDir = resolveUserPath(
@@ -496,7 +478,7 @@ async function runSetupWizardOnce(
   );
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
-    await loadOnboardConfigModule();
+    await import("../commands/onboard-config.js");
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
@@ -546,11 +528,9 @@ async function runSetupWizardOnce(
     flow: wizardFlow,
     baseConfig,
     nextConfig,
-    localPort,
     quickstartGateway,
     secretInputMode: opts.secretInputMode,
     prompter,
-    runtime,
   });
   const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
   const onboardingAgent = await ensureOnboardingAgent({
@@ -594,8 +574,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { createChannelSetupHooks, setupChannels } =
-      await import("../commands/onboard-channels.js");
+    const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
     const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
@@ -612,7 +591,7 @@ async function runSetupWizardOnce(
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
-      onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+      onPostWriteHook: channelSetup.onPostWriteHook,
     });
     const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
     await channelSetup.runPostWriteHooks(committed.path);
@@ -626,7 +605,7 @@ async function runSetupWizardOnce(
     nextConfig = committed.nextConfig;
   }
   let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
-  const { logConfigUpdated } = await loadConfigLoggingModule();
+  const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

@@ -24,6 +24,13 @@ openclaw gateway restart --wait 30s
 Manual restart signals now use `SIGUSR2`. `SIGUSR1` starts Node's inspector and no longer restarts the Gateway. Update scripts that send the old signal; prefer `openclaw gateway restart` for service-aware restarts.
 </Warning>
 
+If restart cannot verify a live serving owner, it leaves the process untouched.
+Run `openclaw gateway status --deep`, fix the reported startup failure (for example,
+a stopped Tailscale backend when Serve is configured), then run
+`openclaw gateway start` to wait for readiness. A loaded service or a running PID
+alone does not prove that the Gateway is serving. Reinstallation is not a remedy
+for an unresolved startup dependency or unknown process ownership.
+
 `--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
 `--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
@@ -36,9 +43,18 @@ leave time for cancellation and cleanup. These caps also apply to `--wait 0`. Lo
 heartbeat timeouts do not extend it. When available, the drain log reports the
 largest observed model request timeout for context.
 
+Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admission,
+including wakes waiting to retry. They cannot start another turn in the draining runtime.
+Already-running wakes and pending final reply writes retain their drain grace.
+
+If the worker inventory has already retired when shutdown starts, the Gateway
+still drains its retained worker tunnels and workspace transfers. Inventory
+retirement alone does not fail shutdown; other cleanup failures still do.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
-the remaining work categories, writes a diagnostic stability bundle, and exits
+the remaining work categories and pending owners (including command lanes and
+request origins), writes a diagnostic stability bundle, and exits
 with status `0`. It does not reuse that unfinished runtime for an in-process
 restart. This lets a requested stop finish cleanly and lets the service manager
 start a fresh Gateway for a restart.
@@ -65,10 +81,24 @@ retains exit status `78` and parks a managed LaunchAgent when possible. A refuse
 shared-state database cannot record a new lifecycle row; the error log explains
 the refusal, and deep status reports it instead of an unavailable shutdown record.
 
+When the shared-state database cannot be read at all (for example, the file is
+damaged), `openclaw gateway status --deep` fails with exit status `1` and names
+the database path and read error instead of reporting a config read failure.
+Stop OpenClaw processes, then restore that file from a verified backup, as
+`openclaw doctor` also advises.
+
 Foreground/manual Gateways, in-process restarts selected by `OPENCLAW_NO_RESPAWN=1`, and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 
-`--force` skips the active-work drain and requests cancellation of active cron runs before cleanup. The normal shutdown path still joins accepted work; existing shutdown deadlines still apply. Plain `restart` normally uses the service-manager restart path.
+`--force` begins restart immediately and closes new admissions. The current CLI supplies the normal drain budget, capped by the native service shutdown deadline. Only work remaining at that deadline is canceled before cleanup. A safe restart whose deferral budget has already expired does not get a second drain budget. Plain `restart` normally uses the service-manager restart path.
+
+Forced requests from older callers that supply no drain budget get at most
+45 seconds to drain. Their 60-second replacement window reserves 10 seconds for
+cleanup and 5 seconds for replacement. This applies to interactive and update
+callers alike. If work remains when the drain expires, the Gateway records a
+warning with the remaining work categories in its restart history and log, then
+cancels that work through normal terminal recovery. Callers that supply a budget
+retain that budget, subject to native service deadlines.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
@@ -82,12 +112,23 @@ without passing a new option. The watchdog includes migration, listener, and hea
 phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
 by newer update callers take precedence. Ordinary standalone restarts wait beyond the standard readiness budget only while the same running Gateway advances startup phases or acquires, renews, or completes an observed same-process migration, up to five minutes, then report `still-starting` (exit 2) with the last phase and `openclaw gateway status --deep` as the next step; startup without progress still fails at the standard budget (exit 1), while a newly observed migration lease gets one heartbeat interval plus polling grace before it is considered stalled, and its observed completion earns one fresh readiness window within the same cap. See [Restart recovery](/gateway/restart-recovery).
 
+On Windows, managed `gateway start` and `gateway restart` allow up to 90 minutes
+for cold startup, using three default update-step budgets for activation, loading,
+and readiness. Managed update restoration uses the same allowance unless an
+explicit `update --timeout` supplies its per-step budget. Implicit Windows update
+readiness checks use ten times the observed startup duration, bounded between
+90 and 120 minutes; the ceiling cannot truncate the cold-start floor. This accommodates large
+agent databases on slow storage; a service that exits or fails a health check can
+still report failure earlier. A live Gateway that remains in startup at the
+deadline is left running and reported as `still-starting`; updates retain the
+readiness warning and recovery backups.
+
 On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
 
-The Windows handoff waits for the outgoing Gateway to exit, then requests a task
+The Windows handoff waits up to three minutes for the outgoing Gateway to exit, then requests a task
 launch. It records `restart finished` in `logs/gateway-restart.log` only after a
 different process with the expected executable and Gateway entrypoint listens on
-the configured port. This listener check allows up to three minutes; it does not
+the configured port. This listener check uses the same 90-minute cold-start allowance; it does not
 prove channel readiness. A task marked **Running** or a successful launch request
 alone does not count as recovery.
 
@@ -107,13 +148,19 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 
 ### Install identity
 
-Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the canonical `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
+Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the standard `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
 
-`OPENCLAW_HOME`, or an `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` that points elsewhere, is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+`OPENCLAW_HOME` may explicitly select the OS account home, including a filesystem alias of that home. Both the process home (`HOME` or `USERPROFILE`) and the effective OpenClaw home must resolve to the account home. An `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, or `OPENCLAW_CONFIG_PATH` that points elsewhere is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+
+Doctor also validates the environment saved in the installed service. A standard `OPENCLAW_HOME` there does not prevent `openclaw doctor --fix` from entering maintenance and importing legacy credentials. Doctor remains the migration owner: it verifies the imported credentials and archives the original bytes before normal runtime reads resume.
 
 On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
 
 Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
+
+On Linux, discovery also recognizes legacy `openclaw-<profile>` unit names. A custom system unit can belong to the default installation when its OpenClaw launcher, service account, profile, and state/config paths identify that installation. Discovery uses systemd's effective command and environment, including drop-ins and environment files. If multiple custom units match or a wrapper makes their identity unclear, specify the intended unit with `OPENCLAW_SYSTEMD_UNIT`; OpenClaw does not choose the first unit carrying its marker.
+
+Doctor offers duplicate user-unit cleanup only when both managers' loaded Gateway commands identify the selected account, profile, state/config paths, and matching port selection. It rechecks the units after confirmation. Different or unverifiable identities leave the user unit in place. Cleanup removes only the confirmed user unit, then reports any remaining matching user unit or unverifiable discovery; another unit requires its own inspection and confirmation on a later Doctor run.
 
 On Linux, `openclaw gateway install --force` refuses a sealed systemd service
 definition, or one whose write authority cannot be verified, before changing
@@ -159,9 +206,9 @@ OPENCLAW_SUPERVISOR_MODE=external \
   openclaw database ownership claim --manager gateway-supervisor --json
 ```
 
-Before claiming, stop and verify every Gateway, CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
+Before claiming, stop the Gateway through the external supervisor and stop any embedded agents. The CLI enforces this procedure: it refuses a live Gateway or embedded-agent owner and holds exclusive offline ownership while committing the claim. Also stop and verify every CLI, Doctor, updater, and native app process older than 2026.8.1 that can write the shared state database. Processes from before the ownership contract ([#121069](https://github.com/openclaw/openclaw/pull/121069)) do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
 
-The claim is idempotent for the same stable manager identifier and refuses a different manager. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
+Repeating the claim for the same stable manager identifier has no additional effect; a different manager is refused. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
 
 For upgrades and rollbacks, have the supervisor create a consolidated WAL-consistent copied snapshot with no SQLite sidecars, then run the target release's own `openclaw database preflight <copied-state.sqlite> --json` before activation. Numeric schema versions alone do not prove that a same-version additive shape is compatible. See [Database schemas](/reference/database-schemas).
 
@@ -176,11 +223,11 @@ openclaw gateway restart-handoff consume --expected-pid <pid> --json
 
 Protocol version `1` supports the `consume` operation. Consumption validates the expected PID and bounded handoff fields inside one immediate SQLite transaction. An accepted handoff is deleted before success is returned, so concurrent or replayed consumers cannot both accept it. A PID mismatch is retained for the matching owner; missing, expired, and invalid rows do not authorize a restart.
 
-Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should probe `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
+Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should check `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
 
 External supervisor implementations should also apply these acceptance rules:
 
-- Bound capability probes with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
+- Bound capability checks with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
 - Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 

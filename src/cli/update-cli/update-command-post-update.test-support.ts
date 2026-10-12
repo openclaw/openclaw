@@ -16,7 +16,7 @@ import {
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
@@ -190,6 +190,7 @@ export function taskRecovery(record: (phase: string) => void = () => {}) {
   return {
     suspended: Promise.resolve(true),
     beginMutation: vi.fn(() => record("mutation")),
+    assertRecoveryCurrent: vi.fn(),
     restore: vi.fn(async () => record("restore")),
     handoff: vi.fn(),
     complete: vi.fn(async () => record("complete")),
@@ -227,7 +228,7 @@ export function registerForegroundFinalizationTests({
   };
 }): void {
   it.each([
-    ...(["noop", "runtime", "plugins", "revoked", "park-failed"] as const).flatMap((outcome) =>
+    ...(["noop", "runtime", "plugins", "park-failed"] as const).flatMap((outcome) =>
       [false, true].map((candidateRuntime) => ({ outcome, candidateRuntime })),
     ),
     { outcome: "retirement" as const, candidateRuntime: true },
@@ -259,11 +260,7 @@ export function registerForegroundFinalizationTests({
       });
       vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementation(
         async ({ beforePublication }) => {
-          const changed =
-            outcome === "runtime" || outcome === "revoked" || outcome === "park-failed";
-          if (outcome === "revoked") {
-            opts.run = { ...run };
-          }
+          const changed = outcome === "runtime" || outcome === "park-failed";
           if (changed) {
             await beforePublication?.();
             events.push("publish");
@@ -303,9 +300,9 @@ export function registerForegroundFinalizationTests({
         },
         { candidateRuntime },
       );
-      if (outcome === "revoked" || outcome === "park-failed") {
+      if (outcome === "park-failed") {
         await expect(finishing).rejects.toBeInstanceOf(Error);
-        expect(events).toEqual(outcome === "revoked" ? [] : ["park"]);
+        expect(events).toEqual(["park"]);
       } else {
         await finishing;
         if (outcome === "retirement") {
@@ -461,7 +458,7 @@ export function registerServiceInstallationConvergenceTests(
   makeHome: () => string,
   mocks: {
     revalidateService: Mock<
-      typeof import("./update-command-service.js").revalidateManagedGatewayServiceAfterUpdate
+      typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
     >;
     readServiceState: Mock;
     stopService: Mock<

@@ -136,10 +136,7 @@ async function waitForShellLayout(page: Page): Promise<void> {
   });
 }
 
-async function expectPanelHeaderControlsClearShellChrome(
-  page: Page,
-  shellChromeExpected: boolean,
-): Promise<void> {
+async function expectPanelHeaderControlsClearShellChrome(page: Page): Promise<void> {
   const panelControls = page.locator(".chat-pane__actions button:visible");
   const panelCount = await panelControls.count();
   expect(panelCount).toBeGreaterThan(0);
@@ -160,7 +157,7 @@ async function expectPanelHeaderControlsClearShellChrome(
       .filter((button) => button.bottom > button.top && button.right > button.left);
     const shells = [
       ...document.querySelectorAll(
-        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-attention--floating) button:not([hidden])",
+        ":is(.shell-chrome-controls, .macos-titlebar-controls, .sidebar-rail, .sidebar-session-toolbar) button:not([hidden])",
       ),
     ]
       .map(rect)
@@ -173,11 +170,7 @@ async function expectPanelHeaderControlsClearShellChrome(
     };
   });
 
-  if (shellChromeExpected) {
-    expect(geometry.shells.length).toBeGreaterThan(0);
-  } else {
-    expect(geometry.shells).toEqual([]);
-  }
+  expect(geometry.shells.length).toBeGreaterThan(0);
   for (const panel of geometry.panels) {
     for (const shell of geometry.shells) {
       expect(
@@ -216,7 +209,7 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
         },
-        async ({ page }) => {
+        async ({ page, context }) => {
           await seedSettings(page, "light");
           await installMockGateway(page, {
             ...scenario(),
@@ -229,20 +222,21 @@ suite.define(() => {
           await composer.waitFor();
           const shell = page.locator(".agent-chat__composer-shell");
           const textarea = composer.locator("textarea");
+          const protocol = await context.newCDPSession(page);
           const bottomGap = () =>
-            shell.evaluate((element) => getComputedStyle(element).marginBottom);
+            shell.evaluate(
+              (element) => window.innerHeight - element.getBoundingClientRect().bottom,
+            );
           for (const safeArea of [0, 24]) {
-            await page.evaluate((inset) => {
-              document.documentElement.style.setProperty("--safe-area-bottom", `${inset}px`);
-            }, safeArea);
-            expect(await bottomGap()).toBe(`${6 + safeArea}px`);
+            await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+              insets: { bottom: safeArea },
+            });
+            expect(await bottomGap()).toBe(6 + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(`${6 + safeArea}px`);
+            expect(await bottomGap()).toBe(6 + safeArea);
             await textarea.blur();
           }
-          await page.evaluate(() =>
-            document.documentElement.style.removeProperty("--safe-area-bottom"),
-          );
+          await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
           await capturePanel(page, "mobile-composer-spacing");
           await page.locator(".chat-side-panel-toggle").click();
           const picker = page.locator(".side-panel-empty--selector");
@@ -266,7 +260,15 @@ suite.define(() => {
           expect(geometry.pickerTop).toBeGreaterThanOrEqual(geometry.panelTop);
           expect(geometry.firstTop).toBeGreaterThanOrEqual(geometry.composerBottom);
           const choices = picker.locator("button");
-          expect(await choices.count()).toBeGreaterThan(5);
+          expect(await picker.locator(".side-panel-type-option__label").allTextContents()).toEqual([
+            "Subagents",
+            "Processes",
+            "Review",
+            "Terminal",
+            "Browser",
+            "Files",
+            "Side chat",
+          ]);
           for (const choice of [choices.first(), choices.last()]) {
             await choice.scrollIntoViewIfNeeded();
             await choice.click({ trial: true });
@@ -413,11 +415,12 @@ suite.define(() => {
           return box ? box.y + box.height / 2 : -1;
         };
         // The toolbar row sits at the top of the content column in both states.
-        await expect.poll(rowCenter).toBe(26);
+        await expect.poll(rowCenter).toBe(24);
+        await capturePanel(page, "page-toolbar-expanded");
 
-        await page.locator(".sidebar-brand__collapse").click();
+        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
-        await expect.poll(rowCenter).toBe(26);
+        await expect.poll(rowCenter).toBe(24);
         const controls = page.locator(".shell-chrome-controls button:visible");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),
@@ -425,9 +428,10 @@ suite.define(() => {
         expect(controlBoxes.length).toBeGreaterThan(0);
         const tabsBox = (await tabs.boundingBox())!;
         for (const box of controlBoxes) {
-          expect(box.top + box.height / 2).toBe(26);
+          expect(box.top + box.height / 2).toBe(24);
           expect(box.right).toBeLessThan(tabsBox.x);
         }
+        await capturePanel(page, "page-toolbar-collapsed");
       },
     );
   });
@@ -462,7 +466,7 @@ suite.define(() => {
       home: true,
       deviceLess: false,
       direction: "ltr",
-      expectedControl: ".shell-chrome-controls__home",
+      expectedControl: ".sidebar-rail__bottom .sidebar-footer-bar__home",
       name: "collapsed navigation with Home and attention",
       navCollapsed: true,
       operatorScopes: undefined,
@@ -474,7 +478,7 @@ suite.define(() => {
       home: false,
       deviceLess: true,
       direction: "rtl",
-      expectedControl: ".sidebar-attention--floating .sidebar-issues-button",
+      expectedControl: ".sidebar-rail__bottom .sidebar-issues-button",
       name: "collapsed RTL limited-access status and attention",
       navCollapsed: true,
       operatorScopes: limitedScopes,
@@ -506,15 +510,15 @@ suite.define(() => {
           document.documentElement.dir = direction;
         }, testCase.direction);
         if (testCase.navCollapsed) {
-          await page.locator(".sidebar-brand__collapse").click();
+          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
           await expect
             .poll(() => page.locator(".shell").getAttribute("class"))
             .toContain("shell--nav-collapsed");
-          await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+          await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
         }
         await page.locator(testCase.expectedControl).waitFor();
         await waitForShellLayout(page);
-        await expectPanelHeaderControlsClearShellChrome(page, testCase.navCollapsed);
+        await expectPanelHeaderControlsClearShellChrome(page);
         await capturePanel(page, testCase.proof);
       },
     );

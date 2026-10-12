@@ -15,21 +15,19 @@ afterEach(async () => {
 });
 
 describe("Matrix per-wire send authority", () => {
-  for (const durable of [false, true]) {
-    it.each([
-      "unchanged",
-      "between chunks",
-      "during preparation",
-      "redirect unchanged",
-      "redirect revoked",
-    ] as const)(`guards %s with durable=${durable}`, async (boundary) => {
+  it.each([
+    { boundary: "between chunks", durable: true, writes: 1, receipts: 1 },
+    { boundary: "during preparation", durable: false, writes: 0, receipts: 0 },
+    { boundary: "redirect unchanged", durable: false, writes: 4, receipts: 3 },
+    { boundary: "redirect revoked", durable: true, writes: 1, receipts: 0 },
+  ])(
+    "guards $boundary with durable=$durable",
+    async ({ boundary, durable, writes: expectedWrites, receipts: expectedReceipts }) => {
       installMatrixTestRuntime({
         channel: {
           text: {
             ...createPluginRuntimeMock().channel.text,
-            resolveTextChunkLimit: () => 5,
             resolveChunkMode: () => "length",
-            resolveMarkdownTableMode: () => "code",
             chunkMarkdownTextWithMode: (text, limit) => chunkTextForOutbound(text, limit),
           },
         },
@@ -89,7 +87,7 @@ describe("Matrix per-wire send authority", () => {
         });
         const send = sendMessageMatrix("!room:example.org", "AAAAA BBBBB CCCCC", {
           client,
-          cfg: {},
+          cfg: { channels: { matrix: { textChunkLimit: 5 } } },
           ...(durable
             ? {
                 deliveryQueueId: `authority-${boundary}`,
@@ -106,25 +104,11 @@ describe("Matrix per-wire send authority", () => {
             receipts.push(result.messageId);
           },
         });
-        if (boundary === "unchanged" || boundary === "redirect unchanged") {
+        if (boundary === "redirect unchanged") {
           await expect(send).resolves.toMatchObject({ messageId: "$event-3" });
         } else {
           await expect(send).rejects.toThrow("completion authority revoked");
         }
-        const expectedWrites =
-          boundary === "unchanged"
-            ? 3
-            : boundary === "redirect unchanged"
-              ? 4
-              : boundary === "during preparation"
-                ? 0
-                : 1;
-        const expectedReceipts =
-          boundary === "unchanged" || boundary === "redirect unchanged"
-            ? 3
-            : boundary === "between chunks"
-              ? 1
-              : 0;
         expect(writes).toHaveLength(expectedWrites);
         expect(receipts).toHaveLength(expectedReceipts);
         expect(new Set(writes).size).toBe(expectedWrites);
@@ -135,6 +119,6 @@ describe("Matrix per-wire send authority", () => {
           server.closeAllConnections();
         });
       }
-    });
-  }
+    },
+  );
 });

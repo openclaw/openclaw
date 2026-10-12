@@ -1,5 +1,3 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import type {
   ChatAccountSelection,
   UserModelAccount,
@@ -7,13 +5,14 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
-import { highlightModelRow, pickerMenu } from "./chat-model-picker-search.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
+import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 registerModelAccountsEnglish();
 
@@ -31,7 +30,8 @@ type AccountInventory = {
 const inventories = new WeakMap<object, AccountInventory>();
 
 export type ChatModelAccountSection = {
-  render: (startIndex: number) => TemplateResult;
+  render: (startIndex: number) => ReturnType<typeof solidTemplate>;
+  viewProps: (startIndex: number) => ChatModelAccountSectionViewProps;
   onClose: () => void;
 };
 
@@ -116,11 +116,13 @@ export function renderChatModelAccountControl(params: {
           canonicalModelAuthProviderId(provider),
       )
       .flatMap((p) => p.profiles) ?? [];
-  const subscriptions = profiles.filter((p) => p.type === "oauth" || p.type === "token");
   const email = (profileId: string | undefined) =>
-    subscriptions.length > 1
-      ? subscriptions.find((p) => p.profileId === profileId)?.email
-      : undefined;
+    profiles.find((profile) => profile.profileId === profileId)?.email;
+  const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
+  const selectedLabel = selectedProfile?.displayName || selection.label;
+  const selectedIdentity = [
+    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+  ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??
     (account &&
@@ -137,7 +139,7 @@ export function renderChatModelAccountControl(params: {
     [
       {
         value: currentValue,
-        label: selection.label,
+        label: selectedLabel,
         description:
           email(currentId) ??
           description(
@@ -190,103 +192,36 @@ export function renderChatModelAccountControl(params: {
       }
     }
   };
+  const toggleAccounts = () => {
+    currentInventory.open = !currentInventory.open;
+    params.onRequestUpdate();
+    // Reopening retries an empty inventory after a failed load; loaded pages are reused.
+    if (
+      currentInventory.open &&
+      currentInventory.accounts.length === 0 &&
+      !currentInventory.loading
+    ) {
+      void loadAccounts();
+    }
+  };
+  const viewProps = (startIndex: number): ChatModelAccountSectionViewProps => ({
+    selectionKind: selection.kind,
+    disabled: params.disabled,
+    selectedIdentity,
+    options,
+    currentValue,
+    open: currentInventory.open,
+    error: currentInventory.error,
+    startIndex,
+    onToggle: toggleAccounts,
+    onSelect: selectAccount,
+  });
   return {
     onClose: () => {
       currentInventory.open = false;
       params.onRequestUpdate();
     },
-    render: (startIndex) => html`
-      <section
-        class="chat-controls__provider-model-group"
-        data-chat-account-selection=${selection.kind}
-        aria-label=${t("chat.modelAccounts.section")}
-      >
-        <button
-          class="chat-controls__provider-heading chat-controls__account-heading"
-          type="button"
-          data-chat-account-group-toggle
-          data-chat-model-group-toggle
-          aria-expanded=${currentInventory.open}
-          ?disabled=${params.disabled}
-          @click=${() => {
-            currentInventory.open = !currentInventory.open;
-            params.onRequestUpdate();
-            // A loaded inventory is reused across collapse/expand; an empty one
-            // (never loaded, or a failed load) fetches again so reopening retries.
-            if (
-              currentInventory.open &&
-              currentInventory.accounts.length === 0 &&
-              !currentInventory.loading
-            ) {
-              void loadAccounts();
-            }
-          }}
-        >
-          <span class="chat-controls__provider-icon chat-controls__target-icon" aria-hidden="true"
-            >${icons.users}</span
-          >
-          <span class="chat-controls__provider-label">${t("chat.modelAccounts.section")}</span>
-          <span class="chat-controls__account-selection">${selection.label}</span>
-          <span class="chat-controls__inline-select-chevron" aria-hidden="true"
-            >${currentInventory.open ? icons.chevronUp : icons.chevronDown}</span
-          >
-        </button>
-        <div
-          class="chat-controls__provider-model-list"
-          data-chat-model-list="true"
-          role="listbox"
-          aria-label=${t("chat.modelAccounts.section")}
-        >
-          ${repeat(
-            options,
-            (option) => option.value,
-            (option, index) => html`
-              <button
-                class="chat-controls__inline-select-option chat-controls__model-option"
-                type="button"
-                role="option"
-                aria-selected=${option.value === currentValue}
-                data-chat-account-option=${option.value}
-                data-chat-model-option=${`account:${option.value}`}
-                data-chat-model-index=${startIndex + index}
-                data-chat-model-name=${option.label.toLocaleLowerCase()}
-                data-chat-model-keywords=${option.description?.toLocaleLowerCase() ?? ""}
-                data-chat-model-provider-label="account"
-                ?hidden=${!currentInventory.open}
-                aria-disabled=${option.disabled ? "true" : nothing}
-                ?disabled=${params.disabled || (option.disabled && option.value !== "more")}
-                @mouseenter=${(event: MouseEvent) => {
-                  // SAFETY: Bound to each account option button's mouseenter event.
-                  const row = event.currentTarget as HTMLButtonElement;
-                  const menu = pickerMenu(row);
-                  if (menu) {
-                    highlightModelRow(menu, row);
-                  }
-                }}
-                @click=${(event: MouseEvent) => selectAccount(option.value, event)}
-              >
-                <span class="chat-controls__model-option-provider" aria-hidden="true"
-                  >${icons.users}</span
-                >
-                <span class="chat-controls__model-option-copy">
-                  <span class="chat-controls__model-option-name">${option.label}</span>
-                  ${option.description ? html`<span class="chat-controls__auth-meta" title=${option.description}><span class="chat-controls__model-option-name">${option.description}</span></span>` : nothing}
-                </span>
-                <span class="chat-controls__model-option-action">
-                  ${option.value === currentValue ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">${icons.check}</span>` : nothing}
-                </span>
-              </button>
-            `,
-          )}
-        </div>
-        ${
-          currentInventory.error
-            ? html`<span class="chat-controls__account-error" role="alert"
-                >${currentInventory.error}</span
-              >`
-            : nothing
-        }
-      </section>
-    `,
+    render: (startIndex) => solidTemplate(ChatModelAccountSectionView, viewProps(startIndex)),
+    viewProps,
   };
 }

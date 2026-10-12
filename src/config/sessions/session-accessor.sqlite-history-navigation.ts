@@ -10,7 +10,11 @@ import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import {
+  transcriptEventNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 
 function parseNavigation(eventJson: string): Record<string, unknown> | undefined {
   const parsed: unknown = JSON.parse(eventJson);
@@ -43,21 +47,22 @@ function parseNavigation(eventJson: string): Record<string, unknown> | undefined
 }
 
 function navigationCandidatesSql(
+  identitySeq: Expression<number | null>,
   event: Expression<string>,
-  candidate: { key: "id"; eventIds: readonly string[] } | { key: "type" },
+  candidate: { key: "id"; eventIds: readonly string[] },
 ): RawBuilder<SqlBool> {
   const match =
-    candidate.key === "type"
-      ? /* kysely-allow-raw: fixed discriminators filter decoded JSON members. */ sql<SqlBool>`member.value IN ('reset', 'compaction', 'custom_message')`
-      : candidate.eventIds.length > 32
-        ? /* kysely-allow-raw: keep the member guard; callers filter large sets without a quadratic scan. */ sql<SqlBool>`1`
-        : candidate.eventIds.length === 1
-          ? /* kysely-allow-raw: bound instr narrows IDs before exact JavaScript matching. */ sql<SqlBool>`instr(member.value, ${candidate.eventIds[0]}) > 0`
-          : /* kysely-allow-raw: nested json_each matches bound ID sets without row hydration. */ sql<SqlBool>`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(candidate.eventIds)}) AS requested
+    candidate.eventIds.length > 32
+      ? /* kysely-allow-raw: keep the member guard; callers filter large sets without a quadratic scan. */ sql<SqlBool>`1`
+      : candidate.eventIds.length === 1
+        ? /* kysely-allow-raw: bound instr narrows IDs before exact JavaScript matching. */ sql<SqlBool>`instr(member.value, ${candidate.eventIds[0]}) > 0`
+        : /* kysely-allow-raw: nested json_each matches bound ID sets without row hydration. */ sql<SqlBool>`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(candidate.eventIds)}) AS requested
         WHERE instr(member.value, requested.value) > 0)`;
   // Admit any duplicate root member; JavaScript applies last-key and full trim semantics.
   // Invalid and SQLite-overdepth rows still reach the existing JSON.parse fallback.
-  return /* kysely-allow-raw: decoded members only narrow candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN json_valid(${event}) THEN EXISTS (
+  // Fence JSON behind the anti-join so indexed payloads are never parsed just to reject them.
+  return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN 0
+    WHEN json_valid(${event}) THEN EXISTS (
       SELECT 1 FROM json_each(${event}) AS member
       WHERE member.key = ${candidate.key} AND member.type = 'text' AND ${match}
     ) ELSE 1 END`;
@@ -90,24 +95,29 @@ export function* iterateUnindexedTranscriptNavigation(
         .onRef("identity.session_id", "=", "event.session_id")
         .onRef("identity.seq", "=", "event.seq"),
     )
-    .select((eb) => [
+    .select([
       "event.seq as event_seq",
-      projectResetBoundaryNavigationSql(eb.ref("event.event_json")).as("event_json"),
+      transcriptEventResetNavigationSql("event").as("event_json"),
       /* kysely-allow-raw: preserve original event byte costs while reading navigation only. */
-      sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+      sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
     .where("event.session_id", "=", projection.resolved.sessionId)
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
       filtered.where((eb) =>
-        navigationCandidatesSql(eb.ref("event.event_json"), {
+        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
           key: "id",
           eventIds: options.eventIds!,
         }),
       ),
     )
     .$if(options.controlsOnly === true, (filtered) =>
-      filtered.where((eb) => navigationCandidatesSql(eb.ref("event.event_json"), { key: "type" })),
+      filtered.where((eb) =>
+        eb.or([
+          eb("event.navigation_valid", "=", 0),
+          eb("event.navigation_last_type", "in", ["reset", "compaction", "custom_message"]),
+        ]),
+      ),
     )
     .where("event.seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)
     .$if(options.afterRawSeq !== undefined, (filtered) =>
@@ -147,19 +157,19 @@ export function* iterateUnindexedActiveTranscriptNavigation(
         .onRef("identity.session_id", "=", "active.session_id")
         .onRef("identity.seq", "=", "active.event_seq"),
     )
-    .select((eb) => [
+    .select([
       "active.event_seq",
       "active.active_position",
       "active.message_position",
-      projectResetBoundaryNavigationSql(eb.ref("event.event_json")).as("event_json"),
+      transcriptEventResetNavigationSql("event").as("event_json"),
       /* kysely-allow-raw: a bounded lookup admits the original payload size before hydration. */
-      sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+      sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("identity.seq", "is", null)
     .$if(canFilterEventIds(options.eventIds), (filtered) =>
       filtered.where((eb) =>
-        navigationCandidatesSql(eb.ref("event.event_json"), {
+        navigationCandidatesSql(eb.ref("identity.seq"), transcriptEventNavigationSql("event"), {
           key: "id",
           eventIds: options.eventIds!,
         }),

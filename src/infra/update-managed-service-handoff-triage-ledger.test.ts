@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+
+useTriageLeaseDatabaseFixture();
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
@@ -35,7 +38,7 @@ fs.readFileSync = function(file, ...args) {
 
 const itUnix = it.runIf(process.platform !== "win32");
 
-itUnix.each([
+itUnix.for([
   { format: "v2", membership: "0::$GROUP\n" },
   { format: "multiline v2", membership: "5:cpu:/unrelated\n0::$GROUP\n2:memory:/other\n" },
   { format: "v1", membership: "12:memory:/unrelated\n1:name=systemd:$GROUP\n3:cpu:/other\n" },
@@ -43,7 +46,7 @@ itUnix.each([
   { format: "hybrid", membership: "0::/unrelated\n4:cpu,cpuacct:/other\n7:name=systemd:$GROUP\n" },
 ])(
   "finishes the original update before the native fixer starts without lending its run identity ($format)",
-  async ({ membership }) => {
+  async ({ membership }, { signal }) => {
     let runId = "";
     let runEnv: NodeJS.ProcessEnv = {};
     const boundary = await createTriageBoundary(
@@ -91,23 +94,19 @@ itUnix.each([
       expect(await boundary.control("park")).toBe("parked");
       expect(await boundary.control("commit")).toBe("committed");
       boundary.parent.kill();
-      await vi.waitFor(
-        async () => {
-          expect(
-            (await boundary.readEvents()).find((event) => event.kind === "ledger-before-fixer"),
-            await boundary.log(),
-          ).toMatchObject({
-            result: {
-              runId,
-              status: "failed",
-              phase: "finished",
-              reason: "managed-service-handoff-failed",
-            },
-            inheritedRunId: null,
-          });
+      await boundary.waitForEvent("ledger-before-fixer", signal);
+      expect(
+        (await boundary.readEvents()).find((event) => event.kind === "ledger-before-fixer"),
+        await boundary.log(),
+      ).toMatchObject({
+        result: {
+          runId,
+          status: "failed",
+          phase: "finished",
+          reason: "original failure",
         },
-        { timeout: 15_000 },
-      );
+        inheritedRunId: null,
+      });
       expect(await boundary.log()).toContain('"reason":"original failure"');
       const events = await boundary.readEvents();
       expect(events.some((event) => event.kind === "cgroup-helper")).toBe(true);

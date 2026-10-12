@@ -3,6 +3,8 @@
 import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
@@ -12,19 +14,86 @@ import {
 } from "./chat-transcript.test-support.ts";
 
 describe("chat transcript controller", () => {
-  beforeEach(installTranscriptDomMocks);
+  let flushFrames: () => void;
+  beforeEach(() => {
+    installTranscriptDomMocks();
+    flushFrames = stubAnimationFrames();
+  });
   afterEach(resetTranscriptTestDom);
+
+  function commitLayout() {
+    flush();
+    flushFrames();
+    flush();
+  }
+
+  it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
+    const update = createDeferred<boolean>();
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: update.promise,
+      },
+      () => "projected-reply",
+    );
+    const tail: TestContentRow = {
+      kind: "content",
+      key: "tail",
+      content: html`<div class="chat-bubble" data-entry-id="tail">Tail</div>`,
+    };
+    const original: TestContentRow = {
+      kind: "content",
+      key: "original",
+      content: html`<div class="chat-bubble" data-entry-id="original">Original</div>`,
+    };
+    const { container, session, renderRows } = await mountTestTranscript(
+      "projected-reply",
+      [tail],
+      transcript,
+    );
+    try {
+      session.syncMessageRows(
+        new Map([
+          ["original", "original"],
+          ["tail", "tail"],
+        ]),
+        new Map(),
+      );
+      expect(transcript.revealMessage("unknown")).toBe(false);
+      expect(transcript.revealMessage("original")).toBe(true);
+      expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
+      update.resolve(true);
+      await update.promise;
+      commitLayout();
+      expect(container.querySelector('[data-entry-id="original"]')).toBeNull();
+
+      renderRows([original, tail]);
+      commitLayout();
+      expect(
+        container
+          .querySelector('[data-entry-id="original"]')
+          ?.classList.contains("chat-bubble--reply-target"),
+      ).toBe(true);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it.each(["none", "idle at end", "wheel", "touch", "disconnect", "new reveal"] as const)(
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = new ChatTranscriptController({
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: update.promise,
-      });
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: update.promise,
+        },
+        () => `message-reveal-${interruption}`,
+      );
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,
@@ -55,7 +124,7 @@ describe("chat transcript controller", () => {
         );
         renderRows(rows);
         if (interruption === "idle at end") {
-          vi.useFakeTimers();
+          vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
         }
         expect(transcript.revealMessage("first")).toBe(true);
         scrollTo.mockClear();
@@ -77,6 +146,7 @@ describe("chat transcript controller", () => {
         }
         update.resolve(true);
         await update.promise;
+        commitLayout();
         expect(bubbles[0]?.classList.contains("chat-bubble--reply-target")).toBe(
           ["none", "idle at end"].includes(interruption),
         );

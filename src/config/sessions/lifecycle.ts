@@ -1,137 +1,26 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  resolveTimestamp,
+  resolveSessionLifecycleTimestampsWithHeader,
+} from "./lifecycle-timestamps.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
-import {
-  isTerminalSessionStatus,
-  type InternalSessionEntry,
-  type SessionEntry,
-  type SessionScope,
-} from "./types.js";
-import {
+import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
+export {
+  createSessionWorkStartChangedError,
+  isSessionWorkStartInvalidatedError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SESSION_WORK_START_CHANGED_ERROR_CODE,
-  SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+  SessionRestartRecoveryTombstoneError,
+  SessionWorkStartChangedError,
+  SessionWorkStartInvalidatedError,
 } from "./work-start-error.js";
 
-type SessionLifecycleEntry = Pick<
-  SessionEntry,
-  "sessionId" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
->;
-
-type SessionWorkStartEntry = Pick<
-  InternalSessionEntry,
-  | "archivedAt"
-  | "initializationPending"
-  | "mainRestartRecovery"
-  | "modelSelectionLocked"
-  | "sessionId"
-  | "pendingProjectGitUrl"
-  | "pendingWorktree"
->;
-
-type SessionWorkStartOptions = {
-  allowRestartTombstoneReplacement?: boolean;
-  expectedSessionId?: string;
-  /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
-  allowPendingWorkspace?: true;
-};
-
-export function isRestartRecoveryTombstone(
-  entry: SessionWorkStartEntry | null | undefined,
-): boolean {
-  return entry?.mainRestartRecovery?.tombstone !== undefined;
-}
-
-/** Stable Gateway error detail for stale session lifecycle requests. */
-export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE };
-
-export class SessionWorkStartInvalidatedError extends Error {
-  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartInvalidatedError";
-  }
-}
-
-export class SessionWorkStartChangedError extends Error {
-  readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionWorkStartChangedError";
-  }
-}
-
-export function createSessionWorkStartChangedError(
-  sessionKey: string,
-): SessionWorkStartChangedError {
-  return new SessionWorkStartChangedError(
-    `Session "${sessionKey}" changed while starting work. Retry.`,
-  );
-}
-
-export function isSessionWorkStartInvalidatedError(
-  error: unknown,
-): error is SessionWorkStartInvalidatedError | SessionWorkStartChangedError {
-  return (
-    error instanceof SessionWorkStartInvalidatedError ||
-    error instanceof SessionWorkStartChangedError ||
-    (typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE ||
-        error.code === SESSION_WORK_START_CHANGED_ERROR_CODE))
-  );
-}
-
-export class SessionRestartRecoveryTombstoneError extends Error {
-  readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "SessionRestartRecoveryTombstoneError";
-  }
-}
-
-/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
-export function resolveSessionWorkStartError(
-  sessionKey: string,
-  entry: SessionWorkStartEntry | null | undefined,
-  options?: SessionWorkStartOptions,
-): string | undefined {
-  if (options?.expectedSessionId && !entry) {
-    return `Session "${sessionKey}" was deleted while starting work. Retry.`;
-  }
-  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
-    return `Session "${sessionKey}" changed while starting work. Retry.`;
-  }
-  if (entry?.initializationPending === true) {
-    return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
-  }
-  const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
-  if (restartRecoveryTombstone) {
-    if (options?.allowRestartTombstoneReplacement === true) {
-      return undefined;
-    }
-    return entry?.modelSelectionLocked === true
-      ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
-      : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
-  }
-  if (entry?.archivedAt !== undefined) {
-    return `Session "${sessionKey}" is archived. Restore it before starting new work.`;
-  }
-  if (
-    !options?.allowPendingWorkspace &&
-    (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
-  ) {
-    return `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`;
-  }
-  return undefined;
-}
+export {
+  isRestartRecoveryTombstone,
+  resolveSessionWorkStartError,
+  SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+} from "./session-work-start.js";
 
 // Transcript headers are read lazily to recover startedAt without parsing full files.
 
@@ -149,77 +38,26 @@ type TerminalMainSessionTranscriptRegistryCheck = {
   registryTimestampMs: number;
 };
 
-function resolveTimestamp(value: number | undefined): number | undefined {
-  const timestampMs = asDateTimestampMs(value);
-  return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : undefined;
-}
-
 function resolvePositiveTimestamp(value: number | undefined): number | undefined {
   const timestampMs = resolveTimestamp(value);
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return resolveTimestamp(Date.parse(value));
-}
-
-function readSessionHeaderStartedAtMs(params: {
-  entry: SessionLifecycleEntry;
-  agentId?: string;
-  sessionKey?: string;
-  storePath?: string;
-}): number | undefined {
-  const sessionId = params.entry.sessionId?.trim();
-  const sessionKey = params.sessionKey?.trim();
-  const agentId =
-    params.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-  if (!sessionId || !agentId) {
-    return undefined;
-  }
-  try {
-    const header = loadTranscriptHeaderSync({
-      agentId,
-      sessionId,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(sessionKey ? { sessionKey } : {}),
-    }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
-    if (
-      header?.type !== "session" ||
-      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
-    ) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveSessionLifecycleTimestamps(params: {
-  entry: SessionLifecycleEntry | undefined;
+  entry: Parameters<typeof resolveSessionLifecycleTimestampsWithHeader>[0]["entry"];
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
-}): { sessionStartedAt?: number; lastInteractionAt?: number } {
-  const entry = params.entry;
-  if (!entry) {
-    return {};
-  }
-  return {
-    sessionStartedAt:
-      resolveTimestamp(entry.sessionStartedAt) ??
-      readSessionHeaderStartedAtMs({ ...params, entry }),
-    lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
-  };
+  readHeader?: (sessionId: string) => unknown;
+}): SessionLifecycleTimestamps {
+  return resolveSessionLifecycleTimestampsWithHeader({
+    ...params,
+    readHeader: (scope) =>
+      params.readHeader ? params.readHeader(scope.sessionId) : loadTranscriptHeaderSync(scope),
+  });
 }
 
-function resolveTerminalMainSessionTranscriptRegistryCheck(
+export function resolveTerminalMainSessionTranscriptRegistryCheck(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): TerminalMainSessionTranscriptRegistryCheck | undefined {
   if (!params.entry || !params.sessionKey) {
@@ -238,17 +76,7 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (candidateSessionKey !== configuredMainSessionKey) {
     return undefined;
   }
-  if (params.entry.status === "running") {
-    // A yielded parent keeps status "running" next to the settled run's endedAt
-    // (see deriveGatewaySessionLifecycleSnapshot). That timestamp records run
-    // timing, not a terminal session: sibling completions must keep reusing the
-    // same session generation instead of rotating the parent mid-preparation.
-    return undefined;
-  }
-  const hasTerminalLifecycle =
-    isTerminalSessionStatus(params.entry.status) ||
-    resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
-  if (!hasTerminalLifecycle) {
+  if (!isTerminalSessionStatus(params.entry.status)) {
     return undefined;
   }
   if (params.entry.status === "done") {
@@ -274,15 +102,6 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
   return { sessionId, registryTimestampMs };
 }
 
-function isTranscriptMutationNewerThanRegistry(params: {
-  transcriptMutationAtMs: number;
-  registryTimestampMs: number;
-}): boolean {
-  const transcriptMutationAtMs = Math.floor(params.transcriptMutationAtMs);
-  const registryTimestampMs = Math.floor(params.registryTimestampMs);
-  return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
-}
-
 export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): boolean {
@@ -301,17 +120,10 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
     if (mutation.updatedAt === null) {
       return false;
     }
-    return isTranscriptMutationNewerThanRegistry({
-      transcriptMutationAtMs: mutation.updatedAt,
-      registryTimestampMs: mutation.observedAt ?? check.registryTimestampMs,
-    });
+    const transcriptMutationAtMs = Math.floor(mutation.updatedAt);
+    const registryTimestampMs = Math.floor(mutation.observedAt ?? check.registryTimestampMs);
+    return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
   } catch {
     return false;
   }
-}
-
-export async function hasTerminalMainSessionTranscriptNewerThanRegistry(
-  params: TerminalMainSessionTranscriptRegistryParams,
-): Promise<boolean> {
-  return hasTerminalMainSessionTranscriptNewerThanRegistrySync(params);
 }

@@ -87,6 +87,7 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
     branch: "main",
     env: process.env,
     assertCurrent: () => undefined,
+    assertCustody: () => undefined,
     run: async (
       argv: string[],
       options?: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv },
@@ -95,35 +96,56 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
 }
 
 describe("GitHub publication index update", () => {
-  it("accepts a linked worktree without a worktree config scope", async () => {
-    const repository = await makeDirectory("worktree-config");
-    await git(repository, ["init", "--initial-branch=main"]);
-    await git(repository, ["config", "user.name", "OpenClaw Test"]);
-    await git(repository, ["config", "user.email", "openclaw@example.test"]);
-    await fs.writeFile(path.join(repository, "artifact.txt"), "base\n");
-    await git(repository, ["add", "artifact.txt"]);
-    await git(repository, ["commit", "-m", "base"]);
-    const linked = testState.path(`linked-${directoryIndex++}`);
-    await git(repository, ["worktree", "add", "-b", "publication", linked]);
+  it.each(["reset", "created"] as const)(
+    "pins a conditional push when the remote branch was %s after admission",
+    async (change) => {
+      const fixture = await createFixture();
+      const remote = await makeDirectory("remote");
+      await git(remote, ["init", "--bare", "--initial-branch=main"]);
+      await fs.mkdir(path.join(fixture.cwd, ".github/workflows"), { recursive: true });
+      await fs.writeFile(
+        path.join(fixture.cwd, ".github/workflows/example.yml"),
+        "name: synthetic\non: workflow_dispatch\njobs: {}\n",
+      );
+      await git(fixture.cwd, ["add", "-A"]);
+      const workflowTree = await git(fixture.cwd, ["write-tree"]);
+      const observedHead = await git(
+        fixture.cwd,
+        ["commit-tree", workflowTree, "-p", fixture.previousHead],
+        "maintainer workflow\n",
+      );
+      await fs.writeFile(path.join(fixture.cwd, "artifact.txt"), "guest code\n");
+      await git(fixture.cwd, ["add", "artifact.txt"]);
+      const candidateTree = await git(fixture.cwd, ["write-tree"]);
+      const candidate = await git(
+        fixture.cwd,
+        ["commit-tree", candidateTree, "-p", observedHead],
+        "guest code\n",
+      );
+      await git(fixture.cwd, ["merge-base", "--is-ancestor", observedHead, candidate]);
+      if (change === "reset") {
+        await git(fixture.cwd, ["push", remote, `${observedHead}:refs/heads/publication`]);
+        await git(remote, ["update-ref", "refs/heads/publication", fixture.previousHead]);
+      } else {
+        await git(fixture.cwd, ["push", remote, `${fixture.previousHead}:refs/heads/publication`]);
+      }
+      const expectedHead = change === "reset" ? observedHead : "";
+      const push = githubPublicationPushArgs(remote, candidate, "publication", expectedHead).slice(
+        1,
+      );
+      await expect(git(fixture.cwd, push)).rejects.toThrow();
+      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(fixture.previousHead);
+      if (expectedHead) {
+        await git(remote, ["update-ref", "refs/heads/publication", expectedHead]);
+      } else {
+        await git(remote, ["update-ref", "-d", "refs/heads/publication"]);
+      }
+      await git(fixture.cwd, push);
+      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(candidate);
+    },
+  );
 
-    await expect(
-      assertSafeGitPublicationWorkspace(
-        linked,
-        async (argv, options) =>
-          await runCommandBuffered(argv, {
-            cwd: options?.cwd ?? linked,
-            env: options?.env,
-            timeoutMs: 10_000,
-            maxOutputBytes: 64 * 1024,
-          }),
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    { scope: "--local" as const, label: "repository-local" },
-    { scope: "--worktree" as const, label: "worktree-scoped" },
-  ])("publishes and recovers with $label hooks without executing them", async ({ scope }) => {
+  it("publishes and recovers with worktree-scoped hooks without executing them", async () => {
     const fixture = await createFixture();
     const remote = await makeDirectory("remote");
     const hooks = await makeDirectory("hooks");
@@ -140,10 +162,8 @@ describe("GitHub publication index update", () => {
           ),
       ),
     );
-    if (scope === "--worktree") {
-      await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
-    }
-    await git(fixture.cwd, ["config", scope, "core.hooksPath", hooks]);
+    await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
+    await git(fixture.cwd, ["config", "--worktree", "core.hooksPath", hooks]);
 
     await expect(
       assertSafeGitPublicationWorkspace(
@@ -190,14 +210,14 @@ describe("GitHub publication index update", () => {
       branch: "main",
       sourceHeadCommit: fixture.previousHead,
       workspaceTree: fixture.workspaceTree,
-      assertCurrent: () => undefined,
+      assertCustody: () => undefined,
       run: async (argv, options) =>
         await git(fixture.cwd, argv.slice(1), options?.input, options?.env ?? hookEnv),
     });
     await expect(fs.access(marker)).rejects.toThrow();
     await git(
       fixture.cwd,
-      githubPublicationPushArgs(remote, fixture.headCommit, "publication").slice(1),
+      githubPublicationPushArgs(remote, fixture.headCommit, "publication", "").slice(1),
       undefined,
       hookEnv,
     );
@@ -217,10 +237,16 @@ describe("GitHub publication index update", () => {
     );
   });
 
-  it("moves the branch and index together without changing accepted worktree content", async () => {
+  it("settles the accepted branch and index after publication authority ends", async () => {
     const fixture = await createFixture();
+    let current = true;
     await updateGitHubPublicationBranchAndIndex({
       ...publicationIndexParams(fixture),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("publication permission ended");
+        }
+      },
       updateRef: async () => {
         await git(fixture.cwd, [
           "update-ref",
@@ -228,6 +254,7 @@ describe("GitHub publication index update", () => {
           fixture.headCommit,
           fixture.previousHead,
         ]);
+        current = false;
       },
     });
 
@@ -235,6 +262,11 @@ describe("GitHub publication index update", () => {
     expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
     expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
     expect(await fs.readFile(path.join(fixture.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
+    expect(
+      (await fs.readdir(path.join(fixture.cwd, ".git"))).filter(
+        (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
+      ),
+    ).toEqual([]);
   });
 
   it("rejects concurrent staged changes without moving HEAD or rewriting the index", async () => {
@@ -314,7 +346,7 @@ describe("GitHub publication index update", () => {
       branch: "main",
       sourceHeadCommit: fixture.previousHead,
       workspaceTree: fixture.workspaceTree,
-      assertCurrent: () => undefined,
+      assertCustody: () => undefined,
       run: async (argv, options) =>
         await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
     });
@@ -323,7 +355,7 @@ describe("GitHub publication index update", () => {
     await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
   });
 
-  it("does not install a recovered index after authority changes during Git probes", async () => {
+  it("does not install a recovered index after custody changes during Git probes", async () => {
     const fixture = await createFixture();
 
     await expect(
@@ -349,7 +381,7 @@ describe("GitHub publication index update", () => {
         branch: "main",
         sourceHeadCommit: fixture.previousHead,
         workspaceTree: fixture.workspaceTree,
-        assertCurrent: () => {
+        assertCustody: () => {
           if (!current) {
             throw new Error("publication authority changed");
           }

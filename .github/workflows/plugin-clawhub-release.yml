@@ -77,13 +77,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_CLI_PACKAGE: "clawhub@0.23.3"
 
 jobs:
   preview_plugins_clawhub:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -131,6 +131,11 @@ jobs:
           workspace = os.environ["GITHUB_WORKSPACE"]
           release_tag = os.environ["RELEASE_TAG"]
           target_ref = os.environ["TARGET_REF"]
+          if any("-alpha." in value or "tideclaw/alpha/" in value for value in (
+              release_tag, target_ref, os.environ.get("GITHUB_REF", ""),
+          )):
+              print("Alpha releases are retired; use a beta prerelease.", file=sys.stderr)
+              raise SystemExit(1)
 
           def resolve(ref):
               try:
@@ -159,7 +164,7 @@ jobs:
           )
           if release_tag:
               if not re.fullmatch(
-                  r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?",
+                  r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?",
                   release_tag,
               ):
                   print(f"Invalid ClawHub release tag: {release_tag}", file=sys.stderr)
@@ -262,6 +267,10 @@ jobs:
                       return False
                   raise
 
+          if "tideclaw/alpha/" in os.environ["TRUSTED_PUBLISH_BRANCH"]:
+              print("Alpha releases are retired; use a beta prerelease.", file=sys.stderr)
+              raise SystemExit(1)
+
           if is_ancestor("origin/main"):
               raise SystemExit(0)
           release_refs = git_output(
@@ -272,25 +281,8 @@ jobs:
           ).splitlines()
           if any(is_ancestor(ref) for ref in release_refs):
               raise SystemExit(0)
-          trusted_branch = os.environ["TRUSTED_PUBLISH_BRANCH"]
-          if re.fullmatch(
-              r"tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
-              trusted_branch,
-          ):
-              run_git(
-                  workspace,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  f"+refs/heads/{trusted_branch}:refs/remotes/origin/{trusted_branch}",
-                  timeout=120,
-                  reclaim_locks=True,
-              )
-              if is_ancestor(f"refs/remotes/origin/{trusted_branch}"):
-                  raise SystemExit(0)
           print(
-              "Plugin ClawHub publishes must target a commit reachable from main, release/*, "
-              "or the matching Tideclaw alpha branch.",
+              "Plugin ClawHub publishes must target a commit reachable from main or release/*.",
               file=sys.stderr,
           )
           raise SystemExit(1)
@@ -377,7 +369,7 @@ jobs:
             node .release-tooling/scripts/clawhub-prepared-artifact.mjs resolve \
               --descriptor .local/clawhub-prepared-descriptor.json \
               --output .local/clawhub-matrix.json
-            jq '{all: ., candidates: map(select(.alreadyPublished | not)), bootstrapCandidates: [], missingTrustedPublisher: [], skippedPublished: map(select(.alreadyPublished))}' \
+            jq '{all: ., candidates: map(select(.publication.state == "absent")), bootstrapCandidates: [], missingTrustedPublisher: [], skippedPublished: map(select(.alreadyPublished)), pendingPublication: map(select(.publication.state == "pending")), failedPublication: map(select(.publication.state == "failed")), warnings: []}' \
               .local/clawhub-matrix.json > .local/plugin-clawhub-release-plan.json
           elif [[ -n "${PUBLISH_SCOPE}" ]]; then
             plan_args=(--selection-mode "${PUBLISH_SCOPE}")
@@ -391,13 +383,46 @@ jobs:
             node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts > .local/plugin-clawhub-release-plan.json
           fi
 
+          if jq -e '(.all[]?, .candidates[]?, .bootstrapCandidates[]?, .missingTrustedPublisher[]?) | select(.publishTag == "alpha" or .channel == "alpha" or ((.version // "") | contains("-alpha.")))' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
+
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { formatClawHubRecoveryCommand } from "./.release-tooling/scripts/plugin-clawhub-recovery.mjs";
+          const plan = JSON.parse(readFileSync(".local/plugin-clawhub-release-plan.json", "utf8"));
+          for (const [heading, entries] of [["Pending publications", plan.pendingPublication], ["Failed publications", plan.failedPublication]]) {
+            if (!entries?.length) continue;
+            const lines = [`\n### ${heading}\n`];
+            for (const entry of entries) {
+              const publication = entry.publication;
+              const detail = publication.state === "pending"
+                ? `waiting at ${publication.stage}; skipped without republishing`
+                : publication.recoverable
+                  ? "operator recovery required with a human publisher token"
+                  : "operator action required: use a new version or ask the ClawHub operator to discard the attempt";
+              const message = `${entry.packageName}@${entry.version}: ${detail}${publication.attemptId ? ` (attempt ${publication.attemptId})` : ""}.`;
+              console.log(`::warning::${message}`);
+              lines.push(`- ${message}`);
+              if (publication.state === "failed" && publication.recoverable) {
+                lines.push(publication.attemptId
+                  ? `\nEdit the pinned checkout and recovery reason placeholders before running:\n\n\`\`\`sh\n${formatClawHubRecoveryCommand({ attemptId: publication.attemptId, clawhubSource: "<PINNED_CLAWHUB_CHECKOUT>", reason: "<EDIT_RECOVERY_REASON>" })}\n\`\`\`\n`
+                  : "  Locate the bound attempt with the ClawHub operator before recovery.");
+              }
+            }
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          }
+          NODE
 
           # Preparation freezes every selected package. Registry presence may
           # change before promotion; existing versions require byte readback.
-          if [[ "${DRY_RUN}" == "true" || -n "${PREPARED_ARTIFACT}" ]]; then
+          if [[ "${DRY_RUN}" == "true" ]]; then
             jq '.all' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
+          elif [[ -n "${PREPARED_ARTIFACT}" ]]; then
+            jq '.candidates + .skippedPublished' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
           else
             jq '.candidates' .local/plugin-clawhub-release-plan.json > .local/clawhub-matrix.json
           fi
@@ -423,7 +448,7 @@ jobs:
             has_missing_trusted_publisher="true"
           fi
           matrix_json="$(jq -c '.' .local/clawhub-matrix.json)"
-          publish_matrix_json="$(jq -c --arg dry_run "${DRY_RUN}" 'map(select($dry_run == "true" or (.alreadyPublished | not)) | del(.prepared))' .local/clawhub-matrix.json)"
+          publish_matrix_json="$(jq -c --arg dry_run "${DRY_RUN}" 'map(select($dry_run == "true" or .publication.state == "absent") | del(.prepared))' .local/clawhub-matrix.json)"
           has_publish_candidates="$(jq 'length > 0' <<<"${publish_matrix_json}")"
           bootstrap_matrix_json="$(jq -c '.bootstrapCandidates' .local/plugin-clawhub-release-plan.json)"
           missing_trusted_publisher_matrix_json="$(jq -c '.missingTrustedPublisher' .local/plugin-clawhub-release-plan.json)"
@@ -475,38 +500,29 @@ jobs:
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
 
-      - name: Validate Tideclaw alpha plugin channels
-        env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            exit 0
-          fi
-          invalid="$(
-            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
-          )"
-          if [[ -n "${invalid}" ]]; then
-            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
-            printf '%s\n' "${invalid}" >&2
-            exit 1
-          fi
-
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: preview_plugins_clawhub
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
+      attestations: read
       contents: read
     outputs:
       direct_recovery: ${{ steps.approval.outputs.direct_recovery }}
+      parent_approval: ${{ steps.receipt.outputs.parent_approval }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Validate release publish approval run
         id: approval
@@ -554,11 +570,38 @@ jobs:
           # recovery receipt for an unvalidated parent.
           echo "direct_recovery=${direct_recovery}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify release approval receipt
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: active-or-success
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            echo "Direct dispatch keeps this workflow's environment gate; no parent receipt consumed."
+            exit 0
+          fi
+          node scripts/release-approval-receipt.mjs verify \
+            --output "$RUNNER_TEMP/openclaw-release-approval/approval.json"
+          gh attestation verify "$RUNNER_TEMP/openclaw-release-approval/approval.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" \
+            --signer-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
+            --deny-self-hosted-runners
+
   pack_plugins_clawhub_artifacts:
     name: Pack ClawHub package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -683,7 +726,7 @@ jobs:
     name: Seal prepared ClawHub packages
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: always() && inputs.dry_run && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/release-publish/')) && needs.preview_plugins_clawhub.result == 'success' && (needs.pack_plugins_clawhub_artifacts.result == 'success' || needs.pack_plugins_clawhub_artifacts.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -732,7 +775,7 @@ jobs:
     name: Seal ClawHub package transactions
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -788,7 +831,8 @@ jobs:
       ]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
     runs-on: ubuntu-latest
-    environment: clawhub-plugin-release
+    # A verified parent receipt replaces the human gate; direct dispatch keeps it.
+    environment: ${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}
     permissions:
       actions: read
       contents: read
@@ -797,21 +841,30 @@ jobs:
         run: |
           echo "Approved CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows release publish gate."
 
-      # The automated bot-dispatched route is unchanged; direct human dispatch binds this approval
+      # The bot-dispatched route waits for the parent's child-bound transaction
+      # authorization instead of a human gate; direct human dispatch binds this approval
       # to the exact child run and to the original child attempt whose parent receipt ClawHub
       # resolves for explicit-recovery finalization (openclaw/clawhub
       # convex/lib/openClawPublishAuthorization.ts validateRecoveryReceipt).
       - name: Checkout trusted release tooling
-        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true' || needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
       - name: Setup Node
-        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
+        if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true' || needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Wait for the release parent's ClawHub authorization
+        if: needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: node scripts/release-approval-receipt.mjs wait-clawhub-authorization
       - name: Write recovery environment approval receipt
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
         env:
@@ -840,7 +893,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d5a3688fb21a283460f362e57028601801961c85 # reviewed parent receipt contract
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c # reviewed sealed receipt and final-effect proof contract
     permissions:
       actions: read
       contents: read
@@ -857,7 +910,7 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
       site: https://clawhub.ai
-      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      family: ${{ matrix.plugin.family }}
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
@@ -867,5 +920,54 @@ jobs:
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
 
+  seal_clawhub_recovery_manifest:
+    name: Seal exact ClawHub recovery manifest
+    needs: [seal_clawhub_transactions, publish_plugins_clawhub]
+    if: ${{ always() && inputs.dry_run != true && needs.seal_clawhub_transactions.result == 'success' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted recovery tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Download exact transaction roster
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-clawhub-transactions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery/transactions
+
+      - name: Download package publication receipts
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: "*-publish-json"
+          path: ${{ runner.temp }}/clawhub-recovery/publications
+
+      - name: Seal complete attempt roster
+        run: |
+          set -euo pipefail
+          publications=()
+          while IFS= read -r -d '' path; do
+            publications+=("$path")
+          done < <(find "$RUNNER_TEMP/clawhub-recovery/publications" -type f -name package-publish.json -print0)
+          node scripts/plugin-clawhub-recovery.mjs create \
+            --transactions "$RUNNER_TEMP/clawhub-recovery/transactions/transactions.json" \
+            --output "$RUNNER_TEMP/clawhub-recovery/manifest/recovery-manifest.json" \
+            "${publications[@]}"
+
+      - name: Upload sealed recovery manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-clawhub-recovery-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery/manifest/recovery-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
   # Exact public artifact verification runs in plugin-clawhub-postpublish.yml
-  # after the authorizing parent succeeds. Waiting here would deadlock staging.
+  # after the authorizing parent becomes terminal. Waiting here deadlocks staging.

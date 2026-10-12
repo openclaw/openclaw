@@ -11,6 +11,11 @@ import * as catalog from "./catalog-target.ts";
 import { renderCheckoutChip, resolveCheckoutChip } from "./checkout-chip.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
+import {
+  environmentPlacementRuntime,
+  environmentDeviceDisabledReason,
+  environmentCloudDisabledReason,
+} from "./hosted-environments.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "../../components/agent-select-registration.ts";
 import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
@@ -19,13 +24,12 @@ import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
 registerNewSessionSetupEnglish();
 
-type DraftAgent = GatewayAgentRow;
-
 export function renderAgentSelect(params: {
-  agents: DraftAgent[];
+  agents: GatewayAgentRow[];
   agentId: string;
   agentIdentity?: AgentIdentityCapability;
   disabled: boolean;
+  variant?: "default" | "compact";
   onSelect: (agentId: string) => void;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -33,7 +37,7 @@ export function renderAgentSelect(params: {
   return html`
     <span class="new-session-page__select new-session-page__select--agent">
       <openclaw-agent-select
-        .variant=${"compact"}
+        .variant=${params.variant ?? "compact"}
         .options=${params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
           label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),
@@ -57,8 +61,37 @@ export function renderAgentSelect(params: {
   `;
 }
 
+export function renderRequiredSessionPlacement(gateway: DraftGatewayState) {
+  const profile = gateway.cloudProfiles.find(
+    (candidate) => candidate.id === gateway.requiredProfile,
+  );
+  return html`<span class="new-session-page__select" role="status" data-required-placement>
+    ${
+      !gateway.placementPolicyReady
+        ? t("newSession.placementNotReady")
+        : !profile
+          ? t("newSession.requiredWorkerUnavailable")
+          : t(
+              profile.inference === "worker"
+                ? "newSession.openClawWorker"
+                : "newSession.requiredWorker",
+            )
+    }
+    ${
+      !gateway.cloudProfilesPending && (!gateway.placementPolicyReady || !profile)
+        ? html`<button
+            type="button"
+            class="btn btn--sm"
+            @click=${() => void gateway.retryRequiredPlacement()}
+          >
+            ${t("common.retry")}
+          </button>`
+        : nothing
+    }
+  </span>`;
+}
+
 export function renderNewSessionPlaceControls({
-  idPrefix,
   context,
   data,
   gateway,
@@ -70,7 +103,6 @@ export function renderNewSessionPlaceControls({
   onFocusComposer,
   requestUpdate,
 }: {
-  idPrefix?: string;
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   gateway: DraftGatewayState;
@@ -82,6 +114,9 @@ export function renderNewSessionPlaceControls({
   onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
+  if (place.requiredPlacement) {
+    return renderRequiredSessionPlacement(gateway);
+  }
   const browser = place.browser;
   const { machineClass, os } = place.cloudSelection;
   const nativeTerminal = catalog.isTarget(data);
@@ -97,6 +132,9 @@ export function renderNewSessionPlaceControls({
         isAdmin: place.isAdmin(),
       });
   const whereState = resolveWhereChip({
+    hostedEnvironment: place.hostedEnvironment
+      ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
+      : undefined,
     environments: place.canWrite() ? gateway.environments : [],
     cloudProfiles,
     cloudProfileId: place.cloudProfileId,
@@ -104,9 +142,9 @@ export function renderNewSessionPlaceControls({
     os,
     deviceId: place.deviceId,
     autoDevice: place.autoDevice,
-    devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
+    devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
     deviceDisabledReason:
-      place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
+      environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
   });
   const projectState = resolveProjectChip({
     folder: place.folder,
@@ -121,7 +159,7 @@ export function renderNewSessionPlaceControls({
   const checkoutState = resolveCheckoutChip({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
-    worktreeAvailable: place.worktreeAvailable(),
+    worktreeName: place.worktreeName,
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
     repository: Boolean(place.remoteRepository),
@@ -129,6 +167,14 @@ export function renderNewSessionPlaceControls({
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
     : t("newSession.gateway");
+  const selectCloudOption = (kind: "os" | "machine", id: string) =>
+    place.cloudMachines[kind === "os" ? "selectOs" : "select"](
+      place.cloudProfileId,
+      id,
+      cloudProfiles,
+      submitting || pendingPlacement,
+      requestUpdate,
+    );
   return html`${
     nativeTerminal
       ? renderNewSessionTerminalHost({
@@ -138,7 +184,10 @@ export function renderNewSessionPlaceControls({
           onSelect: (hostId) => place.selectTerminalHost(hostId),
         })
       : renderWhereChip({
-          idPrefix,
+          hostedEnvironments: place.modelControl.hostedEnvironments(),
+          hostedLoading: place.modelControl.hostedEnvironmentsLoading(),
+          onSelectHostedEnvironment: (id) => place.selectHostedEnvironment(id),
+          hostDisabledReason: place.modelControl.hostEnvironmentDisabledReason(),
           state: whereState,
           environmentQuery: browser.environmentQuery,
           onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
@@ -148,10 +197,12 @@ export function renderNewSessionPlaceControls({
           os,
           deviceId: place.deviceId,
           autoDevice: place.autoDevice,
-          autoPlacementMode: place.modelControl.autoPlacementSelectionMode(),
-          cloudDisabledReason: place.modelControl.cloudRuntimeUnsupportedReason(),
+          autoPlacementMode: place.modelControl.autoPlacementSelectionMode(
+            environmentPlacementRuntime(place.modelControl),
+          ),
+          cloudDisabledReason: environmentCloudDisabledReason(place.modelControl),
           cloudProfileDisabledReason: (profile) =>
-            place.modelControl.cloudRuntimeUnsupportedReason(profile),
+            environmentCloudDisabledReason(place.modelControl, profile),
           submitting,
           pendingPlacement,
           catalogLoading: place.canWrite() && gateway.cloudProfilesPending,
@@ -165,22 +216,8 @@ export function renderNewSessionPlaceControls({
             }
             place.selectCloudProfile(profileId);
           },
-          onSelectCloudOs: (osId) =>
-            place.cloudMachines.selectOs(
-              place.cloudProfileId,
-              osId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
-          onSelectCloudMachine: (machineId) =>
-            place.cloudMachines.select(
-              place.cloudProfileId,
-              machineId,
-              cloudProfiles,
-              submitting || pendingPlacement,
-              requestUpdate,
-            ),
+          onSelectCloudOs: (osId) => selectCloudOption("os", osId),
+          onSelectCloudMachine: (machineId) => selectCloudOption("machine", machineId),
           onConnectMachine,
           onManageCloudWorkers: () => {
             browser.close();
@@ -188,73 +225,77 @@ export function renderNewSessionPlaceControls({
           },
         })
   }${
-    nativeTerminal && place.terminalOnNode
-      ? html`<label class="new-session-page__select new-session-page__menu-field"
-          ><span>${t("newSession.terminalNodeFolder")}</span
-          ><input
-            aria-label=${t("newSession.terminalNodeFolder")}
-            .value=${place.folder}
-            ?disabled=${submitting}
-            @input=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                place.applyFolder(event.currentTarget.value);
-              }
-            }}
-        /></label>`
-      : renderProjectChip({
-          idPrefix,
-          state: projectState,
-          browseAvailable: place.browseAvailable(),
-          isAdmin: place.isAdmin(),
-          canWrite: place.canWrite(),
-          folder: place.folder,
-          workspace: place.workspacePath(),
-          projects,
-          projectQuery: browser.projectQuery,
-          projectSearchAvailable:
-            !nativeTerminal &&
-            canCallGatewayMethod(
-              context?.gateway.snapshot,
-              "projects.searchRemote",
-              "operator.read",
-            ),
-          projectAddAvailable:
-            !nativeTerminal &&
-            canCallGatewayMethod(
-              context?.gateway.snapshot,
-              place.remotePlacement ? "sessions.create" : "projects.add",
-              "operator.write",
-            ),
-          remoteProjects: browser.projectSearchResult?.projects ?? [],
-          selectedRemoteProject: browser.remoteProject,
-          projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
-          projectSearchLoading: browser.projectSearchLoading,
-          projectSearchError: browser.projectSearchError,
-          projectId: browser.projectId,
-          freshWorkspace: place.freshWorkspace,
-          onNewWorkspace: place.remotePlacement ? () => place.selectNewWorkspace() : undefined,
-          gatewayLabel,
-          submitting,
-          pendingPlacement,
-          ...browser.popoverCallbacks("project"),
-          browserOpen: browser.browserOpen,
-          browser: browser.browser,
-          registerProjectPath: browser.browserProjectPath,
-          registeringProject: browser.browserRegistering,
-          onSelectProject: (projectId) => place.selectProjectId(projectId),
-          onProjectQueryInput: (query) => browser.changeProjectQuery(query),
-          onSelectRemoteProject: (project) => place.selectRemoteProject(project),
-          onApplyFolder: (folder) => place.applyFolder(folder),
-          onBrowse: () =>
-            browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
-          onBrowserBack: () => browser.showRoot(),
-          onRegisterProject: (path) => void browser.registerBrowserProject(path),
-          onClose: () => browser.close(),
-        })
+    place.hostedEnvironment
+      ? html`<span
+          class="new-session-page__select new-session-page__hosted-workspace"
+          title=${t("newSession.hostedHint")}
+          >${t("newSession.hostedWorkspace")}</span
+        >`
+      : nativeTerminal && place.terminalOnNode
+        ? html`<label class="new-session-page__select new-session-page__menu-field"
+            ><span>${t("newSession.terminalNodeFolder")}</span
+            ><input
+              aria-label=${t("newSession.terminalNodeFolder")}
+              .value=${place.folder}
+              ?disabled=${submitting}
+              @input=${(event: Event) => {
+                if (event.currentTarget instanceof HTMLInputElement) {
+                  place.applyFolder(event.currentTarget.value);
+                }
+              }}
+          /></label>`
+        : renderProjectChip({
+            state: projectState,
+            browseAvailable: place.browseAvailable(),
+            isAdmin: place.isAdmin(),
+            canWrite: place.canWrite(),
+            folder: place.folder,
+            workspace: place.workspacePath(),
+            projects,
+            projectQuery: browser.projectQuery,
+            projectSearchAvailable:
+              !nativeTerminal &&
+              canCallGatewayMethod(
+                context?.gateway.snapshot,
+                "projects.searchRemote",
+                "operator.read",
+              ),
+            projectAddAvailable:
+              !nativeTerminal &&
+              canCallGatewayMethod(
+                context?.gateway.snapshot,
+                place.remotePlacement ? "sessions.create" : "projects.add",
+                "operator.write",
+              ),
+            remoteProjects: browser.projectSearchResult?.projects ?? [],
+            selectedRemoteProject: browser.remoteProject,
+            projectSearchCredentialMissing: browser.projectSearchResult?.credential === "missing",
+            projectSearchLoading: browser.projectSearchLoading,
+            projectSearchError: browser.projectSearchError,
+            projectId: browser.projectId,
+            freshWorkspace: place.freshWorkspace,
+            onNewWorkspace: place.remotePlacement ? () => place.selectNewWorkspace() : undefined,
+            gatewayLabel,
+            submitting,
+            pendingPlacement,
+            ...browser.popoverCallbacks("project"),
+            browserOpen: browser.browserOpen,
+            browser: browser.browser,
+            registerProjectPath: browser.browserProjectPath,
+            registeringProject: browser.browserRegistering,
+            onSelectProject: (projectId) => place.selectProjectId(projectId),
+            onProjectQueryInput: (query) => browser.changeProjectQuery(query),
+            onSelectRemoteProject: (project) => place.selectRemoteProject(project),
+            onApplyFolder: (folder) => place.applyFolder(folder),
+            onBrowse: () =>
+              browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
+            onBrowserBack: () => browser.showRoot(),
+            onRegisterProject: (path) => void browser.registerBrowserProject(path),
+            onClose: () => browser.close(),
+          })
   }${
-    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+    place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
-          idPrefix,
           state: checkoutState,
           remotePlacement: place.remotePlacement,
           repository: Boolean(place.remoteRepository),

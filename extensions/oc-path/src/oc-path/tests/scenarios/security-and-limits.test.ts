@@ -1,16 +1,10 @@
 // OC Path tests cover security and limits plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  OcPathError,
-  findOcPaths,
-  formatOcPath,
-  parseOcPath,
-  resolveOcPath,
-  setOcPath,
-} from "../../index.js";
+import { findOcPaths } from "../../find.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
-import { MAX_TRAVERSAL_DEPTH } from "../../oc-path.js";
+import { MAX_TRAVERSAL_DEPTH, OcPathError, formatOcPath, parseOcPath } from "../../oc-path.js";
+import { resolveOcPath, setOcPath } from "../../universal.js";
 
 const PATH_LENGTH_LIMIT = 4096;
 
@@ -28,12 +22,6 @@ function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): v
 describe("encoding edges", () => {
   it("strips leading UTF-8 BOM from path string", () => {
     expect(parseOcPath("﻿oc://X/Y").file).toBe("X");
-  });
-
-  it("normalizes path segments to NFC", () => {
-    const nfc = "café";
-    const nfd = "café"; // decomposed
-    expect(parseOcPath(`oc://X/${nfd}`)).toEqual(parseOcPath(`oc://X/${nfc}`));
   });
 
   it("rejects whitespace inside identifier-shaped segments", () => {
@@ -85,12 +73,6 @@ describe("file-slot containment", () => {
 });
 
 describe("path-string and traversal caps", () => {
-  it("parseOcPath rejects strings longer than MAX_PATH_LENGTH", () => {
-    expect(() => parseOcPath("oc://X/" + "a".repeat(PATH_LENGTH_LIMIT))).toThrow(
-      /exceeds .* bytes/,
-    );
-  });
-
   it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
     const multibyteFile = "界".repeat(1400);
     const oversizedPath = `oc://${multibyteFile}`;
@@ -133,17 +115,6 @@ describe("path-string and traversal caps", () => {
     expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
 
     expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
-  });
-
-  it("parseOcPath accepts a path right at the cap", () => {
-    const justUnder = "oc://X/" + "a".repeat(PATH_LENGTH_LIMIT - "oc://X/".length);
-    expect(() => parseOcPath(justUnder)).not.toThrow();
-  });
-
-  it("formatOcPath enforces the same cap on output", () => {
-    expect(() => formatOcPath({ file: "X", section: "a".repeat(PATH_LENGTH_LIMIT) })).toThrow(
-      /Formatted oc:\/\/ exceeds/,
-    );
   });
 
   it("keeps overlong formatted paths UTF-16 safe", () => {

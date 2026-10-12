@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ToolSearchCatalogToolExecutor } from "./tool-search.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -45,7 +46,7 @@ let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
-let testing: typeof import("./code-mode.test-support.js").testing;
+let resetCodeModeTestState: typeof import("./code-mode.test-support.js").resetCodeModeTestState;
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   expect(result.details).toBeDefined();
@@ -82,9 +83,6 @@ function createHarness() {
   applyCodeModeCatalog({
     tools: [...codeModeTools, nodesTool],
     config,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
-    runId: ctx.runId,
     catalogRef,
   });
   return {
@@ -118,7 +116,7 @@ describe("Code Mode nodes", () => {
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
-    ({ testing } = await import("./code-mode.test-support.js"));
+    ({ resetCodeModeTestState } = await import("./code-mode.test-support.js"));
   });
 
   beforeEach(() => {
@@ -152,10 +150,7 @@ describe("Code Mode nodes", () => {
     });
   });
 
-  afterEach(() => {
-    testing.activeRuns.clear();
-    testing.resumingRunIds.clear();
-  });
+  afterEach(() => resetCodeModeTestState());
 
   it("lists nodes and invokes typed handles", async () => {
     const harness = createHarness();
@@ -298,7 +293,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
   });
@@ -315,7 +310,7 @@ describe("Code Mode nodes", () => {
 
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: "guest",
       bridgeDispatchStarted: true,
     });
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(

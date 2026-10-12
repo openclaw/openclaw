@@ -103,22 +103,23 @@ describe("gateway lifecycle hub import boundaries", () => {
             requestGatewayRestartWithSignalAdmission:
               vi.fn<LifecycleRuntime["requestGatewayRestartWithSignalAdmission"]>(),
             captureForegroundUpdateHandoffStop: () => undefined,
+            waitForSystemServiceUpdateHandoffs: () => undefined,
             isGatewayRestartExternallyAllowed: () => false,
             scheduleGatewayRestart: vi.fn<LifecycleRuntime["scheduleGatewayRestart"]>(),
             abortEmbeddedAgentRun: () => false,
-            consumeGatewayRestartIntentPayloadSync: vi.fn(() => null),
+            prepareGatewayRestartIntentConsumption: vi.fn(() => async () => null),
             consumeGatewayRestartAuthorization: () => true,
             consumeGatewayRestartIntent: () => null,
             peekGatewayRestartReason: () => undefined,
             markGatewayRestartHandled: vi.fn(),
             abortPendingChannelReloads: vi.fn(),
             markGatewayDraining: vi.fn(),
-            resolveGatewayRestartDeferralTimeoutMs: () => 300_000,
+            resolveGatewayRestartDrainTimeoutMs: () => 300_000,
             createGatewayActiveWorkSnapshot: () => idle,
             waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
-            stopGatewayManagedProviderLocalServices: vi.fn(async () => {}),
+            stopActiveManagedProviderLocalServices: vi.fn(async () => {}),
             restartGatewayProcessWithFreshPid: vi.fn(() => ({ mode: "supervised" as const })),
-            writeGatewayRestartHandoffSync: vi.fn(() => null),
+            writeGatewayRestartHandoff: vi.fn(async () => null),
           } satisfies Partial<LifecycleRuntime>;
           vi.doMock("./lifecycle.runtime.js", async () => {
             importing.resolve();
@@ -126,7 +127,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             primed = true;
             return hub;
           });
-          const { runGatewayLoop } = await import("./run-loop.js");
+          const { runGatewayLoop } = await import("./run-loop.test-support.js");
           abortSignal.throwIfAborted();
           await withIsolatedSignals(async ({ captureSignal }) => {
             const originalOn = process.on.bind(process);
@@ -170,10 +171,10 @@ describe("gateway lifecycle hub import boundaries", () => {
               await vi.waitFor(() => expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0));
               await expect(exited).resolves.toBe(0);
               expect(missingChunk).not.toHaveBeenCalled();
-              expect(hub.consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
+              expect(hub.prepareGatewayRestartIntentConsumption).toHaveBeenCalledOnce();
               expect(hub.waitForGatewayActiveWork).toHaveBeenCalledOnce();
               expect(close).toHaveBeenCalledOnce();
-              expect(hub.stopGatewayManagedProviderLocalServices).toHaveBeenCalledOnce();
+              expect(hub.stopActiveManagedProviderLocalServices).toHaveBeenCalledOnce();
               expect(fixture.releaseLock).toHaveBeenCalledOnce();
               expect(fixture.error).not.toHaveBeenCalled();
               expect(completeBoot).toHaveBeenCalledWith(
@@ -183,7 +184,7 @@ describe("gateway lifecycle hub import boundaries", () => {
               );
               if (signal === "SIGUSR2") {
                 expect(hub.restartGatewayProcessWithFreshPid).toHaveBeenCalledOnce();
-                expect(hub.writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+                expect(hub.writeGatewayRestartHandoff).toHaveBeenCalledOnce();
               }
             } finally {
               releaseFixture();

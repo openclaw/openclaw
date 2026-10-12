@@ -1,10 +1,11 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
@@ -29,33 +30,13 @@ import {
   isRootBackupManifestEntry,
   parseBackupManifest,
   verifyBackupManifestEntries,
+  verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
 
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
-type BackupVerifyOptions = {
-  archive: string;
-  json?: boolean;
-};
-
-type BackupVerifyResult = {
-  ok: true;
-  archivePath: string;
-  archiveRoot: string;
-  createdAt: string;
-  runtimeVersion: string;
-  assetCount: number;
-  entryCount: number;
-  symlinkCount: number;
-  externalSymbolicLinks?: BackupSymbolicLink[];
-};
-
-type PreparedBackupArchive = {
-  result: BackupVerifyResult;
-  hardlinkTargets: ReadonlyMap<string, string>;
-  symbolicLinks: BackupSymbolicLink[];
-};
+type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
 type ArchiveEntry = {
   path: string;
@@ -74,8 +55,6 @@ type NormalizedArchiveEntry = {
 type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: string };
 
 type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotIdentity;
-
-type ExpectedSqliteRole = "agent" | "global";
 
 async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
@@ -127,6 +106,9 @@ async function extractManifest(params: {
   if (content instanceof Error) {
     throw content;
   }
+  if (!isUtf8(content)) {
+    throw new Error("Backup manifest must be valid UTF-8.");
+  }
   return content.toString("utf8");
 }
 
@@ -139,6 +121,9 @@ function formatResult(result: BackupVerifyResult): string {
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
+    result.sqliteInventoryVerified
+      ? "SQLite database inventory verified."
+      : "SQLite database coverage unknown: this legacy archive has no database inventory.",
   ].join("\n");
 }
 
@@ -165,22 +150,45 @@ function isRegularArchiveFile(entryType: string | undefined): boolean {
   return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
 
-function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | undefined {
+function resolveExtractionBytes(
+  entries: NormalizedArchiveEntry[],
+  sqliteSnapshots = false,
+): number {
+  const label = sqliteSnapshots ? "SQLite snapshot" : "Archive";
+  let totalBytes = 0;
+  for (const entry of entries) {
+    if (!sqliteSnapshots && !isRegularArchiveFile(entry.type)) {
+      continue;
+    }
+    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
+      throw new Error(
+        sqliteSnapshots
+          ? `SQLite snapshot has an invalid archive size: ${entry.normalized}`
+          : `Archive regular file has an invalid size: ${entry.normalized}`,
+      );
+    }
+    if (sqliteSnapshots && entry.size === 0) {
+      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
+    }
+    totalBytes += entry.size ?? 0;
+    if (!Number.isSafeInteger(totalBytes)) {
+      throw new Error(`${label} extraction size exceeds the supported integer range.`);
+    }
+  }
+  return totalBytes;
+}
+
+function assertCanonicalStateAssetRoot(manifest: BackupManifest): void {
   const stateAssets = manifest.assets.filter((asset) => asset.kind === "state");
-  if (stateAssets.length === 0) {
-    return undefined;
+  const stateAsset = stateAssets[0];
+  if (!stateAsset) {
+    return;
   }
   if (stateAssets.length !== 1) {
     throw new Error(
       `Backup manifest must contain at most one state asset; found ${stateAssets.length}.`,
     );
   }
-
-  const stateAsset = stateAssets[0];
-  if (!stateAsset) {
-    return undefined;
-  }
-
   const stateAssetRoot = normalizeArchivePath(
     stateAsset.archivePath,
     "Backup manifest state asset path",
@@ -192,7 +200,6 @@ function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | unde
   if (stateAssetRoot !== expectedStateAssetRoot) {
     throw new Error("Backup manifest state asset archivePath does not match its sourcePath.");
   }
-  return stateAssetRoot;
 }
 
 type SqliteSnapshotOwner = { archivePath: string } & SqliteSnapshotIdentity;
@@ -220,7 +227,9 @@ function listSqliteSnapshotEntries(
       continue;
     }
     if (entry.normalized !== owner.archivePath) {
-      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+      throw new Error(
+        `Backup contains a SQLite path with incorrect letter casing: ${entry.normalized}`,
+      );
     }
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);
@@ -248,29 +257,12 @@ function readArchivedAgentDatabaseOwners(
   }));
 }
 
-function resolveSqliteExtractionBytes(entries: SqliteSnapshotEntry[]): number {
-  let totalBytes = 0;
-  for (const entry of entries) {
-    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
-      throw new Error(`SQLite snapshot has an invalid archive size: ${entry.normalized}`);
-    }
-    if (entry.size === 0) {
-      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
-    }
-    totalBytes += entry.size ?? 0;
-    if (!Number.isSafeInteger(totalBytes)) {
-      throw new Error("SQLite snapshot extraction size exceeds the supported integer range.");
-    }
-  }
-  return totalBytes;
-}
-
 function assertSqliteExtractionBudget(params: {
   entries: SqliteSnapshotEntry[];
   tempRoot: string;
   extractedBytes?: number;
 }): void {
-  const totalBytes = resolveSqliteExtractionBytes(params.entries);
+  const totalBytes = resolveExtractionBytes(params.entries, true);
   if (totalBytes > MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES) {
     throw new Error(
       `SQLite snapshots require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES)}.`,
@@ -292,7 +284,7 @@ function assertSqliteExtractionBudget(params: {
 function assertExpectedSqliteRole(
   database: DatabaseSync,
   archivePath: string,
-  expectedRole: ExpectedSqliteRole,
+  expectedRole: SqliteSnapshotIdentity["role"],
 ): void {
   const schemaMetaTable = database
     .prepare("SELECT type FROM sqlite_schema WHERE name = 'schema_meta'")
@@ -373,19 +365,29 @@ async function verifySqliteSnapshots(params: {
     archivePath: path.posix.join(stateAssetRoot, "state/openclaw.sqlite"),
     role: "global",
   };
-  const globalEntries = listSqliteSnapshotEntries(params.entries, [globalOwner]);
-  if (globalEntries.length === 0) {
+  const declaredOwners: SqliteSnapshotOwner[] = [
+    globalOwner,
+    ...(params.manifest.sqliteSnapshots ?? [])
+      .filter((snapshot) => snapshot.role === "agent")
+      .map(({ sourcePath, role, agentId }) => ({
+        role,
+        agentId,
+        archivePath: buildBackupArchivePath(params.manifest.archiveRoot, sourcePath),
+      })),
+  ];
+  const initialEntries = listSqliteSnapshotEntries(params.entries, declaredOwners);
+  if (initialEntries.length === 0) {
     return verifiedOwners;
   }
-  resolveCanonicalStateAssetRoot(params.manifest);
+  assertCanonicalStateAssetRoot(params.manifest);
   const tempRoot = os.tmpdir();
-  assertSqliteExtractionBudget({ entries: globalEntries, tempRoot });
+  assertSqliteExtractionBudget({ entries: initialEntries, tempRoot });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-sqlite-"));
   try {
-    const batches = [globalEntries];
+    const batches = [initialEntries];
     const extractedEntries: SqliteSnapshotEntry[] = [];
     for (const sqliteEntries of batches) {
-      const extractedBytes = resolveSqliteExtractionBytes(extractedEntries);
+      const extractedBytes = resolveExtractionBytes(extractedEntries, true);
       extractedEntries.push(...sqliteEntries);
       if (extractedBytes > 0) {
         assertSqliteExtractionBudget({ entries: extractedEntries, tempRoot, extractedBytes });
@@ -447,9 +449,12 @@ async function verifySqliteSnapshots(params: {
               params.manifest,
               stateDir,
             );
-            const ownerByPath = new Map<string, SqliteSnapshotOwner>([
-              [resolvePortableArchivePathKey(globalOwner.archivePath), globalOwner],
-            ]);
+            const ownerByPath = new Map<string, SqliteSnapshotOwner>(
+              declaredOwners.map((owner) => [
+                resolvePortableArchivePathKey(owner.archivePath),
+                owner,
+              ]),
+            );
             for (const owner of agentOwners) {
               const ownerKey = resolvePortableArchivePathKey(owner.archivePath);
               const previous = ownerByPath.get(ownerKey);
@@ -466,7 +471,9 @@ async function verifySqliteSnapshots(params: {
               }
               ownerByPath.set(ownerKey, owner);
             }
-            const agentEntries = listSqliteSnapshotEntries(params.entries, agentOwners);
+            const agentEntries = listSqliteSnapshotEntries(params.entries, agentOwners).filter(
+              (candidate) => !extractedEntries.some((extracted) => extracted.raw === candidate.raw),
+            );
             if (agentEntries.length > 0) {
               batches.push(agentEntries);
             }
@@ -491,7 +498,7 @@ async function verifySqliteSnapshots(params: {
 async function verifyResolvedBackupArchive(
   archivePath: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[],
-): Promise<PreparedBackupArchive> {
+) {
   let archiveStat;
   try {
     archiveStat = await fs.stat(archivePath);
@@ -641,25 +648,11 @@ async function verifyResolvedBackupArchive(
     throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
   const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
-  for (const required of requiredSnapshots) {
-    const expectedPath = buildBackupArchivePath(manifest.archiveRoot, required.sourcePath);
-    if (
-      !verifiedSnapshots.some(
-        (verified) =>
-          verified.archivePath === expectedPath &&
-          verified.role === required.role &&
-          (required.role === "global" ||
-            (verified.role === "agent" && verified.agentId === required.agentId)),
-      )
-    ) {
-      throw new Error(
-        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
-      );
-    }
-  }
+  verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
+  const regularFileExtractionBytes = resolveExtractionBytes(entries);
 
-  const result: BackupVerifyResult = {
-    ok: true,
+  const result = {
+    ok: true as const,
     archivePath,
     archiveRoot: manifest.archiveRoot,
     createdAt: manifest.createdAt,
@@ -667,17 +660,23 @@ async function verifyResolvedBackupArchive(
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
     symlinkCount: symbolicLinks.length,
+    sqliteInventoryVerified: manifest.sqliteSnapshots !== undefined,
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 
-  return { result, hardlinkTargets, symbolicLinks: preparedSymbolicLinks };
+  return {
+    result,
+    hardlinkTargets,
+    symbolicLinks: preparedSymbolicLinks,
+    regularFileExtractionBytes,
+  };
 }
 
 /** Verify an archive and prepare the exact hardlink targets needed by extraction. */
 export async function prepareBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
-): Promise<PreparedBackupArchive> {
+) {
   const archivePath = resolveUserPath(archive);
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
     (error: unknown) => {
@@ -691,14 +690,14 @@ export async function prepareBackupArchive(
 export async function verifyBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
-): Promise<BackupVerifyResult> {
+) {
   return (await prepareBackupArchive(archive, requiredSnapshots)).result;
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
+  opts: { archive: string; json?: boolean },
 ): Promise<BackupVerifyResult> {
   const result = await verifyBackupArchive(opts.archive);
 

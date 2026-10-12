@@ -1,7 +1,5 @@
-// Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
@@ -17,16 +15,20 @@ import {
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import type { ConfigPatchOptions, ConfigUnsetOptions } from "./config-cli-input.js";
+import type {
+  ConfigMutationOptions,
+  ConfigPatchOptions,
+  ConfigUnsetOptions,
+} from "./config-cli-input.js";
 import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
-
-export { parseConfigSetPath } from "./config-cli-path.js";
 
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
@@ -49,49 +51,65 @@ const CONFIG_PATCH_DESCRIPTION = [
   formatCliCommand("openclaw config patch --stdin"),
 ].join("\n");
 
+type ConfigOperationParams = Parameters<
+  typeof import("./config-cli-runner.js").runConfigOperations
+>[0];
+
+async function runConfigMutation(
+  opts: { cliOptions: ConfigMutationOptions; runtime?: RuntimeEnv; throwOnError?: boolean },
+  prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
+  jsonOutput = Boolean(opts.cliOptions.json),
+) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
+  try {
+    await runConfigOperations({ runtime, options: opts.cliOptions, ...(await prepare()) });
+  } catch (err) {
+    if (opts.throwOnError) {
+      throw err;
+    }
+    handleConfigMutationError({ err, runtime, options: opts.cliOptions, jsonOutput });
+  }
+}
+
 export async function runConfigSet(opts: {
   path?: string;
   value?: string;
   cliOptions: ConfigSetOptions;
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  /** Embedded recovery needs the writer's typed postcommit/rollback outcome. */
+  throwOnError?: boolean;
 }) {
-  const runtime = opts.runtime ?? defaultRuntime;
-  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
-  try {
-    const { buildConfigSetOperations } = await import("./config-cli-input.js");
-    const { parseConfigSetCurrentExpectation } = await import("./config-set-input.js");
-    const currentExpectation = parseConfigSetCurrentExpectation(opts.cliOptions);
-    const operations = buildConfigSetOperations({
-      path: opts.path,
-      value: opts.value,
-      opts: opts.cliOptions,
-    });
-    if (currentExpectation && operations.length !== 1) {
-      throw new Error(
-        "config set mode error: conditional expectations require exactly one resolved operation.",
-      );
-    }
-    await runConfigOperations({
-      runtime,
-      operations,
-      options: opts.cliOptions,
-      successMode: "set",
-      ...(currentExpectation ? { currentExpectation } : {}),
-      ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
-    });
-  } catch (err) {
-    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
-  }
+  return runConfigMutation(
+    opts,
+    async () => {
+      const { buildConfigSetOperations } = await import("./config-cli-input.js");
+      const { parseConfigSetCurrentExpectation } = await import("./config-set-input.js");
+      const currentExpectation = parseConfigSetCurrentExpectation(opts.cliOptions);
+      const operations = buildConfigSetOperations({
+        path: opts.path,
+        value: opts.value,
+        opts: opts.cliOptions,
+      });
+      return {
+        operations,
+        successMode: "set",
+        ...(currentExpectation ? { currentExpectation } : {}),
+        ...(opts.beforePersistentApply
+          ? { beforePersistentApply: opts.beforePersistentApply }
+          : {}),
+      };
+    },
+    Boolean(opts.cliOptions.dryRun && opts.cliOptions.json),
+  );
 }
 
 export async function runConfigPatch(opts: {
   cliOptions: ConfigPatchOptions;
   runtime?: RuntimeEnv;
 }) {
-  const runtime = opts.runtime ?? defaultRuntime;
-  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
-  try {
+  return runConfigMutation(opts, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
       await import("./config-cli-input.js");
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
@@ -100,15 +118,11 @@ export async function runConfigPatch(opts: {
     if (opts.cliOptions.json && !opts.cliOptions.dryRun) {
       throw configPatchModeError("--json requires --dry-run.");
     }
-    await runConfigOperations({
-      runtime,
+    return {
       operations: await readConfigPatchOperations(opts.cliOptions),
-      options: opts.cliOptions,
       successMode: "patch",
-    });
-  } catch (err) {
-    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
-  }
+    };
+  });
 }
 
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
@@ -131,8 +145,15 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
+      const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
+        (managedPath) =>
+          parsedPath.every((segment, index) => managedPath[index] === segment) ||
+          managedPath.every((segment, index) => parsedPath[index] === segment),
+      );
       const message = isConfigSchemaPath(schema, parsedPath)
-        ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
+        ? autoManaged
+          ? `Config path is valid but unset: ${opts.path}. This path contains metadata managed automatically by OpenClaw on config writes; it cannot be authored with config set.`
+          : `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
@@ -141,12 +162,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.error(danger(message));
       exitCliAfterOutput(runtime, 1);
     }
-    if (opts.json) {
-      writeRuntimeJson(runtime, res.value);
-    } else if (
-      typeof res.value === "string" ||
-      typeof res.value === "number" ||
-      typeof res.value === "boolean"
+    if (
+      !opts.json &&
+      (typeof res.value === "string" ||
+        typeof res.value === "number" ||
+        typeof res.value === "boolean")
     ) {
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
@@ -169,11 +189,10 @@ export async function runConfigUnset(opts: {
   path: string;
   cliOptions?: ConfigUnsetOptions;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }) {
-  const runtime = opts.runtime ?? defaultRuntime;
   const cliOptions = opts.cliOptions ?? {};
-  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
-  try {
+  return runConfigMutation({ ...opts, cliOptions }, async () => {
     const { buildUnsetOperation } = await import("./config-cli-input.js");
     if (cliOptions.allowExec && !cliOptions.dryRun) {
       throw new Error("--allow-exec can only be used with --dry-run.");
@@ -182,15 +201,12 @@ export async function runConfigUnset(opts: {
       throw new Error("--json can only be used with --dry-run.");
     }
     const pathTokens = parseConcreteConfigPathTokens(opts.path);
-    await runConfigOperations({
-      runtime,
+    return {
       operations: [buildUnsetOperation(pathTokens.map(String), pathTokens)],
-      options: cliOptions,
       successMode: "set",
-    });
-  } catch (err) {
-    handleConfigMutationError({ err, runtime, options: cliOptions });
-  }
+      ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
+    };
+  });
 }
 
 async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
@@ -212,11 +228,13 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
-    const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
       properties?: Record<string, unknown>;
     };
-    schema.properties = { $schema: { type: "string" }, ...schema.properties };
-    writeRuntimeJson(runtime, schema);
+    writeRuntimeJson(runtime, {
+      ...schema,
+      properties: { $schema: { type: "string" }, ...schema.properties },
+    });
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);
@@ -262,15 +280,17 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           issues,
         });
       } else {
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
+        runtime.error(`Config needs correction: ${shortPath}`);
+        for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
         runtime.error(
           formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
         );
-        runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
+        runtime.error(
+          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
+        );
       }
       exitCliAfterOutput(runtime, 1);
     }
@@ -303,21 +323,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   }
 }
 
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/config", "docs.openclaw.ai/cli/config")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
       "--section <section>",
       "Configuration sections for guided setup (repeatable). Use with no subcommand.",
@@ -325,7 +337,7 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      const { configureCommandFromSectionsArg } = await import("../commands/configure.commands.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
@@ -411,7 +423,14 @@ export function registerConfigCli(program: Command) {
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
-      await runConfigSet({ path, value, cliOptions: opts });
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config set",
+        params: {},
+        target: path ?? "config",
+        onForeignOwner: "refuse",
+        runLocal: () => runConfigSet({ path, value, cliOptions: opts }),
+      });
     });
 
   cmd
@@ -437,7 +456,14 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts: ConfigPatchOptions) => {
-      await runConfigPatch({ cliOptions: opts });
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config patch",
+        params: {},
+        target: "config",
+        onForeignOwner: "refuse",
+        runLocal: () => runConfigPatch({ cliOptions: opts }),
+      });
     });
 
   cmd
@@ -448,7 +474,14 @@ export function registerConfigCli(program: Command) {
     .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
     .option("--json", "print dry-run result as JSON")
     .action(async (path: string, options: ConfigUnsetOptions) => {
-      await runConfigUnset({ path, cliOptions: options });
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        method: "config unset",
+        params: {},
+        target: path,
+        onForeignOwner: "refuse",
+        runLocal: () => runConfigUnset({ path, cliOptions: options }),
+      });
     });
 
   cmd

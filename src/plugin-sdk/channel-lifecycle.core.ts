@@ -48,35 +48,6 @@ export function createAccountStatusSink(params: {
   };
 }
 
-function createTrackedRunState(params: ChannelRunQueueParams) {
-  const runStarts = new Map<symbol, number>();
-  const oldestRunStart = () => Math.min(...runStarts.values());
-  const runState = createRunStateMachine({
-    setStatus: (patch) => {
-      params.setStatus?.({
-        ...patch,
-        activeRunStartedAt: runStarts.size > 0 ? oldestRunStart() : null,
-      });
-    },
-    abortSignal: params.abortSignal,
-  });
-
-  return {
-    isActive: () => runState.isActive(),
-    deactivate: runState.deactivate,
-    onRunStart() {
-      const handle = Symbol("channel-run");
-      runStarts.set(handle, Date.now());
-      runState.onRunStart();
-      return handle;
-    },
-    onRunEnd(handle: symbol) {
-      runStarts.delete(handle);
-      runState.onRunEnd();
-    },
-  };
-}
-
 /**
  * Serialize channel work per key while keeping lifecycle/busy accounting out of
  * channel-specific message handlers. The queue does not impose run timeouts;
@@ -84,7 +55,17 @@ function createTrackedRunState(params: ChannelRunQueueParams) {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
-  const runState = createTrackedRunState(params);
+  const runStarts = new Map<symbol, number>();
+  const runState = createRunStateMachine({
+    setStatus: (patch) => {
+      params.setStatus?.({
+        ...patch,
+        activeRunStartedAt: runStarts.size > 0 ? Math.min(...runStarts.values()) : null,
+      });
+    },
+    abortSignal: params.abortSignal,
+  });
+
   const reportError = (error: unknown) => {
     try {
       params.onError?.(error);
@@ -101,7 +82,9 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           if (!runState.isActive()) {
             return;
           }
-          const runHandle = runState.onRunStart();
+          const runHandle = Symbol("channel-run");
+          runStarts.set(runHandle, Date.now());
+          runState.onRunStart();
           try {
             // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
@@ -109,13 +92,18 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
             }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
-            runState.onRunEnd(runHandle);
+            runStarts.delete(runHandle);
+            runState.onRunEnd();
           }
         })
         .catch(reportError);
     },
     deactivate: runState.deactivate,
   };
+}
+
+async function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return onAbort?.();
 }
 
 /**
@@ -130,7 +118,7 @@ export function waitUntilAbort(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const complete = () => {
-      Promise.resolve(onAbort?.()).then(() => resolve(), reject);
+      void runAbortCleanup(onAbort).then(resolve, reject);
     };
     if (!signal) {
       return;
@@ -171,6 +159,10 @@ export async function keepHttpServerTaskAlive(params: {
   onAbort?: () => void | Promise<void>;
 }): Promise<void> {
   const { server, abortSignal, onAbort } = params;
+  // Subscribe before an already-aborted signal can synchronously close the server.
+  const closed = new Promise<void>((resolve) => {
+    server.once("close", () => resolve());
+  });
   let abortTask: Promise<void> = Promise.resolve();
   let abortTriggered = false;
 
@@ -179,27 +171,20 @@ export async function keepHttpServerTaskAlive(params: {
       return;
     }
     abortTriggered = true;
-    abortTask = Promise.resolve(onAbort?.()).then(() => undefined);
-  };
-
-  const onAbortSignal = () => {
-    triggerAbort();
+    abortTask = runAbortCleanup(onAbort);
+    // Cleanup can reject before close; retain that error for the task's final await.
+    void abortTask.catch(() => {});
   };
 
   if (abortSignal) {
     if (abortSignal.aborted) {
       triggerAbort();
     } else {
-      abortSignal.addEventListener("abort", onAbortSignal, { once: true });
+      abortSignal.addEventListener("abort", triggerAbort, { once: true });
     }
   }
 
-  await new Promise<void>((resolve) => {
-    server.once("close", () => resolve());
-  });
-
-  if (abortSignal) {
-    abortSignal.removeEventListener("abort", onAbortSignal);
-  }
+  await closed;
+  abortSignal?.removeEventListener("abort", triggerAbort);
   await abortTask;
 }

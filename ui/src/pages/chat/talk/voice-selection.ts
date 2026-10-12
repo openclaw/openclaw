@@ -2,19 +2,12 @@ import {
   TALK_VOICE_CHANGE_TIMEOUT_MS,
   validateTalkVoiceChangeEvent,
   type TalkVoiceChangeEvent,
-  type TalkVoiceSelection,
-  type TalkVoiceSetResult,
+  type TalkVoiceCompleteParams,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 
 export type RealtimeVoiceCall = { getVoiceSessionId(): string | undefined };
-export type RealtimeVoiceSelectionState = {
-  selection: TalkVoiceSelection | null;
-  changing: boolean;
-  error: string | null;
-};
 type VoiceChange = {
   request: TalkVoiceChangeEvent;
   started?: RealtimeVoiceCall;
@@ -28,8 +21,6 @@ const VOICE_REQUEST_TIMEOUT_MS = TALK_VOICE_CHANGE_TIMEOUT_MS + 10_000;
 export class RealtimeTalkVoiceSelection {
   private active = true;
   private change: VoiceChange | undefined;
-  private selection: TalkVoiceSelection | null = null;
-  private setting = false;
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -40,7 +31,6 @@ export class RealtimeTalkVoiceSelection {
       currentCall: () => RealtimeVoiceCall | null;
       restart: (request: TalkVoiceChangeEvent) => Promise<RealtimeVoiceCall | undefined>;
       cancel: (message: string) => void;
-      update: (state: RealtimeVoiceSelectionState) => void;
     },
   ) {
     this.unsubscribe = owner.client.addEventListener((event) => {
@@ -56,92 +46,12 @@ export class RealtimeTalkVoiceSelection {
     );
   }
 
-  private publish(error: string | null = null) {
-    if (this.active && this.owner.isCurrent()) {
-      this.owner.update({
-        selection: this.selection,
-        changing: this.setting || Boolean(this.change),
-        error,
-      });
-    }
-  }
-
-  async refresh(call = this.owner.currentCall()): Promise<void> {
-    const voiceSessionId = call?.getVoiceSessionId();
-    if (!this.current(call) || !voiceSessionId) {
-      return;
-    }
-    try {
-      const selection = await this.owner.client.request<TalkVoiceSelection>("talk.voice.get", {
-        sessionKey: this.owner.sessionKey,
-        voiceSessionId,
-      });
-      if (
-        this.current(call) &&
-        call.getVoiceSessionId() === voiceSessionId &&
-        selection.voiceSessionId === voiceSessionId &&
-        selection.sessionKey === this.owner.sessionKey
-      ) {
-        this.selection = selection;
-        this.publish();
-      }
-    } catch (error) {
-      if (this.current(call)) {
-        this.publish(formatUiError(error));
-      }
-    }
-  }
-
-  async set(voice: string): Promise<void> {
-    const call = this.owner.currentCall();
-    const voiceSessionId = call?.getVoiceSessionId();
-    if (
-      !this.current(call) ||
-      !voiceSessionId ||
-      this.setting ||
-      this.change ||
-      !this.selection?.canChange ||
-      !this.selection.voices.includes(voice) ||
-      voice === this.selection.voice
-    ) {
-      return;
-    }
-    this.setting = true;
-    this.publish();
-    let error: string | null = null;
-    try {
-      const result = await this.owner.client.request<TalkVoiceSetResult>(
-        "talk.voice.set",
-        {
-          sessionKey: this.owner.sessionKey,
-          voiceSessionId,
-          voice,
-        },
-        { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
-      );
-      const current = this.owner.currentCall();
-      if (
-        this.current(current) &&
-        result.voiceSessionId === current.getVoiceSessionId() &&
-        result.sessionKey === this.owner.sessionKey
-      ) {
-        this.selection = result;
-      }
-    } catch {
-      error = t("chat.voice.selectionFailed");
-    } finally {
-      this.setting = false;
-      this.publish(error);
-    }
-  }
-
   ready(call: RealtimeVoiceCall) {
     if (!this.current(call)) {
       return;
     }
     const change = this.change;
     if (!change) {
-      void this.refresh(call);
       return;
     }
     if (call.getVoiceSessionId() === change.request.voiceSessionId) {
@@ -189,7 +99,6 @@ export class RealtimeTalkVoiceSelection {
       ),
     };
     this.change = change;
-    this.publish();
     void this.owner
       .restart(request)
       .then((call) => {
@@ -228,21 +137,10 @@ export class RealtimeTalkVoiceSelection {
       return;
     }
     change.completing = true;
-    void this.owner.client
-      .request(
-        "talk.voice.complete",
-        {
-          changeId: change.request.changeId,
-          voiceSessionId,
-          outcome: "ready",
-        },
-        { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
-      )
+    void this.complete(change, { voiceSessionId, outcome: "ready" })
       .then(() => {
         if (this.change === change && this.current(call)) {
           this.clearChange(change);
-          this.publish();
-          void this.refresh(call);
         }
       })
       .catch(() => this.fail(change, t("chat.voice.selectionConfirmationFailed")));
@@ -261,20 +159,24 @@ export class RealtimeTalkVoiceSelection {
 
   private reportFailure(change: VoiceChange, error: string) {
     const voiceSessionId = this.owner.currentCall()?.getVoiceSessionId();
-    void this.owner.client
-      .request(
-        "talk.voice.complete",
-        {
-          changeId: change.request.changeId,
-          ...(voiceSessionId && voiceSessionId !== change.request.voiceSessionId
-            ? { voiceSessionId }
-            : {}),
-          outcome: "failed",
-          error,
-        },
-        { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
-      )
-      .catch(() => undefined);
+    void this.complete(change, {
+      ...(voiceSessionId && voiceSessionId !== change.request.voiceSessionId
+        ? { voiceSessionId }
+        : {}),
+      outcome: "failed",
+      error,
+    }).catch(() => undefined);
+  }
+
+  private complete(
+    change: VoiceChange,
+    outcome: Omit<TalkVoiceCompleteParams, "changeId">,
+  ): Promise<unknown> {
+    return this.owner.client.request(
+      "talk.voice.complete",
+      { changeId: change.request.changeId, ...outcome },
+      { timeoutMs: VOICE_REQUEST_TIMEOUT_MS },
+    );
   }
 
   dispose() {
@@ -283,7 +185,7 @@ export class RealtimeTalkVoiceSelection {
     const change = this.change;
     if (change) {
       this.clearChange(change);
-      this.reportFailure(change, t("tasksPage.status.cancelled"));
+      this.reportFailure(change, t("common.cancelled"));
     }
   }
 }

@@ -1,7 +1,5 @@
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -17,11 +15,16 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
   type CodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => resetPluginStateStoreForTests());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    cleanup();
+  }),
+);
 const currentAuthority = () => undefined;
 
 const identity = {
@@ -45,7 +48,7 @@ const receipt: CodexNativeSubagentSubmission = {
 };
 
 function openState(root: string) {
-  return createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+  return createCodexSqliteTestBindingStateStore({
     namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
     maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
     overflowPolicy: "reject-new",
@@ -78,6 +81,46 @@ async function fixture(initialReceipt?: CodexNativeSubagentSubmission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("reopens initial assignment facts across native rotation but not physical adoption", async () => {
+    const { root, store, owner } = await fixture();
+    const assignment = {
+      runId: "codex-thread:initial-child",
+      childThreadId: "initial-child",
+      nativeTurnId: "initial-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    await expect(
+      store.mutate(
+        identity,
+        {
+          kind: "record-native-subagent-assignment",
+          owner,
+          assignment,
+        },
+        currentAuthority,
+      ),
+    ).resolves.toBe(true);
+    await store.mutate(identity, {
+      kind: "replace-thread",
+      expectedThreadId: binding.threadId,
+      binding: { ...binding, threadId: "rotated-parent" },
+    });
+    resetPluginStateStoreForTests();
+    const reopened = createLazyCodexAppServerBindingStore(openState(root));
+    const rotated = { ...owner, parentThreadId: "rotated-parent" };
+    expect(await reopened.readNativeSubagentAssignments?.(identity, rotated)).toEqual([assignment]);
+    expect(await reopened.readNativeSubagentSubmissions(identity, rotated)).toEqual([]);
+    const successor = { ...identity, sessionId: "new-physical-session" };
+    await reopened.adoptSessionGeneration(successor, identity.sessionId, currentAuthority);
+    expect(
+      await reopened.readNativeSubagentAssignments?.(successor, {
+        ...rotated,
+        sessionId: successor.sessionId,
+      }),
+    ).toEqual([]);
+  });
+
   it("persists concurrent receipts across reopen and consumes only the exact submission", async () => {
     const { root, state, store, owner } = await fixture();
     const logicalIdentity = { ...identity, sessionId: "logical-parent-session" };
@@ -109,10 +152,11 @@ describe("native subagent submission receipts in the binding store", () => {
     ).resolves.toBe(false);
     expect(store.read(identity)).toEqual(binding);
 
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const reopenedState = openState(root);
     const reopened = scope(createLazyCodexAppServerBindingStore(reopenedState));
-    expect(reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
+    expect(await reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
       receipt,
       second,
     ]);
@@ -123,7 +167,9 @@ describe("native subagent submission receipts in the binding store", () => {
     );
     await expect(reopened.mutate(logicalIdentity, consume, currentAuthority)).resolves.toBe(true);
     await expect(reopened.mutate(logicalIdentity, consume, currentAuthority)).resolves.toBe(true);
-    expect(reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([second]);
+    expect(await reopened.readNativeSubagentSubmissions(logicalIdentity, logicalOwner)).toEqual([
+      second,
+    ]);
     const consumeSecond = { ...consume, receipt: second };
     await expect(reopened.mutate(logicalIdentity, consumeSecond, currentAuthority)).resolves.toBe(
       true,
@@ -160,7 +206,9 @@ describe("native subagent submission receipts in the binding store", () => {
         selectedOwner = { ...owner, lifecycleRevision: "replacement-revision" };
       }
       const before = state.lookup(bindingStoreKey(identity));
-      expect(store.readNativeSubagentSubmissions(selectedIdentity, selectedOwner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(selectedIdentity, selectedOwner)).toEqual(
+        [],
+      );
       for (const kind of [
         "record-native-subagent-submission",
         "consume-native-subagent-submission",
@@ -174,22 +222,23 @@ describe("native subagent submission receipts in the binding store", () => {
   );
 
   it.each(["record-native-subagent-submission", "consume-native-subagent-submission"] as const)(
-    "rechecks current authority inside the atomic %s update",
+    "rechecks current authority before the atomic %s update",
     async (kind) => {
       const { state, owner } = await fixture(receipt);
       const before = state.lookup(bindingStoreKey(identity));
       let current = true;
       const guarded = createCodexAppServerBindingStore({
         ...state,
-        update: (key, apply, options) =>
-          state.update(
-            key,
-            (value) => {
+        withCurrent(authority) {
+          const mutationState = state.withCurrent(authority);
+          return {
+            ...mutationState,
+            compareAndApply(key, comparison, intent) {
               current = false;
-              return apply(value);
+              return mutationState.compareAndApply(key, comparison, intent);
             },
-            options,
-          ),
+          };
+        },
       });
       await expect(
         guarded.mutate(identity, { kind, owner, receipt }, () => {
@@ -197,9 +246,7 @@ describe("native subagent submission receipts in the binding store", () => {
             throw new Error("Parent authority changed.");
           }
         }),
-      ).rejects.toMatchObject({
-        cause: { message: "Parent authority changed." },
-      });
+      ).rejects.toThrow("Parent authority changed.");
       expect(state.lookup(bindingStoreKey(identity))).toEqual(before);
     },
   );
@@ -213,9 +260,9 @@ describe("native subagent submission receipts in the binding store", () => {
         threadId: binding.threadId,
         patch: { serviceTier: "priority" },
       });
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
     });
-    expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
+    expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([receipt]);
     expect(state.lookup(bindingStoreKey(identity))).not.toHaveProperty("lease");
     expect(store.read(identity)).toEqual({ ...binding, model: "gpt-5.5", serviceTier: "priority" });
   });
@@ -251,7 +298,7 @@ describe("native subagent submission receipts in the binding store", () => {
             ? { ...binding, appServerRuntimeFingerprint: "replacement-runtime" }
             : undefined,
       );
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
     },
   );
 
@@ -272,14 +319,14 @@ describe("native subagent submission receipts in the binding store", () => {
         "adopted",
       );
       const successorOwner = { ...owner, sessionId: successor.sessionId };
-      expect(store.readNativeSubagentSubmissions(successor, successorOwner)).toEqual(
+      expect(await store.readNativeSubagentSubmissions(successor, successorOwner)).toEqual(
         stamped ? [receipt] : [],
       );
       expect(store.read(successor)).toEqual(binding);
-      expect(store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+      expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
       if (stamped) {
         const replacement = { ...successorOwner, lifecycleRevision: "replacement-revision" };
-        expect(store.readNativeSubagentSubmissions(successor, replacement)).toEqual([]);
+        expect(await store.readNativeSubagentSubmissions(successor, replacement)).toEqual([]);
         await expect(
           store.mutate(
             successor,
@@ -322,7 +369,7 @@ describe("native subagent submission receipts in the binding store", () => {
     expect(store.read(identity)).toEqual({ ...binding, model: "gpt-5.5" });
     const before = state.lookup(bindingStoreKey(identity));
     expect(before).toHaveProperty("nativeSubagentSubmissions", metadata);
-    expect(() => store.readNativeSubagentSubmissions(identity, owner)).toThrow(
+    await expect(store.readNativeSubagentSubmissions(identity, owner)).rejects.toThrow(
       /native subagent submission/i,
     );
     for (const kind of [
@@ -331,9 +378,7 @@ describe("native subagent submission receipts in the binding store", () => {
     ] as const) {
       await expect(
         store.mutate(identity, { kind, owner, receipt }, currentAuthority),
-      ).rejects.toMatchObject({
-        cause: { message: expect.stringMatching(/native subagent submission/i) },
-      });
+      ).rejects.toThrow(/native subagent submission/i);
     }
     expect(state.lookup(bindingStoreKey(identity))).toEqual(before);
   });

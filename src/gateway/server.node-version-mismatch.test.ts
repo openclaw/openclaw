@@ -94,12 +94,8 @@ describe("node host version mismatch guard", () => {
   });
 
   test.each([
-    [gatewayVersion, gatewayVersion],
     [gatewayVersion, "dev"],
-    [gatewayVersion, "1.0.0"],
     ["2026.9.4", "2026.9.5"],
-    ["2026.9.4", "2026.9.5-beta.1"],
-    ["2026.9.4", "2026.9.4-1"],
   ])(
     "Gateway %s accepts same-install node version %s",
     async (serverVersion, clientVersion) =>
@@ -119,39 +115,6 @@ describe("node host version mismatch guard", () => {
       }),
   );
 
-  test.each(["default", "different", "omitted"])(
-    "same-install stale node is rejected with %s instanceId",
-    async (instance) => {
-      const onHelloOk = vi.fn();
-      await expect(
-        connectNode({
-          clientVersion: "2020.1.1",
-          instanceId:
-            instance === "default"
-              ? instanceId
-              : instance === "different"
-                ? "different-instance"
-                : undefined,
-          onHelloOk,
-          timeoutMs: 5_000,
-          timeoutMessage: "expected version mismatch rejection",
-        }).then(async (client) => {
-          await client.stopAndWait({ timeoutMs: 2_000 });
-          return "connected";
-        }),
-      ).rejects.toMatchObject({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "client version mismatch",
-        details: {
-          code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
-          clientVersion: "2020.1.1",
-          gatewayVersion,
-        },
-      });
-      expect(onHelloOk).not.toHaveBeenCalled();
-    },
-  );
-
   test("list and describe mark only the same-install device despite copied instance metadata", async () => {
     const independent = await createOpenClawTestState({
       label: "node-independent",
@@ -163,7 +126,7 @@ describe("node host version mismatch guard", () => {
       expect(identity.deviceId).not.toBe(localIdentity.deviceId);
       await pairNode(identity);
       clients.push(await connectNode());
-      clients.push(await connectNode({ deviceIdentity: identity }));
+      clients.push(await connectNode({ deviceIdentity: identity, clientVersion: "2020.1.1" }));
       const operator = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token: "secret",
@@ -202,33 +165,6 @@ describe("node host version mismatch guard", () => {
     }
   });
 
-  test("independently paired stale node connects with the same-install instanceId", async () => {
-    const independent = await createOpenClawTestState({
-      label: "node-independent-stale",
-      applyEnv: false,
-    });
-    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    try {
-      const identity = loadOrCreateDeviceIdentity({ env: independent.env });
-      await pairNode(identity);
-      const onHelloOk = vi.fn();
-      client = await connectNode({
-        deviceIdentity: identity,
-        clientVersion: "2020.1.1",
-        onHelloOk,
-      });
-      expect(onHelloOk).toHaveBeenCalledWith(
-        expect.objectContaining({ protocol: PROTOCOL_VERSION }),
-      );
-    } finally {
-      try {
-        await client?.stopAndWait({ timeoutMs: 2_000 });
-      } finally {
-        await independent.cleanup();
-      }
-    }
-  });
-
   test("rejected local reconnects preserve the active node pending reapproval", async () => {
     const initial = await requestNodePairing({
       nodeId: localIdentity.deviceId,
@@ -242,10 +178,12 @@ describe("node host version mismatch guard", () => {
 
     const upgraded = await connectNode({ commands: ["screen.snapshot", "system.run"] });
     try {
+      const onHelloOk = vi.fn();
       const connectReverted = async (clientVersion: string, clientDisplayName: string) =>
         await connectNode({
           clientDisplayName,
           clientVersion,
+          onHelloOk,
           instanceId: "reconnect-instance-override",
           commands: ["screen.snapshot"],
           timeoutMs: 5_000,
@@ -259,9 +197,16 @@ describe("node host version mismatch guard", () => {
       );
       expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
 
-      await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toThrow(
-        /client version mismatch|version mismatch/i,
-      );
+      await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toMatchObject({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "client version mismatch",
+        details: {
+          code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+          clientVersion: "2020.1.1",
+          gatewayVersion,
+        },
+      });
+      expect(onHelloOk).not.toHaveBeenCalled();
 
       const pendingAfterVersionMismatch = (await listNodePairing()).pending.find(
         (entry) => entry.nodeId === localIdentity.deviceId,

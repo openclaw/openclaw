@@ -1,22 +1,54 @@
-import { describe, expect, it, vi } from "vitest";
 // @vitest-environment node
-import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type {
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../../api/types.ts";
 import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { reconcileSessionRunTerminal } from "./index.ts";
 import {
   createGatewayHarness,
+  createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./session-run-terminal.ts";
 
-function sessionChangedEvent(key: string): GatewayEventFrame {
+const mainKey = "agent:main:main";
+const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  key,
+  kind: "direct",
+  updatedAt: 1,
+  ...fields,
+});
+const emptyList = () => sessionsResult([], 2);
+const subscribed = () => ({ subscribed: true });
+
+function sessionHarness(
+  routes: Record<string, (params?: unknown) => unknown>,
+  featureMethods?: string[],
+  sessionKey = mainKey,
+) {
+  const request = createGatewayRequestMock(async (method, params) => {
+    const handler = routes[method];
+    if (!handler) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return await handler(params);
+  });
+  const harness = createGatewayHarness(createTestGatewayClient(request), featureMethods);
+  harness.gateway.snapshot.sessionKey = sessionKey;
+  return { ...harness, request, sessions: createTestSessionCapability(harness.gateway) };
+}
+
+function changed(key: string) {
   return {
     type: "event",
     event: "sessions.changed",
@@ -29,1056 +61,778 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
       sessionId: "hidden-session",
       label: "Hidden",
     },
-  };
+  } as const;
 }
 
-describe("createSessionCapability", () => {
-  it.each(["direct", "subscription"] as const)(
-    "shares confirmed archive visibility after %s reconciliation",
-    async (path) => {
-      const key = "agent:main:archive-from-agent";
-      const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
-      const request = vi.fn(async () => sessionsResult([row], 1));
-      const { emitEvent, gateway } = createGatewayHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      const reconcile = (archived: boolean, updatedAt: number) => {
-        const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
-        if (path === "direct") {
-          sessions.reconcileChanged(payload);
-        } else {
-          emitEvent({ type: "event", event: "sessions.changed", payload });
-        }
-      };
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        reconcile(true, 2);
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        reconcile(false, 3);
-        expect(sessions.archiveVisibility(key)).toBeUndefined();
-      } finally {
-        sessions.dispose();
-      }
-    },
-  );
+afterEach(() => vi.useRealTimers());
 
-  it.each(["direct", "subscription"] as const)(
-    "ignores stale archive state after a newer unarchive via %s reconciliation",
-    async (path) => {
-      const key = "agent:main:main";
-      const request = vi.fn(async (method: string) => {
-        if (method !== "sessions.list") {
-          throw new Error(`Unexpected request: ${method}`);
-        }
-        return sessionsResult(
-          [
-            {
-              key,
-              kind: "direct",
-              sessionId: "main-session",
-              updatedAt: 30,
-              archived: false,
-            },
-          ],
-          30,
-        );
+it.each([false, null])(
+  "shares confirmed archive visibility after a %s restore event",
+  async (restored) => {
+    const key = "agent:main:archive-from-agent";
+    const held = row(key, { sessionId: "archive-session" });
+    const { sessions, emitEvent } = sessionHarness({
+      "sessions.list": () => sessionsResult([held], 1),
+    });
+    const reconcile = (archived: boolean | null, updatedAt: number) =>
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...held, sessionKey: key, reason: "patch", archived, updatedAt },
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { emitEvent, gateway } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const staleArchive = {
-        sessionKey: key,
-        key,
-        kind: "direct" as const,
-        sessionId: "main-session",
-        updatedAt: 20,
-        archived: true,
-        archivedAt: 20,
-        reason: "update",
-      };
+    await sessions.refresh({ agentId: "main", force: true });
+    reconcile(true, 2);
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    reconcile(restored, 3);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+    sessions.dispose();
+  },
+);
 
-      if (path === "direct") {
-        sessions.reconcileChanged(staleArchive);
-      } else {
-        emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
-      }
+it("accepts a descriptor restore outside the primary list", async () => {
+  const key = "agent:main:descriptor-restore";
+  const held = row(key, { sessionId: "restored-session", archived: true, updatedAt: 2 });
+  let listed = [held];
+  const { sessions, emitEvent } = sessionHarness({
+    "sessions.list": () => sessionsResult(listed, 2),
+    "sessions.describe": () => ({ session: { ...held, archived: false, updatedAt: 3 } }),
+  });
+  const observation = sessions.observeRow({ key, agentId: "main" }, () => {});
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { ...held, sessionKey: key, reason: "patch" },
+    });
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    listed = [];
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions).toEqual([]);
+    const reconcile = observation.captureReconcile();
+    const described = await sessions.describe({ key, agentId: "main" }, { refresh: true });
+    reconcile(described.session ?? undefined);
+    expect(observation.row?.archived).toBe(false);
+    expect(sessions.archiveVisibility(key)).toBeUndefined();
+  } finally {
+    observation.dispose();
+    sessions.dispose();
+  }
+});
 
-      expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
-        archived: false,
-        updatedAt: 30,
-      });
-      sessions.dispose();
+it("automatically retries an explicitly retryable group catalog failure", async () => {
+  vi.useFakeTimers();
+  let calls = 0;
+  const { sessions } = sessionHarness(
+    {
+      "sessions.groups.list": () => {
+        if (++calls === 1) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "temporary catalog failure",
+            retryable: true,
+            retryAfterMs: 100,
+          });
+        }
+        return { groups: [{ name: "Recovered" }], sectionOrder: ["work", "category:Recovered"] };
+      },
     },
+    ["sessions.groups.list"],
   );
+  await sessions.groupsLoad();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(sessions.state.groups).toEqual(["Recovered"]);
+  expect(sessions.state.sectionOrder).toEqual(["work", "category:Recovered"]);
+  expect(calls).toBe(2);
+  sessions.dispose();
+});
 
-  it("allows an advertised group catalog load to be retried after failure", async () => {
-    let groupsCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.groups.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      groupsCalls += 1;
-      if (groupsCalls === 1) {
-        throw new Error("temporary catalog failure");
-      }
-      return {
-        groups: [{ name: "Research" }],
-        sectionOrder: ["work", "category:Research", "ungrouped"],
-      };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    await sessions.groupsLoad();
-    expect(sessions.state.groups).toEqual([]);
-    await sessions.groupsLoad();
-
-    expect(groupsCalls).toBe(2);
-    expect(sessions.state.groups).toEqual(["Research"]);
-    expect(sessions.state.sectionOrder).toEqual(["work", "category:Research", "ungrouped"]);
-    sessions.dispose();
-  });
-
-  it("automatically retries an explicitly retryable group catalog failure", async () => {
-    let groupsCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.groups.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      groupsCalls += 1;
-      if (groupsCalls === 1) {
-        throw new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "temporary catalog failure",
-          retryable: true,
-          retryAfterMs: 100,
-        });
-      }
-      return { groups: [{ name: "Recovered" }] };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    await sessions.groupsLoad();
-
-    await waitForFast(() => expect(sessions.state.groups).toEqual(["Recovered"]));
-    expect(groupsCalls).toBe(2);
-    sessions.dispose();
-  });
-
-  it("keeps the legacy group catalog probe one-shot without feature metadata", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("unknown method");
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await sessions.groupsLoad();
-    await sessions.groupsLoad();
-
-    expect(request).toHaveBeenCalledOnce();
-    sessions.dispose();
-  });
-
-  it("loads a metadata-less group catalog without probing the newer defaults method", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Research", position: 0 }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.groupsLoad()).resolves.toEqual([{ name: "Research", position: 0 }]);
-    expect(request).toHaveBeenCalledOnce();
-    expect(sessions.state.groups).toEqual(["Research"]);
-    sessions.dispose();
-  });
-
-  it("publishes state.error when group rename is rejected", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.rename") {
-        throw new Error("rename failed");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.rename"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.groupsRename("Alpha", "Beta")).rejects.toThrow("rename failed");
-    expect(sessions.state.error).toBe("rename failed");
-    sessions.dispose();
-  });
-
-  it("publishes state.error when replacing the group catalog is rejected", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.put") {
+it("publishes state.error when replacing the group catalog is rejected", async () => {
+  const { sessions } = sessionHarness(
+    {
+      "sessions.groups.put": () => {
         throw new Error("group catalog rejected");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.put"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
-    expect(sessions.state.error).toBe("group catalog rejected");
-    sessions.dispose();
-  });
-
-  it("publishes state.error when group delete is rejected", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.delete") {
-        throw new Error("delete failed");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, ["sessions.groups.delete"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.groupsDelete("Alpha")).rejects.toThrow("delete failed");
-    expect(sessions.state.error).toBe("delete failed");
-    sessions.dispose();
-  });
-
-  it("reports a group rename as stale after a same-client reconnect", async () => {
-    const renamed = createDeferred<{ groups: Array<{ name: string }> }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.rename") {
-        return await renamed.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.rename"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    const operation = sessions.groupsRename("Alpha", "Beta");
-    publish(false);
-    publish(true);
-    renamed.resolve({ groups: [{ name: "Beta" }] });
-
-    await expect(operation).resolves.toBe("stale");
-    expect(sessions.state.groups).toEqual([]);
-    sessions.dispose();
-  });
-
-  it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
-    const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.put") {
-        return await replaced.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client, ["sessions.groups.put"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    const operation = sessions.groupsPut(["Alpha"]);
-    publish(false);
-    publish(true);
-    replaced.resolve({ groups: [{ name: "Alpha" }] });
-
-    await expect(operation).resolves.toBe("stale");
-    expect(sessions.state.groups).toEqual([]);
-    expect(sessions.state.error).toBeNull();
-    sessions.dispose();
-  });
-
-  it.each(["rename", "delete"] as const)(
-    "keeps a confirmed group %s completed when its row refresh outlives the connection",
-    async (operation) => {
-      const refreshed = createDeferred<SessionsListResult>();
-      const method = operation === "rename" ? "sessions.groups.rename" : "sessions.groups.delete";
-      const request = vi.fn(async (requestedMethod: string) => {
-        if (requestedMethod === method) {
-          return { groups: [{ name: operation === "rename" ? "Beta" : "Other" }] };
-        }
-        if (requestedMethod === "sessions.list") {
-          return await refreshed.promise;
-        }
-        throw new Error(`Unexpected request: ${requestedMethod}`);
-      });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { gateway, publish } = createGatewayHarness(client, [method]);
-      const sessions = createTestSessionCapability(gateway);
-
-      const mutation =
-        operation === "rename"
-          ? sessions.groupsRename("Alpha", "Beta")
-          : sessions.groupsDelete("Alpha");
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith("sessions.list", expect.any(Object)),
-      );
-      publish(false);
-      refreshed.resolve(sessionsResult([], 2));
-
-      await expect(mutation).resolves.toBe("completed");
-      sessions.dispose();
+      },
     },
+    ["sessions.groups.put"],
   );
+  await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
+  expect(sessions.state.error).toBe("group catalog rejected");
+  sessions.dispose();
+});
 
-  it("does not probe for a group catalog when the method is explicitly absent", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client, []);
-    const sessions = createTestSessionCapability(gateway);
+it("reports a group catalog replacement as stale after a same-client reconnect", async () => {
+  const replaced = createDeferred<{ groups: Array<{ name: string }> }>();
+  const { sessions, publish } = sessionHarness(
+    {
+      "sessions.groups.put": () => replaced.promise,
+      "sessions.subscribe": subscribed,
+      "sessions.list": emptyList,
+    },
+    ["sessions.groups.put"],
+  );
+  const operation = sessions.groupsPut(["Alpha"]);
+  publish(false);
+  publish(true);
+  replaced.resolve({ groups: [{ name: "Alpha" }] });
+  await expect(operation).resolves.toBe("stale");
+  expect(sessions.state.groups).toEqual([]);
+  expect(sessions.state.error).toBeNull();
+  sessions.dispose();
+});
 
-    await sessions.groupsLoad();
-    await sessions.groupsLoad();
+it("keeps a confirmed group rename completed when its row refresh outlives the connection", async () => {
+  const refreshed = createDeferred<SessionsListResult>();
+  const { sessions, publish, request } = sessionHarness(
+    {
+      "sessions.groups.rename": () => ({ groups: [{ name: "Beta" }] }),
+      "sessions.list": () => refreshed.promise,
+    },
+    ["sessions.groups.rename"],
+  );
+  const mutation = sessions.groupsRename("Alpha", "Beta");
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("sessions.list", expect.any(Object)),
+  );
+  publish(false);
+  refreshed.resolve(emptyList());
+  await expect(mutation).resolves.toBe("completed");
+  sessions.dispose();
+});
 
-    expect(request).not.toHaveBeenCalled();
-    expect(sessions.state.groups).toEqual([]);
-    sessions.dispose();
+it("ignores an older group load failure after an event-driven load succeeds", async () => {
+  const first = createDeferred<{ groups: Array<{ name: string }> }>();
+  const current = createDeferred<{ groups: Array<{ name: string }> }>();
+  let calls = 0;
+  const { sessions, emitEvent } = sessionHarness(
+    {
+      "sessions.groups.list": () => (++calls === 1 ? first.promise : current.promise),
+      "sessions.list": () => sessionsResult([], 1),
+    },
+    ["sessions.groups.list"],
+  );
+  const firstLoad = sessions.groupsLoad();
+  await waitForFast(() => expect(calls).toBe(1));
+  emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
+  await waitForFast(() => expect(calls).toBe(2));
+  current.resolve({ groups: [{ name: "Current" }] });
+  await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
+  first.reject(new Error("stale catalog failure"));
+  await firstLoad;
+  await sessions.groupsLoad();
+  expect(calls).toBe(2);
+  expect(sessions.state.groups).toEqual(["Current"]);
+  sessions.dispose();
+});
+
+it("excludes lifecycle no-ops from batch deletion results", async () => {
+  const rejectedKey = "agent:main:rejected";
+  const keptKey = "agent:main:kept";
+  const deletedKey = "agent:main:deleted";
+  const error = new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: `Session ${rejectedKey} changed before deletion. Retry.`,
   });
-
-  it("ignores an older group load failure after an event-driven load succeeds", async () => {
-    const firstGroups = createDeferred<{ groups: Array<{ name: string }> }>();
-    const currentGroups = createDeferred<{ groups: Array<{ name: string }> }>();
-    let groupsCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        groupsCalls += 1;
-        return await (groupsCalls === 1 ? firstGroups.promise : currentGroups.promise);
+  const { sessions, request } = sessionHarness({
+    "sessions.delete": (params) => {
+      const key = asOptionalRecord(params)?.key;
+      if (key === rejectedKey) {
+        throw error;
       }
-      if (method === "sessions.list") {
-        return sessionsResult([], 1);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, emitEvent } = createGatewayHarness(client, ["sessions.groups.list"]);
-    const sessions = createTestSessionCapability(gateway);
-
-    const firstLoad = sessions.groupsLoad();
-    await waitForFast(() => expect(groupsCalls).toBe(1));
-    emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
-    await waitForFast(() => expect(groupsCalls).toBe(2));
-    currentGroups.resolve({ groups: [{ name: "Current" }] });
-    await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
-    firstGroups.reject(new Error("stale catalog failure"));
-    await firstLoad;
-
-    await sessions.groupsLoad();
-    expect(groupsCalls).toBe(2);
-    expect(sessions.state.groups).toEqual(["Current"]);
-    sessions.dispose();
+      return { ok: true, deleted: key === deletedKey };
+    },
+    "sessions.list": () => sessionsResult([row(keptKey)], 2),
   });
-
-  it("keeps a session when sessions.delete reports no deletion", async () => {
-    const key = "agent:main:missing";
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.delete") {
-        return { ok: true, deleted: false };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(
-      sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
-    ).resolves.toEqual({ deleted: false });
-    expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.delete",
-      {
-        key,
-        deleteTranscript: true,
-        expectedSessionId: "session-before-replacement",
-      },
-      { timeoutMs: 10 * 60_000 },
-    );
-    sessions.dispose();
+  const deletedSnapshots: string[][] = [];
+  const unsubscribe = sessions.subscribe((next) =>
+    deletedSnapshots.push(next.deletedSessions.map((target) => target.key)),
+  );
+  await expect(
+    sessions.deleteMany([
+      { key: rejectedKey },
+      { key: keptKey, expectedSessionId: "kept-generation" },
+      { key: deletedKey, archivedOnly: true },
+    ]),
+  ).resolves.toEqual({
+    deleted: [deletedKey],
+    errors: [{ target: { key: rejectedKey }, error }],
+    preservedWorktrees: [],
   });
+  expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
+  expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
+  expect(request).toHaveBeenCalledTimes(4);
+  expect(request).toHaveBeenCalledWith(
+    "sessions.delete",
+    { key: deletedKey, deleteTranscript: true, archivedOnly: true },
+    { timeoutMs: 10 * 60_000 },
+  );
+  expect(request).toHaveBeenCalledWith(
+    "sessions.delete",
+    { key: keptKey, deleteTranscript: true, expectedSessionId: "kept-generation" },
+    { timeoutMs: 10 * 60_000 },
+  );
+  unsubscribe();
+  sessions.dispose();
+});
 
-  it("excludes lifecycle no-ops from batch deletion results", async () => {
-    const rejectedKey = "agent:main:rejected";
-    const keptKey = "agent:main:kept";
-    const deletedKey = "agent:main:deleted";
-    const error = new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: `Session ${rejectedKey} changed before deletion. Retry.`,
-    });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "sessions.delete") {
-        const key = (params as { key?: string } | undefined)?.key;
-        if (key === rejectedKey) {
-          throw error;
-        }
-        return { ok: true, deleted: key === deletedKey };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([{ key: keptKey, kind: "direct", updatedAt: 1 }], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-    const deletedSnapshots: string[][] = [];
-    const unsubscribe = sessions.subscribe((next) => {
-      deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
-    });
-
-    await expect(
-      sessions.deleteMany([
-        { key: rejectedKey },
-        { key: keptKey },
-        { key: deletedKey, archivedOnly: true },
-      ]),
-    ).resolves.toEqual({
-      deleted: [deletedKey],
-      errors: [{ target: { key: rejectedKey }, error }],
-      preservedWorktrees: [],
-    });
-    expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
-    expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.delete",
-      {
-        key: deletedKey,
-        deleteTranscript: true,
-        archivedOnly: true,
-      },
-      { timeoutMs: 10 * 60_000 },
-    );
-    unsubscribe();
-    sessions.dispose();
+it("creates a session while a list refresh is in flight", async () => {
+  const pending = createDeferred<SessionsListResult>();
+  const key = "agent:main:created";
+  let calls = 0;
+  const { sessions, request } = sessionHarness({
+    "sessions.list": () =>
+      ++calls === 1 ? pending.promise : sessionsResult([row(key, { updatedAt: 2 })], 2),
+    "sessions.create": () => ({ key }),
   });
+  const refresh = sessions.refresh({ force: true });
+  expect(sessions.state.loading).toBe(true);
+  const created = sessions.create({ agentId: "main" });
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+  );
+  pending.resolve(sessionsResult([], 1));
+  await expect(created).resolves.toBe(key);
+  await refresh;
+  expect(calls).toBe(2);
+  expect(sessions.state.result?.sessions[0]?.key).toBe(key);
+  sessions.dispose();
+});
 
-  it("advances the canonical list revision only for sessions.list publications", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      return sessionsResult([{ key: "agent:main:listed", kind: "direct", updatedAt: 2 }], 2);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability({
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: "agent:main:main",
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
-
-    expect(sessions.canonicalListRevision).toBe(0);
-    sessions.reconcile(
-      { key: "agent:main:startup", kind: "direct", updatedAt: 1 },
-      { modelProvider: null, model: null, contextTokens: null },
-    );
-    expect(sessions.canonicalListRevision).toBe(0);
-
-    await sessions.refresh({ force: true });
-
-    expect(sessions.canonicalListRevision).toBe(1);
-    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
-    sessions.dispose();
+it("reports a reset as stale when its connection epoch retires", async () => {
+  const pending = createDeferred<unknown>();
+  const { sessions, publish } = sessionHarness({
+    "sessions.reset": () => pending.promise,
+    "sessions.subscribe": subscribed,
+    "sessions.list": emptyList,
   });
+  const reset = sessions.reset(mainKey);
+  publish(false);
+  publish(true);
+  pending.resolve({});
+  await expect(reset).resolves.toBe("uncertain");
+  sessions.dispose();
+});
 
-  it("starts a fresh list epoch when the same client reconnects", async () => {
-    const staleList = createDeferred<SessionsListResult>();
-    const currentList = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        listCalls += 1;
-        return await (listCalls === 1 ? staleList.promise : currentList.promise);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    const staleRefresh = sessions.refresh({ force: true });
-    publish(false);
-    publish(true);
-    await waitForFast(() => expect(listCalls).toBe(2));
-
-    staleList.resolve(sessionsResult([{ key: "stale", kind: "direct", updatedAt: 1 }], 1));
-    await staleRefresh;
-    expect(sessions.state.result).toBeNull();
-
-    currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
-    await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-    sessions.dispose();
+it("reports a same-connection reset rejection as uncertain", async () => {
+  const { sessions } = sessionHarness({
+    "sessions.reset": () => {
+      throw new Error("post-commit lifecycle failed");
+    },
+    "sessions.subscribe": subscribed,
+    "sessions.list": emptyList,
   });
+  await expect(sessions.reset(mainKey)).resolves.toBe("uncertain");
+  expect(sessions.state.error).toContain("post-commit lifecycle failed");
+  sessions.dispose();
+});
 
-  it("creates a session while a list refresh is in flight", async () => {
-    const pendingList = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const key = "agent:main:created";
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        listCalls += 1;
-        return listCalls === 1
-          ? await pendingList.promise
-          : sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 2);
-      }
-      if (method === "sessions.create") {
-        return { key };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
+  const pending = createDeferred<SessionsListResult>();
+  const key = "agent:main:oldest";
+  let calls = 0;
+  const { sessions } = sessionHarness(
+    {
+      "sessions.list": () =>
+        ++calls === 1 ? sessionsResult([row(key, { label: "Oldest" })], 1) : pending.promise,
+    },
+    undefined,
+    key,
+  );
+  await sessions.refresh({ agentId: "main", force: true });
+  const loading: boolean[] = [];
+  const stop = sessions.subscribe((state) => loading.push(state.loading));
+  const hydration = sessions.refresh({ agentId: "main", backgroundHydrate: true, force: true });
+  expect(sessions.state.loading).toBe(false);
+  pending.resolve(emptyList());
+  await hydration;
+  expect(loading).not.toContain(true);
+  expect(sessions.state.result?.sessions).toEqual([
+    expect.objectContaining({ key, label: "Oldest" }),
+  ]);
+  stop();
+  sessions.dispose();
+});
 
-    const refresh = sessions.refresh({ force: true });
-    expect(sessions.state.loading).toBe(true);
-
-    const created = sessions.create({ agentId: "main" });
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
-    );
-
-    pendingList.resolve(sessionsResult([], 1));
-    await expect(created).resolves.toBe(key);
-    await refresh;
-
-    expect(listCalls).toBe(2);
-    expect(sessions.state.result?.sessions[0]?.key).toBe(key);
-    sessions.dispose();
-  });
-
-  it("returns the initial-run rejection without discarding the created session key", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        return {
-          key: "agent:main:rejected",
-          runStarted: false,
-          runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
-        };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability({
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: "agent:main:source",
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
-
-    await expect(sessions.createResult({ agentId: "main", message: "hello" })).resolves.toEqual({
-      key: "agent:main:rejected",
-      initialRun: { status: "rejected", error: "send blocked by session policy" },
-    });
-    sessions.dispose();
-  });
-
-  it("reports a reset as stale when its connection epoch retires", async () => {
-    const staleReset = createDeferred<unknown>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.reset") {
-        return await staleReset.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    const reset = sessions.reset("agent:main:main");
-    publish(false);
-    publish(true);
-    staleReset.resolve({});
-
-    await expect(reset).resolves.toBe("uncertain");
-    sessions.dispose();
-  });
-
-  it("reports a same-connection reset rejection as uncertain", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.reset") {
-        throw new Error("post-commit lifecycle failed");
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.reset("agent:main:main")).resolves.toBe("uncertain");
-    expect(sessions.state.error).toContain("post-commit lifecycle failed");
-    sessions.dispose();
-  });
-
-  it("passes transcript fork parameters to sessions.create", async () => {
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.create") {
-        return { key: "agent:main:forked" };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability({
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: "agent:main:source",
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
-
-    await expect(
-      sessions.create({
-        agentId: "main",
-        parentSessionKey: "agent:main:source",
-        fork: true,
-      }),
-    ).resolves.toBe("agent:main:forked");
-    expect(request).toHaveBeenCalledWith("sessions.create", {
-      agentId: "main",
-      parentSessionKey: "agent:main:source",
-      fork: true,
-    });
-    sessions.dispose();
-  });
-
-  it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
-    const secondList = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCalls += 1;
-      if (listCalls === 1) {
-        return sessionsResult(
-          [
-            {
-              key: "agent:main:oldest",
-              kind: "direct",
-              updatedAt: 1,
-              label: "Oldest",
-            },
-          ],
-          1,
-        );
-      }
-      return await secondList.promise;
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = {
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: "agent:main:oldest",
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    };
-    const sessions = createTestSessionCapability(gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-    const loadingStates: boolean[] = [];
-    const stop = sessions.subscribe((state) => loadingStates.push(state.loading));
-
-    const hydration = sessions.refresh({
-      agentId: "main",
-      backgroundHydrate: true,
-      force: true,
-    });
-    expect(sessions.state.loading).toBe(false);
-    secondList.resolve(sessionsResult([], 2));
-    await hydration;
-
-    expect(loadingStates).not.toContain(true);
-    expect(sessions.state.result?.sessions).toEqual([
-      expect.objectContaining({ key: "agent:main:oldest", label: "Oldest" }),
-    ]);
-    stop();
-    sessions.dispose();
-  });
-
-  it("publishes terminal run state to shared session subscribers", async () => {
-    const key = "agent:main:main";
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            updatedAt: 1,
-            hasActiveRun: true,
-            activeRunIds: ["run-1"],
-            status: "running",
-            startedAt: 100,
-          },
-        ],
-        1,
-      );
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability({
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: key,
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    });
-    await sessions.refresh({ agentId: "main", force: true });
-
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "failed",
-        errorMessage: `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
-        endedAt: 160,
-      }),
-    ).toBe(true);
-    const lastRunError = `Provider failed. password=[redacted] ${"x".repeat(123)}`;
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
-      key,
-      hasActiveRun: false,
-      activeRunIds: [],
-      status: "failed",
-      lastRunError,
-      endedAt: 160,
-      runtimeMs: 60,
-    });
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "failed",
-        endedAt: 160,
-      }),
-    ).toBe(false);
-    expect(sessions.state.result?.sessions[0]?.lastRunError).toBe(lastRunError);
-
-    expect(
-      sessions.reconcile({
-        key,
-        kind: "direct",
-        updatedAt: 2,
-        hasActiveRun: true,
-        activeRunIds: ["run-2"],
-        status: "running",
-        startedAt: 200,
-        lastRunError,
-      }),
-    ).toBe(true);
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "done",
-        endedAt: 260,
-      }),
-    ).toBe(false);
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
+it("publishes terminal run state to shared session subscribers", async () => {
+  const active = (updatedAt: number, activeRunIds?: string[]) =>
+    row(mainKey, {
+      updatedAt,
       hasActiveRun: true,
-      activeRunIds: ["run-2"],
+      ...(activeRunIds ? { activeRunIds } : {}),
       status: "running",
-      lastRunError,
+      startedAt: updatedAt * 100,
     });
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        runId: "run-2",
-        status: "done",
-        endedAt: 260,
-      }),
-    ).toBe(true);
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
-      hasActiveRun: false,
+  const { sessions } = sessionHarness({
+    "sessions.list": () => sessionsResult([active(1, ["run-1"])], 1),
+  });
+  await sessions.refresh({ agentId: "main", force: true });
+  const terminal = (
+    runId: string | undefined,
+    status: SessionRunTerminal["status"],
+    endedAt: number,
+    errorMessage?: string,
+  ) =>
+    sessions.reconcileRunTerminal({ sessionKeys: ["main"], runId, status, endedAt, errorMessage });
+  const current = () => sessions.state.result?.sessions[0];
+  expect(
+    terminal(
+      "run-1",
+      "failed",
+      160,
+      `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
+    ),
+  ).toBe(true);
+  const lastRunError = `Provider failed. password=[redacted] ${"x".repeat(123)}`;
+  expect(current()).toMatchObject({
+    key: mainKey,
+    hasActiveRun: false,
+    activeRunIds: [],
+    status: "failed",
+    lastRunError,
+    endedAt: 160,
+    runtimeMs: 60,
+  });
+  expect(terminal("run-1", "failed", 160)).toBe(false);
+  expect(current()?.lastRunError).toBe(lastRunError);
+  expect(sessions.reconcile({ ...active(2, ["run-2"]), lastRunError })).toBe(true);
+  expect(terminal("run-1", "done", 260)).toBe(false);
+  expect(current()).toMatchObject({
+    hasActiveRun: true,
+    activeRunIds: ["run-2"],
+    status: "running",
+    lastRunError,
+  });
+  expect(terminal("run-2", "done", 260)).toBe(true);
+  expect(current()).toMatchObject({ hasActiveRun: false, status: "done" });
+  expect(current()?.lastRunError).toBeUndefined();
+  expect(sessions.reconcile(active(3))).toBe(true);
+  expect(terminal("run-1", "done", 360)).toBe(false);
+  expect(current()).toMatchObject({ hasActiveRun: true, status: "running" });
+  expect(terminal(undefined, "done", 360)).toBe(false);
+  sessions.dispose();
+});
+
+it("publishes remote deletion before refreshing the canonical list", async () => {
+  vi.useFakeTimers();
+  const pending = createDeferred<SessionsListResult>();
+  let calls = 0;
+  const { sessions, emitEvent, request } = sessionHarness({
+    "sessions.list": () =>
+      ++calls === 1
+        ? sessionsResult([row(mainKey, { sessionId: "deleted-generation" })], 1)
+        : pending.promise,
+  });
+  await sessions.refresh({ force: true });
+  const deleted: string[][] = [];
+  sessions.subscribe((next) => deleted.push(next.deletedSessions.map((target) => target.key)));
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: mainKey, sessionId: "deleted-generation", reason: "delete" },
+  });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(deleted.some((keys) => keys.includes(mainKey))).toBe(true);
+  pending.resolve(emptyList());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sessions.state.loading).toBe(false);
+  sessions.dispose();
+});
+
+it("refreshes broad lists when the client omits the server-side window limit", async () => {
+  vi.useFakeTimers();
+  const hiddenKey = "agent:local:hidden";
+  const { sessions, emitEvent, request } = sessionHarness({
+    "sessions.list": () => sessionsResult([row()], 1),
+  });
+  await sessions.refresh({ configuredAgentsOnly: false, force: true, limit: 0 });
+  const params = request.mock.calls[0]?.[1];
+  expect(params).toEqual(
+    expect.objectContaining({
+      configuredAgentsOnly: false,
+      includeGlobal: true,
+      includeUnknown: true,
+    }),
+  );
+  expect(params).not.toHaveProperty("limit");
+  emitEvent(changed(hiddenKey));
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(sessions.state.result?.sessions.map((entry) => entry.key)).not.toContain(hiddenKey);
+  sessions.dispose();
+});
+
+it("ignores stale archive state after a newer unarchive via Gateway events", async () => {
+  const held = row(mainKey, { sessionId: "main-session", updatedAt: 30, archived: false });
+  const { sessions, emitEvent } = sessionHarness({
+    "sessions.list": () => sessionsResult([held], 30),
+  });
+  await sessions.refresh({ agentId: "main", force: true });
+  emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      ...held,
+      sessionKey: mainKey,
+      updatedAt: 20,
+      archived: true,
+      archivedAt: 20,
+      reason: "update",
+    },
+  });
+  expect(sessions.state.result?.sessions.find((entry) => entry.key === mainKey)).toMatchObject({
+    archived: false,
+    updatedAt: 30,
+  });
+  sessions.dispose();
+});
+
+it("advances the canonical list revision only for sessions.list publications", async () => {
+  const { sessions } = sessionHarness({
+    "sessions.list": () => sessionsResult([row("agent:main:listed", { updatedAt: 2 })], 2),
+  });
+  expect(sessions.canonicalListRevision).toBe(0);
+  sessions.reconcile(row("agent:main:startup"), {
+    modelProvider: null,
+    model: null,
+    contextTokens: null,
+  });
+  expect(sessions.canonicalListRevision).toBe(0);
+  await sessions.refresh({ force: true });
+  expect(sessions.canonicalListRevision).toBe(1);
+  expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
+  sessions.dispose();
+});
+
+it("starts a fresh list epoch when the same client reconnects", async () => {
+  const stale = createDeferred<SessionsListResult>();
+  const current = createDeferred<SessionsListResult>();
+  let calls = 0;
+  const { sessions, publish } = sessionHarness({
+    "sessions.subscribe": subscribed,
+    "sessions.list": () => (++calls === 1 ? stale.promise : current.promise),
+  });
+  const staleRefresh = sessions.refresh({ force: true });
+  publish(false);
+  publish(true);
+  await waitForFast(() => expect(calls).toBe(2));
+  stale.resolve(sessionsResult([row("stale")], 1));
+  await staleRefresh;
+  expect(sessions.state.result).toBeNull();
+  current.resolve(sessionsResult([row("current", { updatedAt: 2 })], 2));
+  await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
+  sessions.dispose();
+});
+
+it("does not probe for a group catalog when the method is explicitly absent", async () => {
+  const { sessions, request } = sessionHarness({}, []);
+  await sessions.groupsLoad();
+  await sessions.groupsLoad();
+  expect(request).not.toHaveBeenCalled();
+  expect(sessions.state.groups).toEqual([]);
+  sessions.dispose();
+});
+
+it("preserves registry-active terminal rows without matching run identity", () => {
+  const result = sessionsResult([row(mainKey, { hasActiveRun: true, status: "done" })], 1);
+  expect(
+    reconcileSessionRunTerminal(result, {
+      sessionKeys: ["main"],
+      runId: "run-1",
       status: "done",
-    });
-    expect(sessions.state.result?.sessions[0]?.lastRunError).toBeUndefined();
+      endedAt: 160,
+    }),
+  ).toBe(result);
+});
 
-    expect(
-      sessions.reconcile({
-        key,
-        kind: "direct",
-        updatedAt: 3,
-        hasActiveRun: true,
-        status: "running",
-        startedAt: 300,
-      }),
-    ).toBe(true);
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "done",
-        endedAt: 360,
-      }),
-    ).toBe(false);
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
-      hasActiveRun: true,
-      status: "running",
-    });
-    expect(
-      sessions.reconcileRunTerminal({
-        sessionKeys: ["main"],
-        status: "done",
-        endedAt: 360,
-      }),
-    ).toBe(false);
-    sessions.dispose();
-  });
-
-  it("preserves registry-active terminal rows without matching run identity", () => {
-    const result = sessionsResult(
-      [
-        {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
-          hasActiveRun: true,
-          status: "done",
-        },
-      ],
-      1,
+it("refreshes stale active rows after a terminal session message", async () => {
+  vi.useFakeTimers();
+  const list = vi
+    .fn()
+    .mockResolvedValueOnce(
+      sessionsResult([row(mainKey, { hasActiveRun: true, status: "running" })], 1),
+    )
+    .mockResolvedValueOnce(
+      sessionsResult([row(mainKey, { updatedAt: 2, hasActiveRun: false, status: "done" })], 2),
     );
-
-    expect(
-      reconcileSessionRunTerminal(result, {
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "done",
-        endedAt: 160,
-      }),
-    ).toBe(result);
+  const { sessions, emitEvent, request } = sessionHarness({ "sessions.list": list });
+  await sessions.refresh({ agentId: "main", force: true });
+  emitEvent({
+    type: "event",
+    event: "session.message",
+    payload: {
+      sessionKey: mainKey,
+      updatedAt: 1,
+      status: "done",
+    },
   });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    key: mainKey,
+    hasActiveRun: false,
+    status: "done",
+  });
+  expect(request).toHaveBeenCalledTimes(2);
+  sessions.dispose();
+});
 
-  it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
-    const visibleKey = "agent:main:main";
-    const hiddenKey = "agent:local:hidden";
-    const refreshed = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
+describe("session capability dashboard default acknowledgements", () => {
+  const key = "agent:main:dashboard";
+  const sessionId = "dashboard-incarnation";
+  const patchOptions = { agentId: "main", expectedSessionId: sessionId, deferListRefresh: true };
+  const initial: GatewaySessionRow = {
+    key,
+    agentId: "main",
+    sessionId,
+    kind: "direct",
+    updatedAt: 10,
+    boardFace: "dashboard",
+    boardPresentation: "split",
+    pinned: true,
+    pinnedAt: 5,
+    unread: true,
+    lastReadAt: 1,
+    lastActivityAt: 10,
+  };
+
+  function acknowledgement(
+    presentation: GatewaySessionRow["boardPresentation"],
+  ): SessionsPatchResult {
+    return {
+      ok: true,
+      key,
+      path: "(multiple)",
+      entry: {
+        sessionId,
+        updatedAt: 20,
+        boardFace: "dashboard",
+        ...(presentation ? { boardPresentation: presentation } : {}),
+      },
+    };
+  }
+
+  async function createPresentationHarness(initialRow = initial) {
+    let current = initialRow;
+    let listFailure = false;
+    const patchReply = createDeferred<SessionsPatchResult>();
+    const request = createGatewayRequestMock(async (method) => {
+      if (method === "sessions.list") {
+        if (listFailure) {
+          throw new Error("Roster refresh unavailable");
+        }
+        return sessionsResult([current], current.updatedAt ?? 0);
       }
-      listCalls += 1;
-      const result = sessionsResult(
-        [
-          {
-            key: visibleKey,
-            kind: "direct",
-            updatedAt: 1,
-            sessionId: "visible-session",
-          },
-        ],
-        1,
-      );
-      return listCalls === 1 ? result : await refreshed.promise;
+      if (method === "sessions.patch") {
+        return patchReply.promise;
+      }
+      if (method === "sessions.describe") {
+        return { session: current };
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+    const client = createTestGatewayClient(request);
+    const gateway = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway.gateway);
+    onTestFinished(() => {
+      sessions.dispose();
+      patchReply.resolve(acknowledgement("expanded"));
+    });
+    await sessions.refresh({ agentId: "main", force: true });
+    return {
+      ...gateway,
+      sessions,
+      client,
+      request,
+      patchReply,
+      setCurrent: (next: GatewaySessionRow) => {
+        current = next;
+      },
+      failList: () => {
+        listFailure = true;
+      },
+    };
+  }
 
-    await sessions.refresh({ force: true });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ configuredAgentsOnly: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+  it("clears the optional default on a null patch instead of retaining an expanded cache value", async () => {
+    const h = await createPresentationHarness({
+      ...initial,
+      boardFace: "chat",
+      boardPresentation: "expanded",
+    });
+    const query = { agentId: "main", hasBoard: true, archivedFilter: "all" as const };
+    await h.sessions.refreshList({ ...query, force: true });
+    const operation = h.sessions.patch(
+      key,
+      { boardFace: "dashboard", boardPresentation: null },
+      patchOptions,
     );
-    const publishedKeys: string[][] = [];
-    sessions.subscribe((next) => {
-      publishedKeys.push(next.result?.sessions.map((row) => row.key) ?? []);
-    });
-
-    emitEvent(sessionChangedEvent(hiddenKey));
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
-    expect(publishedKeys.some((keys) => keys.includes(hiddenKey))).toBe(false);
-    refreshed.resolve(sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
-    sessions.dispose();
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
+      expect(result?.sessions[0]?.boardPresentation).toBe("expanded");
+    }
+    h.patchReply.resolve(acknowledgement(undefined));
+    await operation;
+    for (const result of [h.sessions.state.result, h.sessions.listSnapshot(query).result]) {
+      expect(result?.sessions[0]).not.toHaveProperty("boardPresentation");
+      expect(result?.sessions[0]).toMatchObject({
+        sessionId,
+        boardFace: "dashboard",
+        pinned: true,
+        pinnedAt: 5,
+        unread: true,
+        lastReadAt: 1,
+      });
+    }
   });
 
-  it("publishes remote deletion before refreshing the canonical list", async () => {
-    const visibleKey = "agent:main:main";
-    const refreshed = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCalls += 1;
-      const result = sessionsResult(
-        [{ key: visibleKey, sessionId: "deleted-generation", kind: "direct", updatedAt: 1 }],
-        1,
-      );
-      return listCalls === 1 ? result : await refreshed.promise;
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+  it("retains the acknowledged default when the follow-up list fails and an older read arrives", async () => {
+    const h = await createPresentationHarness();
+    const reconcileEarlierRead = h.sessions.captureReconcile();
+    const operation = h.sessions.patch(
+      key,
+      { boardPresentation: "split" },
+      {
+        agentId: "main",
+        expectedSessionId: sessionId,
+      },
+    );
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    h.failList();
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await expect(operation).resolves.toBeTruthy();
+    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
+    reconcileEarlierRead({ ...initial });
+    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
+  });
 
-    await sessions.refresh({ force: true });
-    const deletedSnapshots: string[][] = [];
-    sessions.subscribe((next) => {
-      deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
+  it("keeps a newer external default ahead of an older successful patch acknowledgement", async () => {
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    h.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        ...initial,
+        sessionKey: key,
+        reason: "patch",
+        updatedAt: 30,
+        boardPresentation: "split",
+      },
     });
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId,
+      updatedAt: 30,
+      boardPresentation: "split",
+    });
+  });
+
+  it("does not attach an old incarnation's acknowledgement to a replacement row", async () => {
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    const replacement = { ...initial, sessionId: "replacement-session", updatedAt: 30 };
+    h.setCurrent(replacement);
+    await h.sessions.refresh({ agentId: "main", force: true });
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: replacement.sessionId,
+      boardPresentation: "split",
+    });
+  });
+
+  it("does not project a successful acknowledgement into a replacement Gateway", async () => {
+    const h = await createPresentationHarness();
+    const operation = h.sessions.patch(key, { boardPresentation: "expanded" }, patchOptions);
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
+    const replacement = { ...initial, sessionId: "other-gateway-session", updatedAt: 40 };
+    const replacementClient = createTestGatewayClient((method) => {
+      if (method === "sessions.list") {
+        return sessionsResult([replacement], 40);
+      }
+      throw new Error(`Unexpected replacement Gateway request: ${method}`);
+    });
+    h.publish(false);
+    h.publish(true, replacementClient);
+    await h.sessions.refresh({ agentId: "main", force: true });
+    h.patchReply.resolve(acknowledgement("expanded"));
+    await operation;
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: "other-gateway-session",
+      boardPresentation: "split",
+    });
+  });
+});
+
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
+
+it("ignores recap-only changes for canonical, filtered, and child rosters", async () => {
+  vi.useFakeTimers();
+  const key = "agent:main:parent";
+  const recapRow = { key, kind: "direct" as const, updatedAt: 1 };
+  const child = { ...recapRow, key: "agent:main:child", spawnedBy: key };
+  const request = vi.fn(async (method: string, params?: { spawnedBy?: string }) => {
+    if (method !== "sessions.list") {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return sessionsResult(params?.spawnedBy ? [child] : [recapRow], 1);
+  });
+  const { sessions, emitEvent } = createSessionCapabilityHarness(
+    request as unknown as GatewayBrowserClient["request"],
+    { ownerId: "viewer" },
+  );
+  const scopes = [
+    { agentId: "main", involvingMe: true },
+    { agentId: "main", spawnedBy: key, limit: 100, includeGlobal: false, includeUnknown: false },
+    {
+      agentId: "main",
+      spawnedBy: key,
+      limit: 10_000,
+      includeGlobal: false,
+      includeUnknown: false,
+    },
+  ];
+  const stops = scopes.map((scope) => sessions.subscribeList(scope, vi.fn()));
+
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    await Promise.all(scopes.map((scope) => sessions.refreshList({ ...scope, force: true })));
+    expect(request).toHaveBeenCalledTimes(4);
+    request.mockClear();
+
+    for (let index = 0; index < 4; index += 1) {
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { agentId: "main", sessionKey: key, reason: "activity-summary" },
+      });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+    }
+    expect(request).not.toHaveBeenCalled();
 
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
+      payload: { agentId: "main", sessionKey: key, reason: "patch" },
     });
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(deletedSnapshots.some((keys) => keys.includes(visibleKey))).toBe(true);
-    refreshed.resolve(sessionsResult([], 2));
-    await waitForFast(() => expect(sessions.state.loading).toBe(false));
-    sessions.dispose();
-  });
-
-  it("refreshes broad lists when the client omits the server-side window limit", async () => {
-    const visibleKey = "agent:main:main";
-    const hiddenKey = "agent:local:hidden";
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      return sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await sessions.refresh({ configuredAgentsOnly: false, force: true, limit: 0 });
-    const requestParams = request.mock.calls[0]?.[1];
-    expect(requestParams).toEqual(
-      expect.objectContaining({
-        configuredAgentsOnly: false,
-        includeGlobal: true,
-        includeUnknown: true,
-      }),
+    await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ ownerFirst: true }),
     );
-    expect(requestParams).not.toHaveProperty("limit");
-
-    emitEvent(sessionChangedEvent(hiddenKey));
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(sessions.state.result?.sessions.map((row) => row.key)).not.toContain(hiddenKey);
+    expect(sessions.state.result?.sessions).toEqual([recapRow]);
+  } finally {
+    stops.forEach((stop) => stop());
     sessions.dispose();
-  });
-
-  it("refreshes stale active rows after a terminal session message", async () => {
-    const key = "agent:main:main";
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(
-        sessionsResult(
-          [{ key, kind: "direct", updatedAt: 1, hasActiveRun: true, status: "running" }],
-          1,
-        ),
-      )
-      .mockResolvedValueOnce(
-        sessionsResult(
-          [{ key, kind: "direct", updatedAt: 2, hasActiveRun: false, status: "done" }],
-          2,
-        ),
-      );
-    let eventListener: ((event: GatewayEventFrame) => void) | undefined;
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = {
-      snapshot: {
-        client,
-        phase: "connected" as const,
-        sessionKey: key,
-        assistantAgentId: "main",
-        hello: null,
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: (listener: (event: GatewayEventFrame) => void) => {
-        eventListener = listener;
-        return () => undefined;
-      },
-    };
-    const sessions = createTestSessionCapability(gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-
-    eventListener?.({
-      type: "event",
-      event: "session.message",
-      payload: { sessionKey: key, updatedAt: 1, status: "done" },
-    });
-
-    await waitForFast(() =>
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: false,
-        status: "done",
-      }),
-    );
-    expect(request).toHaveBeenCalledTimes(2);
-    sessions.dispose();
-  });
+    vi.useRealTimers();
+  }
 });

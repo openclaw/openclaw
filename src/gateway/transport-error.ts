@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
+import { projectGatewayUrlForDiagnostics } from "./connection-details.js";
 import type { GatewayConnectionDetails } from "./connection-details.js";
 
 export type GatewayTransportErrorKind = "closed" | "timeout";
@@ -9,6 +11,7 @@ export class GatewayTransportError extends Error {
   readonly code?: number;
   readonly reason?: string;
   readonly timeoutMs?: number;
+  readonly requestDispatched?: boolean;
 
   constructor(params: {
     kind: GatewayTransportErrorKind;
@@ -17,6 +20,7 @@ export class GatewayTransportError extends Error {
     code?: number;
     reason?: string;
     timeoutMs?: number;
+    requestDispatched?: boolean;
   }) {
     super(params.message);
     this.name = "GatewayTransportError";
@@ -30,6 +34,9 @@ export class GatewayTransportError extends Error {
     }
     if (params.timeoutMs !== undefined) {
       this.timeoutMs = params.timeoutMs;
+    }
+    if (params.requestDispatched !== undefined) {
+      this.requestDispatched = params.requestDispatched;
     }
   }
 }
@@ -85,6 +92,7 @@ export function createGatewayCloseTransportError(params: {
     code,
     reason,
     connectionDetails,
+    requestDispatched,
     message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
   });
 }
@@ -100,6 +108,7 @@ export function createGatewayTimeoutTransportError(params: {
     kind: "timeout",
     timeoutMs,
     connectionDetails,
+    requestDispatched,
     message: requestDispatched ? `${message}\n\n${DISPATCHED_REQUEST_OUTCOME_GUIDANCE}` : message,
   });
 }
@@ -116,4 +125,43 @@ export function isGatewayRpcUnavailableError(error: unknown): boolean {
     (/^gateway closed \((?:1006|1012)\): [^\r\n]*$/u.test(error.message) ||
       /^gateway timeout after \d+ms(?:\n[\s\S]*)?$/u.test(error.message))
   );
+}
+
+export function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+// Connection-establishment failures where "start the gateway" is the actionable
+// next step; protocol/auth failures keep their own richer messages.
+const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
+  "ECONNREFUSED",
+  // RST during connect/handshake: the port is not serving a working gateway.
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+export function isGatewayUnreachableSocketError(error: Error): boolean {
+  const code = extractErrorCodeOrErrno(error);
+  return code !== undefined && GATEWAY_UNREACHABLE_SOCKET_CODES.has(code);
+}
+
+/** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
+export function createGatewayUnreachableTransportError(params: {
+  cause: Error;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  const code = extractErrorCodeOrErrno(params.cause);
+  return new GatewayTransportError({
+    kind: "closed",
+    reason: firstGatewayErrorLine(params.cause.message),
+    connectionDetails: params.connectionDetails,
+    message: [
+      `Gateway not reachable at ${projectGatewayUrlForDiagnostics(params.connectionDetails.url)}${code ? ` (${code})` : ""}.`,
+      "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      params.connectionDetails.message,
+    ].join("\n"),
+  });
 }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -9,6 +10,7 @@ import {
 import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
+  type NativeDeviceSettingsSnapshot,
 } from "./native-device-settings.ts";
 
 let capability: NativeDeviceSettingsCapability | null;
@@ -30,36 +32,102 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
-  it.each([
-    ["chromeExtensionStatus", "chrome-extension-status"],
-    ["installChromeExtension", "install-chrome-extension"],
-  ] as const)("validates %s results and forwards its exact native action", async (method, type) => {
-    const post = installBridge();
-    const result = {
-      nativeHostRegistered: true,
-      installRequested: true,
-      installedProfiles: 1,
-      discoveredProfiles: 0,
-    };
-    post.mockResolvedValueOnce(result);
-    await expect(capability![method]()).resolves.toEqual(result);
-    expect(post).toHaveBeenLastCalledWith({ type });
-    post.mockResolvedValueOnce({ ...result, installedProfiles: -1 });
-    await expect(capability![method]()).rejects.toThrow("invalid result");
-    post.mockRejectedValueOnce(new Error("CLI unavailable"));
-    await expect(capability![method]()).rejects.toThrow("CLI unavailable");
-    const shippedReply = {
-      nativeHostRegistered: true,
-      installRequested: false,
-      discoveredProfiles: 1,
-    };
-    post.mockResolvedValueOnce(shippedReply);
-    if (method === "installChromeExtension") {
-      await expect(capability![method]()).resolves.toEqual(shippedReply);
-    } else {
-      await expect(capability![method]()).rejects.toThrow("invalid result");
+  it("uses the shipped installation projection on an older native host without offering new actions", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    delete snapshot.browser.chromeSetupActions;
+    const post = installBridge(snapshot);
+    const legacy = { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 };
+    post.mockResolvedValueOnce({ ...legacy, privatePath: "not forwarded" });
+    await expect(capability!.installChromeExtension!()).resolves.toEqual(legacy);
+    expect(post).toHaveBeenLastCalledWith({ type: "install-chrome-extension" });
+    post.mockClear();
+    for (const action of ["inspect", "install", "verify"] as const) {
+      await expect(capability!.setupChromeExtension(action)).rejects.toThrow("does not advertise");
     }
+    expect(post).not.toHaveBeenCalled();
+    const status = { ...legacy, installedProfiles: 1 };
+    post.mockResolvedValueOnce(status);
+    await expect(capability!.chromeExtensionStatus!()).resolves.toEqual(status);
+    expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-status" });
+    post.mockResolvedValueOnce(legacy);
+    await expect(capability!.chromeExtensionStatus!()).rejects.toThrow("invalid result");
   });
+  it.each(["installChromeExtension", "chromeExtensionStatus", "setupChromeExtension"] as const)(
+    "rejects %s completion after document retirement",
+    async (operation) => {
+      const post = installBridge();
+      const pending = createDeferred<unknown>();
+      post.mockReturnValueOnce(pending.promise);
+      const response =
+        operation === "setupChromeExtension"
+          ? capability!.setupChromeExtension("verify")
+          : capability![operation]!();
+      const rejected = expect(response).rejects.toThrow("invalid result");
+      capability!.dispose();
+      pending.resolve(
+        operation === "setupChromeExtension"
+          ? createChromeExtensionSetupResult({ action: "verify" })
+          : {
+              nativeHostRegistered: true,
+              installRequested: true,
+              installedProfiles: 0,
+              discoveredProfiles: 0,
+            },
+      );
+      await rejected;
+    },
+  );
+
+  it.each([
+    ["macos", "inspect"],
+    ["macos", "install"],
+    ["macos", "verify"],
+    ["linux", "inspect"],
+    ["windows", "inspect"],
+  ] as const)(
+    "forwards %s %s setup without publishing a settings snapshot",
+    async (platform, action) => {
+      const snapshot =
+        platform === "macos"
+          ? createNativeDeviceSettingsSnapshot()
+          : createTauriDeviceSettingsSnapshot(platform);
+      const post = installBridge(snapshot);
+      const listener = vi.fn();
+      capability!.subscribe(listener);
+      const result = createChromeExtensionSetupResult({
+        action,
+        target: {
+          kind: "local-host",
+          platform: ({ macos: "darwin", linux: "linux", windows: "win32" } as const)[platform],
+          hostname: "Example desktop",
+          profile: "chrome",
+          relayPort: 18792,
+        },
+      });
+      post.mockResolvedValueOnce({ ...result, privatePath: "not forwarded" });
+      await expect(capability!.setupChromeExtension(action)).resolves.toEqual(result);
+      expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-setup", action });
+      expect(capability!.snapshot).toEqual(snapshot);
+      expect(listener).not.toHaveBeenCalled();
+      if (platform === "macos") {
+        for (const invalid of [
+          { ...result, action: "other" },
+          { ...result, target: { ...result.target, kind: "remote-host" } },
+          { ...result, target: { ...result.target, platform: "linux" } },
+          { ...result, target: { ...result.target, relayPort: 0 } },
+          { ...result, installation: { ...result.installation, installedProfiles: -1 } },
+          { ...result, installation: { ...result.installation, discoveredProfiles: -1 } },
+          { ...result, reason: "raw failure with private details" },
+        ]) {
+          post.mockResolvedValueOnce(invalid);
+          await expect(capability!.setupChromeExtension(action)).rejects.toThrow("invalid result");
+        }
+        post.mockRejectedValueOnce(new Error("CLI unavailable"));
+        await expect(capability!.setupChromeExtension(action)).rejects.toThrow("CLI unavailable");
+      }
+    },
+  );
+
   it("exists only with the native message handler and reads the document-start snapshot", () => {
     vi.stubGlobal("webkit", undefined);
     expect(createNativeDeviceSettingsCapability()).toBeNull();
@@ -68,18 +136,36 @@ describe("native device settings wire contract", () => {
     expect(post.mock.calls).toEqual([[{ type: "status" }]]);
   });
 
-  it("accepts hosts that do not advertise Dock icon selection", () => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    delete snapshot.app.iconStyle;
-    installBridge(snapshot);
-    expect(capability?.snapshot).toEqual(snapshot);
-  });
-
-  it("accepts the iOS snapshot with only its published fields", () => {
-    const snapshot = createIosNativeDeviceSettingsSnapshot();
-    installBridge(snapshot);
-    expect(capability?.snapshot).toEqual(snapshot);
-  });
+  it.each([
+    [
+      "without Dock icon selection",
+      () => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        delete snapshot.app.iconStyle;
+        return snapshot;
+      },
+    ],
+    ["iOS", createIosNativeDeviceSettingsSnapshot],
+    [
+      "without optional families",
+      () => {
+        const { device, permissions } = createNativeDeviceSettingsSnapshot();
+        return {
+          contract: 1,
+          device,
+          permissions,
+          voice: { supported: false, wakeEnabled: false },
+        };
+      },
+    ],
+  ] satisfies [string, () => NativeDeviceSettingsSnapshot][])(
+    "accepts %s snapshots",
+    (_name, create) => {
+      const snapshot = create();
+      installBridge(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+    },
+  );
 
   it.each(["linux", "windows", "macos"] as const)(
     "accepts the %s companion's desktop setting without location access",
@@ -138,68 +224,6 @@ describe("native device settings wire contract", () => {
     expect(capability!.snapshot).toEqual(stopped);
   });
 
-  it("accepts absent optional families and voice fields", () => {
-    const { device, permissions } = createNativeDeviceSettingsSnapshot();
-    const snapshot = {
-      contract: 1,
-      device,
-      permissions,
-      voice: { supported: false, wakeEnabled: false },
-    };
-    installBridge(snapshot);
-    expect(capability?.snapshot).toEqual(snapshot);
-  });
-
-  it.each([
-    { state: "locked", enabled: true },
-    { state: "unlocked", enabled: false },
-    { state: "unknown", enabled: true },
-    { state: undefined, enabled: undefined },
-  ] as const)(
-    "preserves published desktop state $state and hosting $enabled",
-    ({ state, enabled }) => {
-      installBridge();
-      const listener = vi.fn();
-      capability?.subscribe(listener);
-      const snapshot = createNativeDeviceSettingsSnapshot();
-      if (state === undefined) {
-        delete snapshot.desktopAvailability;
-        delete snapshot.capabilities.unattendedDesktopEnabled;
-      } else {
-        snapshot.desktopAvailability = { state };
-        snapshot.capabilities.unattendedDesktopEnabled = enabled;
-      }
-      publish(snapshot);
-      expect(capability?.snapshot).toEqual(snapshot);
-      expect(listener).toHaveBeenCalledWith(snapshot);
-    },
-  );
-
-  it.each([
-    { name: "empty", entries: [] },
-    { name: "single", entries: [{ id: "camera", status: "granted" }] },
-    {
-      name: "requestable macOS",
-      entries: [
-        { id: "screenRecording", status: "notDetermined" },
-        { id: "accessibility", status: "notDetermined" },
-      ],
-    },
-    {
-      name: "reordered",
-      entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
-    },
-  ])("accepts $name permission subsets in host-published order", ({ entries }) => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    const next = { ...snapshot, permissions: { ...snapshot.permissions, entries } };
-    installBridge();
-    const listener = vi.fn();
-    capability?.subscribe(listener);
-    publish(next);
-    expect(capability?.snapshot).toEqual(next);
-    expect(listener).toHaveBeenCalledWith(next);
-  });
-
   it("accepts shipped Mac snapshots without exposing their retired Terminal permission", () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.device.appVersion = "2026.9.5";
@@ -229,111 +253,165 @@ describe("native device settings wire contract", () => {
   });
 
   it.each([
-    ["contract", { contract: 2 }],
-    ["negative revision", { revision: -1 }],
-    ["fractional revision", { revision: 1.5 }],
-    ["non-numeric revision", { revision: "2" }],
-    ["device", { device: { platform: "macos" } }],
-    ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
-    ["absent family encoded as null", { app: null }],
-    ["appearance", { app: { appearance: "sepia" } }],
-    ["notifications", { app: { notificationsEnabled: "true" } }],
-    ["native experience", { app: { nativeExperienceEnabled: "true" } }],
-    ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
-    ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
-    ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
-    ...[null, {}, { state: "available" }, { state: true }].map(
-      (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
-    ),
     ...[
-      null,
-      { selectedId: 1, available: [] },
-      { selectedId: "paper", available: [{ id: "paper" }] },
-    ].map(
-      (iconStyle) =>
-        ["Dock icon", { app: { ...createNativeDeviceSettingsSnapshot().app, iconStyle } }] as const,
-    ),
-    [
-      "capabilities",
-      {
+      { state: "locked", enabled: true },
+      { state: "unlocked", enabled: false },
+      { state: "unknown", enabled: true },
+      { state: undefined, enabled: undefined },
+    ].map(({ state, enabled }) => ({
+      name: `desktop ${state}`,
+      change: {
+        desktopAvailability: state === undefined ? undefined : { state },
         capabilities: {
           ...createNativeDeviceSettingsSnapshot().capabilities,
-          computerControlProvider: "other",
+          unattendedDesktopEnabled: enabled,
         },
       },
-    ],
-    [
-      "browser",
+      accepted: true,
+    })),
+    ...[
+      { name: "empty", entries: [] },
+      { name: "single", entries: [{ id: "camera", status: "granted" }] },
       {
-        browser: {
-          importAvailable: true,
-          cookieSync: { ...createNativeDeviceSettingsSnapshot().browser.cookieSync, domains: [42] },
-        },
+        name: "requestable macOS",
+        entries: [
+          { id: "screenRecording", status: "notDetermined" },
+          { id: "accessibility", status: "notDetermined" },
+        ],
       },
-    ],
-    [
-      "permissions",
-      { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
-    ],
-    [
-      "unknown permission id",
       {
-        permissions: {
-          ...createNativeDeviceSettingsSnapshot().permissions,
-          entries: [{ id: "unknown", status: "granted" }],
-        },
+        name: "reordered",
+        entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
       },
-    ],
-    [
-      "duplicate permission id",
-      {
-        permissions: {
-          ...createNativeDeviceSettingsSnapshot().permissions,
-          entries: [
-            { id: "camera", status: "granted" },
-            { id: "camera", status: "denied" },
-          ],
-        },
-      },
-    ],
-    [
-      "precise editability",
-      {
-        permissions: {
-          ...createIosNativeDeviceSettingsSnapshot().permissions,
-          location: { mode: "whileUsing", precise: true, preciseEditable: "false" },
-        },
-      },
-    ],
-    ["missing voice wakeEnabled", { voice: { supported: true } }],
-    ["missing voice supported", { voice: { wakeEnabled: false } }],
-    ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
-    [
-      "location",
-      {
-        permissions: {
-          ...createNativeDeviceSettingsSnapshot().permissions,
-          location: { mode: ["off"], precise: false },
-        },
-      },
-    ],
-    [
-      "voice",
-      {
-        voice: {
-          ...createNativeDeviceSettingsSnapshot().voice,
-          microphone: { selectedId: null, devices: [{ id: "mic" }] },
-        },
-      },
-    ],
-    ["updates", { updates: { available: true, automatic: true } }],
-  ] as const)("ignores malformed %s snapshots without notifying subscribers", (_name, change) => {
-    installBridge();
+    ].map(({ name, entries }) => ({
+      name: `${name} permissions`,
+      change: { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries } },
+      accepted: true,
+    })),
+    ...(
+      [
+        ["contract", { contract: 2 }],
+        ["negative revision", { revision: -1 }],
+        ["fractional revision", { revision: 1.5 }],
+        ["non-numeric revision", { revision: "2" }],
+        ["device", { device: { platform: "macos" } }],
+        ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
+        ["absent family encoded as null", { app: null }],
+        ["appearance", { app: { appearance: "sepia" } }],
+        ["notifications", { app: { notificationsEnabled: "true" } }],
+        ["native experience", { app: { nativeExperienceEnabled: "true" } }],
+        ["Gateway hosting", { app: { keepGatewayRunning: "true" } }],
+        ["Gateway hosting availability", { app: { keepGatewayRunningAvailable: "true" } }],
+        ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
+        ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
+        ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
+        ...[null, {}, { state: "available" }, { state: true }].map(
+          (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
+        ),
+        ...[
+          null,
+          { selectedId: 1, available: [] },
+          { selectedId: "paper", available: [{ id: "paper" }] },
+        ].map(
+          (iconStyle) =>
+            [
+              "Dock icon",
+              { app: { ...createNativeDeviceSettingsSnapshot().app, iconStyle } },
+            ] as const,
+        ),
+        [
+          "capabilities",
+          {
+            capabilities: {
+              ...createNativeDeviceSettingsSnapshot().capabilities,
+              computerControlProvider: "other",
+            },
+          },
+        ],
+        [
+          "browser",
+          {
+            browser: {
+              importAvailable: true,
+              cookieSync: {
+                ...createNativeDeviceSettingsSnapshot().browser.cookieSync,
+                domains: [42],
+              },
+            },
+          },
+        ],
+        [
+          "permissions",
+          { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
+        ],
+        [
+          "unknown permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              entries: [{ id: "unknown", status: "granted" }],
+            },
+          },
+        ],
+        [
+          "duplicate permission id",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              entries: [
+                { id: "camera", status: "granted" },
+                { id: "camera", status: "denied" },
+              ],
+            },
+          },
+        ],
+        [
+          "precise editability",
+          {
+            permissions: {
+              ...createIosNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: "whileUsing", precise: true, preciseEditable: "false" },
+            },
+          },
+        ],
+        ["missing voice wakeEnabled", { voice: { supported: true } }],
+        ["missing voice supported", { voice: { wakeEnabled: false } }],
+        ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
+        [
+          "location",
+          {
+            permissions: {
+              ...createNativeDeviceSettingsSnapshot().permissions,
+              location: { mode: ["off"], precise: false },
+            },
+          },
+        ],
+        [
+          "voice",
+          {
+            voice: {
+              ...createNativeDeviceSettingsSnapshot().voice,
+              microphone: { selectedId: null, devices: [{ id: "mic" }] },
+            },
+          },
+        ],
+        ["updates", { updates: { available: true, automatic: true } }],
+      ] as const
+    ).map(([name, change]) => ({ name: `malformed ${name}`, change, accepted: false })),
+  ])("admits $name snapshots only when valid", ({ change, accepted }) => {
+    const initial = createNativeDeviceSettingsSnapshot();
+    installBridge(initial);
     const listener = vi.fn();
     capability?.subscribe(listener);
-    publish({ ...createNativeDeviceSettingsSnapshot(), ...change });
-    expect(capability?.snapshot).toEqual(createNativeDeviceSettingsSnapshot());
-    expect(listener).not.toHaveBeenCalled();
+    const next = { ...initial, ...change };
+    publish(next);
+    if (accepted) {
+      expect(capability?.snapshot).toEqual(next);
+      expect(listener).toHaveBeenCalledWith(next);
+    } else {
+      expect(capability?.snapshot).toEqual(initial);
+      expect(listener).not.toHaveBeenCalled();
+    }
   });
 
   it("waits for a valid snapshot and stops notifications after unsubscribe/dispose", () => {
@@ -372,7 +450,7 @@ describe("native device settings wire contract", () => {
     capability!.set("browser.cookieSync.targetProfile", pending, settled);
     const observed: string[] = [];
     capability!.subscribe(() =>
-      observed.push(pending || capability!.snapshot!.browser!.cookieSync.targetProfile),
+      observed.push(pending || capability!.snapshot!.browser!.cookieSync!.targetProfile),
     );
     reply.resolve(createNativeDeviceSettingsSnapshot());
     await vi.waitFor(() => expect(observed).toEqual(["default"]));
@@ -388,10 +466,12 @@ describe("native device settings wire contract", () => {
     const listener = vi.fn();
     capability!.subscribe(listener);
     capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
-    rejected.reject(new Error("Document retired"));
+    const failure = new Error("Document retired");
+    rejected.reject(failure);
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
     expect(listener).toHaveBeenCalledWith(createNativeDeviceSettingsSnapshot());
     expect(warning).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledWith(failure);
     const delayed = createDeferred<unknown>();
     post.mockReturnValueOnce(delayed.promise);
     capability!.set("app.showDockIcon", false, settled);
@@ -412,6 +492,7 @@ describe("native device settings wire contract", () => {
     capability?.set("app.showDockIcon", false);
     capability?.set("app.nativeExperienceEnabled", true);
     capability?.set("app.iconStyle", "origami");
+    capability?.set("app.keepGatewayRunning", true);
     capability?.set("voice.microphone", null);
     capability?.set("browser.cookieSync.domains", ["example.com"]);
     capability?.set("voice.locale.primary", "de-DE");
@@ -423,6 +504,7 @@ describe("native device settings wire contract", () => {
       { type: "set", key: "app.showDockIcon", value: false },
       { type: "set", key: "app.nativeExperienceEnabled", value: true },
       { type: "set", key: "app.iconStyle", value: "origami" },
+      { type: "set", key: "app.keepGatewayRunning", value: true },
       { type: "set", key: "voice.microphone", value: null },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },
       { type: "set", key: "voice.locale.primary", value: "de-DE" },
@@ -433,5 +515,6 @@ describe("native device settings wire contract", () => {
     ]);
     expect(capability?.snapshot?.app?.showDockIcon).toBe(true);
     expect(capability?.snapshot?.app?.iconStyle?.selectedId).toBe("paper");
+    expect(capability?.snapshot?.app?.keepGatewayRunning).toBe(false);
   });
 });

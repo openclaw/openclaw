@@ -42,11 +42,92 @@ mention/reply/command/DM -> user request
 always-on group chatter -> user request, or room event when configured
 ```
 
+## Bot-created threads
+
+Use `requireMentionInBotThreads` to override mention gating only in a thread or
+topic created by the receiving bot:
+
+- `false` accepts unmentioned follow-ups in confirmed bot-created threads.
+- `true` requires a mention there, even when the room normally accepts all
+  messages. Replies, quotes, and past bot participation alone do not satisfy it;
+  native mentions, configured mention patterns, and authorized commands retain
+  their normal behavior.
+- Omitted preserves the channel's existing mention and implicit-reply behavior.
+
+For example, keep Discord parent channels mention-gated while opening the bot's
+own threads, and apply the same policy to Slack. Merge these fields into your
+existing channel configuration, preserving its credentials and allowlists:
+
+```json5
+{
+  channels: {
+    discord: {
+      intents: { messageContent: true },
+      guilds: {
+        "123456789012345678": {
+          requireMention: true,
+          requireMentionInBotThreads: false,
+        },
+      },
+    },
+    slack: {
+      requireMention: true,
+      requireMentionInBotThreads: false,
+    },
+  },
+}
+```
+
+The setting uses each channel's existing configuration scopes; account-scoped
+configuration uses the corresponding paths under `accounts.<id>` where supported.
+For a narrower change, set the option on an existing allowed channel entry. See
+the [Discord example](/channels/discord/access-control#bot-created-threads) and
+[Slack example](/channels/slack/access-control#bot-created-threads).
+
+| Channel         | Configuration scopes                | Thread ownership evidence                                                           |
+| --------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| Buzz            | Group                               | Verified root event author and room                                                 |
+| ClickClack      | Account, group                      | Authenticated root message author, workspace, and channel                           |
+| Discord         | Guild, channel                      | Discord thread owner ID                                                             |
+| Feishu          | Account, group                      | Native topic root and current app identity                                          |
+| iMessage        | Group                               | Native thread-root GUID in the account/conversation-scoped sent-message cache       |
+| Matrix          | Account, room                       | Native `m.thread` root sender                                                       |
+| Mattermost      | Account, group                      | Native root post author and channel                                                 |
+| Microsoft Teams | Global, team, channel               | Channel root in the current app/conversation's sent-message cache                   |
+| Slack           | Account, channel                    | Native root author or authenticated thread-starter lookup                           |
+| Telegram        | Group, topic                        | Recorded topic creator from native creation events or successful bot topic creation |
+| Tlon            | Account, channel authorization rule | Authenticated root post author                                                      |
+
+Unknown or unavailable ownership keeps ordinary mention rules. Existing bounded
+caches can lose old ownership evidence; see the channel documentation for its
+limits. A bot replying in someone else's thread does not make it the creator.
+Sender, channel, and bot-access restrictions still apply. Explicit session
+bindings retain their own route activation rules.
+
+These rules govern new message admissions. An already admitted turn keeps its
+captured policy; changing mention rules or sender allowlists does not suppress
+its reply.
+
+The transport must deliver unmentioned messages before OpenClaw can apply the
+policy:
+
+- Discord needs [Message Content Intent](/channels/discord/setup#quick-setup)
+  enabled in both the Developer Portal and the OpenClaw account configuration.
+- Microsoft Teams needs the [`ChannelMessage.Read.Group` RSC permission](/channels/msteams/access-control#mentions-in-bot-created-threads).
+- Slack needs channel membership and the matching [`message.channels` or `message.groups` event subscription](/channels/slack/manifest-and-scopes#manifest-and-scope-checklist).
+- Telegram needs [privacy mode disabled or group-admin status](/channels/telegram/setup#privacy-mode-and-group-visibility).
+
+The current Google Chat interaction webhook does not provide ordinary unmentioned
+space messages or thread-owner metadata, so it does not expose this option.
+Channels that provide only quotes, direct conversations, or no native threads
+also keep their existing mention behavior. External plugins need to implement
+the shared [thread mention policy](/plugins/sdk-channel-plugins/mention-policy).
+
 ## Visible replies
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly.
+Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly. Claude CLI runs call the registered tool as `mcp__openclaw__message`; the backend explains this mapping and how to discover deferred tools in the system prompt.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
@@ -117,7 +198,7 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations omit the context.
 
 These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).
 
@@ -312,7 +393,7 @@ Control how group/room messages are handled per channel:
     - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`: `groupEnabled`, `groupChannels`).
     - Telegram: sender allowlists accept numeric user IDs only (`"123456789"`; `telegram:`/`tg:` prefixes are stripped case-insensitively). `@username` entries do not match at runtime and log a warning; setup resolves `@username` to IDs. Negative chat IDs belong under `channels.telegram.groups`, not sender allowlists.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
-    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy fails closed to `allowlist` instead of inheriting `channels.defaults.groupPolicy`, and the gateway logs the fallback once per account.
+    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy defaults to `allowlist` instead of inheriting `channels.defaults.groupPolicy`, and the gateway logs the fallback once per account.
 
   </Accordion>
 </AccordionGroup>
@@ -370,7 +451,6 @@ Each fact defaults to enabled when the channel produces it. Among bundled channe
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
@@ -473,7 +553,15 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
 
 - `tools`: allow/deny tools for the whole group (`allow`, `alsoAllow`, `deny`; deny wins).
-- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Channel ids use canonical OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are still accepted, matched as `id:` only, and log a deprecation warning.
+- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Use the primary OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
+
+When a sender or group policy restricts the turn's tools, that requester can
+create only hidden helpers of the same agent. Visible and cross-agent sessions
+are refused, including through ACP or automatic session creation by
+`sessions_send`. Helpers retain the restricted tools and the requester's workspace
+and session root. The restriction follows delegated and queued turns; an
+unrestricted sender's later turn does not replace it.
+Owner-authorized automations retain their separate scheduling policy and workspace.
 
 Resolution order (most specific wins):
 
@@ -610,4 +698,4 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - [Channel routing](/channels/channel-routing)
 - [Group messages](/channels/group-messages) — WhatsApp-only behavior (history injection, mention handling details)
 - [Pairing](/channels/pairing)
-- [WhatsApp](/channels/whatsapp#system-prompts) — canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics
+- [WhatsApp](/channels/whatsapp#system-prompts) — WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics

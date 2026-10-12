@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -45,31 +46,7 @@ export type CodexNodeHistory = {
 
 export type CodexSessionDisposition = "existing" | "forked";
 
-export const continueOperations = new Map<
-  string,
-  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
->();
-const sessionActionTails = new Map<string, Promise<void>>();
-
-export async function runSessionActionExclusive<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previous = sessionActionTails.get(threadId) ?? Promise.resolve();
-  const operation = previous.then(run);
-  const tail = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  sessionActionTails.set(threadId, tail);
-  try {
-    return await operation;
-  } finally {
-    if (sessionActionTails.get(threadId) === tail) {
-      sessionActionTails.delete(threadId);
-    }
-  }
-}
+export const catalogSessionActions = new KeyedAsyncQueue();
 
 // Session creation persists this plugin-owned suffix under an agent-qualified key.
 // Restart discovery must compare the parsed suffix, not the returned canonical key.
@@ -120,13 +97,33 @@ export function readNodeSessionMarker(
   };
 }
 
+const nodeAdoptionsByRevision = new WeakMap<
+  object,
+  {
+    config?: OpenClawConfig;
+    agentId?: string;
+    includeInitializing?: boolean;
+    adopted: ReadonlyMap<string, AdoptedSessionEntry>;
+  }
+>();
+
 export function listNodeAdoptedSessionEntries(params: {
   agentId?: string;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
   includeInitializing?: boolean;
   sessionEntries?: SessionCatalogEntrySnapshot;
-}): Map<string, AdoptedSessionEntry> {
+}): ReadonlyMap<string, AdoptedSessionEntry> {
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? nodeAdoptionsByRevision.get(revision) : undefined;
+  if (
+    cached &&
+    cached.config === params.config &&
+    cached.agentId === params.agentId &&
+    cached.includeInitializing === params.includeInitializing
+  ) {
+    return cached.adopted;
+  }
   const adopted = new Map<string, AdoptedSessionEntry>();
   for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -165,6 +162,15 @@ export function listNodeAdoptedSessionEntries(params: {
       sessionId,
       agentId,
       ...(marker.initializing === true ? { initializing: true } : {}),
+    });
+  }
+  if (revision) {
+    // Retain only derived identities, never the request's session entries.
+    nodeAdoptionsByRevision.set(revision, {
+      config: params.config,
+      agentId: params.agentId,
+      includeInitializing: params.includeInitializing,
+      adopted,
     });
   }
   return adopted;
@@ -209,11 +215,11 @@ export async function finalizeNodeAdoptedSession(params: {
     new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
   let finalized: CatalogSessionEntry | null;
   try {
-    finalized = await params.api.runtime.agent.session.patchSessionEntry({
+    finalized = await params.api.runtime.agent.session.prepareSessionEntryPatch({
       sessionKey: params.adopted.key,
       readConsistency: "latest",
       preserveActivity: true,
-      update: (entry) => {
+      prepare: (entry) => {
         const current = readNodeSessionMarker(entry);
         if (
           entry.sessionId?.trim() !== params.adopted.sessionId ||
@@ -244,7 +250,7 @@ export async function finalizeNodeAdoptedSession(params: {
       },
     });
   } catch (error) {
-    const currentEntry = params.api.runtime.agent.session.getSessionEntry({
+    const currentEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
       sessionKey: params.adopted.key,
       readConsistency: "latest",
     });
@@ -276,7 +282,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
   record: CodexSessionCatalogSession;
   history: CodexNodeHistory;
 }): Promise<AdoptedSessionEntry> {
-  const existing = findNodeAdoptedSessionEntry({
+  const lookup = {
     agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
@@ -284,7 +290,8 @@ export async function createOrReuseNodeAdoptedSession(params: {
     threadId: params.record.threadId,
     sourceHomeId: params.sourceHomeId,
     includeInitializing: true,
-  });
+  };
+  const existing = findNodeAdoptedSessionEntry(lookup);
   if (existing) {
     return existing;
   }
@@ -339,15 +346,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       initializing: true,
     };
   } catch (error) {
-    const raced = findNodeAdoptedSessionEntry({
-      agentId: params.agentId,
-      config: params.config,
-      runtime: params.api.runtime,
-      hostId: params.hostId,
-      threadId: params.record.threadId,
-      sourceHomeId: params.sourceHomeId,
-      includeInitializing: true,
-    });
+    const raced = findNodeAdoptedSessionEntry(lookup);
     if (raced) {
       return raced;
     }

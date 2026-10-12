@@ -1,7 +1,5 @@
-// Dispatch-result helpers for counting visible channel turn deliveries.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 
-/** Minimal dispatch result shape needed to count visible channel deliveries. */
 export type ChannelTurnDispatchResultLike =
   | {
       queuedFinal?: boolean;
@@ -38,14 +36,12 @@ const hasVisibleSignal = (
   signals.observedReplyDelivery === true ||
   hasFinalSignal(signals);
 
-/** Zero-filled reply dispatch count map used before merging optional provider counts. */
 export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, number> = {
   tool: 0,
   block: 0,
   final: 0,
 };
 
-/** Returns whether a turn produced any visible reply delivery signal. */
 export function hasVisibleChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals = {},

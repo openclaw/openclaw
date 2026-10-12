@@ -1,10 +1,6 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
-/**
- * Agent transcript redaction helpers.
- *
- * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
- */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -26,7 +22,6 @@ import {
   sanitizeTranscriptImageDataUrlField,
   sanitizeTranscriptImageRecord,
   shouldPreserveNestedTranscriptImageDataUrlFields,
-  shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 import {
@@ -56,6 +51,7 @@ type TranscriptAssistantRoute = {
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "google-gemini-cli",
   "openclaw-google-generative-ai-transport",
@@ -223,8 +219,8 @@ function isOpenAITextSignature(
 ): boolean {
   if (value.startsWith("{")) {
     try {
-      const parsed = JSON.parse(value) as unknown;
-      if (!parsed || typeof parsed !== "object" || !isPlainTranscriptObject(parsed)) {
+      const parsed = safeParseJsonRecord(value);
+      if (!parsed) {
         return false;
       }
       if (!Object.keys(parsed).every((key) => key === "v" || key === "id" || key === "phase")) {
@@ -347,20 +343,16 @@ function shouldPreserveOpaqueProviderPayload(
   );
 }
 
-function sanitizeOpenAIReasoningSignature(
+export function sanitizeOpenAIReasoningSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
+  if (!isOpenAIResponsesRoute(route) && !isCustomProviderRoute(route)) {
     return undefined;
   }
+  const parsed = safeParseJsonRecord(value);
   if (
     !parsed ||
-    typeof parsed !== "object" ||
-    !isPlainTranscriptObject(parsed) ||
     parsed.type !== "reasoning" ||
     (parsed.summary !== undefined && !Array.isArray(parsed.summary))
   ) {
@@ -380,7 +372,10 @@ function sanitizeOpenAIReasoningSignature(
   }
   if (
     parsed.id !== undefined &&
-    (typeof parsed.id !== "string" || !isOpenAIResponseItemId(parsed.id, route))
+    (typeof parsed.id !== "string" ||
+      !(isOpenAIResponsesRoute(route)
+        ? isSafeReplayIdentifier(parsed.id, Infinity)
+        : isOpenAIResponseItemId(parsed.id, route)))
   ) {
     return undefined;
   }
@@ -413,19 +408,12 @@ function sanitizeOpenAICompletionsToolSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJsonRecord(value);
   const isValidEncryptedData = isOpenAICompletionsRoute(route)
     ? isStructurallyValidOpaqueReplayToken
     : isCredentialSafeOpaqueReplayToken;
   if (
     !parsed ||
-    typeof parsed !== "object" ||
-    !isPlainTranscriptObject(parsed) ||
     parsed.type !== "reasoning.encrypted" ||
     typeof parsed.data !== "string" ||
     !isValidEncryptedData(parsed.data) ||
@@ -566,6 +554,7 @@ function redactTranscriptStructuredValue(
       delete next[key];
       continue;
     }
+    let sanitizedField: unknown;
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
@@ -573,33 +562,19 @@ function redactTranscriptStructuredValue(
       source.type === "thinking" &&
       key === "openclawReasoningReplay"
     ) {
-      const sanitizedMetadata = sanitizeOpenAIReasoningReplayMetadata(item, currentAssistantRoute);
-      if (sanitizedMetadata !== undefined) {
-        if (sanitizedMetadata !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedMetadata;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAIReasoningReplayMetadata(item, currentAssistantRoute);
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
-      (isOpenAIResponsesRoute(currentAssistantRoute) ||
-        isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "thinking" &&
       key === "thinkingSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAIReasoningSignature(item, currentAssistantRoute);
-      if (sanitizedSignature !== undefined) {
-        if (sanitizedSignature !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedSignature;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAIReasoningSignature(item, currentAssistantRoute);
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
       // These transports use the same validated v1 phase signature for pre-tool commentary;
       // stripping it would resurface narration after reload or session resume.
@@ -615,6 +590,7 @@ function redactTranscriptStructuredValue(
       continue;
     }
     if (
+      sanitizedField === undefined &&
       location === "assistant-content-block" &&
       (isOpenAICompletionsRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
@@ -622,38 +598,31 @@ function redactTranscriptStructuredValue(
       key === "thoughtSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAICompletionsToolSignature(
-        item,
-        currentAssistantRoute,
-      );
-      if (sanitizedSignature !== undefined) {
-        if (sanitizedSignature !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedSignature;
-        }
-        continue;
-      }
+      sanitizedField = sanitizeOpenAICompletionsToolSignature(item, currentAssistantRoute);
     }
     // Provider-signed/encrypted bytes must remain exact or replayed tool turns fail.
-    if (shouldPreserveOpaqueProviderPayload(source, key, item, location, currentAssistantRoute)) {
+    if (
+      sanitizedField === undefined &&
+      shouldPreserveOpaqueProviderPayload(source, key, item, location, currentAssistantRoute)
+    ) {
       continue;
     }
-    if (typeof item === "string") {
-      const sanitizedDataUrl = sanitizeTranscriptImageDataUrlField({
+    if (sanitizedField === undefined && typeof item === "string") {
+      sanitizedField = sanitizeTranscriptImageDataUrlField({
         source,
         key,
         value: item,
         preserveImageDataUrlFields,
       });
-      if (sanitizedDataUrl !== undefined) {
-        if (sanitizedDataUrl !== item) {
-          next ??= { ...source };
-          next[key] = sanitizedDataUrl;
-        }
-        continue;
-      }
     }
-    if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
+    if (sanitizedField !== undefined) {
+      if (sanitizedField !== item) {
+        next ??= { ...source };
+        next[key] = sanitizedField;
+      }
+      continue;
+    }
+    if (key === "data" && sanitizedImageRecord) {
       continue;
     }
     const redacted =

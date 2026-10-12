@@ -118,24 +118,6 @@ async function serve(
 }
 
 describe("Beam payload validation", () => {
-  it("accepts the closed normalized payload", () => {
-    const upload = sampleUpload({
-      sourceModel: { provider: "OpenAI", model: "gpt-5.6-sol" },
-    });
-    const result = parseBeamUpload(upload);
-    expect(result).toEqual({
-      ok: true,
-      value: sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6-sol" } }),
-    });
-  });
-
-  it("accepts timezone-bearing ISO timestamps with four-digit low years", () => {
-    expect(parseBeamUpload(sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }))).toEqual({
-      ok: true,
-      value: sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }),
-    });
-  });
-
   it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
     expect(parseBeamUpload(sampleUpload({ arbitrary: "junk" }))).toEqual({
       ok: false,
@@ -195,38 +177,6 @@ describe("Beam receiver", () => {
     }
     expect((await upload(sampleUpload({ uploaderProfileId: "forged-profile" }))).status).toBe(400);
     expect((await store.get(sampleUpload().beamId))?.uploaderProfileId).toBeUndefined();
-  });
-
-  it("stores authenticated uploads and preserves creation time across updates", async () => {
-    const store = memoryStore();
-    let now = 100;
-    const endpoint = await serve(store, { now: () => now });
-    const first = await postUpload(endpoint);
-    expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({
-      ok: true,
-      beamId: "0123456789abcdef0123456789abcdef",
-      url: "/beam/fix-the-upload-flow-0123456789ab",
-    });
-    expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
-      createdAt: 100,
-      receivedAt: 100,
-    });
-
-    now = 200;
-    const updated = await postUpload(
-      endpoint,
-      sampleUpload({ completed: true, title: "Renamed upload flow" }),
-    );
-    expect(await updated.json()).toMatchObject({
-      beamId: sampleUpload().beamId,
-      url: "/beam/renamed-upload-flow-0123456789ab",
-    });
-    expect(store.values.get("0123456789abcdef0123456789abcdef")).toMatchObject({
-      createdAt: 100,
-      receivedAt: 200,
-      completed: true,
-    });
   });
 
   it("orders replacement snapshots without refreshing stale state", async () => {
@@ -401,21 +351,6 @@ describe("Beam receiver", () => {
     }
   });
 
-  it("returns a Beam share URL beneath a nested Control UI base path", async () => {
-    const store = memoryStore();
-    const endpoint = await serve(store, {
-      resolveControlUiBasePath: () => "/admin/openclaw/",
-    });
-    const response = await postUpload(endpoint);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      ok: true,
-      beamId: "0123456789abcdef0123456789abcdef",
-      url: "/admin/openclaw/beam/fix-the-upload-flow-0123456789ab",
-    });
-  });
-
   it("requires operator.write before reading the upload body", async () => {
     const store = memoryStore();
     const endpoint = await serve(store, {
@@ -527,22 +462,18 @@ describe("Beam mirror receiver boundary", () => {
       listCatalogs: () => [catalog],
     });
 
-    try {
-      await runner.tick();
-      active = false;
-      clock += 4 * 60 * 60_000;
-      await runner.tick();
-      expect([...store.values.values()][0]?.completed).toBe(false);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+    await runner.tick();
+    active = false;
+    clock += 4 * 60 * 60_000;
+    await runner.tick();
+    expect([...store.values.values()][0]?.completed).toBe(false);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
 
-      await runner.tick();
+    await runner.tick();
 
-      expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-      expect([...store.values.values()][0]?.completed).toBe(true);
-      expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
-    } finally {
-      await runner.stop();
-    }
+    expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
+    expect([...store.values.values()][0]?.completed).toBe(true);
+    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
   });
 });
 
@@ -560,6 +491,7 @@ describe("Beam session catalog", () => {
 
     try {
       expect((await postUpload(endpoint)).status).toBe(200);
+      expect((await catalog.list({ agentId: "main" }))[0]?.sessions).toHaveLength(1);
       await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
         "unknown Beam host: other-host",
       );

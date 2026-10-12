@@ -245,24 +245,13 @@ describe("memory-core generic embedding provider contract", () => {
   });
 });
 
-// Zhipu BigModel embedding-3 caps `input` at 64 items and rejects a larger array
-// with HTTP 400 code 1214. Memory batches are byte-budgeted, not item-counted, so
-// short chunks pack far more than 64 items into one request (issue #139040).
-const ZHIPU_INPUT_ARRAY_LIMIT = 64;
-const ZHIPU_REJECTION_BODY = JSON.stringify({
-  error: { code: "1214", message: "input array max 64" },
-});
-
 // Keep batching, splitting, retry classification, and timeout ownership real.
-function createMemoryEmbeddingOwner(params: {
-  provider: NonNullable<Awaited<ReturnType<typeof createEmbeddingProvider>>["provider"]>;
-  providerRuntime: Awaited<ReturnType<typeof createEmbeddingProvider>>["runtime"];
-  database: MemoryIndexDatabase;
-}) {
+function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration) {
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
-    provider: params.provider,
-    providerRuntime: params.providerRuntime,
-    publishedDatabase: params.database,
+    provider: generation.provider,
+    providerRuntime: generation.runtime,
+    publishedDatabase: generation.database,
+    syncProviderGeneration: generation,
     cache: { enabled: false },
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
@@ -271,6 +260,7 @@ function createMemoryEmbeddingOwner(params: {
     embedChunksInBatches: (
       candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
       generation: MemorySemanticProviderGeneration,
+      maxTokens: number,
     ) => Promise<number[][]>;
   };
 }
@@ -293,11 +283,7 @@ async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: Da
     identities: [],
   };
   return {
-    owner: createMemoryEmbeddingOwner({
-      provider,
-      providerRuntime: created.runtime,
-      database: indexDatabase,
-    }),
+    owner: createMemoryEmbeddingOwner(generation),
     generation,
   };
 }
@@ -329,31 +315,79 @@ function distinctCandidates(
 }
 
 describe("memory-core embedding batch recovery over real transport", () => {
-  it("halves an oversized batch until the provider input array limit is met", async () => {
-    const server = await startEmbeddingServer({
-      reject: (inputCount) =>
-        inputCount > ZHIPU_INPUT_ARRAY_LIMIT
-          ? { status: 400, body: ZHIPU_REJECTION_BODY }
-          : undefined,
-    });
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-        server.baseUrl,
-        database,
-      );
-      const embeddings = await owner.embedChunksInBatches(distinctCandidates(100), generation);
+  it.each([
+    {
+      message: "input array max 10",
+      count: 33,
+      limit: 10,
+      maxInputsPerRequest: 10,
+      requests: [10, 10, 10, 3],
+    },
+    {
+      message: "input array max 10",
+      count: 33,
+      limit: 10,
+      maxInputsPerRequest: 20,
+      requests: [20, 10, 10, 13, 10, 3],
+    },
+    {
+      message: "batch size is invalid, it should not be larger than 10",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    { message: "input array max 64", count: 100, limit: 64, requests: [100, 64, 36] },
+    {
+      message: "input数组最大不得超过10条",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    {
+      message: "Embeddings API input limit exceeded: max 10, got 33",
+      count: 33,
+      limit: 10,
+      requests: [33, 10, 10, 10, 3],
+    },
+    {
+      message: "request header fields too large",
+      count: 100,
+      limit: 50,
+      requests: [100, 50, 50],
+    },
+  ])(
+    "embeds in order for $message with declared cap $maxInputsPerRequest",
+    async ({ message, count, limit, requests, maxInputsPerRequest }) => {
+      const server = await startEmbeddingServer({
+        reject: (inputCount) =>
+          inputCount > limit
+            ? { status: 400, body: JSON.stringify({ error: { message } }) }
+            : undefined,
+      });
+      const database = new DatabaseSync(":memory:");
+      try {
+        const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+          server.baseUrl,
+          database,
+        );
+        generation.provider.maxInputsPerRequest = maxInputsPerRequest;
+        const embeddings = await owner.embedChunksInBatches(
+          distinctCandidates(count),
+          generation,
+          8000,
+        );
 
-      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
-        100, 50, 50,
-      ]);
-      expect(embeddings).toEqual(
-        Array.from({ length: 100 }, (_, index) => [index + 1, (index % 50) + 0.5, 3]),
-      );
-    } finally {
-      database.close();
-    }
-  });
+        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+          requests,
+        );
+        expect(embeddings).toEqual(
+          Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it.each([
     "input array must contain strings",
@@ -377,7 +411,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
         database,
       );
       await expect(
-        owner.embedChunksInBatches(distinctCandidates(100), generation),
+        owner.embedChunksInBatches(distinctCandidates(100), generation, 8000),
       ).rejects.toMatchObject({
         code: "MEMORY_EMBEDDING_OPERATION_FAILED",
         operation: "batch",

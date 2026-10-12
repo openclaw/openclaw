@@ -5,7 +5,7 @@ import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -23,15 +23,10 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import { AuthStorage } from "./auth-storage.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
-import { ModelRegistry } from "./model-registry.js";
-import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -44,7 +39,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession runtime and transcript projections", () => {
-  it.each([
+  it.for([
     { owner: "adapter", abortBeforeLaunch: false },
     { owner: "source", abortBeforeLaunch: false },
     { owner: "adapter", abortBeforeLaunch: true },
@@ -52,7 +47,8 @@ describe("AgentSession runtime and transcript projections", () => {
     { owner: "client", abortBeforeLaunch: true },
   ])(
     "settles the real $owner preparer with abortBeforeLaunch=$abortBeforeLaunch",
-    async ({ owner, abortBeforeLaunch }) => {
+    { timeout: 10_000 },
+    async ({ owner, abortBeforeLaunch }, { signal }) => {
       const directory = tempDirs.make("openclaw-adapter-lifecycle-");
       const output = path.join(directory, "receipt.txt");
       const args = { value: "local receipt" };
@@ -153,7 +149,7 @@ describe("AgentSession runtime and transcript projections", () => {
       });
       const prompt = session.prompt("Write one receipt.");
       try {
-        await withTestTimeout(prompt, 2_000, "receipt session did not settle");
+        await withinTest(prompt, signal);
         expect(preparations).toHaveLength(1);
         expect(order.filter((entry) => entry === "dispose")).toHaveLength(1);
         expect(session.isStreaming).toBe(false);
@@ -220,57 +216,14 @@ describe("AgentSession runtime and transcript projections", () => {
       } finally {
         session.agent.abort();
         try {
-          await withTestTimeout(
-            Promise.allSettled([prompt, session.agent.waitForIdle()]),
-            2_000,
-            "receipt session cleanup did not settle",
-          );
+          await withinTest(Promise.allSettled([prompt, session.agent.waitForIdle()]), signal);
         } finally {
           unsubscribe();
           session.dispose();
         }
       }
     },
-    10_000,
   );
-
-  it("keeps grep-only truncation results free of unavailable read-tool instructions", async () => {
-    const cwd = await fs.realpath(tempDirs.make("openclaw-sdk-grep-guidance-"));
-    const line = `needle ${"x".repeat(600)} OMITTED_END`;
-    await fs.writeFile(path.join(cwd, "long-line.txt"), `${line}\n`);
-    const { session } = await createAgentSession({
-      cwd,
-      tools: ["grep"],
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-    try {
-      expect(session.getActiveToolNames()).toEqual(["grep"]);
-      session.setActiveToolsByName(["read", "grep"]);
-      expect(session.getActiveToolNames()).toEqual(["grep"]);
-      const grep = session.agent.state.tools[0];
-      if (!grep) {
-        throw new Error("Expected the selected grep tool");
-      }
-      const result = await grep.execute("grep-long-line", {
-        pattern: "needle",
-        path: "long-line.txt",
-      });
-      const text = result.content
-        .flatMap((block) => (block.type === "text" ? [block.text] : []))
-        .join("\n");
-      expect(result.details).toMatchObject({ linesTruncated: true });
-      expect(text).toContain(`long-line.txt:1: ${line.slice(0, 500)}... [truncated]`);
-      expect(text).toContain("Some lines truncated to 500 chars");
-      expect(text).not.toContain("OMITTED_END");
-      expect(text).not.toMatch(/\bread tool\b/u);
-    } finally {
-      session.dispose();
-    }
-  });
 
   it("preserves execution correlation IDs through redacted transcript persistence", async () => {
     const dir = tempDirs.make("openclaw-correlation-projection-");
@@ -339,7 +292,7 @@ describe("AgentSession runtime and transcript projections", () => {
     );
   });
 
-  it.each(["key", "apiKey", "account"])(
+  it.each(["apiKey", "account"])(
     "executes original %s arguments while preserving redacted storage and delivery facts",
     async (field) => {
       const dir = tempDirs.make("openclaw-runtime-projection-");

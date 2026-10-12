@@ -1,4 +1,3 @@
-// Slack data_table Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   renderMessagePresentationTableFallbackText,
@@ -51,24 +50,31 @@ function countCharacters(value: string): number {
   return Array.from(value).length;
 }
 
-function readSlackBasicTableCell(value: unknown): string {
+function readSlackTableCell(
+  value: unknown,
+  mode: "basic" | "native-header" | "native-cell",
+): string | undefined {
   const cell = asOptionalRecord(value);
   if (!cell) {
-    return "";
+    return undefined;
   }
+  const basic = mode === "basic";
+  let text: unknown;
   if (cell.type === "raw_text") {
-    return typeof cell.text === "string" ? cell.text : "";
-  }
-  if (cell.type === "raw_number") {
-    if (typeof cell.text === "string" && cell.text.length > 0) {
+    text = cell.text;
+  } else if (cell.type === "raw_number") {
+    if (basic && typeof cell.text === "string" && cell.text.length > 0) {
       return cell.text;
     }
     if (typeof cell.value === "number" && Number.isFinite(cell.value)) {
-      return String(cell.value);
+      text = basic ? String(cell.value) : cell.text;
+    } else if (basic && typeof cell.value === "string") {
+      text = cell.value;
     }
-    return typeof cell.value === "string" ? cell.value : "";
+  } else if (cell.type === "rich_text" && mode !== "native-header") {
+    text = renderSlackRichText(cell.elements, "table", basic ? "\n" : "");
   }
-  return cell.type === "rich_text" ? renderSlackRichText(cell.elements, "table", "\n") : "";
+  return basic ? (typeof text === "string" ? text : undefined) : readNonEmptyString(text);
 }
 
 function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
@@ -89,7 +95,7 @@ function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
     ) {
       return undefined;
     }
-    const row = rawRow.map(readSlackBasicTableCell);
+    const row = rawRow.map((cell) => readSlackTableCell(cell, "basic") ?? "");
     characterCount += row.reduce((total, cell) => total + countCharacters(cell), 0);
     if (characterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX) {
       return undefined;
@@ -97,25 +103,6 @@ function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
     rows.push(row);
   }
   return rows.some((row) => row.some((cell) => cell.length > 0)) ? rows : undefined;
-}
-
-function readSlackDataTableCell(value: unknown, allowRichText: boolean): string | undefined {
-  const cell = asOptionalRecord(value);
-  if (!cell) {
-    return undefined;
-  }
-  if (cell.type === "raw_text") {
-    return readNonEmptyString(cell.text);
-  }
-  if (cell.type === "raw_number") {
-    return typeof cell.value === "number" && Number.isFinite(cell.value)
-      ? readNonEmptyString(cell.text)
-      : undefined;
-  }
-  if (allowRichText && cell.type === "rich_text") {
-    return readNonEmptyString(renderSlackRichText(cell.elements, "table"));
-  }
-  return undefined;
 }
 
 function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
@@ -131,7 +118,7 @@ function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
   if (!Array.isArray(rawHeader) || rawHeader.length < 1) {
     return undefined;
   }
-  const headers = Array.from(rawHeader, (cell) => readSlackDataTableCell(cell, false));
+  const headers = Array.from(rawHeader, (cell) => readSlackTableCell(cell, "native-header"));
   if (!headers.every((header): header is string => Boolean(header))) {
     return undefined;
   }
@@ -139,18 +126,13 @@ function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
     if (!Array.isArray(rawRow) || rawRow.length !== headers.length) {
       return undefined;
     }
-    const cells = rawRow.map((cell) => readSlackDataTableCell(cell, true));
+    const cells = rawRow.map((cell) => readSlackTableCell(cell, "native-cell"));
     return cells.every((cell): cell is string => Boolean(cell)) ? cells : undefined;
   });
   if (!rows.every((row): row is string[] => Boolean(row))) {
     return undefined;
   }
   return { caption, headers, rows };
-}
-
-/** Detect current native table blocks without depending on unreleased Slack SDK types. */
-export function hasSlackDataTableBlock(blocks?: readonly unknown[]): boolean {
-  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_table") ?? false;
 }
 
 /** Count display characters in one structurally valid native table. */
@@ -174,13 +156,12 @@ export function countSlackDataTableCellCharacters(value: unknown): number | unde
     : cellCharacterCount;
 }
 
-/** Count the aggregate native-table cell characters already present in a message. */
 export function countSlackDataTableBlocksCellCharacters(
   blocks?: readonly unknown[],
 ): number | undefined {
   let total = 0;
   for (const block of blocks ?? []) {
-    if (!hasSlackDataTableBlock([block])) {
+    if (asOptionalRecord(block)?.type !== "data_table") {
       continue;
     }
     const cellCharacterCount = countSlackDataTableCellCharacters(block);
@@ -192,9 +173,14 @@ export function countSlackDataTableBlocksCellCharacters(
   return total;
 }
 
-function resolvePortableTableCellCharacterCount(
+export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
-): number | undefined {
+  options: SlackDataTableBuildOptions = {},
+): SlackDataTableBlock | undefined {
+  const cellCharacterCountOffset = options.cellCharacterCountOffset ?? 0;
+  if (!Number.isSafeInteger(cellCharacterCountOffset) || cellCharacterCountOffset < 0) {
+    return undefined;
+  }
   if (
     typeof block.caption !== "string" ||
     block.caption.trim().length === 0 ||
@@ -213,86 +199,81 @@ function resolvePortableTableCellCharacterCount(
   ) {
     return undefined;
   }
-  const values: string[] = [...block.headers];
+  const rows: SlackDataTableCell[][] = [
+    Array.from(block.headers, (text) => ({ type: "raw_text", text })),
+  ];
   for (const row of block.rows) {
     if (!Array.isArray(row) || row.length !== block.headers.length) {
       return undefined;
     }
+    const cells: SlackDataTableCell[] = [];
     for (const cell of row) {
       if (typeof cell === "number") {
         if (!Number.isFinite(cell)) {
           return undefined;
         }
-        values.push(String(cell));
+        cells.push({ type: "raw_number", value: cell, text: String(cell) });
         continue;
       }
       if (typeof cell !== "string" || cell.trim().length === 0) {
         return undefined;
       }
-      values.push(cell);
+      cells.push({ type: "raw_text", text: cell });
     }
+    rows.push(cells);
   }
-  return values.reduce((total, value) => total + countCharacters(value), 0);
-}
-
-/** Count portable table cells when the table fits Slack's native message budget. */
-export function resolveSlackDataTableCellCharacterCount(
-  block: MessagePresentationTableBlock,
-  options: SlackDataTableBuildOptions = {},
-): number | undefined {
-  const cellCharacterCountOffset = options.cellCharacterCountOffset ?? 0;
-  if (!Number.isSafeInteger(cellCharacterCountOffset) || cellCharacterCountOffset < 0) {
+  const cellCharacterCount = rows
+    .flat()
+    .reduce((total, cell) => total + countCharacters(cell.text), 0);
+  if (
+    cellCharacterCountOffset + cellCharacterCount >
+    SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
+  ) {
     return undefined;
   }
-  const cellCharacterCount = resolvePortableTableCellCharacterCount(block);
-  return cellCharacterCount !== undefined &&
-    cellCharacterCountOffset + cellCharacterCount <= SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
-    ? cellCharacterCount
-    : undefined;
-}
-
-/** Map a validated portable table to Slack's current app-facing Block Kit shape. */
-export function buildSlackDataTableBlock(
-  block: MessagePresentationTableBlock,
-  options: SlackDataTableBuildOptions = {},
-): SlackDataTableBlock | undefined {
-  if (resolveSlackDataTableCellCharacterCount(block, options) === undefined) {
-    return undefined;
-  }
-  const header: SlackDataTableCell[] = block.headers.map((text) => ({ type: "raw_text", text }));
-  const rows = block.rows.map((row) =>
-    row.map<SlackDataTableCell>((cell) =>
-      typeof cell === "number"
-        ? { type: "raw_number", value: cell, text: String(cell) }
-        : { type: "raw_text", text: cell },
-    ),
-  );
   return {
     type: "data_table",
     caption: block.caption,
-    rows: [header, ...rows],
+    rows,
     ...(block.rowHeaderColumnIndex !== undefined
       ? { row_header_column_index: block.rowHeaderColumnIndex }
       : {}),
   };
 }
 
-/** Extract a deterministic accessible summary from a native Slack table block. */
-export function renderSlackDataTableFallbackText(value: unknown): string | undefined {
+function renderSlackDataTable(
+  value: unknown,
+  render: (table: ParsedSlackDataTable & { type: "table" }) => string,
+  mrkdwnSafe = false,
+): string | undefined {
   const block = asOptionalRecord(value);
   if (block?.type !== "data_table") {
     return undefined;
   }
   const parsed = parseSlackDataTable(block);
   if (parsed) {
-    return renderMessagePresentationTableFallbackText({
+    return render({
       type: "table",
       caption: parsed.caption,
       headers: parsed.headers,
       rows: parsed.rows,
     });
   }
-  return readNonEmptyString(block.caption)?.trim();
+  const caption = readNonEmptyString(block.caption)?.trim();
+  return caption && mrkdwnSafe ? escapeSlackMrkdwn(caption) : caption;
+}
+
+export function renderSlackDataTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
+  return renderSlackDataTable(
+    value,
+    mrkdwnSafe
+      ? renderSlackMessagePresentationTableFallbackText
+      : renderMessagePresentationTableFallbackText,
+    mrkdwnSafe,
+  );
 }
 
 function escapeCompactFallbackCell(value: string): string {
@@ -303,59 +284,28 @@ function escapeCompactFallbackCell(value: string): string {
     .replaceAll("\n", "\\n");
 }
 
-function escapeSlackBasicTableCell(value: string, mrkdwnSafe: boolean): string {
-  return escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(value) : value);
-}
-
-function renderSlackBasicTableRows(value: unknown, mrkdwnSafe: boolean): string | undefined {
+/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
+export function renderSlackTableFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const rows = parseSlackBasicTableRows(value);
   return rows
-    ?.map((row) => row.map((cell) => escapeSlackBasicTableCell(cell, mrkdwnSafe)).join("\t"))
+    ?.map((row) =>
+      row
+        .map((cell) => escapeCompactFallbackCell(mrkdwnSafe ? escapeSlackMrkdwn(cell) : cell))
+        .join("\t"),
+    )
     .join("\n");
-}
-
-/** Render Slack's inbound `table` block as ordered, delimiter-safe TSV. */
-export function renderSlackTableFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, false);
-}
-
-/** Render Slack's inbound `table` block without activating mrkdwn control tokens. */
-export function renderSlackTableMrkdwnFallbackText(value: unknown): string | undefined {
-  return renderSlackBasicTableRows(value, true);
 }
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */
 export function renderSlackDataTableCompactPlainTextFallback(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_table") {
-    return undefined;
-  }
-  const parsed = parseSlackDataTable(block);
-  if (!parsed) {
-    return readNonEmptyString(block.caption)?.trim();
-  }
-  return [
-    `${escapeCompactFallbackCell(parsed.caption)} (table)`,
-    parsed.headers.map(escapeCompactFallbackCell).join("\t"),
-    ...parsed.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
-  ].join("\n");
-}
-
-/** Render a native table as mrkdwn without activating raw cell control tokens. */
-export function renderSlackDataTableMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_table") {
-    return undefined;
-  }
-  const parsed = parseSlackDataTable(block);
-  if (parsed) {
-    return renderSlackMessagePresentationTableFallbackText({
-      type: "table",
-      caption: parsed.caption,
-      headers: parsed.headers,
-      rows: parsed.rows,
-    });
-  }
-  const caption = readNonEmptyString(block.caption)?.trim();
-  return caption ? escapeSlackMrkdwn(caption) : undefined;
+  return renderSlackDataTable(value, (table) =>
+    [
+      `${escapeCompactFallbackCell(table.caption)} (table)`,
+      table.headers.map(escapeCompactFallbackCell).join("\t"),
+      ...table.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
+    ].join("\n"),
+  );
 }

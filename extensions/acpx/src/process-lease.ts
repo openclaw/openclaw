@@ -1,18 +1,13 @@
-/**
- * Persistent lease store for ACPX wrapper processes. Leases let OpenClaw attach
- * gateway/session identity to spawned ACP processes and clean them up later.
- */
 import { createHash } from "node:crypto";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
-/** CLI argument carrying the ACPX process lease id. */
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
-/** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
 /** Synthetic session identity for generated-wrapper health probes. */
 export const ACPX_PROBE_LEASE_SESSION_KEY = "openclaw:acpx:probe";
@@ -22,7 +17,6 @@ export type AcpxProcessLeaseIdentity = {
   gatewayInstanceId: string;
 };
 
-/** Read OpenClaw lease identity from a generated wrapper command. */
 export function readAcpxProcessLeaseIdentity(
   command: AcpxAgentCommand | undefined,
 ): AcpxProcessLeaseIdentity | undefined {
@@ -46,7 +40,6 @@ export function readAcpxProcessLeaseIdentity(
   return { leaseId, gatewayInstanceId };
 }
 
-/** Lifecycle state for a tracked ACPX wrapper process. */
 type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
 
 /** Persisted identity and command metadata for one ACPX wrapper process. */
@@ -63,7 +56,6 @@ export type AcpxProcessLease = {
   state: AcpxProcessLeaseState;
 };
 
-/** Async lease store used by runtime sessions and cleanup routines. */
 export type AcpxProcessLeaseStore = {
   load(leaseId: string): Promise<AcpxProcessLease | undefined>;
   listOpen(gatewayInstanceId?: string): Promise<AcpxProcessLease[]>;
@@ -71,17 +63,10 @@ export type AcpxProcessLeaseStore = {
   markState(leaseId: string, state: AcpxProcessLeaseState): Promise<void>;
 };
 
-type AcpxProcessLeaseFile = {
-  version: 1;
-  leases: AcpxProcessLease[];
-};
-
 export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asOptionalObjectRecord(value);
   if (
+    !record ||
     typeof record.leaseId !== "string" ||
     typeof record.gatewayInstanceId !== "string" ||
     typeof record.sessionKey !== "string" ||
@@ -108,17 +93,6 @@ export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | un
   };
 }
 
-export function normalizeAcpxProcessLeaseFile(value: unknown): AcpxProcessLeaseFile {
-  const root =
-    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  const leases = Array.isArray(root.leases)
-    ? root.leases
-        .map(normalizeAcpxProcessLease)
-        .filter((lease): lease is AcpxProcessLease => Boolean(lease))
-    : [];
-  return { version: 1, leases };
-}
-
 export function openAcpxProcessLeaseStateStore(
   openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
 ): PluginStateKeyedStore<AcpxProcessLease> {
@@ -129,16 +103,13 @@ export function openAcpxProcessLeaseStateStore(
   });
 }
 
-/** Create a serialized SQLite-backed ACPX process lease store. */
 export function createAcpxProcessLeaseStore(params: {
   store: PluginStateKeyedStore<AcpxProcessLease>;
 }): AcpxProcessLeaseStore {
   let updateQueue: Promise<void> = Promise.resolve();
 
   async function update(mutator: () => Promise<void>): Promise<void> {
-    const run = updateQueue.then(async () => {
-      await mutator();
-    });
+    const run = updateQueue.then(mutator);
     updateQueue = run.catch(() => {});
     await run;
   }

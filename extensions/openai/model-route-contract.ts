@@ -1,7 +1,17 @@
 // OpenAI model route membership shared by catalog and policy surfaces.
 
 export const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
+export const OPENAI_DAYBREAK_MODEL_IDS = [
+  "gpt-daybreak-blue-latest",
+  "gpt-daybreak-red-latest",
+] as const;
 export const OPENAI_GPT_6_ASTRA_MODEL_ID = "gpt-6-astra";
+export const OPENAI_GPT_6_MODEL_IDS = [
+  OPENAI_GPT_6_ASTRA_MODEL_ID,
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-6.1-sol",
+] as const;
 export const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 export const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
 export const OPENAI_GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra";
@@ -42,7 +52,7 @@ const OPENAI_CODEX_REASONING_EFFORTS_BY_MODEL = new Map<
 
 /** Models with known first-party Platform and ChatGPT transports. */
 const OPENAI_DUAL_ROUTE_MODEL_IDS = [
-  OPENAI_GPT_6_ASTRA_MODEL_ID,
+  ...OPENAI_GPT_6_MODEL_IDS,
   ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -112,18 +122,12 @@ export function resolveOpenAICodexReasoningEfforts(
   if (observed === undefined || observed.length === 0) {
     return observed ? [] : [...known];
   }
-  const normalizedObserved = observed.map((effort) => effort.trim().toLowerCase()).filter(Boolean);
-  const supported = new Set([...known, ...normalizedObserved]);
-  const knownSet = new Set(known);
-  for (const effort of OPENAI_CODEX_REASONING_EFFORT_ORDER) {
-    if (!knownSet.has(effort)) {
-      supported.delete(effort);
-    }
-  }
-  return [
-    ...OPENAI_CODEX_REASONING_EFFORT_ORDER.filter((effort) => supported.delete(effort)),
-    ...supported,
-  ];
+  const extraEfforts = observed
+    .map((effort) => effort.trim().toLowerCase())
+    .filter(
+      (effort) => effort && !OPENAI_CODEX_REASONING_EFFORT_ORDER.some((level) => level === effort),
+    );
+  return [...known, ...new Set(extraEfforts)];
 }
 
 export function isOpenAIDualRouteModelId(value: string | undefined): boolean {
@@ -136,4 +140,12 @@ export function isOpenAIPlatformOnlyRouteModelId(value: string | undefined): boo
 
 export function isOpenAISubscriptionOnlyRouteModelId(value: string | undefined): boolean {
   return openAISubscriptionOnlyRouteModelIds.has(normalizeOpenAIRouteMembershipId(value));
+}
+
+export function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  if (normalized !== OPENAI_GPT_53_CODEX_SPARK_MODEL_ID) {
+    return undefined;
+  }
+  return "gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.";
 }

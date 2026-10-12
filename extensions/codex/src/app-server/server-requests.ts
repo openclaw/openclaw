@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { addSafeTimeoutDelayGraceMs } from "openclaw/plugin-sdk/number-runtime";
@@ -25,6 +26,9 @@ type ServerRequest = Parameters<CodexServerRequestHandler>[0];
 /** Physical-client owner for inbound requests, cancellation, and response deadlines. */
 export class CodexServerRequests {
   readonly handlers = new Set<CodexServerRequestHandler>();
+  private readonly refreshWork = new AsyncWorkScope();
+  private closed = false;
+  private closing: Promise<void> | undefined;
   private readonly active = new Map<
     string | number,
     { threadId: JsonValue | undefined; controller: AbortController }
@@ -47,15 +51,21 @@ export class CodexServerRequests {
     }
   }
 
-  close(error: Error): void {
+  close(error: Error): Promise<void> {
+    this.closed = true;
+    this.closing ??= this.refreshWork.drain();
     const requests = [...this.active.values()];
     this.active.clear();
     for (const request of requests) {
       request.controller.abort(error);
     }
+    return this.closing;
   }
 
   async handle(request: ServerRequest): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     const controller = new AbortController();
     const entry = {
       threadId: isJsonObject(request.params) ? request.params.threadId : undefined,
@@ -79,7 +89,11 @@ export class CodexServerRequests {
           method: request.method,
           timeoutMs,
         });
-        deadline.resolve(timeoutServerRequestResponse(timeoutMs));
+        deadline.resolve(
+          failedToolResponse(
+            `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
+          ),
+        );
         controller.abort(new Error("codex app-server server request timed out"));
       }, timeoutMs);
       timeout.unref?.();
@@ -120,7 +134,14 @@ export class CodexServerRequests {
       return undefined;
     };
     try {
-      const result = await Promise.race([run(), deadline.promise]);
+      // Auth recovery belongs to the retained physical client, not the turn
+      // whose stdio handles delivered this request. Keep tool/approval work in
+      // its existing caller context and join admitted refresh tails at close.
+      const work =
+        request.method === "account/chatgptAuthTokens/refresh"
+          ? this.refreshWork.track(run)
+          : run();
+      const result = await Promise.race([work, deadline.promise]);
       if (this.active.get(request.id) === entry) {
         this.respond({
           id: request.id,
@@ -150,19 +171,9 @@ export class CodexServerRequests {
   }
 }
 
-function defaultServerRequestResponse(
-  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
-): JsonValue {
+function defaultServerRequestResponse(request: ServerRequest): JsonValue {
   if (request.method === "item/tool/call") {
-    return {
-      contentItems: [
-        {
-          type: "inputText",
-          text: "OpenClaw did not register a handler for this app-server tool call.",
-        },
-      ],
-      success: false,
-    };
+    return failedToolResponse("OpenClaw did not register a handler for this app-server tool call.");
   }
   if (
     request.method === "item/commandExecution/requestApproval" ||
@@ -174,9 +185,7 @@ function defaultServerRequestResponse(
     return { permissions: {}, scope: "turn" };
   }
   if (request.method === "item/tool/requestUserInput") {
-    return {
-      answers: {},
-    };
+    return { answers: {} };
   }
   if (request.method === "mcpServer/elicitation/request") {
     return createCodexElicitationResponse("decline", null, {
@@ -186,14 +195,9 @@ function defaultServerRequestResponse(
   return {};
 }
 
-function timeoutServerRequestResponse(timeoutMs: number): JsonValue {
+function failedToolResponse(text: string): JsonValue {
   return {
-    contentItems: [
-      {
-        type: "inputText",
-        text: `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
-      },
-    ],
+    contentItems: [{ type: "inputText", text }],
     success: false,
   };
 }

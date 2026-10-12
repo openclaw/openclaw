@@ -189,7 +189,7 @@ suite.define(() => {
 
         await expect
           .poll(() => catalogWarning.textContent(), { timeout: 5_000 })
-          .toContain("More models could not be discovered.");
+          .toContain("Model catalog temporarily unavailable");
         await catalogWarning.getByRole("button", { name: "Retry", exact: true }).waitFor();
         expect(await page.locator(".provider-usage-error").count()).toBe(0);
         expect(await page.locator('[data-model-readiness="model-required"]').count()).toBe(0);
@@ -310,6 +310,7 @@ suite.define(() => {
 
         await page.locator("[data-models-connect]").click();
         await page.locator('[data-models-login-provider="google"]').click();
+        await page.locator("[data-models-login-api-key]").click();
         const addSection = page.locator("[data-models-key-dialog]");
         await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
         // The modal makes the picker inert. Use its selection owner without

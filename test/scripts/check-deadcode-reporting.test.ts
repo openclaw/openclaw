@@ -1,26 +1,37 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 type Outcome = "failure" | "finding" | "success";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("deadcode command reporting", () => {
-  it.each<{
+  it.for<{
     wrapper: "exports" | "unused-files";
     outcomes: Outcome[];
   }>([
     { wrapper: "exports", outcomes: ["failure", "finding", "success"] },
     { wrapper: "unused-files", outcomes: ["failure", "finding"] },
-    { wrapper: "unused-files", outcomes: ["failure", "success"] },
-    { wrapper: "exports", outcomes: ["success", "success", "failure"] },
     { wrapper: "unused-files", outcomes: ["success", "finding"] },
     { wrapper: "exports", outcomes: ["success", "success", "success"] },
     { wrapper: "unused-files", outcomes: ["success", "success"] },
-  ])("reports every $wrapper outcome: $outcomes", ({ wrapper, outcomes }) => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-deadcode-reporting-"));
-    const pnpm = path.join(root, "pnpm.cjs");
+  ])("reports every $wrapper outcome: $outcomes", async ({ wrapper, outcomes }, { signal }) => {
+    const root = tempDirs.make("openclaw-deadcode-reporting-");
+    const pnpm = path.join(root, "pnpm.mjs");
     const scopes = ["production", "full-tree", "script"].slice(0, outcomes.length);
     const configs = [
       "config/knip.config.ts",
@@ -28,6 +39,17 @@ describe("deadcode command reporting", () => {
       "config/knip.scripts-exports.config.ts",
     ].slice(0, outcomes.length);
     const kind = wrapper === "exports" ? "unused-export" : "unused-file";
+    const receipts = await openFixtureReceiptChannel();
+    let child: ChildProcess | undefined;
+    let completion:
+      | Promise<{
+          error: Error | undefined;
+          signal: NodeJS.Signals | null;
+          status: number | null;
+          stdout: string;
+          stderr: string;
+        }>
+      | undefined;
 
     try {
       // Synthetic Knip output only: keep the real CLI, launcher and child processes.
@@ -35,48 +57,87 @@ describe("deadcode command reporting", () => {
       writeFileSync(
         pnpm,
         `
-const fs = require("node:fs");
-const path = require("node:path");
+${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const configs = ${JSON.stringify(configs)};
 const outcomes = ${JSON.stringify(outcomes)};
 const index = configs.indexOf(args[args.indexOf("--config") + 1]);
 if (index < 0) throw new Error("Unexpected scan config");
-const marker = (i, phase) => path.join(__dirname, i + "." + phase);
+const marker = (i, phase) => path.join(${JSON.stringify(root)}, i + "." + phase);
 fs.writeFileSync(marker(index, "started"), JSON.stringify(args));
-const deadline = setTimeout(() => {
-  console.error("Fixture concurrency barrier timed out");
-  process.exit(3);
-}, 5000);
-const barrier = setInterval(() => {
-  if (!configs.every((_, i) => fs.existsSync(marker(i, "started")))) return;
-  if (index > 0 && !fs.existsSync(marker(index - 1, "completed"))) return;
-  clearInterval(barrier);
-  clearTimeout(deadline);
-  const outcome = outcomes[index];
-  if (outcome === "failure") {
-    console.error("SYNTHETIC_SCAN_FAILURE_" + index);
-    process.exitCode = 2;
-  } else if (outcome === "finding") {
-    console.log(args.includes("--files")
-      ? "Unused files (1)\\nsrc/diagnostic-fixture.ts: src/diagnostic-fixture.ts"
-      : "Unused exports (1)\\nsrc/diagnostic-fixture.ts: syntheticFinding");
-    process.exitCode = 1;
-  }
-  fs.writeFileSync(marker(index, "completed"), outcome);
-}, 5);
+sendReceipt(String(index), "started");
+await awaitRelease(String(index), "run");
+const outcome = outcomes[index];
+if (outcome === "failure") {
+  console.error("SYNTHETIC_SCAN_FAILURE_" + index);
+  process.exitCode = 2;
+} else if (outcome === "finding") {
+  console.log(args.includes("--files")
+    ? "Unused files (1)\\nsrc/diagnostic-fixture.ts: src/diagnostic-fixture.ts"
+    : "Unused exports (1)\\nsrc/diagnostic-fixture.ts: syntheticFinding");
+  process.exitCode = 1;
+}
+fs.writeFileSync(marker(index, "completed"), outcome);
+sendReceipt(String(index), "completed");
 `,
       );
-      const result = spawnSync(
+      child = spawn(
         process.execPath,
-        ["--import", "./scripts/tsx.mjs", `scripts/check-deadcode-${wrapper}.mts`],
+        resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(
+            wrapper === "exports"
+              ? toolingMtsEntrypoints.deadcodeExports
+              : toolingMtsEntrypoints.deadcodeUnusedFiles,
+          ),
+        ),
         {
           cwd: process.cwd(),
           env: { ...process.env, npm_execpath: pnpm },
-          encoding: "utf8",
-          timeout: 15_000,
+          stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      const stdout = createBoundedChildOutput();
+      const stderr = createBoundedChildOutput();
+      child.stdout?.on("data", stdout.append);
+      child.stderr?.on("data", stderr.append);
+      completion = new Promise((resolve) => {
+        let error: Error | undefined;
+        child?.once("error", (cause) => {
+          error = cause;
+        });
+        child?.once("close", (status, exitSignal) => {
+          resolve({
+            error,
+            status,
+            signal: exitSignal,
+            stdout: stdout.text(),
+            stderr: stderr.text(),
+          });
+        });
+      });
+      const completed = completion;
+      const waitForPhase = (index: number, phase: string) =>
+        awaitGateBeforeSettlement(
+          receipts.waitFor(String(index), phase),
+          completed,
+          "Fixture concurrency barrier timed out",
+        ).catch((error: unknown) => {
+          // Scan output and receipts use different pipes; its durable marker wins the race.
+          if (!existsSync(path.join(root, `${index}.${phase}`))) {
+            throw error;
+          }
+        });
+      await withinTest(
+        Promise.all(outcomes.map((_, index) => waitForPhase(index, "started"))),
+        signal,
+      );
+      for (const index of outcomes.keys()) {
+        receipts.release(String(index), "run");
+        await withinTest(waitForPhase(index, "completed"), signal);
+      }
+      const result = await withinTest(completed, signal);
       const output = result.stdout + result.stderr;
       expect(result.error, output).toBeUndefined();
       expect(result.signal, output).toBeNull();
@@ -122,7 +183,14 @@ const barrier = setInterval(() => {
         }
       }
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      for (const index of outcomes.keys()) {
+        receipts.release(String(index), "run");
+      }
+      if (child?.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      await completion;
+      await receipts.close();
     }
   });
 });

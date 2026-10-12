@@ -1,10 +1,55 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export function exportPreflightHarness(directory: string): string {
+  const workspace = path.join(directory, "workspace");
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith("GIT_")) {
+      delete env[key];
+    }
+  }
+  execFileSync("git", ["init", "--quiet", workspace], { env });
+  execFileSync(
+    "git",
+    [
+      `--git-dir=${path.join(workspace, ".git")}`,
+      `--work-tree=${process.cwd()}`,
+      "add",
+      "--",
+      ".github/actions",
+      "scripts",
+    ],
+    { env },
+  );
+  const result = spawnSync(
+    "python3",
+    ["-I", "-S", ".github/actions/git-owner/owner.py", "--policy", "-"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...env, WORKFLOW_SHA: "a".repeat(40) },
+      input: `import os
+import ci_git_owner
+ci_git_owner.kind = "preflight"
+ci_git_owner.workspace = ${JSON.stringify(workspace)}
+ci_git_owner.checkout_harness(os.environ["WORKFLOW_SHA"])
+`,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Preflight harness export failed: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+  return path.join(workspace, ".ci-harness");
+}
 
 /** Execute the workflow's native Node manifest with runtime dependencies forbidden. */
 export function runDependencyFreePreflight(
-  source: string,
+  entrypoint: URL,
   directory: string,
   nodeExecPath: string,
 ) {
@@ -16,17 +61,13 @@ export function runDependencyFreePreflight(
 import { isBuiltin, registerHooks } from "node:module";
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    // CI materializes these unchanged trusted helpers under its harness checkout.
-    if (specifier.startsWith("./.ci-harness/")) {
-      specifier = "./" + specifier.slice("./.ci-harness/".length);
-    }
     if (!isBuiltin(specifier) && !specifier.startsWith(".") &&
         !specifier.startsWith("file:") && !specifier.startsWith("/")) {
       throw new Error("Unexpected preflight dependency: " + specifier);
     }
     const resolved = nextResolve(specifier, context);
     if (resolved.url.includes("/node_modules/") ||
-        /\/(managed-windows-job|service-child-windows-job-native)\.[cm]?[jt]s$/.test(resolved.url)) {
+        /\/(managed-windows-job)\.[cm]?[jt]s$/.test(resolved.url)) {
       throw new Error("Unexpected preflight runtime module: " + resolved.url);
     }
     return resolved;
@@ -40,25 +81,26 @@ registerHooks({
       delete env[key];
     }
   }
-  const result = spawnSync(nodeExecPath, ["--import", preload, "--input-type=module"], {
+  const result = spawnSync(nodeExecPath, ["--import", preload, fileURLToPath(entrypoint)], {
     cwd: process.cwd(),
-    input: source,
     encoding: "utf8",
     timeout: 30_000,
     killSignal: "SIGKILL",
     env: {
       ...env,
       GITHUB_OUTPUT: output,
-      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
       GITHUB_RUN_ATTEMPT: "1",
-      OPENCLAW_CI_EVENT_NAME: "pull_request",
+      OPENCLAW_CI_EVENT_NAME: "workflow_dispatch",
       OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
       OPENCLAW_CI_HEAD_REPOSITORY: "openclaw/openclaw",
       OPENCLAW_CI_RUNNER_PROFILE: "github",
-      OPENCLAW_CI_RUN_NODE: "true",
+      OPENCLAW_CI_RUN_NODE: "false",
       OPENCLAW_CI_RUN_WINDOWS: "true",
-      // Exercise the same import closure without unrelated source-impact graph walks.
-      OPENCLAW_CI_CHANGED_PATHS_JSON: '["test/scripts/managed-child-process.test.ts"]',
+      OPENCLAW_CI_RUN_UI_TESTS: "true",
+      // Exercise real planner and codec imports without a repository-wide PR
+      // owner graph. Changed-owner selection has separate integration coverage.
+      OPENCLAW_CI_CHANGED_PATHS_JSON: "[]",
     },
   });
   return {

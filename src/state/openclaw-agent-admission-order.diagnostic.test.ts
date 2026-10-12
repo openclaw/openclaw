@@ -9,6 +9,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
@@ -18,7 +19,6 @@ import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
-  disposeOpenClawAgentDatabaseByPath,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -59,7 +59,7 @@ afterEach(async () => {
   }
 });
 
-function seed() {
+function seed(freshIdentity = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-order-"));
   roots.push(root);
   const options = { agentId: "synthetic-owner", env: { OPENCLAW_STATE_DIR: root } };
@@ -68,15 +68,19 @@ function seed() {
   database.db.exec(`
     INSERT INTO memory_index_chunks
       (id,path,start_line,end_line,hash,model,text,embedding,updated_at)
-      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text','[]',1);
+      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text',X'',1);
     INSERT INTO memory_index_chunk_recall_metadata (chunk_id, importance)
       VALUES ('synthetic-parent',1);
   `);
   expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
-  // Independent fixture writers model unclean state that requires a full admission check.
+  // Independent fixture writers model unclean state that requires physical admission checks.
   clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  if (freshIdentity) {
+    fs.copyFileSync(pathname, `${pathname}.replacement`);
+    fs.renameSync(`${pathname}.replacement`, pathname);
+  }
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -103,7 +107,10 @@ function tracePhysicalChecks(
     const prepare = db.prepare.bind(db);
     db.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (
+        sql === "PRAGMA integrity_check;" ||
+        sql === "PRAGMA integrity_check('memory_index_chunk_recall_metadata');"
+      ) {
         const all = statement.all.bind(statement);
         statement.all = () => {
           const rows = all();
@@ -116,7 +123,10 @@ function tracePhysicalChecks(
           return rows;
         };
       }
-      if (sql === "PRAGMA foreign_key_check;") {
+      if (
+        sql === "PRAGMA foreign_key_check;" ||
+        sql === "PRAGMA foreign_key_check('memory_index_chunk_recall_metadata');"
+      ) {
         const iterate = statement.iterate.bind(statement);
         statement.iterate = function* () {
           yield* iterate();
@@ -150,7 +160,7 @@ function ordinaryWrite(options: Parameters<typeof openOpenClawAgentDatabase>[0])
 }
 
 describe("physical-open admission ordering", () => {
-  it("rejects an external FK violation committed between full integrity and FK checks", () => {
+  it("rejects an external FK violation committed between table integrity and FK checks", () => {
     const { options, pathname, writer } = seed();
     const trace = tracePhysicalChecks(pathname, "integrity", () => corruptForeignKey(writer));
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
@@ -161,7 +171,7 @@ describe("physical-open admission ordering", () => {
     ]);
   });
 
-  it("exposes and writes after an external FK violation committed after the FK check", () => {
+  it("exposes and writes after an external FK violation committed after its table FK check", () => {
     const { options, pathname, writer } = seed();
     const trace = tracePhysicalChecks(pathname, "foreign-key", () => corruptForeignKey(writer));
     const database = openOpenClawAgentDatabase(options);
@@ -174,34 +184,37 @@ describe("physical-open admission ordering", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
-  it("trusts a live cached handle but rejects the same FK violation after disposal", () => {
+  it("trusts a live cached handle but rejects the same FK violation after disposal", async () => {
     const { options, pathname, writer } = seed();
     const first = openOpenClawAgentDatabase(options);
     corruptForeignKey(writer);
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
-    expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     clearOpenClawAgentIntegrityVerification(pathname, options.env);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects concurrent %s replacement after the physical checks before exposure",
+    "rejects %s replacement before exposure, with version drift after physical checks",
     (replacement) => {
-      const { options, pathname, writer } = seed();
-      const trace = tracePhysicalChecks(pathname, "foreign-key", () => {
-        if (replacement === "agent-id") {
-          writer.exec("UPDATE schema_meta SET agent_id='replacement' WHERE meta_key='primary'");
-        } else if (replacement === "role") {
-          writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
-        } else {
-          writer.exec("PRAGMA user_version=9999;");
-        }
-      });
+      const { options, pathname, writer } = seed(replacement !== "version");
+      // Ownership is immutable once admitted; reject incompatible replacement files on load.
+      if (replacement === "agent-id") {
+        writer.exec("UPDATE schema_meta SET agent_id='replacement' WHERE meta_key='primary'");
+      } else if (replacement === "role") {
+        writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
+      }
+      const trace = tracePhysicalChecks(pathname, "foreign-key", () =>
+        writer.exec("PRAGMA user_version=9999;"),
+      );
       expect(() => openOpenClawAgentDatabase(options)).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
-      expect(trace.didCommit()).toBe(true);
+      expect(trace.didCommit()).toBe(replacement === "version");
+      if (replacement !== "version") {
+        expect(trace.events).toEqual([]);
+      }
       expect(
         writer.prepare("SELECT count(*) AS n FROM cache_entries WHERE scope='synthetic'").get(),
       ).toEqual({ n: 0 });
@@ -381,9 +394,9 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each([false, true])(
-    "preserves physical index repair policy (unrelated damage: %s)",
+    "refuses physical index corruption without changing it (unrelated damage: %s)",
     async (unrelated) => {
-      const { options, writer } = seed();
+      const { options, pathname, writer } = seed();
       writer.exec(`
       INSERT INTO cache_entries (scope,key,value_json,expires_at,updated_at)
       VALUES ('scope-a','key-a','{}',100,1);
@@ -409,20 +422,20 @@ describe("asynchronous canonical admission", () => {
       }
       const version = Number(writer.prepare("PRAGMA schema_version").get()?.schema_version);
       writer.exec(`PRAGMA writable_schema=OFF; PRAGMA schema_version=${version + 1};`);
-      expect(writer.prepare("PRAGMA integrity_check").all()).not.toEqual([
-        { integrity_check: "ok" },
-      ]);
+      const findings = writer.prepare("PRAGMA integrity_check").all();
+      expect(findings).not.toEqual([{ integrity_check: "ok" }]);
       writer.close();
-      if (unrelated) {
-        await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
-          /integrity_check failed/,
-        );
-      } else {
-        const database = await openOpenClawAgentDatabaseAsync(options);
-        expect(database.db.prepare("PRAGMA integrity_check").all()).toEqual([
-          { integrity_check: "ok" },
+      await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+        /integrity_check failed.*openclaw doctor --fix/,
+      );
+      const unchanged = realOpen(pathname, { readOnly: true });
+      try {
+        expect(unchanged.prepare("PRAGMA integrity_check").all()).toEqual(findings);
+        expect(unchanged.prepare("SELECT key FROM cache_entries NOT INDEXED").all()).toEqual([
+          { key: "key-a" },
         ]);
-        expect(ordinaryWrite(options)).toEqual({ n: 1 });
+      } finally {
+        unchanged.close();
       }
     },
   );
@@ -473,9 +486,9 @@ describe("asynchronous canonical admission", () => {
       if (mode !== "new") {
         const original = openOpenClawAgentDatabase(options);
         if (mode === "disposed replacement") {
-          expect(disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env })).toBe(
-            true,
-          );
+          expect(
+            await disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env }),
+          ).toBe(true);
         } else {
           closeOpenClawAgentDatabaseByPath(original.path);
         }
@@ -580,25 +593,25 @@ describe("asynchronous canonical admission", () => {
   });
 
   it.each(["agent-id", "role", "version"] as const)(
-    "rejects %s replacement after Worker completion before exposure",
+    "rejects %s replacement before async exposure, with version drift after Worker completion",
     async (replacement) => {
-      const { options, writer } = seed();
+      const { options, writer } = seed(replacement !== "version");
+      if (replacement === "agent-id") {
+        writer.exec("UPDATE schema_meta SET agent_id='replacement'");
+      } else if (replacement === "role") {
+        writer.exec("UPDATE schema_meta SET role='global'");
+      }
       const check = integrityWorker.assertSqliteIntegrityInWorker;
-      vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker").mockImplementation(
-        async (...args) => {
+      const worker = vi
+        .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
+        .mockImplementation(async (...args) => {
           await check(...args);
-          if (replacement === "agent-id") {
-            writer.exec("UPDATE schema_meta SET agent_id='replacement'");
-          } else if (replacement === "role") {
-            writer.exec("UPDATE schema_meta SET role='global'");
-          } else {
-            writer.exec("PRAGMA user_version=9999;");
-          }
-        },
-      );
+          writer.exec("PRAGMA user_version=9999;");
+        });
       await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
+      expect(worker).toHaveBeenCalledTimes(replacement === "version" ? 1 : 0);
       expect(() =>
         assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
       ).not.toThrow();
@@ -636,7 +649,7 @@ describe("asynchronous canonical admission", () => {
   it("rechecks corruption after async handle disposal", async () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
-    expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
     clearOpenClawAgentIntegrityVerification(pathname, options.env);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
@@ -752,6 +765,12 @@ describe("failed-open cleanup ownership", () => {
       release.mockImplementation(() => {
         throw new Error("synthetic lease release failure");
       });
+      const closeFailure = {
+        message: "Agent database close failed",
+        errors: expect.arrayContaining([
+          expect.objectContaining({ message: "synthetic lease release failure" }),
+        ]),
+      };
       if (mode === "sync") {
         expect(() =>
           openOpenClawAgentDatabase({ ...options, agentId: "other-owner", path: pathname }),
@@ -760,9 +779,7 @@ describe("failed-open cleanup ownership", () => {
         const admission = openOpenClawAgentDatabaseAsync(options);
         await Promise.all([
           expect(admission).rejects.toThrow("synthetic lease release failure"),
-          expect(closeOpenClawAgentDatabasesAsync()).rejects.toThrow(
-            "synthetic lease release failure",
-          ),
+          expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure),
         ]);
       }
       expect(rows()).toHaveLength(1);
@@ -770,9 +787,7 @@ describe("failed-open cleanup ownership", () => {
       const nextRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-close-next-owner-"));
       roots.push(nextRoot);
       options.env.OPENCLAW_STATE_DIR = nextRoot;
-      await expect(closeOpenClawAgentDatabasesAsync()).rejects.toThrow(
-        "synthetic lease release failure",
-      );
+      await expect(closeOpenClawAgentDatabasesAsync()).rejects.toMatchObject(closeFailure);
       expect(rows()).toEqual([originalLease]);
       release.mockRestore();
       await closeOpenClawAgentDatabasesAsync();

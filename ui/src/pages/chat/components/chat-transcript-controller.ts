@@ -1,5 +1,5 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
-import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
@@ -17,6 +17,7 @@ export class ChatTranscriptController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
+    private readonly scrollPaneId: () => string,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
     host.addController(this);
@@ -26,17 +27,16 @@ export class ChatTranscriptController implements ReactiveController {
     return this.activeSessionKey;
   }
 
-  renderSession(
-    paneId: string,
-    sessionKey: string,
-    render: (transcript: ChatTranscriptSession) => TemplateResult,
-  ): TemplateResult {
+  renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
     if (
       !this.sessionVirtualizer ||
       this.activeSessionKey === null ||
       !areUiSessionKeysEquivalent(this.activeSessionKey, sessionKey)
     ) {
       this.sessionVirtualizer?.dispose();
+      // Presentation identities include the session; the cache is instead
+      // bounded by physical panes, with a separate session LRU inside each pane.
+      const paneId = this.scrollPaneId();
       const savedPosition = getChatSessionScrollPosition(paneId, sessionKey);
       const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
@@ -61,10 +61,6 @@ export class ChatTranscriptController implements ReactiveController {
     return this.sessionVirtualizer?.isProgrammaticScroll ?? false;
   }
 
-  get isManualScroll(): boolean {
-    return this.sessionVirtualizer?.isManualScroll ?? false;
-  }
-
   scrollToEnd(options: ChatScrollToEndOptions = {}): boolean {
     return this.sessionVirtualizer?.scrollToEnd(options) ?? false;
   }
@@ -83,6 +79,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   get scrollElement(): HTMLDivElement | null {
     return this.sessionVirtualizer?.scrollElement ?? null;
+  }
+
+  syncViewportGeometry(): void {
+    this.sessionVirtualizer?.syncViewportGeometry();
   }
 
   hostConnected(): void {

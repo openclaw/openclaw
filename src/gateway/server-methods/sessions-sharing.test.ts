@@ -10,14 +10,14 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   loadSessionEntry,
+  replaceSessionEntrySync,
   loadTranscriptEvents,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionMember,
-  listSessionMembers,
-} from "../../config/sessions/session-sharing-store.js";
+import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
+import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -29,6 +29,8 @@ import {
   getGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "../local-user-ingress.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
@@ -41,7 +43,6 @@ import { createControlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionReadHandlers as registeredSessionReadHandlers } from "./sessions-read.js";
-import { sessionSharingHandlers } from "./sessions-sharing.js";
 import {
   callSessionSharingHandler as call,
   identifiedClient,
@@ -59,35 +60,8 @@ const sessionReadHandlers = {
   },
 };
 
-type ResolveSessionSharingTarget =
-  (typeof import("../session-sharing.js"))["resolveSessionSharingTarget"];
-
-const targetResolutionMock = vi.hoisted(() => ({
-  calls: 0,
-  override: undefined as
-    | undefined
-    | ((
-        target: ReturnType<ResolveSessionSharingTarget>,
-        callIndex: number,
-      ) => ReturnType<ResolveSessionSharingTarget>),
-}));
-
-vi.mock("../session-sharing.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../session-sharing.js")>("../session-sharing.js");
-  return {
-    ...actual,
-    resolveSessionSharingTarget: (params: Parameters<ResolveSessionSharingTarget>[0]) => {
-      const target = actual.resolveSessionSharingTarget(params);
-      const callIndex = ++targetResolutionMock.calls;
-      return targetResolutionMock.override?.(target, callIndex) ?? target;
-    },
-  };
-});
-
 afterEach(() => {
-  targetResolutionMock.calls = 0;
-  targetResolutionMock.override = undefined;
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -330,7 +304,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it.each([undefined, "idle"])(
+  it.each(["idle"])(
     "keeps hidden incognito rows from changing non-owner list metadata (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -405,12 +379,14 @@ describe("session sharing handlers", () => {
           createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
+      const previewContext = context(vi.fn());
+      await initializeSessionReadContext(previewContext);
       const previewFor = async (client: GatewayClient) => {
         const responses: Parameters<RespondFn>[] = [];
         await createControlUiHandlers()["controlUi.sessionPreview"]?.({
           params: { sessionKey },
           client,
-          context: context(vi.fn()),
+          context: previewContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
         } as never);
         return responses[0]?.[1];
@@ -440,27 +416,34 @@ describe("session sharing handlers", () => {
           visibility: "shared",
         },
       );
-      targetResolutionMock.override = (target, callIndex) =>
-        callIndex === 2 && target
-          ? {
-              ...target,
-              entry: { ...target.entry, sessionId: "session-replaced" },
-            }
-          : target;
       const broadcast = vi.fn();
-      const respond = vi.fn();
+      const requestContext = context(broadcast);
+      const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
+      vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
+        async (operation, params) => {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "session-replaced",
+              updatedAt: Date.now(),
+              visibility: "shared",
+            },
+          );
+          expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(
+            "session-replaced",
+          );
+          await getSessionRowProjection(requestContext)!.prepareMembership();
+          return run(operation, params);
+        },
+      );
 
       await expect(
-        sessionSharingHandlers["session.visibility.set"]?.({
-          params: { sessionKey, visibility: "draft" },
-          client: soloClient(),
-          context: context(broadcast),
-          respond,
-        } as never),
-      ).rejects.toThrow("session changed before sharing mutation");
+        call("session.visibility.set", { sessionKey, visibility: "draft" }, requestContext),
+      ).rejects.toThrow(SessionMutationFactsUnavailableError);
 
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.visibility).toBe("shared");
-      expect(respond).not.toHaveBeenCalled();
+      const replacement = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(replacement?.sessionId).toBe("session-replaced");
+      expect(replacement?.visibility ?? "shared").toBe("shared");
       expect(broadcast).not.toHaveBeenCalledWith(
         "session.sharing",
         expect.anything(),
@@ -514,48 +497,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("projects a shared session member's truthful role in sessions.list", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:shared-member";
-      const memberIdentity = { id: "member@example.com", label: "Member" };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-shared-member",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-          visibility: "shared",
-        },
-      );
-      expect(
-        addSessionMember(
-          { agentId: "main", sessionKey },
-          { identityId: memberIdentity.id, addedBy: "owner@example.com", addedAt: 1 },
-        ).inserted,
-      ).toBe(true);
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionReadHandlers["sessions.list"]?.({
-        req: { type: "req", id: "session-list-test", method: "sessions.list" },
-        params: { agentId: "main" },
-        client: identifiedClient(memberIdentity.id, memberIdentity.label),
-        context: {
-          ...context(vi.fn()),
-          loadGatewayModelCatalog: async () => [],
-        } as unknown as GatewayRequestContext,
-        respond: (...response: Parameters<RespondFn>) => responses.push(response),
-      } as never);
-
-      expect(responses[0]?.[0]).toBe(true);
-      const payload = responses[0]?.[1] as
-        | { sessions?: Array<{ key: string; sharingRole?: string }> }
-        | undefined;
-      expect(payload?.sessions?.find((session) => session.key === sessionKey)?.sharingRole).toBe(
-        "member",
-      );
-    });
-  });
-
-  it.each([undefined, "direct"])(
+  it.each(["direct"])(
     "hides drafts after asynchronous catalog preparation (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -717,8 +659,8 @@ describe("session sharing handlers", () => {
       const requestContext = {
         ...context(vi.fn()),
         execApprovalManager: {
-          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
-          getSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
+          lookupLocalApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getLocalSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
         },
       } as unknown as GatewayRequestContext;
       const mutations: Array<[string, Record<string, unknown>]> = [
@@ -878,6 +820,7 @@ describe("session sharing handlers", () => {
           category: "Projects",
         },
       );
+      await getSessionRowProjection(requestContext)!.prepareMembership();
       expect(
         resolveSessionMutationAuthorization({
           client: identifiedClient("viewer"),

@@ -1,18 +1,20 @@
 import { readFileSync } from "node:fs";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import {
   copyTree,
   createCloneSource,
   probeTreeClone,
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
+import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
   FsSafeCopyWrite,
 } from "./fs-safe-copy-worker-contract.js";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "./fs-safe-defaults.js";
+import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -23,6 +25,8 @@ function failure(error: unknown): FsSafeCopyReply {
       : {}),
   };
 }
+
+normalizeFsSafeNativeEnv();
 
 if (parentPort) {
   // This isolate uses the library's default and explicit operator environment.
@@ -36,7 +40,13 @@ if (parentPort) {
     try {
       switch (command.type) {
         case "probe":
-          return { type: "probe", backend: probeTreeClone(command.parent) };
+          return {
+            type: "probe",
+            backend: probeTreeClone(command.parent),
+            nativeMode: getFsSafeNativeConfig().mode,
+          };
+        case "acl":
+          return { type: "acl", acl: inspectDarwinAcl(command.path) };
         case "metadata":
           return { type: "metadata", entries: await readCloneFileMetadata(command.paths) };
         default:

@@ -124,20 +124,14 @@ describe("retired copilot custody", () => {
       blocked: false,
     });
 
-    expect(storage.localSet).toHaveBeenCalledWith({ [CUSTODY_BLOCKED_KEY]: true });
-    expect(storage.localRemove).toHaveBeenCalledTimes(2);
-    expect(storage.localRemove).toHaveBeenNthCalledWith(1, COPILOT_LOCAL_KEYS);
-    expect(storage.localRemove).toHaveBeenNthCalledWith(2, [CUSTODY_BLOCKED_KEY]);
+    expect(storage.localSet).not.toHaveBeenCalled();
+    expect(storage.localRemove).toHaveBeenCalledOnce();
+    expect(storage.localRemove).toHaveBeenCalledWith(COPILOT_LOCAL_KEYS);
     expect(storage.sessionRemove).toHaveBeenCalledOnce();
     expect(storage.sessionRemove).toHaveBeenCalledWith(COPILOT_SESSION_KEYS);
     expect(storage.localValues).toEqual(RETAINED_LOCAL);
     expect(storage.sessionValues).toEqual({});
-    expect(storage.operations).toEqual([
-      "marker_set",
-      "session_remove",
-      "retired_local_remove",
-      "marker_remove",
-    ]);
+    expect(storage.operations).toEqual(["session_remove", "retired_local_remove"]);
   });
 
   it.each([
@@ -151,35 +145,6 @@ describe("retired copilot custody", () => {
             gatewayScope: "ws://127.0.0.1:18789/",
             sessionKey: "browser:tab:7",
             creationPending: true,
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "a confirmed session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            gatewayScope: "ws://127.0.0.1:18789/",
-            sessionKey: "browser:tab:7",
-            sessionId: "session-7",
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "an active session remains",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            sessionKey: "browser:tab:7",
-            active: true,
           },
         },
         pendingArchives: [],
@@ -293,17 +258,34 @@ describe("retired copilot custody", () => {
     expect(storage.sessionValues).toEqual({});
   });
 
-  it("keeps authority blocked when automatic empty-state cleanup fails", async () => {
-    const storage = cleanupStorage({
-      registry: { sessions: {}, pendingArchives: [] },
-      failureStage: "retired_local_remove",
-    });
+  it.each([
+    { stage: "session_remove", registryPresent: true },
+    { stage: "retired_local_remove", registryPresent: true },
+    { stage: "session_remove", registryPresent: false },
+    { stage: "retired_local_remove", registryPresent: false },
+  ] as const)(
+    "retries harmless cleanup after $stage fails (registry present: $registryPresent)",
+    async ({ stage, registryPresent }) => {
+      const storage = cleanupStorage({
+        registry: { sessions: {}, pendingArchives: [] },
+        registryPresent,
+        failureStage: stage,
+      });
 
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({ blocked: true });
+      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+        blocked: true,
+      });
+      expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+      expect(Object.hasOwn(storage.localValues, "copilotSessionRegistryV1")).toBe(registryPresent);
 
-    expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
-    expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
-  });
+      storage.setFailureStage(undefined);
+      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+        blocked: false,
+      });
+      expect(storage.localValues).toEqual(RETAINED_LOCAL);
+      expect(storage.sessionValues).toEqual({});
+    },
+  );
 });
 
 describe("native bootstrap timeout", () => {

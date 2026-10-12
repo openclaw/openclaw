@@ -4,6 +4,7 @@ import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js"
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
+import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
@@ -11,10 +12,17 @@ import {
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
-import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  releasePluginCacheInstance,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createProviderHookRuntime } from "./provider-hook-runtime-core.js";
@@ -27,8 +35,18 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-export const resolveRuntimePluginRegistry =
-  createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
+export function resolveRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
+  if (activeRegistry) {
+    return activeRegistry;
+  }
+  // Runtime helpers must not recurse while this exact snapshot is registering.
+  return isPluginRegistryLoadInFlight(options)
+    ? undefined
+    : loadOpenClawPlugins({ ...options, activate: false });
+}
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
@@ -53,7 +71,9 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelAuth ??= Object.freeze(
       createRuntimeModelAuth({
         ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
         isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
       }),
     ));
   },
@@ -69,15 +89,7 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
   },
 });
 
-type NativePluginBindings = {
-  providerRegistry: ReturnType<typeof createProviderRegistryResolver>;
-  providerHooks: ReturnType<typeof createProviderHookRuntime>;
-  externalProfiles: ReturnType<typeof createProviderExternalAuthResolver>;
-  externalAuth: ReturnType<typeof createExternalAuthRuntime>;
-  authStore: ReturnType<typeof createAuthProfileStoreRuntime>;
-  authAvailability: ReturnType<typeof createProviderAuthAvailability>;
-};
-export const nativePluginBindings: Readonly<NativePluginBindings> = Object.freeze({
+export const nativePluginBindings = Object.freeze({
   providerRegistry,
   providerHooks,
   externalProfiles,
@@ -91,6 +103,24 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Publishes synchronously, then joins every accepted health write before returning to its host. */
+export async function loadAndActivateRootPluginRegistry(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const cleanup: Promise<void>[] = [];
+  try {
+    return loadOpenClawPluginsCore(
+      { ...options, activate: true },
+      loaderBindings,
+      undefined,
+      undefined,
+      (completion) => cleanup.push(completion),
+    );
+  } finally {
+    await Promise.allSettled(cleanup);
+  }
 }
 
 /** Acquires a fresh discovery registry; release waits for its registration resources. */
@@ -115,7 +145,8 @@ async function acquireRegistryResources(
     const instances = new Set(cache.instances);
     for (const record of registry?.plugins ?? []) {
       const instance = getPluginInstance(record);
-      if (instance) {
+      // Borrowed records stay in the lending registry's custody.
+      if (instance && instance.owner?.registry === registry) {
         instances.add(instance);
       }
     }
@@ -126,24 +157,30 @@ async function acquireRegistryResources(
         .filter((instance) => !rollbackInstances.has(instance))
         .map((instance) => instance.dispose()),
     );
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected"
+        ? [new PluginRuntimeCloseRetainedError(result.reason)]
+        : result.value.errors,
+    );
     for (const instance of instances) {
-      cache.instances.delete(instance);
+      releasePluginCacheInstance(instance, cache);
     }
     try {
-      await retirePluginCache(cache);
+      const retired = await retirePluginCache(cache);
+      failures.push(...retired.failures.map((failure) => failure.error));
     } catch (reason) {
-      results.push({ status: "rejected", reason });
+      failures.push(new PluginRuntimeCloseRetainedError(reason));
     }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
     if (failures.length) {
-      throw new PluginRuntimeCloseRetainedError(
-        new AggregateError(failures, "Plugin inspection instances failed to retire"),
-      );
+      const error = new AggregateError(failures, "Plugin inspection instances failed to retire");
+      // Settled callback faults are diagnostics; timed-out disposal still owns physical cleanup.
+      throw failures.some((failure) => failure instanceof PluginInstanceDrainTimeoutError)
+        ? new PluginRuntimeCloseRetainedError(error)
+        : error;
     }
   });
   try {
+    inheritPluginNativeAdmissions(getPluginCache(), cache);
     const registry = withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {

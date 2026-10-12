@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
+import { resolveQaConvexCredentialEnv } from "../../qa-credentials-bootstrap.runtime.js";
 import {
   isQaCredentialTruthyOptIn,
   joinQaCredentialEndpoint,
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
   QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "../../qa-credentials-common.runtime.js";
+import { createQaLeaseHealth } from "./credential-lease-health.js";
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
-const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
@@ -53,28 +57,7 @@ const convexPayloadChunkSuccessSchema = z.object({
   data: z.string(),
 });
 
-type ConvexCredentialBrokerConfig = {
-  acquireTimeoutMs: number;
-  acquireUrl: string;
-  authToken: string;
-  heartbeatIntervalMs: number;
-  heartbeatUrl: string;
-  httpTimeoutMs: number;
-  leaseTtlMs: number;
-  ownerId: string;
-  payloadMaxBytes: number;
-  payloadMaxChunks: number;
-  payloadChunkUrl: string;
-  releaseUrl: string;
-  role: QaCredentialRole;
-};
-
-type QaCredentialLeaseHeartbeat = {
-  getFailure(): Error | null;
-  stop(): Promise<void>;
-  throwIfFailed(): void;
-  whenFailed: Promise<Error>;
-};
+type ConvexCredentialBrokerConfig = ReturnType<typeof resolveConvexCredentialBrokerConfig>;
 
 type QaCredentialRole = "ci" | "maintainer";
 
@@ -82,6 +65,7 @@ type QaCredentialLeaseSource = "convex" | "env";
 
 type QaCredentialLease<TPayload> = {
   credentialId?: string;
+  assertHealthy(): void;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
   kind: string;
@@ -96,6 +80,8 @@ type QaCredentialLease<TPayload> = {
 
 type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   kind: string;
   ownerId?: string;
@@ -112,8 +98,8 @@ class QaCredentialBrokerError extends Error {
   code: string;
   retryAfterMs?: number;
 
-  constructor(params: { code: string; message: string; retryAfterMs?: number }) {
-    super(params.message);
+  constructor(params: { code: string; message: string; retryAfterMs?: number; cause?: unknown }) {
+    super(params.message, { cause: params.cause });
     this.name = "QaCredentialBrokerError";
     this.code = params.code;
     this.retryAfterMs = params.retryAfterMs;
@@ -144,27 +130,11 @@ function normalizeQaCredentialRole(
   throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
 }
 
-function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
-  return normalizeQaCredentialConvexSiteUrl({ raw, env });
-}
-
-function normalizeEndpointPrefix(value: string | undefined): string {
-  return normalizeQaCredentialEndpointPrefix({
-    value,
-    fallback: DEFAULT_ENDPOINT_PREFIX,
-    invalidAbsoluteMessage:
-      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path like /qa-credentials/v1.",
-    invalidSegmentsMessage:
-      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must not contain backslashes or .. path segments.",
-  });
-}
-
 function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole): string {
-  const roleToken =
+  const token =
     role === "ci"
       ? env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim()
       : env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim();
-  const token = roleToken;
   if (token) {
     return token;
   }
@@ -178,13 +148,20 @@ function resolveConvexCredentialBrokerConfig(params: {
   env: NodeJS.ProcessEnv;
   ownerId?: string;
   role: QaCredentialRole;
-}): ConvexCredentialBrokerConfig {
+}) {
   const siteUrl = params.env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL for --credential-source convex.");
   }
-  const baseUrl = normalizeConvexSiteUrl(siteUrl, params.env);
-  const endpointPrefix = normalizeEndpointPrefix(params.env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX);
+  const baseUrl = normalizeQaCredentialConvexSiteUrl({ raw: siteUrl, env: params.env });
+  const endpointPrefix = normalizeQaCredentialEndpointPrefix({
+    value: params.env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX,
+    fallback: QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
+    invalidAbsoluteMessage:
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path like /qa-credentials/v1.",
+    invalidSegmentsMessage:
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must not contain backslashes or .. path segments.",
+  });
   const ownerId =
     params.ownerId?.trim() ||
     params.env.OPENCLAW_QA_CREDENTIAL_OWNER_ID?.trim() ||
@@ -282,40 +259,31 @@ function toBrokerError(params: {
   });
 }
 
-async function postConvexBroker(params: {
-  authToken: string;
-  body: Record<string, unknown>;
-  fetchImpl: typeof fetch;
-  maxBytes: number;
-  timeoutMs: number;
-  url: string;
-}): Promise<unknown> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
-  const response = await params.fetchImpl(params.url, {
+async function postConvexBroker(
+  config: ConvexCredentialBrokerConfig,
+  fetchImpl: typeof fetch,
+  endpoint: "acquire" | "heartbeat" | "payloadChunk" | "release",
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const url = config[`${endpoint}Url`];
+  const timeoutMs = resolveTimerTimeoutMs(config.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
+  const response = await fetchImpl(url, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${params.authToken}`,
+      authorization: `Bearer ${config.authToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(params.body),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
 
   // Keep ordinary broker responses small, while allowing chunk payloads to use
   // the larger declared payload ceiling.
   const text = await readProviderTextResponse(response, "Convex credential broker", {
-    maxBytes: params.maxBytes,
+    maxBytes:
+      endpoint === "payloadChunk" ? config.payloadMaxBytes : CONVEX_BROKER_RESPONSE_MAX_BYTES,
   });
-  const payload: unknown = (() => {
-    if (!text.trim()) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(text) as unknown;
-    } catch {
-      return text;
-    }
-  })();
+  const payload = parseQaCredentialResponsePayload(text);
 
   const brokerError = toBrokerError({
     payload,
@@ -326,7 +294,7 @@ async function postConvexBroker(params: {
   }
   if (!response.ok) {
     throw new Error(
-      `Convex credential broker request to ${params.url} failed with HTTP ${response.status}.`,
+      `Convex credential broker request to ${url} failed with HTTP ${response.status}.`,
     );
   }
   return payload;
@@ -337,7 +305,9 @@ async function resolveConvexCredentialPayload(params: {
   config: ConvexCredentialBrokerConfig;
   fetchImpl: typeof fetch;
   kind: string;
+  signal?: AbortSignal;
 }) {
+  params.signal?.throwIfAborted();
   const marker = parseChunkedPayloadMarker(params.acquired.payload, {
     maxBytes: params.config.payloadMaxBytes,
     maxChunks: params.config.payloadMaxChunks,
@@ -348,21 +318,16 @@ async function resolveConvexCredentialPayload(params: {
   const chunks: string[] = [];
   let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
-    const payload = await postConvexBroker({
-      fetchImpl: params.fetchImpl,
-      maxBytes: params.config.payloadMaxBytes,
-      timeoutMs: params.config.httpTimeoutMs,
-      authToken: params.config.authToken,
-      url: params.config.payloadChunkUrl,
-      body: {
-        kind: params.kind,
-        ownerId: params.config.ownerId,
-        actorRole: params.config.role,
-        credentialId: params.acquired.credentialId,
-        leaseToken: params.acquired.leaseToken,
-        index,
-      },
+    params.signal?.throwIfAborted();
+    const payload = await postConvexBroker(params.config, params.fetchImpl, "payloadChunk", {
+      kind: params.kind,
+      ownerId: params.config.ownerId,
+      actorRole: params.config.role,
+      credentialId: params.acquired.credentialId,
+      leaseToken: params.acquired.leaseToken,
+      index,
     });
+    params.signal?.throwIfAborted();
     const parsed = convexPayloadChunkSuccessSchema.parse(payload);
     serializedBytes += Buffer.byteLength(parsed.data, "utf8");
     if (serializedBytes > marker.byteLength) {
@@ -392,18 +357,8 @@ function computeAcquireBackoffMs(params: {
 }
 
 function assertConvexOk(payload: unknown, actionLabel: string) {
-  if (payload === undefined) {
+  if (payload === undefined || convexOkSchema.safeParse(payload).success) {
     return;
-  }
-  if (convexOkSchema.safeParse(payload).success) {
-    return;
-  }
-  const brokerError = toBrokerError({
-    payload,
-    fallback: `Convex credential ${actionLabel} failed.`,
-  });
-  if (brokerError) {
-    throw brokerError;
   }
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
@@ -423,7 +378,8 @@ function isTransientBrokerTransportError(error: unknown) {
 export async function acquireQaCredentialLease<TPayload>(
   opts: AcquireQaCredentialLeaseOptions<TPayload>,
 ): Promise<QaCredentialLease<TPayload>> {
-  const env = opts.env ?? process.env;
+  let env = opts.env ?? process.env;
+  opts.signal?.throwIfAborted();
   const source = normalizeQaCredentialSource(opts.source ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE);
   if (source === "env") {
     return {
@@ -431,6 +387,7 @@ export async function acquireQaCredentialLease<TPayload>(
       kind: opts.kind,
       payload: opts.resolveEnvPayload(),
       heartbeatIntervalMs: 0,
+      assertHealthy() {},
       leaseTtlMs: 0,
       async heartbeat() {},
       async release() {},
@@ -438,67 +395,55 @@ export async function acquireQaCredentialLease<TPayload>(
   }
 
   const role = normalizeQaCredentialRole(opts.role ?? env.OPENCLAW_QA_CREDENTIAL_ROLE, env);
+  if (role === "ci") {
+    env = await resolveQaConvexCredentialEnv(env, opts);
+  }
   const config = resolveConvexCredentialBrokerConfig({
     env,
     role,
     ownerId: opts.ownerId,
   });
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const sleepImpl =
-    opts.sleepImpl ??
-    ((ms: number) =>
-      new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleepImpl = opts.sleepImpl ?? sleep;
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
   const startedAt = timeImpl();
   let attempt = 0;
 
   while (true) {
+    opts.signal?.throwIfAborted();
     attempt += 1;
     try {
-      const payload = await postConvexBroker({
-        fetchImpl,
-        maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-        timeoutMs: config.httpTimeoutMs,
-        authToken: config.authToken,
-        url: config.acquireUrl,
-        body: {
-          kind: opts.kind,
-          ownerId: config.ownerId,
-          actorRole: config.role,
-          leaseTtlMs: config.leaseTtlMs,
-          heartbeatIntervalMs: config.heartbeatIntervalMs,
-        },
+      const acquiredAt = Date.now();
+      const payload = await postConvexBroker(config, fetchImpl, "acquire", {
+        kind: opts.kind,
+        ownerId: config.ownerId,
+        actorRole: config.role,
+        leaseTtlMs: config.leaseTtlMs,
+        heartbeatIntervalMs: config.heartbeatIntervalMs,
       });
       const acquired = convexAcquireSuccessSchema.parse(payload);
       const releaseLease = async () => {
-        const releasePayload = await postConvexBroker({
-          fetchImpl,
-          maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-          timeoutMs: config.httpTimeoutMs,
-          authToken: config.authToken,
-          url: config.releaseUrl,
-          body: {
-            kind: opts.kind,
-            ownerId: config.ownerId,
-            credentialId: acquired.credentialId,
-            leaseToken: acquired.leaseToken,
-            actorRole: config.role,
-          },
+        const releasePayload = await postConvexBroker(config, fetchImpl, "release", {
+          kind: opts.kind,
+          ownerId: config.ownerId,
+          credentialId: acquired.credentialId,
+          leaseToken: acquired.leaseToken,
+          actorRole: config.role,
         });
         assertConvexOk(releasePayload, "release");
       };
       let parsedPayload: TPayload;
       try {
         const resolvedPayload = await resolveConvexCredentialPayload({
+          signal: opts.signal,
           acquired,
           config,
           fetchImpl,
           kind: opts.kind,
         });
         parsedPayload = opts.parsePayload(resolvedPayload);
+        opts.signal?.throwIfAborted();
       } catch (error) {
         try {
           await releaseLease();
@@ -515,8 +460,11 @@ export async function acquireQaCredentialLease<TPayload>(
       }
       const leaseTtlMs = acquired.leaseTtlMs ?? config.leaseTtlMs;
       const heartbeatIntervalMs = acquired.heartbeatIntervalMs ?? config.heartbeatIntervalMs;
-      return {
+      const health = createQaLeaseHealth(leaseTtlMs, acquiredAt);
+      let releasePromise: Promise<void> | undefined;
+      const lease: QaCredentialLease<TPayload> = {
         source: "convex",
+        assertHealthy: health.assertHealthy,
         kind: opts.kind,
         role,
         ownerId: config.ownerId,
@@ -526,27 +474,45 @@ export async function acquireQaCredentialLease<TPayload>(
         heartbeatIntervalMs,
         payload: parsedPayload,
         async heartbeat() {
-          const heartbeatPayload = await postConvexBroker({
-            fetchImpl,
-            maxBytes: CONVEX_BROKER_RESPONSE_MAX_BYTES,
-            timeoutMs: config.httpTimeoutMs,
-            authToken: config.authToken,
-            url: config.heartbeatUrl,
-            body: {
-              kind: opts.kind,
-              ownerId: config.ownerId,
-              credentialId: acquired.credentialId,
-              leaseToken: acquired.leaseToken,
-              actorRole: config.role,
-              leaseTtlMs,
-            },
+          health.assertHealthy();
+          const requestStartedAt = Date.now();
+          const heartbeatPayload = await postConvexBroker(config, fetchImpl, "heartbeat", {
+            kind: opts.kind,
+            ownerId: config.ownerId,
+            credentialId: acquired.credentialId,
+            leaseToken: acquired.leaseToken,
+            actorRole: config.role,
+            leaseTtlMs,
           });
           assertConvexOk(heartbeatPayload, "heartbeat");
+          health.confirm(requestStartedAt);
         },
-        async release() {
-          await releaseLease();
+        release() {
+          health.close();
+          releasePromise ??= releaseLease();
+          return releasePromise;
         },
       };
+      try {
+        lease.assertHealthy();
+        opts.signal?.throwIfAborted();
+        return lease;
+      } catch (error) {
+        try {
+          await lease.release();
+        } catch (releaseError) {
+          throw new AggregateError(
+            [error, releaseError],
+            "QA credential readiness and release failed.",
+            { cause: releaseError },
+          );
+        }
+        throw new QaCredentialBrokerError({
+          code: "LEASE_NOT_READY",
+          message: "QA credential lease could not be confirmed before use.",
+          cause: error,
+        });
+      }
     } catch (error) {
       const retryablePoolError =
         error instanceof QaCredentialBrokerError && RETRYABLE_ACQUIRE_CODES.has(error.code);
@@ -587,24 +553,17 @@ export async function acquireQaCredentialLease<TPayload>(
 }
 
 export function startQaCredentialLeaseHeartbeat(
-  lease: Pick<QaCredentialLease<unknown>, "heartbeat" | "heartbeatIntervalMs" | "kind" | "source">,
+  lease: Pick<QaCredentialLease<unknown>, "heartbeat" | "heartbeatIntervalMs" | "kind" | "source"> &
+    Partial<Pick<QaCredentialLease<unknown>, "assertHealthy">>,
   opts?: {
     intervalMs?: number;
     retryDelaysMs?: readonly number[];
     setTimeoutImpl?: typeof setTimeout;
     clearTimeoutImpl?: typeof clearTimeout;
   },
-): QaCredentialLeaseHeartbeat {
-  if (lease.source !== "convex") {
-    return {
-      getFailure: () => null,
-      async stop() {},
-      throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => {}),
-    };
-  }
+) {
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
-  if (!Number.isFinite(intervalMs) || intervalMs < 1) {
+  if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {
       getFailure: () => null,
       async stop() {},
@@ -621,10 +580,19 @@ export function startQaCredentialLeaseHeartbeat(
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
-  let resolveFailure: (error: Error) => void = () => undefined;
-  const whenFailed = new Promise<Error>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: whenFailed, resolve: resolveFailure } = createDeferred<Error>();
+  const getFailure = () => {
+    if (!failure) {
+      try {
+        lease.assertHealthy?.();
+      } catch (error) {
+        failure =
+          error instanceof Error ? error : new Error("QA credential lease is no longer usable.");
+        resolveFailure(failure);
+      }
+    }
+    return failure;
+  };
 
   const schedule = (delayMs = intervalMs) => {
     if (stopped || failure) {
@@ -666,12 +634,11 @@ export function startQaCredentialLeaseHeartbeat(
 
   return {
     whenFailed,
-    getFailure() {
-      return failure;
-    },
+    getFailure,
     throwIfFailed() {
-      if (failure) {
-        throw failure;
+      const currentFailure = getFailure();
+      if (currentFailure) {
+        throw currentFailure;
       }
     },
     async stop() {

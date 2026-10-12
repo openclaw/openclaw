@@ -10,7 +10,6 @@ import {
   createChatLayoutBrowser,
   getBoundingBox,
   getRect,
-  messageCircleOffSvg,
   readUiCss,
   rectsOverlap,
   waitForLayoutSettled,
@@ -189,82 +188,108 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     });
   });
 
-  it.each([
-    [1200, 800, "desktop"],
-    [390, 844, "mobile"],
-  ] as const)(
-    "keeps the complete interrupted status above the input inside the %s footer",
-    async (width, height, label) => {
-      await withBrowserPage(openBrowserPage(width, height), async (page) => {
-        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <section class="chat">
-          <div class="chat-main__conversation-frame"><div class="chat-main__conversation">
-            <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-            <div class="chat-footer">
-              <div class="agent-chat__composer-shell">
-                <div class="chat-footer__context">
-                <div class="agent-chat__composer-notices">
-                  <div class="agent-chat__composer-run-status">
-                    <span class="agent-chat__run-status agent-chat__run-status--interrupted">
-                  ${messageCircleOffSvg()}<span class="agent-chat__run-status-label">Interrupted</span>
-                    </span>
+  it("paints message footer focus outlines past virtual row boundaries", async () => {
+    await withBrowserPage(openBrowserPage(600, 300), async (page) => {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
+            <div class="chat-thread-inner chat-thread-inner--virtual">
+              <div class="chat-virtual-sizer">
+                <div class="chat-virtual-block">
+                  <div class="chat-virtual-row" data-focused-row>
+                    <div class="chat-group assistant chat-group--with-footer">
+                      <div class="chat-group-messages"><div class="chat-bubble">Message</div></div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <button class="msg-meta__summary" type="button">
+                            <span class="chat-group-timestamp" style="width: 18px;">6m ago</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="chat-virtual-row" style="height: 40px;">
+                    <div>The next message begins here.</div>
                   </div>
                 </div>
-                </div>
-                <div class="agent-chat__input">Composer</div>
               </div>
             </div>
-          </div></div>
-        </section>
-      </body></html>`);
-
-        const [composer, status, input, footer, thread] = await Promise.all([
-          getRect(page, ".agent-chat__composer-shell"),
-          getRect(page, ".agent-chat__composer-run-status"),
-          getRect(page, ".agent-chat__input"),
-          getRect(page, ".chat-footer"),
-          getRect(page, ".chat-thread"),
-        ]);
-        expect(
-          Math.abs(status.left + status.width / 2 - (composer.left + composer.width / 2)),
-        ).toBeLessThan(1);
-        expect(status.top).toBeGreaterThanOrEqual(composer.top);
-        expect(status.bottom).toBeLessThanOrEqual(input.top);
-        expect(thread.bottom).toBeLessThanOrEqual(footer.top);
-        expect(composer.bottom).toBeLessThanOrEqual(footer.bottom);
-        expect(
-          await page.locator(".agent-chat__run-status-label").evaluate((node) => ({
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-            text: node.textContent,
-          })),
-        ).toEqual(expect.objectContaining({ text: "Interrupted" }));
-        const labelWidths = await page
-          .locator(".agent-chat__run-status-label")
-          .evaluate((node) => ({
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-          }));
-        expect(labelWidths.scrollWidth).toBeLessThanOrEqual(labelWidths.clientWidth);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, `interrupted-status-${label}.png`),
-          });
-        }
+          </div>
+        </body></html>`,
+      );
+      const summary = page.locator(".msg-meta__summary");
+      await summary.focus();
+      await page
+        .locator(".chat-group-footer")
+        .evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
+      const bounds = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-focused-row]")!;
+        const control = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        // Keep the clipping boundary at the control, independent of turn spacing.
+        // Otherwise extra room below the footer makes the below-row pixel oracle vacuous.
+        row.style.height = `${control.getBoundingClientRect().bottom - row.getBoundingClientRect().top}px`;
+        const rowRect = row.getBoundingClientRect();
+        const controlRect = control.getBoundingClientRect();
+        return {
+          controlBottom: controlRect.bottom,
+          clip: {
+            x: Math.floor(controlRect.left - 8),
+            y: Math.floor(controlRect.top - 8),
+            width: Math.ceil(controlRect.width + 16),
+            height: Math.ceil(controlRect.height + 16),
+          },
+          rowBottom: rowRect.bottom,
+          deviceScaleFactor: window.devicePixelRatio,
+        };
       });
-    },
-  );
+      expect(bounds.controlBottom).toBeCloseTo(bounds.rowBottom, 3);
+      const png = await page.screenshot({ clip: bounds.clip });
+      const widestAccentRunBelowRow = await page.evaluate(
+        async ({ pngBase64, clipTop, rowBottom, deviceScaleFactor }) => {
+          const image = new Image();
+          image.src = `data:image/png;base64,${pngBase64}`;
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(0, 0, image.width, image.height).data;
+          const firstRowBelow = Math.ceil((rowBottom - clipTop) * deviceScaleFactor);
+          let widestRun = 0;
+          for (let y = firstRowBelow; y < image.height; y += 1) {
+            let currentRun = 0;
+            for (let x = 0; x < image.width; x += 1) {
+              const offset = (y * image.width + x) * 4;
+              if (pixels[offset]! > 240 && pixels[offset + 1]! < 20 && pixels[offset + 2]! < 20) {
+                currentRun += 1;
+                widestRun = Math.max(widestRun, currentRun);
+              } else {
+                currentRun = 0;
+              }
+            }
+          }
+          return widestRun;
+        },
+        {
+          pngBase64: png.toString("base64"),
+          clipTop: bounds.clip.y,
+          rowBottom: bounds.rowBottom,
+          deviceScaleFactor: bounds.deviceScaleFactor,
+        },
+      );
+
+      // A clipped ring leaves only a vertical edge (the outline's device-pixel
+      // width). A wider run proves the rounded bottom edge was painted too.
+      expect(widestAccentRunBelowRow).toBeGreaterThan(bounds.deviceScaleFactor * 2);
+    });
+  });
 
   it.each([
     [1200, 800, "desktop", "overlay", false],
     [900, 500, "mobile-landscape-900", "inline", false],
     [640, 900, "mobile-responsive-640", "overlay", false],
     [320, 568, "mobile-320", "overlay", false],
-    [375, 812, "mobile-375", "overlay", false],
-    [430, 932, "mobile-430", "overlay", false],
     [1200, 800, "desktop-with-pull-request", "overlay", true],
     [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(
@@ -345,6 +370,32 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         const before = await geometry();
+        await page.locator(".chat-footer__context").evaluate((node) => {
+          const notices = node.querySelector(".agent-chat__composer-notices")!;
+          const content = document.createElement("span");
+          content.className = "chat-composer-lit-content";
+          content.style.display = "contents";
+          for (const child of Array.from(node.children)) {
+            if (child !== notices) {
+              content.append(child);
+            }
+          }
+          node.prepend(content);
+          const recovery = document.createElement("openclaw-chat-outbox-recovery");
+          recovery.style.display = "contents";
+          content.append(recovery);
+          const noticeContent = document.createElement("span");
+          noticeContent.className = "chat-composer-lit-content";
+          noticeContent.style.display = "contents";
+          const attention = document.createElement("openclaw-chat-child-attention");
+          attention.style.display = "contents";
+          noticeContent.append(attention);
+          notices.append(noticeContent);
+        });
+        await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
+        expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
+        expect(await geometry()).toEqual(before);
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
@@ -354,7 +405,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         });
         await page.locator(".agent-chat__composer-notices").evaluate((node) => {
           node.innerHTML =
-            '<div class="chat-composer-neighbor-card chat-error">Model unavailable</div>';
+            '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);

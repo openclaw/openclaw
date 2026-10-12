@@ -15,7 +15,7 @@ import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-k
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  createConfigSecretInputCollector,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -94,6 +94,7 @@ export function collectAgentMemorySearchAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
+  const collect = createConfigSecretInputCollector(params);
   const memory = params.config.memory as Record<string, unknown> | undefined;
   const defaultsMemorySearch = isRecord(memory?.search) ? memory.search : undefined;
   const configuredEntries = listAgentEntriesWithSource(params.config);
@@ -101,7 +102,7 @@ export function collectAgentMemorySearchAssignments(params: {
     configuredEntries.length === 0 && !hasAgentRosterProperty(params.config)
       ? [
           {
-            entry: { id: LEGACY_IMPLICIT_AGENT_ID, default: true },
+            entry: { id: LEGACY_IMPLICIT_AGENT_ID },
             source: { kind: "entries", key: LEGACY_IMPLICIT_AGENT_ID },
           },
         ]
@@ -150,21 +151,18 @@ export function collectAgentMemorySearchAssignments(params: {
     const hasApiKeyOverride = Boolean(remote && Object.hasOwn(remote, "apiKey"));
     const apiKeyTarget = hasApiKeyOverride ? remote : defaultRemote;
     if (apiKeyTarget && Object.hasOwn(apiKeyTarget, "apiKey")) {
-      collectRuntimeSecretInputAssignment({
-        value: apiKeyTarget.apiKey,
-        path: hasApiKeyOverride
+      collect(
+        apiKeyTarget,
+        "apiKey",
+        hasApiKeyOverride
           ? `${agentPath}.memory.search.remote.apiKey`
           : "memory.search.remote.apiKey",
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active,
-        inactiveReason: "agent or memorySearch override is disabled.",
-        owner,
-        apply: (value) => {
-          apiKeyTarget.apiKey = value;
+        {
+          active,
+          inactiveReason: "agent or memorySearch override is disabled.",
+          owner,
         },
-      });
+      );
       if (!hasApiKeyOverride && active) {
         defaultApiKeyAssignmentCollected = true;
       }
@@ -175,22 +173,19 @@ export function collectAgentMemorySearchAssignments(params: {
     if (!headerTarget) {
       return;
     }
-    for (const [headerKey, headerValue] of Object.entries(headerTarget)) {
-      collectRuntimeSecretInputAssignment({
-        value: headerValue,
-        path: overrideHeaders
+    for (const headerKey of Object.keys(headerTarget)) {
+      collect(
+        headerTarget,
+        headerKey,
+        overrideHeaders
           ? appendConfigPathSegment(`${agentPath}.memory.search.remote.headers`, headerKey)
           : appendConfigPathSegment("memory.search.remote.headers", headerKey),
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active,
-        inactiveReason: "agent or memorySearch override is disabled.",
-        owner,
-        apply: (value) => {
-          headerTarget[headerKey] = value;
+        {
+          active,
+          inactiveReason: "agent or memorySearch override is disabled.",
+          owner,
         },
-      });
+      );
       if (!overrideHeaders && active) {
         collectedDefaultHeaderKeys.add(headerKey);
       }
@@ -200,34 +195,23 @@ export function collectAgentMemorySearchAssignments(params: {
   entries.forEach(collectForAgent);
 
   if (defaultRemote && !defaultApiKeyAssignmentCollected) {
-    collectRuntimeSecretInputAssignment({
-      value: defaultRemote.apiKey,
-      path: "memory.search.remote.apiKey",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
+    collect(defaultRemote, "apiKey", "memory.search.remote.apiKey", {
       active: false,
       inactiveReason: "no enabled agent inherits this memorySearch remote api key.",
-      apply: (value) => {
-        defaultRemote.apiKey = value;
-      },
     });
   }
-  for (const [headerKey, headerValue] of Object.entries(defaultHeaders ?? {})) {
+  for (const headerKey of Object.keys(defaultHeaders ?? {})) {
     if (collectedDefaultHeaderKeys.has(headerKey)) {
       continue;
     }
-    collectRuntimeSecretInputAssignment({
-      value: headerValue,
-      path: appendConfigPathSegment("memory.search.remote.headers", headerKey),
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: false,
-      inactiveReason: "no enabled agent inherits this memorySearch remote header.",
-      apply: (value) => {
-        defaultHeaders![headerKey] = value;
+    collect(
+      defaultHeaders!,
+      headerKey,
+      appendConfigPathSegment("memory.search.remote.headers", headerKey),
+      {
+        active: false,
+        inactiveReason: "no enabled agent inherits this memorySearch remote header.",
       },
-    });
+    );
   }
 }
