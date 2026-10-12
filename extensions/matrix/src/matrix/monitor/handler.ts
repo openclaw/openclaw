@@ -48,6 +48,23 @@ const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_
 const RESTART_RECOVERY_TOMBSTONE_NOTICE =
   "This session ended during gateway restart recovery and cannot accept more messages. Send /new or /reset to start a replacement session.";
 
+type MatrixReplayClaimHandle =
+  import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
+
+/** Inbound debounce context for one dispatch; see inbound-debounce.ts. */
+export type MatrixRoomMessageDispatchOptions = {
+  /** Claim for every event merged into this one, taken by the debounce flush; adopted instead of reclaimed. */
+  replayClaim?: MatrixReplayClaimHandle;
+  /** Releases the debounce lane once the turn is adopted or deferred, not when it ends. */
+  admission?: {
+    onAdopted: () => Promise<void>;
+    onDeferred: () => boolean | void;
+    onAbandoned: () => Promise<void>;
+  };
+};
+
+export type MatrixRoomMessageHandler = ReturnType<typeof createMatrixRoomMessageHandler>;
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -110,11 +127,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
-  return async (roomId: string, event: MatrixRawEvent) => {
+  return async (
+    roomId: string,
+    event: MatrixRawEvent,
+    dispatchOptions?: MatrixRoomMessageDispatchOptions,
+  ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let inboundReplayClaim:
-      | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
-      | undefined;
+    let inboundReplayClaim: MatrixReplayClaimHandle | undefined;
+    // A debounce-owned claim becomes this event's claim once ingress accepts it; otherwise
+    // finally releases it so the events stay replayable.
+    const preclaimedReplay = dispatchOptions?.replayClaim;
+    let unadoptedPreclaim = preclaimedReplay;
+    const debounceAdmission = dispatchOptions?.admission;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
       const eventType = event.type;
@@ -170,12 +194,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           event,
           eventType,
           eventId,
-          inboundDeduper,
+          inboundDeduper: preclaimedReplay
+            ? { claim: async () => ({ kind: "claimed" as const, handle: preclaimedReplay }) }
+            : inboundDeduper,
           roomId,
           logVerboseMessage,
           directTracker,
           claimInboundReplay: (handle) => {
             inboundReplayClaim = handle;
+            unadoptedPreclaim = undefined;
           },
         });
       const ingressContext = {
@@ -376,6 +403,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 return false;
               }
               inboundReplayClaim = undefined;
+              debounceAdmission?.onDeferred();
               return undefined;
             },
             onAdopted: async () => {
@@ -383,12 +411,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 inboundReplayClaim = undefined;
               }
               await replayClaimAtDispatch.commit();
+              await debounceAdmission?.onAdopted();
             },
             onAbandoned: () => {
               if (inboundReplayClaim === replayClaimAtDispatch) {
                 inboundReplayClaim = undefined;
               }
               replayClaimAtDispatch.release();
+              void debounceAdmission?.onAbandoned();
             },
           }
         : undefined;
@@ -604,6 +634,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await draftStream.cleanupPending();
       }
       inboundReplayClaim?.release();
+      unadoptedPreclaim?.release();
     }
   };
 }
