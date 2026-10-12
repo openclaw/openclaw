@@ -20,6 +20,31 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("activates a self-removing archive control after bringing it into view", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await page.setContent(
+        '<main style="padding-top: 1200px"><button type="button">Unarchive</button><output>0</output></main>',
+      );
+      const control = page.getByRole("button", { name: "Unarchive" });
+      await control.evaluate((element) => {
+        element.addEventListener("click", () => {
+          const count = document.querySelector("output")!;
+          count.textContent = String(Number(count.textContent) + 1);
+          element.remove();
+        });
+      });
+      expect(await control.isVisible()).toBe(true);
+      expect(
+        await control.evaluate((element) => element.getBoundingClientRect().top >= innerHeight),
+      ).toBe(true);
+
+      await activateSelfRemovingControl(control);
+
+      expect(await control.count()).toBe(0);
+      expect(await page.locator("output").textContent()).toBe("1");
+    });
+  });
+
   for (const viewport of [
     { height: 900, label: "desktop", width: 1280 },
     { height: 844, label: "mobile", width: 390 },
