@@ -9,7 +9,6 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
@@ -158,9 +157,18 @@ function mergeTranscriptPolicy(
   return merged;
 }
 
-const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
-
-/** Resolve and cache the effective replay policy for a provider/model/config tuple. */
+/**
+ * Resolves the effective replay policy for a provider/model tuple on every call.
+ *
+ * Deliberately uncached: the previous config-keyed memo served policies from whichever plugin
+ * package owned the provider at first resolution, and its fingerprint ignored the installed
+ * plugin inventory, so an in-process plugin package swap (e.g. the setup-inference Codex
+ * generation install, which clears the loader/metadata caches via
+ * `invalidatePluginRuntimeDiscoveryAfterConfigMutation`) kept replaying with the previous
+ * package's policy until the config object itself was replaced. Plugin hook invocation is cheap
+ * and registry lookups reuse the current runtime snapshots, so resolving fresh on every call
+ * keeps policy ownership current.
+ */
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -173,37 +181,6 @@ export function resolveTranscriptPolicy(params: {
   directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = !params.env || params.env === process.env ? params.config : undefined;
-  const cacheKey = cacheConfig
-    ? JSON.stringify({
-        provider,
-        directApiKey: params.directApiKey === true,
-        baseUrl:
-          params.model?.baseUrl?.trim() ||
-          (params.env ?? process.env).ANTHROPIC_BASE_URL?.trim() ||
-          "",
-        modelApi: params.modelApi ?? "",
-        modelId: params.modelId ?? "",
-        canonicalModelId:
-          typeof params.model?.params?.canonicalModelId === "string"
-            ? params.model.params.canonicalModelId
-            : "",
-        dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
-        preservesReasoningContentReplay: params.model?.reasoning === true,
-        workspaceDir: params.workspaceDir ?? "",
-        pluginControlPlane: resolvePluginControlPlaneFingerprint({
-          config: cacheConfig,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }),
-      })
-    : undefined;
-  if (cacheConfig && cacheKey) {
-    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const runtimePlugin =
     params.runtimeHandle?.plugin ??
     (provider
@@ -249,14 +226,6 @@ export function resolveTranscriptPolicy(params: {
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
-  }
-  if (cacheConfig && cacheKey) {
-    let configCache = transcriptPolicyCache.get(cacheConfig);
-    if (!configCache) {
-      configCache = new Map();
-      transcriptPolicyCache.set(cacheConfig, configCache);
-    }
-    configCache.set(cacheKey, policy);
   }
   return policy;
 }
