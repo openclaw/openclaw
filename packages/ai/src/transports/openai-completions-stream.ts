@@ -105,9 +105,10 @@ export async function processCompletionsStream(
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
-  const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
+  const shouldFilterDeepSeekDsmlText = compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const deepSeekToolCallRecoverer =
+    !directMode && shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
