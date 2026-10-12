@@ -5,7 +5,7 @@
 // must not receive it. This drives the real MCP loopback
 // entry, real Gateway tool resolution, and the real message tool and outbound path; only the
 // channel transport is a test double, and its awaited payload preparation is the pause point.
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
