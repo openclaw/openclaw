@@ -296,31 +296,25 @@ const pluginStateExpiryQuery = createSqliteQueryCache((db) =>
 export function deleteExpiredPluginStateEntries(
   db: DatabaseSync,
   now: number,
-  scope?: { pluginId: string; namespace: string },
+  scope: { pluginId: string; namespace: string },
 ): number {
-  if (scope && isRetainedPluginStateNamespace(scope.namespace)) {
+  if (isRetainedPluginStateNamespace(scope.namespace)) {
     return 0;
   }
   const kysely = getPluginStateKysely(db);
-  if (scope) {
-    // The expiry index can prove there is nothing due without scanning the namespace.
-    // Only compilation is retained; expiry is checked in the caller's current transaction.
-    if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
-      return 0;
-    }
+  // The expiry index can prove there is nothing due without scanning the namespace.
+  // Only compilation is retained; expiry is checked in the caller's current transaction.
+  if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
+    return 0;
   }
-  let expiredEntries = kysely
+  // Leave namespace scans unsorted to avoid an unbounded sort under the write lock.
+  const expiredEntries = kysely
     .selectFrom("plugin_state_entries")
     .select(["plugin_id", "namespace", "entry_key"])
     .where("expires_at", "is not", null)
-    .where("expires_at", "<=", now);
-  // Global expiry ordering uses its index; namespace scans must stay unsorted
-  // so SQLite never builds an unbounded temporary sort under the write lock.
-  expiredEntries = scope
-    ? expiredEntries
-        .where("plugin_id", "=", scope.pluginId)
-        .where("namespace", "=", scope.namespace)
-    : expiredEntries.orderBy("expires_at", "asc");
+    .where("expires_at", "<=", now)
+    .where("plugin_id", "=", scope.pluginId)
+    .where("namespace", "=", scope.namespace);
   const result = executeSqliteQuerySync(
     db,
     kysely

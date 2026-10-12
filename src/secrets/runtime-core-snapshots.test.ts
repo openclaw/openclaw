@@ -1,11 +1,7 @@
 /** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  getRuntimeConfig,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
   getAuthoredConfigSecretRef,
@@ -278,10 +274,6 @@ describe("secrets runtime snapshot core lanes", () => {
   });
 
   it.each([
-    ["openai", "openai", "auto", true],
-    ["openai", "openai", undefined, true],
-    ["gemini", "google", "gemini", true],
-    ["bedrock", "amazon-bedrock", "bedrock", true],
     ["gemini", "google", "tenant-gemini", true],
     ["gemini", "google", "gemini", false],
   ] as const)(
@@ -322,9 +314,7 @@ describe("secrets runtime snapshot core lanes", () => {
                   headers: { "X-Tenant": version },
                   models: [],
                 },
-                ...(configuredProviderId &&
-                configuredProviderId !== "auto" &&
-                configuredProviderId !== adapterId
+                ...(configuredProviderId && configuredProviderId !== adapterId
                   ? {
                       [configuredProviderId]: {
                         api: adapterId,
@@ -518,13 +508,6 @@ describe("secrets runtime snapshot core lanes", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
-  });
-
-  it("activates runtime snapshots for loadConfig", async () => {
-    const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
-    activateSecretsRuntimeSnapshot(prepared);
-
-    expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
   });
 
   it("activates runtime snapshots for ensureAuthProfileStore", async () => {

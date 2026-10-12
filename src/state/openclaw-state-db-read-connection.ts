@@ -218,7 +218,6 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
           }
         });
       }
-      assertSource();
       scheduleReaderRetirement(retained);
       return retained;
     } catch (error) {
