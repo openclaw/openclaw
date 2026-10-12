@@ -80,6 +80,7 @@ it("commits final custody and restart claim cleanup together across a failed com
     expect(f.nativeEntry()).toEqual(before.entry);
 
     delete f.hooks.admit;
+    command.input.expected = f.read().version;
     const transactions = f.hooks.transactions;
     expect(f.mutate(command)).toMatchObject({ kind: "committed" });
     expect(f.hooks.transactions - transactions).toBe(1);

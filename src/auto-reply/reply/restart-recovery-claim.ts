@@ -605,11 +605,11 @@ export function createReplyRestartRecoveryClaimController(params: {
       !lifecycleGeneration ||
       params.isRestartAbort()
     ) {
-      return;
+      return undefined;
     }
     const sessionId = params.getSessionId();
     if (sessionId !== trackedSessionId) {
-      return;
+      return undefined;
     }
     const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
     return {
