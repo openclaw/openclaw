@@ -70,6 +70,7 @@ describe("Ollama provider usage integration", () => {
 
   it.each([
     ["ollama-local", { Accept: "application/json" }],
+    ["OLLAMA_API_KEY", { Accept: "application/json" }],
     ["endpoint-key", { Accept: "application/json", Authorization: "Bearer endpoint-key" }],
   ])("keeps ambient Cloud auth off LAN requests with %s", async (apiKey, headers) => {
     const fetchFn = vi.fn(async () =>

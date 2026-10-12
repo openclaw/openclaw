@@ -28,10 +28,13 @@ export function createOllamaUsageHooks(): Pick<
       }
       const baseUrl = readProviderBaseUrl(provider) ?? OLLAMA_DEFAULT_BASE_URL;
       const input = provider?.apiKey;
+      if (
+        isLocalOllamaBaseUrl(baseUrl) &&
+        (input == null || readOllamaStringValue(input) === "OLLAMA_API_KEY")
+      ) {
+        return { token: OLLAMA_DEFAULT_API_KEY };
+      }
       if (input === undefined || input === null) {
-        if (isLocalOllamaBaseUrl(baseUrl)) {
-          return { token: OLLAMA_DEFAULT_API_KEY };
-        }
         const token = ctx.resolveApiKeyFromConfigAndStore();
         return token ? { token } : { handled: true };
       }
