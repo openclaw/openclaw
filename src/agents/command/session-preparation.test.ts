@@ -39,13 +39,14 @@ vi.mock("../../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }));
+// mock-isolation: Session-preparation tests own their skill snapshot and exec eligibility without host storage.
 vi.mock("./runtime-loaders.js", () => ({
   loadSkillsRuntime: async () => ({
     getRemoteSkillEligibility: () => ({}),
     resolveReusableWorkspaceSkillSnapshot: () => ({ snapshot: undefined, shouldRefresh: false }),
   }),
   loadExecDefaultsRuntime: async () => ({
-    resolveNodeExecEligibility: () => ({ canExec: false }),
+    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
 

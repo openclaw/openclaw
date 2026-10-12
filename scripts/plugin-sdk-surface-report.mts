@@ -203,6 +203,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "command-auth-native": 3,
   "native-command-registry": 1,
   "skill-commands-runtime": 2,
+  // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
+  "control-ui": 1,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
@@ -242,7 +244,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
       // +2: approved readTranscriptStatsAsync and PreparedAgentRunStart replacements;
       // the released synchronous stats reader and onAgentRunStart callback remain compatible.
-      3698,
+      // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
+      3699,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -268,7 +271,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
       // +1: the same bounded stale-read cache factory on collection-runtime.
       // +1: readTranscriptStatsAsync replaces the retained synchronous stats reader.
-      2158,
+      // +1: the same deprecated createSessionHeaderLink.
+      2159,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -282,7 +286,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +15: retained synchronous auth, model, and TTS compatibility exports.
       // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
       // +1: readTranscriptStatsSync remains until the next Plugin SDK major.
-      184,
+      // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
+      185,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

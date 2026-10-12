@@ -250,6 +250,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "packages/gateway-client/src/websocket.ts",
     "src/gateway/desktop/node-stream-broker.ts",
     "src/gateway/desktop/observe-bridge.ts",
+    "src/gateway/control-ui-public-session-card-render.ts",
     "src/gateway/server-runtime-state.ts",
     "src/realtime-transcription/websocket-session.ts",
   ]) {

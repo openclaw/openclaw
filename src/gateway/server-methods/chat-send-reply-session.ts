@@ -104,7 +104,7 @@ export function createChatReplySessionReader(
           logicalStorePath: initialStorePath,
           preparedSource: { ...borrowed.source, assertCurrent },
           includeMembership: false,
-          readOptions: { projection: "exact", lifecycleSessionKey: undefined },
+          readOptions: { projection: "exact" },
           consume: (selected, _membership, assertSourceCurrent) => {
             assertSourceCurrent();
             assertCurrent();

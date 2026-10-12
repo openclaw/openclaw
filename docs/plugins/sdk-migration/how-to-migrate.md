@@ -138,7 +138,8 @@ content and recorded GitHub effects remain intact.
 Deprecated publication methods retain their TypeScript signatures to make the
 migration discoverable, but fail explicitly at invocation. Actual legacy use emits
 one warning per plugin and the `github-publication` family per Gateway process,
-through the shared SDK warning helper. Unknown direct SDK consumers share one
+through the shared SDK warning helper. The warning states that the method no
+longer performs publication work and names its replacement. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
 major**. Personal OAuth compatibility methods described above retain their existing
 completion behavior. No schema, stored-data, retention, or update migration is required.

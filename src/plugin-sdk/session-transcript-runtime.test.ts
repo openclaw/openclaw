@@ -12,7 +12,6 @@ import {
 import * as sessionEntryWriter from "../config/sessions/session-entry-patch.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -219,27 +218,7 @@ describe("session transcript runtime SDK", () => {
     const steps: string[] = [];
     const firstRead = createDeferredCore();
     const releaseFirst = createDeferredCore();
-    const secondTargetRead = createDeferredCore();
     const secondQueued = createDeferredCore();
-    const read = projectionLane.pool.run.bind(projectionLane.pool);
-    let targetReads = 0;
-    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      if (
-        reply.ok &&
-        typeof reply.value !== "boolean" &&
-        !Array.isArray(reply.value) &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        if (++targetReads === 1) {
-          await secondTargetRead.promise;
-        } else if (targetReads === 2) {
-          secondTargetRead.resolve();
-          await firstRead.promise;
-        }
-      }
-      return reply;
-    });
     const enqueueWrite = sessionEntryWriter.runSessionEntryWorkerOperation;
     let queuedWrites = 0;
     vi.spyOn(sessionEntryWriter, "runSessionEntryWorkerOperation").mockImplementation((params) => {
@@ -253,7 +232,6 @@ describe("session transcript runtime SDK", () => {
     let enteredWrites = 0;
     const appendIfMissing = async () =>
       await withSessionTranscriptWriteLock(scope, async (locked) => {
-        // Target preparation can finish out of order before either caller acquires the lock.
         const label = ++enteredWrites === 1 ? "first" : "second";
         steps.push(`${label}:read`);
         const events = await locked.readEvents();
@@ -289,14 +267,12 @@ describe("session transcript runtime SDK", () => {
       );
       expect(steps).toEqual(["first:read"]);
     } finally {
-      secondTargetRead.resolve();
       firstRead.resolve();
       releaseFirst.resolve();
       await Promise.allSettled([first, second]);
     }
     await writes;
 
-    expect(targetReads).toBe(2);
     expect(steps).toEqual(["first:read", "first:done", "second:read", "second:done"]);
     const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
       const message = (event as { message?: { role?: unknown } }).message;

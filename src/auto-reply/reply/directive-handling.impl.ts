@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
-import { resolveExecDefaults } from "../../agents/exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../../agents/exec-defaults.js";
 import {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
@@ -336,7 +336,7 @@ export async function handleDirectiveOnly(
       return unexpectedExecArguments;
     }
     if (!directives.hasExecOptions) {
-      const execDefaults = resolveExecDefaults({
+      const execDefaults = await resolveExecDefaultsAsync({
         cfg: params.cfg,
         sessionEntry,
         agentId: activeAgentId,

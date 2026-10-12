@@ -156,7 +156,6 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           storePath: params.logicalStorePath,
           preparedSource: params.preparedSource,
           sessionKeys: params.target.storeKeys,
-          lifecycleSessionKey: params.target.storeKey,
           projection: "full",
           includeMembers: params.includeMembership,
           includeAuthorization: true,

@@ -364,11 +364,13 @@ function convertResponsesMessagesWithStyle(
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
     messages.push(
-      ...replayPlan.compactedWindow.map((item) =>
-        options?.retainUserProvenance && item.type === "message" && item.role === "user"
-          ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
-          : item,
-      ),
+      ...replayPlan.compactedWindow.map((item) => {
+        if (options?.retainUserProvenance && item.type === "message" && item.role === "user") {
+          return Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true });
+        }
+        // SAFETY: Validated window; Responses accepts assistant output_text without an id.
+        return item as ResponseInputItem;
+      }),
     );
   }
   let replayMessages = replayPlan.compaction
