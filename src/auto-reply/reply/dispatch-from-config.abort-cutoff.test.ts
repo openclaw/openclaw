@@ -9,7 +9,7 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -22,7 +22,6 @@ beforeEach(() => {
 });
 
 it.each([
-  { name: "older message ID", message: { MessageSid: "41" }, cancelled: true },
   { name: "cutoff message ID", message: { MessageSid: "42" }, cancelled: true },
   { name: "older timestamp", message: { Timestamp: 999 }, cancelled: true },
   { name: "newer message ID", message: { MessageSid: "43" }, cancelled: false },

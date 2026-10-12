@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
@@ -24,7 +25,7 @@ import {
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
@@ -74,13 +75,13 @@ describe("session creation scope", () => {
 
       const created = await createSessionEntryWithTranscript(
         scope,
-        ({ existingEntry, targetEntry, isLabelInUse }) => {
+        ({ existingEntry, targetEntry, labelInUse }) => {
           expect(existingEntry).toBeUndefined();
           expect(targetEntry).toBeUndefined();
-          expect(isLabelInUse("unused")).toBe(false);
+          expect(labelInUse).toBe(false);
           return { ok: true, entry };
         },
-        { cwd: state.workspaceDir },
+        { cwd: state.workspaceDir, label: "unused" },
       );
       expect(created).toEqual({ ok: true, entry, sessionFile: key });
       // Inspect before reading: a bad creation can open the sentinel under the wrong agent.
@@ -111,15 +112,20 @@ describe("session creation scope", () => {
 
       const updated = { ...entry, label: "recreated", updatedAt: 2 };
       await expect(
-        createSessionEntryWithTranscript(scope, ({ existingEntry, targetEntry, isLabelInUse }) => {
-          expect(existingEntry).toMatchObject(entry);
-          expect(targetEntry).toMatchObject(entry);
-          expect(isLabelInUse("recreated")).toBe(false);
-          return { ok: true, entry: updated };
-        }),
+        createSessionEntryWithTranscript(
+          scope,
+          ({ existingEntry, targetEntry, labelInUse }) => {
+            expect(existingEntry).toMatchObject(entry);
+            expect(targetEntry).toMatchObject(entry);
+            expect(labelInUse).toBe(false);
+            return { ok: true, entry: updated };
+          },
+          { label: "recreated" },
+        ),
       ).resolves.toMatchObject({ ok: true, sessionFile: key });
       expect(loadSessionEntry(scope)).toMatchObject(updated);
 
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(loadSessionEntry(scope)).toBeUndefined();
       await expect(loadTranscriptEvents(transcriptScope)).resolves.toEqual([]);
@@ -161,6 +167,7 @@ describe("session creation scope", () => {
         expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
       ]);
       expect(fs.existsSync(databasePath)).toBe(true);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(loadSessionEntry(scope)).toMatchObject(entry);
       await expect(loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).resolves.toEqual(
@@ -359,6 +366,7 @@ describe("incognito transcript access", () => {
       ]);
       expect(fs.readdirSync(stateDir, { recursive: true })).toEqual([]);
 
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(listSessionEntriesCore({ agentId: "main", env, storePath })).toEqual([]);
       await expect(

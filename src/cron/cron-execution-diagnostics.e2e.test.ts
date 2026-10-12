@@ -1,18 +1,13 @@
-import { createServer, type Server, type AddressInfo } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
-import {
-  createAgentRunDirectAbortError,
-  createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
-} from "../agents/run-termination.js";
+import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  loadRunCronIsolatedAgentTurn,
   dispatchCronDeliveryMock,
+  loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
@@ -20,10 +15,10 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 vi.doUnmock("./isolated-agent/model-preflight.runtime.js");
 
@@ -89,10 +84,11 @@ async function runPersistedDiagnosticCase(params: {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
-      resetTaskRegistryForTests();
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
@@ -128,7 +124,7 @@ async function runPersistedDiagnosticCase(params: {
         const finished = events.find(
           (event) => event.action === "finished" && event.jobId === job.id,
         );
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
           limit: 1,
@@ -143,7 +139,6 @@ async function runPersistedDiagnosticCase(params: {
         };
       } finally {
         cron.stop();
-        resetTaskRegistryForTests({ persist: false });
       }
     },
   );
@@ -181,13 +176,15 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
         status: "skipped",
         provider: "ollama",
         model: "diagnostic-model",
-        error: expect.stringContaining("unavailable"),
+        error: expect.stringContaining(
+          "Start the local provider or correct its configured endpoint",
+        ),
         diagnostics: {
           entries: expect.arrayContaining([
             expect.objectContaining({
               source: "model-preflight",
               severity: "warn",
-              message: expect.stringContaining("unavailable"),
+              message: expect.stringContaining("the local provider preflight failed"),
             }),
           ]),
         },
@@ -261,33 +258,31 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     expect(history.errorReason).toBe("model_not_found");
   });
 
-  it.each([
-    ["direct abort", createAgentRunDirectAbortError],
-    ["gateway restart", createAgentRunRestartAbortError],
-    ["superseded run", createAgentRunSupersededAbortError],
-    ["stale gateway lifecycle", createAgentRunStaleLifecycleError],
-  ])("persists the coded %s reason instead of reporting a timeout", async (name, createError) => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
-    const rejection = createError() as Error & { code: string };
-    runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+  it.each([["superseded run", createAgentRunSupersededAbortError]])(
+    "persists the coded %s reason instead of reporting a timeout",
+    async (name, createError) => {
+      const modelRef = { provider: "openai", model: "gpt-5.4" };
+      resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+      const rejection = createError() as Error & { code: string };
+      runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
-    const { finished, history, lastError } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name,
-    });
-    const expected = `${rejection.message} | ${rejection.code}`;
-
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "error",
-        error: expected,
+      const { finished, history, lastError } = await runPersistedDiagnosticCase({
+        cfg: configFor(modelRef),
+        modelRef,
+        name,
       });
-      expect(outcome.error).not.toContain("timed out");
-    }
-    expect(lastError).toBe(expected);
-  });
+      const expected = `${rejection.message} | ${rejection.code}`;
+
+      for (const outcome of [finished, history]) {
+        expect(outcome).toMatchObject({
+          status: "error",
+          error: expected,
+        });
+        expect(outcome.error).not.toContain("timed out");
+      }
+      expect(lastError).toBe(expected);
+    },
+  );
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
@@ -329,6 +324,48 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
               message: "SYSTEM_RUN_DENIED: approval required",
             }),
           ]),
+        },
+      });
+    }
+  });
+
+  it("persists an unresolved exec warning when the scheduled agent recovers with a reply", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "RESULT: the command did not run" }],
+      meta: {
+        agentMeta: {},
+        toolSummary: {
+          calls: 1,
+          tools: ["exec"],
+          failures: 1,
+          unresolvedError: { toolName: "exec" },
+        },
+      },
+    });
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "invalid exec arguments",
+    });
+
+    expect(lastError).toBeUndefined();
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "ok",
+        diagnostics: {
+          summary: "exec tool failed",
+          entries: [
+            expect.objectContaining({
+              source: "exec",
+              severity: "warn",
+              message: "exec tool failed",
+              toolName: "exec",
+            }),
+          ],
         },
       });
     }

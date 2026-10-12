@@ -316,17 +316,21 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
   };
 }
 
-/** Apply the same retirement decision to config selectors and cron payload selectors. */
-export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+function createRetiredModelSlotRewriter(params: ModelRefRewriteContext) {
   const rewrite = createRetiredModelRefRewriter(params);
   const rewriteAuth = createRetiredModelRefRewriter({ ...params, authProfileOnly: true });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
+  return (container: unknown, key: string, path: string, authProfileOnly = false) =>
     rewriteModelReferenceSlot({
       container: asOptionalRecord(container),
       key,
       path,
       resolve: authProfileOnly ? rewriteAuth : rewrite,
     });
+}
+
+/** Apply the same retirement decision to config selectors and cron payload selectors. */
+export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+  const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
   for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
@@ -515,21 +519,7 @@ export function repairRetiredConfigModelRefs(
       inheritedModelPolicy: asOptionalRecord(defaults?.modelPolicy),
     });
   }
-  const rewrite = createRetiredModelRefRewriter({ path: "", resolve, changes, warnings });
-  const rewriteAuth = createRetiredModelRefRewriter({
-    path: "",
-    resolve,
-    changes,
-    warnings,
-    authProfileOnly: true,
-  });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
-    rewriteModelReferenceSlot({
-      container: asOptionalRecord(container),
-      key,
-      path,
-      resolve: authProfileOnly ? rewriteAuth : rewrite,
-    });
+  const rewriteSlot = createRetiredModelSlotRewriter({ path: "", resolve, changes, warnings });
   for (const capability of ["image", "audio", "video"] as const) {
     rewriteSlot(
       config.tools?.media?.[capability],

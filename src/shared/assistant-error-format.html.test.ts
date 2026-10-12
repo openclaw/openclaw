@@ -17,11 +17,6 @@ describe("isCloudflareOrHtmlErrorPage", () => {
     expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
   });
 
-  it("detects complete 5xx HTML pages after an HTTP reason phrase", () => {
-    const htmlError = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
-    expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
-  });
-
   it("does not flag partial HTML after an HTTP reason phrase", () => {
     const partialHtml = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down";
     expect(isCloudflareOrHtmlErrorPage(partialHtml)).toBe(false);

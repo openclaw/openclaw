@@ -27,7 +27,7 @@ export const configWritePostCommitRollback = Symbol("configWritePostCommitRollba
 export type InternalConfigWriteResult = ConfigWriteResult & {
   [configWritePostCommitRollback]?: {
     restoreFile: (assertCurrent: () => void) => Promise<boolean>;
-    restoreEffects: (assertCurrent: () => void) => void;
+    restoreEffects: (assertCurrent: () => void) => Promise<void>;
   };
 };
 
@@ -154,11 +154,10 @@ export type ReadConfigFileSnapshotInternalResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-export type ReadConfigFileSnapshotWithPluginMetadataResult = {
-  strictIssues?: ConfigValidationIssue[];
-  snapshot: ConfigFileSnapshot;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-};
+export type ReadConfigFileSnapshotWithPluginMetadataResult = Pick<
+  ReadConfigFileSnapshotInternalResult,
+  "strictIssues" | "snapshot" | "pluginMetadataSnapshot"
+>;
 
 export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
   apply: (beforeCommit?: () => void) => Promise<void>;

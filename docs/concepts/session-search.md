@@ -47,6 +47,15 @@ searches the full authorized indexed history in that scope. The browser does not
 a session roster to choose which transcripts to search, and a roster page size does not
 exclude older matching sessions.
 
+Title searches treat punctuation and repeated whitespace as word separators, so
+`per session communi` finds a conversation titled **Per-session communication
+controls**. The command palette uses the same matching rule when grouping results
+under Sessions or Messages. Identifier searches retain their literal matching.
+
+Control UI message searches match the final word as a prefix while requiring the
+preceding words in full. For example, `session communi` finds **session
+communication**. The agent-facing `sessions_search` tool keeps exact-word matching.
+
 The command palette also finds agent-created conversations assigned to a custom
 sidebar group, by title or transcript, after you switch to another conversation.
 Ungrouped spawned sessions and subagent runs remain excluded from the palette.

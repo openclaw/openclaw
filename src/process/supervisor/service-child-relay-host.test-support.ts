@@ -42,7 +42,7 @@ export function createWritableRelayChild() {
 }
 
 export async function createRelayFixture(
-  platform: "linux" | "darwin" | "win32",
+  platform: "darwin" | "win32",
   retainLineage: boolean,
   configureSpawn: (child: ChildProcess) => void,
   onCleanup: (cleanup: () => void) => void,
@@ -53,13 +53,15 @@ export async function createRelayFixture(
   const stub = createStubChild();
   const cancellations: Array<(error: Error) => void> = [];
   const acknowledgements: ServiceChildControlMessage[] = [];
+  // The simulated peer must stay outside spies on the host's incoming decoder.
+  const parseControlMessage = JSON.parse;
   // Keep channel closure independently controlled from cancellation write completion.
   const control = new Duplex({
     autoDestroy: false,
     read() {},
     write(chunk: Buffer, _encoding, callback) {
       // SAFETY: this exact adapter is the sole writer on its private control channel.
-      const message = JSON.parse(chunk.toString()) as ServiceChildControlMessage;
+      const message = parseControlMessage(chunk.toString()) as ServiceChildControlMessage;
       if (message.type === "cancel") {
         cancellations.push(callback);
       } else {
@@ -88,6 +90,9 @@ export async function createRelayFixture(
   const start = firstMockArg(stub.sendMock, "service start");
   if (!isRecord(start) || typeof start.generation !== "string") {
     throw new Error("Expected an admitted service generation");
+  }
+  if (start.treeOwnership !== undefined) {
+    throw new Error("Process-group fixture cannot certify native descendant extinction");
   }
   const generation = start.generation;
   let sequence = 0;

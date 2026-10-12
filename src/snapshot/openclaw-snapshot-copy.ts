@@ -7,7 +7,7 @@ import {
 } from "../infra/sqlite-snapshot.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
-import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
+import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,

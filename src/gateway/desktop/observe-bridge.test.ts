@@ -40,6 +40,9 @@ afterEach(async () => {
     for (const capture of logCaptures) {
       await capture.flush();
     }
+    if (vi.isFakeTimers()) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     for (const capture of logCaptures.splice(0)) {
       capture.cleanup();
@@ -121,6 +124,7 @@ async function createProxyHarness(
     httpServer.once("error", reject);
     httpServer.listen(0, "127.0.0.1", resolve);
   });
+  const serverTimers = vi.isFakeTimers() ? vi.getTimerCount() : undefined;
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("expected TCP test server address");
@@ -148,6 +152,7 @@ async function createProxyHarness(
     desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
+    serverTimers,
     ws,
   };
 }
@@ -241,6 +246,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     logCaptures.push(logCapture);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
+    expect(vi.getTimerCount()).toBe(harness.serverTimers! + 1);
     const pings: Buffer[] = [];
     const onDesktopData = vi.fn();
     harness.ws.on("ping", (data) => pings.push(data));
@@ -274,7 +280,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(harness.serverTimers);
   });
 
   it("clears the credential-bearing token timer when the token is consumed", async () => {
@@ -446,14 +452,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       closeCode: 1000,
     });
     expect(harness.release).toHaveBeenCalledOnce();
-  });
-
-  it("keeps controlling observers on the plain pass-through path", async () => {
-    const harness = await createProxyHarness({ control: true });
-    const bytes = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 0])]);
-    const fromWebSocket = readSocketBytes(harness.desktopPeer, bytes.length);
-    harness.ws.send(bytes);
-    await expect(fromWebSocket).resolves.toEqual(bytes);
   });
 
   it("closes malformed view-only streams with a policy violation", async () => {

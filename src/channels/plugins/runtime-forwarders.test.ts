@@ -57,8 +57,9 @@ describe("createRuntimeOutboundDelegates", () => {
   it("resolves the current runtime and method for each call", async () => {
     const firstSender = vi.fn(async () => ({ channel: "x", messageId: "first" }));
     const secondSender = vi.fn(async () => ({ channel: "x", messageId: "second" }));
+    let sender = firstSender;
     const params = {
-      getRuntime: vi.fn(async () => ({ sendText: firstSender })),
+      getRuntime: vi.fn(async () => ({ sendText: sender })),
       sendText: { resolve: (runtime: { sendText: typeof firstSender }) => runtime.sendText },
     };
     const outbound = createRuntimeOutboundDelegates(params);
@@ -66,10 +67,7 @@ describe("createRuntimeOutboundDelegates", () => {
 
     expect(params.getRuntime).not.toHaveBeenCalled();
     await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "first" });
-    params.getRuntime = vi.fn(async () => ({ sendText: secondSender }));
-    params.sendText = { resolve: () => firstSender };
-    await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "first" });
-    params.sendText = { resolve: (runtime) => runtime.sendText };
+    sender = secondSender;
     await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "second" });
     expect(params.getRuntime).toHaveBeenCalledTimes(2);
     expect(firstSender).toHaveBeenCalledWith(ctx);

@@ -5,6 +5,7 @@ import {
   setHeartbeatWakeHandler,
   type HeartbeatRunResult,
 } from "../infra/heartbeat-wake.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import { CronService } from "./service.js";
 import {
@@ -17,7 +18,7 @@ import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-startup-heartbeat-",
-  baseTimeIso: "2026-09-18T00:00:00.000Z",
+  fakeTimers: false,
 });
 
 describe("heartbeat startup catch-up", () => {
@@ -26,6 +27,7 @@ describe("heartbeat startup catch-up", () => {
     setHeartbeatWakeHandler(null);
     const entered = createDeferred<{ result: Promise<HeartbeatRunResult> }>();
     const { cron } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       logger,
       resolveHeartbeatTimeoutMs: () => undefined,
@@ -67,14 +69,9 @@ describe("heartbeat startup catch-up", () => {
       });
       expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
     } finally {
-      const dispose = setHeartbeatWakeHandler(async () => ({
-        status: "skipped",
-        reason: "disabled",
-      }));
-      await vi.advanceTimersByTimeAsync(250);
       await running;
       cron.stop();
-      dispose();
+      setHeartbeatWakeHandler(null);
       await store.cleanup();
     }
   });
@@ -89,7 +86,8 @@ describe("heartbeat startup catch-up", () => {
     { name: "immediate event", payload: { kind: "systemEvent", text: "Deliver the reminder" } },
   ] as const)("defers an overdue $name without awaiting its heartbeat", async (testCase) => {
     const store = await makeStorePath();
-    const now = Date.now();
+    const scheduler = createTestGatewayScheduler();
+    const now = scheduler.now();
     const job: CronJob = {
       id: "overdue-heartbeat",
       name: testCase.name,
@@ -112,6 +110,7 @@ describe("heartbeat startup catch-up", () => {
       return await release.promise;
     });
     const cron = new CronService({
+      scheduler,
       storePath: store.storePath,
       cronEnabled: true,
       log: logger,

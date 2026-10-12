@@ -15,7 +15,7 @@ import {
   resolveWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;

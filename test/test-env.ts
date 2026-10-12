@@ -361,6 +361,7 @@ function sanitizeLiveConfig(raw: string): string {
     const parsed: {
       agents?: {
         defaults?: Record<string, unknown>;
+        entries?: Record<string, Record<string, unknown>>;
         list?: Array<Record<string, unknown>>;
       };
       diagnostics?: Record<string, unknown>;
@@ -385,6 +386,16 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.agents?.entries && typeof parsed.agents.entries === "object") {
+      for (const entry of Object.values(parsed.agents.entries)) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        delete entry.workspace;
+        delete entry.agentDir;
+      }
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

@@ -215,10 +215,6 @@ export function readMcpOAuthStoreInDatabase(
 
 export const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
 
-export type McpOAuthReadOperations = {
-  "mcpOAuth.read": { input: string; output: McpOAuthStore };
-};
-
 export type McpOAuthReadOnlyOperations = {
   "mcpOAuth.statuses": { input: readonly string[]; output: McpOAuthPrincipalStatus[] };
   "mcpOAuth.readOnly": { input: string; output: McpOAuthStore };

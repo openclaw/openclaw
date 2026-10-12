@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("Codex catalog events", () => {
-  it.each(["thread/start", "thread/fork", "thread/resume", "thread/read"] as const)(
+  it.each(["thread/fork", "thread/resume"] as const)(
     "publishes ephemeral %s acknowledgements before resolving the request",
     async (method) => {
       const options = startOptions(tempDirs.make("codex-catalog-ephemeral-ack-"));

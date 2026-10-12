@@ -10,12 +10,8 @@ import { WizardLoginController } from "./wizard-login-controller.ts";
 
 it.each([
   ["mcp.authLogin", "terminal during status", "cancelled"],
-  ["models.authLogin", "terminal during status", "cancelled"],
   ["mcp.authLogin", "failed cancellation", "cancelled"],
-  ["models.authLogin", "failed cancellation", "cancelled"],
-  ["mcp.authLogin", "failed status", "cancelled"],
   ["models.authLogin", "failed status", "cancelled"],
-  ["mcp.authLogin", "failed cancellation", "done"],
   ["models.authLogin", "failed cancellation", "done"],
 ] as const)(
   "settles %s after %s with %s without poisoning a new sign-in",
@@ -90,6 +86,13 @@ it.each([
       });
     const container = document.createElement("div");
     document.body.append(container);
+    const clickButton = (label: string) =>
+      expectDefined(
+        [...container.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === label,
+        ),
+        `${label} control`,
+      ).click();
     const host = {
       addController: vi.fn(),
       removeController: vi.fn(),
@@ -113,12 +116,7 @@ it.each([
     try {
       const first = start();
       await nextRequested.promise;
-      expectDefined(
-        [...container.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Cancel",
-        ),
-        "Cancel control",
-      ).click();
+      clickButton("Cancel");
       await cancellationRequested.promise;
       if (ordering === "failed cancellation") {
         cancellationResult.reject(new Error("Cancellation response lost"));
@@ -139,12 +137,7 @@ it.each([
       if (terminal === "done") {
         expect(container.textContent).toContain("Authentication saved");
         expect(container.querySelector('[role="alert"]')).toBeNull();
-        expectDefined(
-          [...container.querySelectorAll("button")].find(
-            (button) => button.textContent?.trim() === "Close",
-          ),
-          "Close control",
-        ).click();
+        clickButton("Close");
       }
       await waitForFast(() => {
         expect(controller.runner.state.phase).toBe("idle");

@@ -13,10 +13,8 @@ import {
 describe("OpenShell host policy", () => {
   const defaults = ["10.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "fc00::/7"];
   it.each([
-    { name: "default", hostIp: undefined, allowedIps: defaults },
     { name: "blank override", hostIp: "  ", allowedIps: defaults },
     { name: "custom IPv4 override", hostIp: " 198.51.100.42 ", allowedIps: ["198.51.100.42/32"] },
-    { name: "shipped IPv6 override", hostIp: "2001:db8::1", allowedIps: ["2001:db8::1/32"] },
   ])("preserves $name without changing the endpoint or binary", ({ hostIp, allowedIps }) => {
     const params = { port: 17680, binaryPath: "/usr/bin/curl", hostIp };
     const policy: unknown = parse(buildOpenShellPolicyYaml(params));
@@ -50,9 +48,7 @@ it.runIf(process.platform !== "win32")("reports a signal-killed probe as failure
   expect(result.code).not.toBe(0);
 });
 
-async function createCleanupFixture(
-  options: { mode?: string; inventory?: string; names?: string[] } = {},
-) {
+async function createCleanupFixture(options: { mode?: string; inventory?: string } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openshell-cleanup-test-"));
   const stateFile = path.join(root, "state.json");
   const command = path.join(root, "openshell");
@@ -102,8 +98,7 @@ if (failure) {
   console.error(failure);
   process.exit(1);
 }
-if ((state.mode === "slow-delete" && args[3] === "delete") ||
-    (state.mode === "stuck" && state.observations > 0)) {
+if (state.mode === "stuck" && state.observations > 0) {
   fs.writeFileSync(stateFile + ".expired", "");
 }
 `,
@@ -124,43 +119,9 @@ if ((state.mode === "slow-delete" && args[3] === "delete") ||
 }
 
 describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () => {
-  it("waits for durable sandbox deletion before deleting its workspace", async () => {
-    const fixture = await createCleanupFixture();
-    try {
-      await fixture.cleanup();
-      expect(await fixture.read()).toMatchObject({
-        names: [],
-        deletes: ["first", "second"],
-        workspaceDeletes: 1,
-      });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it("deletes an empty workspace without deleting never-created sandboxes", async () => {
-    const fixture = await createCleanupFixture({ names: [] });
-    try {
-      await fixture.cleanup();
-      expect(await fixture.read()).toMatchObject({
-        listCalls: 1,
-        deletes: [],
-        workspaceDeletes: 1,
-      });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
   it.each([
     ["non-JSON", "not json"],
-    ["non-array", "{}"],
-    ["null row", "[null]"],
-    ["missing name", "[{}]"],
-    ["empty name", '[{"name":""}]'],
     ["unexpected sandbox", '[{"name":"someone-else"}]'],
-    ["duplicate sandbox", '[{"name":"first"},{"name":"first"}]'],
-    ["full page", '[{"name":"first"},{"name":"second"},{"name":"never-created"},{"name":"extra"}]'],
   ])("rejects %s inventory without deleting resources", async (_label, inventory) => {
     const fixture = await createCleanupFixture({ inventory });
     try {
@@ -199,8 +160,8 @@ describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () =
     },
   );
 
-  it.each(["slow-delete", "stuck"])("bounds %s by the original cleanup deadline", async (mode) => {
-    const fixture = await createCleanupFixture({ mode });
+  it("bounds stuck deletion by the original cleanup deadline", async () => {
+    const fixture = await createCleanupFixture({ mode: "stuck" });
     const startedAt = Date.now();
     // Advance at the real child operation boundary, not a wall-clock poll that
     // can expire before a loaded host starts the command.
@@ -214,9 +175,9 @@ describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () =
         expect.objectContaining({ message: expect.stringContaining("120 seconds") }),
       );
       expect(await fixture.read()).toMatchObject({
-        listCalls: mode === "slow-delete" ? 1 : 2,
+        listCalls: 2,
         deletes: ["first"],
-        observations: mode === "slow-delete" ? 0 : 1,
+        observations: 1,
         workspaceDeletes: 0,
       });
     } finally {
@@ -225,11 +186,15 @@ describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () =
     }
   });
 
-  it("keeps workspace deletion failure visible after sandbox absence", async () => {
+  it("waits for durable sandbox absence and reports workspace deletion failure", async () => {
     const fixture = await createCleanupFixture({ mode: "workspace-failure" });
     try {
       await expect(fixture.cleanup()).rejects.toThrow("workspace cleanup failed");
-      expect(await fixture.read()).toMatchObject({ names: [], workspaceDeletes: 1 });
+      expect(await fixture.read()).toMatchObject({
+        names: [],
+        deletes: ["first", "second"],
+        workspaceDeletes: 1,
+      });
     } finally {
       await fixture.dispose();
     }

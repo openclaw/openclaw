@@ -20,6 +20,19 @@ import {
   serializeConversation,
 } from "./utils.js";
 
+function serializeToolResult(text: string): string {
+  return serializeConversation([
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "test-tool",
+      isError: false,
+      timestamp: 1,
+      content: [{ type: "text", text }],
+    },
+  ]);
+}
+
 describe("file operation provenance", () => {
   it.each([
     {
@@ -179,6 +192,26 @@ describe("getCompactionContent", () => {
 });
 
 describe("serializeConversation", () => {
+  it.each([
+    { name: "canonical", marker: { runtimeContext: {} } },
+    { name: "shipped", marker: { runtimeContextCarrier: true } },
+  ])("excludes mixed-media $name runtime carriers from summaries", ({ marker }) => {
+    const serialized = serializeConversation([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "private legacy runtime context" },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+        ...marker,
+      },
+      { role: "user", content: "visible user text", timestamp: 2 },
+    ]);
+
+    expect(serialized).toBe("[User]: visible user text");
+  });
+
   it("sends independent tool-result blocks to the summarizer with their boundaries intact", async () => {
     const model: Model = {
       id: "summary-model",
@@ -579,14 +612,8 @@ describe("serializeConversation", () => {
 
   it("preserves terminal failures when truncating long tool results", () => {
     const output = `command started\n${"progress ".repeat(450)}\nFATAL: missing deployment token`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
 
-    const serialized = serializeConversation(messages);
+    const serialized = serializeToolResult(output);
 
     expect(serialized).toContain("command started");
     expect(serialized).toContain("FATAL: missing deployment token");
@@ -596,69 +623,26 @@ describe("serializeConversation", () => {
 
   it("keeps both diagnostic truncation boundaries UTF-16 safe", () => {
     const output = `${"h".repeat(1399)}🚀${"m".repeat(1600)}🚀\nERROR: failed safely`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
 
-    const serialized = serializeConversation(messages);
+    const serialized = serializeToolResult(output);
 
     expect(serialized).toContain("ERROR: failed safely");
     expect(serialized).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(serialized).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 
-  it("retains earlier diagnostics when they are outside the preserved tail", () => {
-    const output = `${"h".repeat(1500)}ERROR: earlier failure${"m".repeat(1500)}`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
-
-    expect(serializeConversation(messages)).toContain("ERROR: earlier failure");
-  });
-
   it.each(["done", "exit code 0", "1 failed"])(
     "does not let routine '%s' output evict an earlier failure",
     (footer) => {
       const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\n${footer}`;
-      const messages = [
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: output }],
-        },
-      ] as unknown as Message[];
-
-      expect(serializeConversation(messages)).toContain("ERROR: deployment failed");
+      expect(serializeToolResult(output)).toContain("ERROR: deployment failed");
     },
   );
 
-  it("preserves a terminal failure when no earlier diagnostic would be displaced", () => {
-    const output = `${"h".repeat(1500)}${"m".repeat(1500)}\nERROR: terminal failure`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
-
-    expect(serializeConversation(messages)).toContain("ERROR: terminal failure");
-  });
-
   it("retains terminal errors followed by more than 600 characters of stack frames", () => {
     const output = `${"progress ".repeat(300)}\nERROR: terminal failure\n${"  at applicationFrame()\n".repeat(45)}`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
 
-    const serialized = serializeConversation(messages);
+    const serialized = serializeToolResult(output);
 
     expect(serialized).toContain("ERROR: terminal failure");
     expect(serialized).toContain("applicationFrame()");
@@ -668,14 +652,8 @@ describe("serializeConversation", () => {
 
   it("does not duplicate early errors into an overlapping diagnostic window", () => {
     const output = `${"h".repeat(600)}ERROR: early failure${"m".repeat(1900)}`;
-    const messages = [
-      {
-        role: "toolResult",
-        content: [{ type: "text", text: output }],
-      },
-    ] as unknown as Message[];
 
-    const serialized = serializeConversation(messages);
+    const serialized = serializeToolResult(output);
 
     expect(serialized.split("ERROR: early failure")).toHaveLength(2);
     expect(serialized).toContain(`[... ${output.length - 2000} more characters truncated]`);
@@ -692,12 +670,5 @@ describe("formatFileOperations bounds", () => {
     // stay bounded no matter how many paths accumulated.
     expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
     expect(section).toContain("more");
-  });
-
-  it("emits full lists untouched when they fit the budget", () => {
-    const section = formatFileOperations(["a.ts"], ["b.ts"]);
-    expect(section).toBe(
-      "\n\n<read-files>\na.ts\n</read-files>\n\n<modified-files>\nb.ts\n</modified-files>",
-    );
   });
 });

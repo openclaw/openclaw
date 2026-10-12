@@ -1,6 +1,22 @@
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  getScopedPluginCache,
+} from "../../plugins/plugin-cache.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getPluginRuntimeGenerationRegistry,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import {
   getGatewayToolCallerIdentity,
@@ -20,6 +36,65 @@ beforeEach(() => {
 });
 
 describe("openclaw delegation tool", () => {
+  it("admits each delegated call outside its caller generation without dropping caller fences", async () => {
+    await using cache = createPluginCache();
+    const registry = createEmptyPluginRegistry();
+    const generation: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: createEmptyPluginMetadataSnapshot(),
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    };
+    bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
+    const controller = new AbortController();
+    const approvalAuthorityCheck = vi.fn(() => true);
+    const [tool] = createOpenClawDelegateToolsForRun({
+      sessionAgentId: "main",
+      runSessionKey: "agent:main:main",
+    });
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
+    callGateway.mockImplementation(async () => {
+      expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+      expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+      expect(getScopedPluginCache()).toBeUndefined();
+      expect(getGatewayToolCallerIdentity()).toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        approvalAuthorityCheck,
+        approvalSignals: [controller.signal],
+      });
+      return { reply: "Ready." };
+    });
+    await withPreparedModelRuntimePluginGenerationScope(generation, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          approvalAuthorityCheck,
+          approvalSignals: [controller.signal],
+        },
+        () =>
+          withPluginRuntimeGenerationScope(
+            { metadataSnapshot: generation.pluginMetadataSnapshot, pluginRegistry: registry },
+            async () => {
+              for (const message of ["First helper call", "Second helper call"]) {
+                await tool.execute("delegate", { message });
+                expect(getPreparedModelRuntimePluginGeneration()).toBe(generation);
+                expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
+                expect(getScopedPluginCache()).toBe(cache);
+              }
+            },
+          ),
+      ),
+    );
+    expect(getGatewayToolCallerIdentity()).toBeUndefined();
+    expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+    expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+    expect(getScopedPluginCache()).toBeUndefined();
+  });
+
   it("relays context and the completed approval outcome", async () => {
     callGateway.mockResolvedValue({
       sessionId: "ignored-by-client",
@@ -75,7 +150,7 @@ describe("openclaw delegation tool", () => {
     },
     {
       name: "agent-restricted default",
-      options: { config: { agents: { list: [{ id: "main", tools: { exec: { mode: "ask" } } }] } } },
+      options: { config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } } },
       full: false,
     },
     {

@@ -1,13 +1,39 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { expect } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, beforeAll, expect } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { isProcessAlive, waitForDead, waitForFile } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+// Escaped descendants have no surviving ChildProcess owner. Keep only the
+// foreign-PID extinction check, bounded by the owning test's cancellation.
+async function waitForReaped(pid: number, signal: AbortSignal): Promise<void> {
+  while (isProcessAlive(pid)) {
+    if (signal.aborted) {
+      throw new Error(`process still alive: ${pid}`, { cause: signal.reason });
+    }
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    });
+  }
+}
 
 /** Real escaped writer, inner fixture lifetime, and two non-isolated worker files. */
 export async function proveNestedRetention(
@@ -25,6 +51,8 @@ export async function proveNestedRetention(
     `import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+${fixtureReceiptClientSource(receipts.endpoint)}
+import { sendReceipt as sendBeforeReceipt } from './before-client.mjs';
 const [role, control, input] = process.argv.slice(2);
 const file = name => path.join(control, name);
 const publish = (name, data) => {
@@ -41,22 +69,20 @@ if (role === 'leader') {
 } else {
   // A safety deadline is not a readiness signal. The test must stop and join us.
   const deadline = setTimeout(() => process.exit(3), 90000);
-  const poll = setInterval(() => {
-    if (fs.existsSync(file('stop'))) {
-      clearTimeout(deadline);
-      clearInterval(poll);
-      return;
+  const append = phase => {
+    try {
+      fs.appendFileSync(input, phase + '\\n');
+      publish(phase + '.json', { pid: process.pid, written: phase });
+    } catch (error) {
+      publish(phase + '.json', { pid: process.pid, error: error.code });
     }
-    for (const phase of ['before', 'after']) {
-      if (!fs.existsSync(file(phase + '.request')) || fs.existsSync(file(phase + '.json'))) continue;
-      try {
-        fs.appendFileSync(input, phase + '\\n');
-        publish(phase + '.json', { pid: process.pid, written: phase });
-      } catch (error) {
-        publish(phase + '.json', { pid: process.pid, error: error.code });
-      }
-    }
-  }, 5);
+    // Durable publication precedes either receipt and the leader's exit.
+    if (phase === 'before') sendBeforeReceipt(file('before.json'), 'written');
+    else sendReceipt(file('after.json'), 'written');
+  };
+  process.on('SIGUSR1', () => append('after'));
+  process.on('SIGTERM', () => { clearTimeout(deadline); });
+  append('before');
   process.send('ready');
   process.disconnect();
 }
@@ -67,14 +93,21 @@ if (role === 'leader') {
     `import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { threadId } from 'node:worker_threads';
 import { createFixtureLifetime } from ${source("test/helpers/fixture-lifetime.ts")};
 import { runManagedCommand, inspectManagedProcessGroup } from ${source("scripts/lib/managed-child-process.mts")};
-import { waitForFile } from ${source("test/helpers/process-wait.ts")};
+import { fixtureReceiptClientSource, openFixtureReceiptChannel } from ${source("test/helpers/fixture-receipts.ts")};
+import { withinTest } from ${source("test/helpers/promise.ts")};
 const lifetime = createFixtureLifetime();
 const control = ${JSON.stringify(root)};
 const file = name => path.join(control, name);
+let beforeReceipts;
+beforeAll(async () => {
+  beforeReceipts = await openFixtureReceiptChannel();
+  fs.writeFileSync(file('before-client.mjs'), fixtureReceiptClientSource(beforeReceipts.endpoint) + '\\nexport { sendReceipt };\\n');
+});
+afterAll(async () => { await beforeReceipts.close(); });
 let retained;
 afterEach(async () => {
   try { await lifetime.cleanup(); }
@@ -86,7 +119,7 @@ afterEach(async () => {
     ${mode === "swallowed" ? "" : "throw error;"}
   }
 });
-it('retains inputs after a genuine escaped writer fails strict join', async () => {
+it('retains inputs after a genuine escaped writer fails strict join', async ({ signal }) => {
   const root = lifetime.createTempDir('inner-retained-');
   const input = path.join(root, 'input');
   fs.writeFileSync(input, 'owned\\n');
@@ -102,14 +135,17 @@ it('retains inputs after a genuine escaped writer fails strict join', async () =
       fs.writeFileSync(file('leader.pid.json'), JSON.stringify(child.pid));
     },
   }));
-  fs.writeFileSync(file('before.request'), 'write');
-  await waitForFile(file('before.json'), 10000);
+  const settled = command.then(
+    () => { if (!fs.existsSync(file('before.json'))) throw new Error('timeout waiting for ' + file('before.json')); },
+    (error: unknown) => { if (!fs.existsSync(file('before.json'))) throw error; },
+  );
+  await withinTest(Promise.race([beforeReceipts.waitFor(file('before.json'), 'written'), settled]), signal);
   const before = JSON.parse(fs.readFileSync(file('before.json'), 'utf8'));
   expect(before.written).toBe('before');
   retained = { root, input, namespace: os.tmpdir(), workerPid: process.pid, threadId, leaderPid: child.pid, writerPid: before.pid };
   fs.writeFileSync(file('retained.json'), JSON.stringify(retained));
   ${mode === "crash" ? "process.kill(process.pid, 'SIGKILL'); await new Promise(() => {});" : ""}
-  await exited;
+  await withinTest(exited, signal);
   // The real writer has written and the leader has exited. Advance only the
   // unchanged drain deadline; native process/pipe observation remains real.
   const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000);
@@ -213,7 +249,6 @@ export default {
   };
   const abort = () => killGroup(child.pid!);
   signal.addEventListener("abort", abort, { once: true });
-  const deadline = setTimeout(abort, 60000);
   let outerClosed = false;
   const taskProcesses = () => {
     let pids: string;
@@ -260,12 +295,12 @@ export default {
     await runQaGatewayFixture(
       async () => {
         signal.throwIfAborted();
-        const outer = await withTestTimeout(outcome, 65000, "outer completion did not settle");
-        await withTestTimeout(closed, 5000, "outer child did not close");
+        const outer = await withinTest(outcome, signal);
+        await withinTest(closed, signal);
         const retained = read("retained.json");
         const before = read("before.json");
-        write("after.request", "write");
-        await waitForFile(file("after.json"), 5000);
+        process.kill(before.pid, "SIGUSR1");
+        await withinTest(receipts.waitFor(file("after.json"), "written"), signal);
         const after = read("after.json");
         const observation = {
           pool,
@@ -330,15 +365,14 @@ export default {
         for (const { group } of spawners) {
           killGroup(group);
         }
-        for (const { pid } of spawners) {
-          await waitForDead(pid, 5000);
-        }
-        await withTestTimeout(closed, 5000, "outer cleanup did not close");
-        await withTestTimeout(outcome, 5000, "outer cleanup did not settle");
+        await closed;
+        await outcome;
         outerClosed = true;
+        for (const { pid } of spawners) {
+          await waitForReaped(pid, signal);
+        }
       },
       async () => {
-        write("stop", "stop");
         const recorded = ["leader.pid.json", "writer.pid.json"]
           .filter((name) => fs.existsSync(file(name)))
           .map((name) => Number(fs.readFileSync(file(name), "utf8")))
@@ -356,7 +390,7 @@ export default {
               throw new Error("Invalid owned fixture PID");
             }
             killGroup(pid);
-            await waitForDead(pid, 5000);
+            await waitForReaped(pid, signal);
           }),
         );
         expect(taskProcesses()).toEqual([]);
@@ -375,7 +409,6 @@ export default {
       },
     );
   } finally {
-    clearTimeout(deadline);
     signal.removeEventListener("abort", abort);
     write("output.log", output);
   }

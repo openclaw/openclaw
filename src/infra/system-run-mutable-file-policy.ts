@@ -1,4 +1,3 @@
-/** Filesystem heuristics for mutable executable and script operands. */
 import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
@@ -50,34 +49,24 @@ export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean 
   return false;
 }
 
-export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
-  if (
+function isMutableShellPathSync(targetPath: string): boolean {
+  return (
     isMutableByCurrentProcessSync(targetPath) ||
     isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
     hasMutableSymlinkPathComponentSync(targetPath)
-  ) {
-    return true;
-  }
-  const realPath = safeRealpathSync(targetPath);
-  if (!realPath) {
-    return true;
-  }
-  return (
-    isMutableByCurrentProcessSync(realPath) ||
-    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
-    hasMutableSymlinkPathComponentSync(realPath)
   );
 }
 
+export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (isMutableShellPathSync(targetPath)) {
+    return true;
+  }
+  const realPath = safeRealpathSync(targetPath);
+  return !realPath || isMutableShellPathSync(realPath);
+}
+
 export function looksLikePathToken(token: string): boolean {
-  return (
-    token.startsWith(".") ||
-    token.startsWith("/") ||
-    token.startsWith("\\") ||
-    token.includes("/") ||
-    token.includes("\\") ||
-    path.extname(token).length > 0
-  );
+  return looksLikeExplicitPathToken(token) || path.extname(token).length > 0;
 }
 
 export function looksLikeExplicitPathToken(token: string): boolean {

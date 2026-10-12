@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Summarizes OpenClaw performance source fixtures for reports.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -20,22 +19,8 @@ type JsonObject = { [key: string]: JsonValue };
 type JsonValue = boolean | number | string | null | JsonObject | JsonValue[];
 type RequiredOption = { required?: boolean };
 
-function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null || ["boolean", "number", "string"].includes(typeof value)) {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    return value.every(isJsonValue);
-  }
-  return isRecord(value) && Object.values(value).every(isJsonValue);
-}
-
 function parseJson(source: string): JsonValue {
-  const value: unknown = JSON.parse(source);
-  if (!isJsonValue(value)) {
-    throw new Error("parsed value is not JSON");
-  }
-  return value;
+  return JSON.parse(source) as JsonValue;
 }
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {

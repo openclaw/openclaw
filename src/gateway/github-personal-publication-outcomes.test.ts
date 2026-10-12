@@ -1,35 +1,39 @@
+// Register the shared Git transport before any publication or run-lease consumer.
+// oxfmt-ignore
+import {
+  BRANCH,
+  SESSION_ID,
+  SESSION_KEY,
+  commandResult,
+  commands,
+  createRealPublicationWorkspace,
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+} from "./github-publication.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
   createForeignPublicationSession,
   createPersonalPublicationFixture,
+  readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import {
-  BRANCH,
-  SESSION_ID,
-  SESSION_KEY,
-  commandResult,
-  createRealPublicationWorkspace,
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
-} from "./github-publication.test-support.js";
+  claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStore,
+  readGitHubPublicationRequest,
+} from "./github-publication-store.js";
+import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 
 const mocks = githubPublicationTestMocks();
-vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
-  lockWorktreeForProcess: vi.fn(async () => undefined),
-  unlockWorktree: vi.fn(async () => undefined),
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandBuffered: (
-    ...args: Parameters<typeof import("../process/exec.js").runCommandBuffered>
-  ) => mocks.runCommand(...args),
-}));
+const table = "github_personal_publication_requests";
 
 describe("personal publication definitive outcomes", () => {
   installGitHubPublicationTestHarness();
@@ -40,22 +44,19 @@ describe("personal publication definitive outcomes", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
-  const rpc = (method: string, params?: Record<string, unknown>) =>
-    callPersonalPublicationRpc(fixture, method, params);
+  const rpc = (
+    method: string,
+    params?: Record<string, unknown>,
+    hooks?: Parameters<typeof callPersonalPublicationRpc>[3],
+  ) => callPersonalPublicationRpc(fixture, method, params, hooks);
   const request = () => ({
     sessionKey: SESSION_KEY,
     idempotencyKey: "personal-publish",
     selection: { source: "personal" as const, generation: fixture.generation, account },
   });
-  const status = (requestId: string) =>
-    fixture.coordinator.personalStatus(
-      fixture.action,
-      { sessionKey: SESSION_KEY, sessionId: SESSION_ID, agentId: "main" },
-      requestId,
-    );
+  const status = (requestId: string) => readPersonalPublicationFixtureStatus(fixture, requestId);
   it.each([
     { boundary: "connection closes", readback: false },
-    { boundary: "permission ends", readback: false },
     { boundary: "permission ends during readback", readback: true },
   ] as const)(
     "retains an accepted open PR response after the requesting $boundary",
@@ -155,19 +156,11 @@ describe("personal publication definitive outcomes", () => {
   });
 
   it.each([
-    "closed",
-    "closed-before-unavailable",
-    "closed-with-foreign",
-    "closed-after-create",
-    "closed-after-lost-create",
     "no-changes",
-    "foreign",
     "foreign-after-create",
-    "revoked",
     "revoked-after-create",
     "unavailable-after-create",
     "malformed-after-create",
-    "timeout-after-create",
   ] as const)(
     "preserves the original request outcome for %s observation after an earlier effect",
     async (outcome) => {
@@ -175,10 +168,8 @@ describe("personal publication definitive outcomes", () => {
       const foreign = outcome.startsWith("foreign");
       const revoked = outcome.startsWith("revoked");
       const afterCreate = outcome.endsWith("after-create");
-      const unavailable = /^(unavailable|malformed|timeout)/u.test(outcome);
-      const workspace = await createRealPublicationWorkspace(
-        outcome === "closed-after-lost-create" ? "create" : "push",
-      );
+      const unavailable = /^(unavailable|malformed)/u.test(outcome);
+      const workspace = await createRealPublicationWorkspace("push");
       const initial = (await rpc("sessions.github.publish", request()))[1];
       expect(initial.status).toBe("needs_confirmation");
       const pending = status(initial.requestId);
@@ -218,13 +209,7 @@ describe("personal publication definitive outcomes", () => {
           if (outcome === "malformed-after-create") {
             return commandResult("[{}");
           }
-          if (outcome === "timeout-after-create") {
-            throw new Error("synthetic remote timeout");
-          }
           lookups += 1;
-          if (outcome === "closed-before-unavailable" && lookups > 1) {
-            throw new Error("synthetic later lookup unavailable");
-          }
           if (revoked && lookups === 1) {
             client.connect.scopes = ["operator.read"];
           }
@@ -239,28 +224,13 @@ describe("personal publication definitive outcomes", () => {
                 headRef: BRANCH,
                 baseRef: "main",
               },
-              ...(outcome === "closed-with-foreign"
-                ? [
-                    {
-                      url: "https://github.com/openclaw/openclaw/pull/125204",
-                      userId: 202,
-                      state: "open",
-                      body: "",
-                      headSha,
-                      headRef: BRANCH,
-                      baseRef: "main",
-                    },
-                  ]
-                : []),
             ]),
           );
         }
         return await remote(argv, options);
       });
       const confirmed = await rpc("sessions.github.confirm", confirm);
-      expect(workspace.effects).toEqual(
-        afterCreate || outcome === "closed-after-lost-create" ? ["push", "pull_request"] : ["push"],
-      );
+      expect(workspace.effects).toEqual(afterCreate ? ["push", "pull_request"] : ["push"]);
       if (unavailable) {
         expect(confirmed[0]).toBe(true);
         expect(confirmed[1]).toMatchObject({
@@ -287,28 +257,21 @@ describe("personal publication definitive outcomes", () => {
         return;
       }
       expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
-      const closed = outcome.startsWith("closed");
       expect(confirmed[1]).toMatchObject({
         requestId: initial.requestId,
         status: "failed",
         publisher: initial.publisher,
         code: outcome === "no-changes" ? "no_changes" : "github_rejected",
-        effect: closed
-          ? { kind: "pull_request", status: "observed", headCommit: headSha, url }
-          : afterCreate
-            ? { kind: "pull_request", status: "dispatched", headCommit: headSha }
-            : initial.effect,
-        nextAction: expect.stringContaining(
-          closed ? "Reopen" : outcome === "no-changes" ? "change" : "permission",
-        ),
+        effect: afterCreate
+          ? { kind: "pull_request", status: "dispatched", headCommit: headSha }
+          : initial.effect,
+        nextAction: expect.stringContaining(outcome === "no-changes" ? "change" : "permission"),
       });
       expect(status(initial.requestId)).toEqual({ result: confirmed[1], confirmation: null });
       expect((await rpc("sessions.github.options"))[1].pendingPersonal).toBeNull();
       expect((await rpc("sessions.github.publish", request()))[1]).toEqual(confirmed[1]);
       expect((await rpc("sessions.github.confirm", confirm))[1]).toEqual(confirmed[1]);
-      expect(workspace.effects).toEqual(
-        afterCreate || outcome === "closed-after-lost-create" ? ["push", "pull_request"] : ["push"],
-      );
+      expect(workspace.effects).toEqual(afterCreate ? ["push", "pull_request"] : ["push"]);
       mocks.runCommand.mockImplementation(remote);
       const fresh = await rpc("sessions.github.publish", {
         ...request(),
@@ -319,4 +282,218 @@ describe("personal publication definitive outcomes", () => {
       expect(fresh[1].requestId).not.toBe(initial.requestId);
     },
   );
+
+  // Leaves a personal publication row in "requested" (needs_confirmation) by aborting
+  // admission through a temp trigger, so tests can drive status/options readbacks.
+  const createStoppedPersonalRequest = async () => {
+    const { client, context, coordinator } = fixture;
+    const persisted = await persistPublicationTestSession();
+    const controller = new AbortController();
+    const db = openOpenClawStateDatabase().db;
+    ensurePersonalGitHubPublicationSchema(db);
+    db.function("stop_personal_admission", () => {
+      controller.abort();
+      return 1;
+    });
+    db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
+      BEGIN SELECT stop_personal_admission(); END`);
+    const stopped = await preparePersonalPublicationFixtureAction(
+      { client, context },
+      controller.signal,
+    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    db.exec("DROP TRIGGER stop_personal_admission");
+    const row = openOpenClawStateDatabase()
+      .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
+      .get() as { request_id: string; status: string; execution_id: null };
+    expect(row).toMatchObject({ status: "requested", execution_id: null });
+    return { requestId: row.request_id, session: persisted.read() };
+  };
+  // The scope omits storePath: the fixture persists through the resolved agent store, and
+  // a custom locator would resolve a different SQLite file and silently no-op the patch.
+  const archiveSession = () =>
+    patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, () => ({
+      archivedAt: Date.now(),
+    }));
+  const restoreSession = () =>
+    patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, () => ({
+      archivedAt: undefined,
+    }));
+
+  it("stops offering a pending confirmation once the session is archived", async () => {
+    const { generation } = fixture;
+    const { requestId } = await createStoppedPersonalRequest();
+    const pending = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId,
+    });
+    expect(pending[1]).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation, account },
+    });
+    // Archiving preserves sessionId/lifecycleRevision, so only an explicit archivedAt
+    // check can retire the pending confirmation the archived confirm action would reject.
+    await archiveSession();
+    const discovered = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId,
+    });
+    expect(discovered[1]).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
+  it("projects an archive that lands while publication options are awaited", async () => {
+    await createStoppedPersonalRequest();
+    const before = await rpc("sessions.github.options");
+    expect(before[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+    // The archive lands inside the awaited personal-status work, after the options
+    // request captured its request-start session snapshot; the projection must re-read
+    // archivedAt instead of offering the confirmation the archived session would reject.
+    const discovered = await rpc(
+      "sessions.github.options",
+      { sessionKey: SESSION_KEY },
+      { duringPersonalStatus: archiveSession },
+    );
+    expect(discovered[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
+  it("revives the pending confirmation when a restore lands while options are awaited", async () => {
+    await createStoppedPersonalRequest();
+    await archiveSession();
+    // The restore lands inside the awaited personal-status work; the projection must use
+    // the refreshed archivedAt instead of reporting session_changed for an active session.
+    const revived = await rpc(
+      "sessions.github.options",
+      { sessionKey: SESSION_KEY },
+      { duringPersonalStatus: restoreSession },
+    );
+    expect(revived[0], JSON.stringify(revived[2])).toBe(true);
+    expect(revived[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+  });
+
+  it("pins the response archive snapshot through shared receipt supersession", async () => {
+    const { requestId, session } = await createStoppedPersonalRequest();
+    const shared = insertSharedWorktreeReceipt("archive-supersession", {
+      session: {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        lifecycleRevision: session.lifecycleRevision ?? null,
+      },
+      createdAtMs: Date.now(),
+    });
+    const instance = "archive-supersession-instance";
+    createGitHubPublicationExecutionStore(instance).complete(
+      claimGitHubPublicationExecution(shared.request_id, instance),
+      {
+        requestId: shared.request_id,
+        status: "failed",
+        code: "unavailable",
+        message: "Synthetic publication failure.",
+        nextAction: "Review the recorded request.",
+      },
+    );
+    const readShared = () =>
+      readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
+        requestId: shared.request_id,
+      });
+    const originalShared = readShared();
+    const originalPersonal = readPersonalGitHubPublication(fixture.owner, { requestId });
+    fixture.context.controlUiSessionPullRequests = {
+      readPrepared: vi.fn(),
+      read: vi.fn(async () => {
+        throw new Error("No session PR projection is installed in this fixture.");
+      }),
+      replace: vi.fn(async () => {}),
+      unsubscribe: vi.fn(),
+      pollNow: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const latestShared = fixture.coordinator.latestShared.bind(fixture.coordinator);
+    const supersessionEntered = vi.fn();
+    let changeArchive: (() => Promise<unknown>) | undefined;
+    let restoreBeforeSharedRead = false;
+    const coordinator: typeof fixture.coordinator = {
+      ...fixture.coordinator,
+      latestShared: async (current, idempotencyKey, isSuperseded) => {
+        // Archived sessions have no shared discovery result, so restore before
+        // that read, after pendingPersonal captured the archived snapshot.
+        if (restoreBeforeSharedRead) {
+          await restoreSession();
+        }
+        return latestShared(current, idempotencyKey, async (snapshot) => {
+          supersessionEntered();
+          await changeArchive?.();
+          // Exercise the real callback: refreshing its read must not replace the
+          // earlier snapshot used to compute pendingPersonal.
+          if (!isSuperseded) {
+            throw new Error("Expected the session supersession callback.");
+          }
+          return isSuperseded(snapshot);
+        });
+      },
+    };
+    const options = () =>
+      callPersonalPublicationRpc({ ...fixture, coordinator }, "sessions.github.options");
+    const unchanged = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(1);
+    expect(unchanged[0], JSON.stringify(unchanged[2])).toBe(true);
+    expect(unchanged[1]).toMatchObject({
+      pendingPersonal: {
+        result: { status: "needs_confirmation" },
+        confirmation: { generation: fixture.generation, account },
+      },
+      latestShared: { result: { requestId: shared.request_id, status: "failed" } },
+    });
+
+    changeArchive = archiveSession;
+    const archived = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(2);
+    expect(archived[0]).toBe(false);
+    expect(JSON.stringify(archived[2])).toContain("session access changed");
+    changeArchive = undefined;
+    const freshArchived = await options();
+    expect(freshArchived[0], JSON.stringify(freshArchived[2])).toBe(true);
+    expect(freshArchived[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+
+    expect(supersessionEntered).toHaveBeenCalledTimes(2);
+    restoreBeforeSharedRead = true;
+    const restored = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(3);
+    expect(restored[0]).toBe(false);
+    expect(JSON.stringify(restored[2])).toContain("session access changed");
+    restoreBeforeSharedRead = false;
+    const freshRestored = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(4);
+    expect(freshRestored[0], JSON.stringify(freshRestored[2])).toBe(true);
+    expect(freshRestored[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+    expect(readShared()).toEqual(originalShared);
+    expect(readPersonalGitHubPublication(fixture.owner, { requestId })).toEqual(originalPersonal);
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
 });

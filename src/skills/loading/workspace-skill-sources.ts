@@ -11,7 +11,10 @@ import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
-import { resolveWorkspaceSkillDirectories } from "./workspace-skill-roots.js";
+import {
+  resolveWorkspaceSkillDirectories,
+  type ExecutionSkillWorkspace,
+} from "./workspace-skill-roots.js";
 import type {
   WorkspaceSkillSourcePlan,
   WorkspaceSkillSource,
@@ -24,7 +27,10 @@ export type {
 } from "./workspace-skill-sources.types.js";
 
 /** Gateway-installed sources stay local; only workspace-owned files cross the boundary. */
-export function splitSkillSourcePlan(plan: WorkspaceSkillSourcePlan) {
+export function splitSkillSourcePlan(
+  plan: WorkspaceSkillSourcePlan,
+  execution: ExecutionSkillWorkspace = {},
+) {
   const isWorkspaceOwned = (root: WorkspaceSkillSource) =>
     root.tier === "workspace" ||
     ((root.tier === "managed" || root.tier === "extra") &&
@@ -34,6 +40,14 @@ export function splitSkillSourcePlan(plan: WorkspaceSkillSourcePlan) {
   const gatewayRoots = roots.filter((root) => !isWorkspaceOwned(root));
   const workspaceRoots = roots.filter(isWorkspaceOwned);
   return {
+    gatewayExecutionWorkspaceDir:
+      execution.executionWorkspaceFileHost === "gateway"
+        ? execution.executionWorkspaceDir
+        : undefined,
+    workspaceExecutionWorkspaceDir:
+      execution.executionWorkspaceFileHost === "gateway"
+        ? undefined
+        : execution.executionWorkspaceDir,
     gatewayRoots,
     gatewayPlan: { ...plan, roots: gatewayRoots },
     workspacePlan: {

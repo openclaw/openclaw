@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 // Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
@@ -41,10 +41,6 @@ export type OnboardEnsureWorkspaceOptions = {
 export type OnboardGatewayHealthCall = {
   password?: string;
   token?: string;
-};
-
-export type OnboardHealthCommandCall = OnboardGatewayHealthCall & {
-  config?: OpenClawConfig;
 };
 
 export function createThrowingRuntime(): NonInteractiveRuntime {
@@ -256,13 +252,11 @@ export async function mockOnboardingAgent(params: {
   baseConfig?: OpenClawConfig;
   workspace: string;
 }) {
-  const roster = listAgentEntries(params.config);
-  const existing = roster.find((entry) => entry.default === true) ?? roster[0];
-  if (existing) {
+  if (listAgentEntries(params.config).length > 0) {
     return {
       config: params.config,
       configBase: params.baseConfig ?? params.config,
-      agentId: existing.id,
+      agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
     };
   }
@@ -272,7 +266,7 @@ export async function mockOnboardingAgent(params: {
       ...params.config,
       agents: {
         ...params.config.agents,
-        entries: { main: { name: "main", workspace: params.workspace, default: true } },
+        entries: { main: { name: "main", workspace: params.workspace } },
       },
     },
     agentId: "main",

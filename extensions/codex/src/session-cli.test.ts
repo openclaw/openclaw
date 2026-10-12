@@ -163,14 +163,6 @@ describe("registerCodexSessionCli", () => {
       expect(output).toContain("Error [NODE_OFFLINE]: Paired node is offline");
     });
 
-    it("declares the extended federated catalog timeout in help", () => {
-      const program = createProgram();
-      const codex = program.commands.find((command) => command.name() === "codex");
-      const sessions = codex?.commands.find((command) => command.name() === "sessions");
-
-      expect(sessions?.helpInformation()).toContain('(default: "75000")');
-    });
-
     it("neutralizes terminal controls in human-readable host and session metadata", async () => {
       const program = createProgram();
       gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(

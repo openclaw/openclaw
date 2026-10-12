@@ -41,9 +41,11 @@ describe("progress_card tool", () => {
         },
       })
       .mockResolvedValueOnce({ card: null });
+    const savedPlans: boolean[] = [];
     const tool = createProgressCardTool({
       agentSessionKey: "agent:main:main",
       callGateway,
+      onPlanSaved: (unfinished) => savedPlans.push(unfinished),
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
@@ -72,6 +74,11 @@ describe("progress_card tool", () => {
     });
     expect(cleared.details).toEqual({ revision: null, steps: null });
     expect(cleared.content[0]).toEqual({ type: "text", text: "Progress card cleared" });
+    expect(savedPlans).toEqual([true, false, false]);
+
+    callGateway.mockRejectedValueOnce(new Error("save rejected"));
+    await expect(tool.execute("call-failed", { plan: steps })).rejects.toThrow("save rejected");
+    expect(savedPlans).toEqual([true, false, false]);
   });
 
   it.each([

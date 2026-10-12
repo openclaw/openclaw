@@ -90,14 +90,12 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
-  return [
+  const steps: ToolPolicyPipelineStep[] = [
     {
       policy: params.profilePolicy,
       source: params.sources?.profile,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
     {
       policy: params.providerProfilePolicy,
@@ -105,54 +103,33 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
-      stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
-      unavailableCoreToolReason,
     },
-    {
-      policy: params.globalPolicy,
-      source: params.sources?.global,
-      label: "tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.globalProviderPolicy,
-      source: params.sources?.globalProvider,
-      label: "tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.agentPolicy,
-      source: params.sources?.agent,
-      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.agentProviderPolicy,
-      source: params.sources?.agentProvider,
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.groupPolicy,
-      source: { kind: "session" },
-      label: "group tools.allow",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
-    {
-      policy: params.senderPolicy,
-      source: { kind: "session" },
-      label: "tools.toolsBySender",
-      stripPluginOnlyAllowlist: true,
-      unavailableCoreToolReason,
-    },
+    ...(
+      [
+        [params.globalPolicy, params.sources?.global, "tools.allow"],
+        [params.globalProviderPolicy, params.sources?.globalProvider, "tools.byProvider.allow"],
+        [
+          params.agentPolicy,
+          params.sources?.agent,
+          agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        ],
+        [
+          params.agentProviderPolicy,
+          params.sources?.agentProvider,
+          agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+        ],
+        [params.groupPolicy, { kind: "session" }, "group tools.allow"],
+        [params.senderPolicy, { kind: "session" }, "tools.toolsBySender"],
+      ] as const
+    ).map(([policy, source, label]) => ({ policy, source, label })),
   ];
+  for (const step of steps) {
+    step.stripPluginOnlyAllowlist = true;
+    step.unavailableCoreToolReason = unavailableCoreToolReason;
+  }
+  return steps;
 }
 
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */

@@ -7,12 +7,7 @@ import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
-import type {
-  SnapshotDatabaseManifest,
-  SnapshotManifest,
-  SnapshotRef,
-  SnapshotSummary,
-} from "../snapshot/snapshot-provider.js";
+import type { SnapshotDatabaseManifest } from "../snapshot/snapshot-provider.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -28,50 +23,6 @@ type BackupSqliteCreateOptions = {
   json?: boolean;
 };
 
-type BackupSqliteRepositoryOptions = {
-  repository?: string;
-  json?: boolean;
-};
-
-type BackupSqliteJsonOptions = {
-  json?: boolean;
-};
-
-type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
-  scratch?: string;
-};
-
-type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
-  target?: string;
-};
-
-type BackupSqliteCreateResult = {
-  ok: true;
-  snapshotPath: string;
-  manifest: SnapshotManifest;
-};
-
-type BackupSqliteListResult = {
-  ok: true;
-  repositoryPath: string;
-  snapshots: SnapshotSummary[];
-};
-
-type BackupSqliteVerifyResult = {
-  ok: true;
-  snapshotPath: string;
-  manifest: SnapshotManifest;
-};
-
-type BackupSqliteRestoreResult = BackupSqliteVerifyResult & {
-  targetPath: string;
-};
-
-type ResolvedSnapshotDatabase = {
-  path: string;
-  identity: { role: "global" } | { role: "agent"; agentId: string };
-};
-
 const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
   allowedDatabaseRoles: ["global", "agent"],
 } as const;
@@ -79,13 +30,13 @@ const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
 export async function backupSqliteCreateCommand(
   runtime: RuntimeEnv,
   options: BackupSqliteCreateOptions,
-): Promise<BackupSqliteCreateResult> {
+) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   try {
     const database = await resolveSnapshotDatabase(options);
     const result = await createLocalSqliteSnapshotProvider({ repositoryPath }).create(database);
-    const report: BackupSqliteCreateResult = {
-      ok: true,
+    const report = {
+      ok: true as const,
       snapshotPath: result.ref.path,
       manifest: result.manifest,
     };
@@ -94,7 +45,17 @@ export async function backupSqliteCreateCommand(
       archivePath: report.snapshotPath,
       status: "ok",
     });
-    writeCreateResult(runtime, options, report);
+    if (options.json) {
+      writeRuntimeJson(runtime, report);
+    } else {
+      runtime.log(
+        [
+          `SQLite snapshot created: ${shortenHomePath(report.snapshotPath)}`,
+          `Database: ${formatDatabaseIdentity(report.manifest.database)}`,
+          `Size: ${report.manifest.artifact.sizeBytes} bytes`,
+        ].join("\n"),
+      );
+    }
     return report;
   } catch (error) {
     await recordBackupOutcomeBestEffort(runtime, {
@@ -109,59 +70,82 @@ export async function backupSqliteCreateCommand(
 
 export async function backupSqliteListCommand(
   runtime: RuntimeEnv,
-  options: BackupSqliteRepositoryOptions,
-): Promise<BackupSqliteListResult> {
+  options: { repository?: string; json?: boolean },
+) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const snapshots = await createLocalSqliteSnapshotProvider({
     repositoryPath,
     ...OPENCLAW_SNAPSHOT_READ_OPTIONS,
   }).list();
-  const report: BackupSqliteListResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     repositoryPath,
     snapshots,
   };
-  writeListResult(runtime, options, report);
+  if (options.json) {
+    writeRuntimeJson(runtime, report);
+  } else if (snapshots.length === 0) {
+    runtime.log(`No SQLite snapshots in ${shortenHomePath(repositoryPath)}.`);
+  } else {
+    runtime.log(
+      snapshots
+        .map(
+          (snapshot) =>
+            `${snapshot.manifest.createdAt}  ${formatDatabaseIdentity(snapshot.manifest.database)}  ${snapshot.manifest.artifact.sizeBytes} bytes  ${shortenHomePath(snapshot.ref.path)}`,
+        )
+        .join("\n"),
+    );
+  }
   return report;
 }
 
 export async function backupSqliteVerifyCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteVerifyOptions,
-): Promise<BackupSqliteVerifyResult> {
+  options: { scratch?: string; json?: boolean },
+) {
   const resolved = resolveSnapshot(snapshot, options.scratch);
   const verified = await resolved.provider.verify(resolved.ref);
-  const report: BackupSqliteVerifyResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     snapshotPath: resolved.ref.path,
     manifest: verified.manifest,
   };
-  writeVerifyResult(runtime, options, report);
+  if (options.json) {
+    writeRuntimeJson(runtime, report);
+  } else {
+    runtime.log(
+      `SQLite snapshot verified: ${shortenHomePath(report.snapshotPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
+    );
+  }
   return report;
 }
 
 export async function backupSqliteRestoreCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteRestoreOptions,
-): Promise<BackupSqliteRestoreResult> {
+  options: { target?: string; json?: boolean },
+) {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   const restored = await resolved.provider.restoreFresh(resolved.ref, targetPath);
-  const report: BackupSqliteRestoreResult = {
-    ok: true,
+  const report = {
+    ok: true as const,
     snapshotPath: resolved.ref.path,
     targetPath,
     manifest: restored.manifest,
   };
-  writeRestoreResult(runtime, options, report);
+  if (options.json) {
+    writeRuntimeJson(runtime, report);
+  } else {
+    runtime.log(
+      `SQLite snapshot restored: ${shortenHomePath(report.targetPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
+    );
+  }
   return report;
 }
 
-async function resolveSnapshotDatabase(
-  options: BackupSqliteCreateOptions,
-): Promise<ResolvedSnapshotDatabase> {
+async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions) {
   const rawAgentId = options.agent?.trim();
   if (options.agent !== undefined && !rawAgentId) {
     throw new Error("--agent must not be blank");
@@ -177,7 +161,7 @@ async function resolveSnapshotDatabase(
     assertNotUpdateCapturePath(selectedPath, resolveStateDir());
     return {
       path: await fs.realpath(selectedPath),
-      identity: { role: "global" },
+      identity: { role: "global" as const },
     };
   }
   const config = getRuntimeConfig({ skipPluginValidation: true });
@@ -186,17 +170,11 @@ async function resolveSnapshotDatabase(
   assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());
   return {
     path: await fs.realpath(agentRoot.databasePath),
-    identity: { role: "agent", agentId },
+    identity: { role: "agent" as const, agentId },
   };
 }
 
-function resolveSnapshot(
-  snapshot: string,
-  scratch?: string,
-): {
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  ref: SnapshotRef;
-} {
+function resolveSnapshot(snapshot: string, scratch?: string) {
   const snapshotPath = resolveRequiredBackupPath(snapshot, "<snapshot>");
   const repositoryPath = path.dirname(snapshotPath);
   const validationRootPath = scratch
@@ -220,73 +198,4 @@ function formatDatabaseIdentity(database: SnapshotDatabaseManifest): string {
     return `agent:${database.agentId}`;
   }
   return database.id;
-}
-
-function writeCreateResult(
-  runtime: RuntimeEnv,
-  options: BackupSqliteJsonOptions,
-  report: BackupSqliteCreateResult,
-): void {
-  if (options.json) {
-    writeRuntimeJson(runtime, report);
-    return;
-  }
-  runtime.log(
-    [
-      `SQLite snapshot created: ${shortenHomePath(report.snapshotPath)}`,
-      `Database: ${formatDatabaseIdentity(report.manifest.database)}`,
-      `Size: ${report.manifest.artifact.sizeBytes} bytes`,
-    ].join("\n"),
-  );
-}
-
-function writeListResult(
-  runtime: RuntimeEnv,
-  options: BackupSqliteJsonOptions,
-  report: BackupSqliteListResult,
-): void {
-  if (options.json) {
-    writeRuntimeJson(runtime, report);
-    return;
-  }
-  if (report.snapshots.length === 0) {
-    runtime.log(`No SQLite snapshots in ${shortenHomePath(report.repositoryPath)}.`);
-    return;
-  }
-  runtime.log(
-    report.snapshots
-      .map(
-        (snapshot) =>
-          `${snapshot.manifest.createdAt}  ${formatDatabaseIdentity(snapshot.manifest.database)}  ${snapshot.manifest.artifact.sizeBytes} bytes  ${shortenHomePath(snapshot.ref.path)}`,
-      )
-      .join("\n"),
-  );
-}
-
-function writeVerifyResult(
-  runtime: RuntimeEnv,
-  options: BackupSqliteJsonOptions,
-  report: BackupSqliteVerifyResult,
-): void {
-  if (options.json) {
-    writeRuntimeJson(runtime, report);
-    return;
-  }
-  runtime.log(
-    `SQLite snapshot verified: ${shortenHomePath(report.snapshotPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
-  );
-}
-
-function writeRestoreResult(
-  runtime: RuntimeEnv,
-  options: BackupSqliteJsonOptions,
-  report: BackupSqliteRestoreResult,
-): void {
-  if (options.json) {
-    writeRuntimeJson(runtime, report);
-    return;
-  }
-  runtime.log(
-    `SQLite snapshot restored: ${shortenHomePath(report.targetPath)} (${formatDatabaseIdentity(report.manifest.database)})`,
-  );
 }

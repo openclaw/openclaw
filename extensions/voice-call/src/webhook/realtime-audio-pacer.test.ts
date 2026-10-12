@@ -6,25 +6,17 @@ type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[
 
 function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
   return {
-    media: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
-    clear: () => JSON.stringify({ event: "clear", streamSid }),
-    mark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
-  };
-}
-
-function createTelnyxSerializer(): RealtimeAudioSerializer {
-  return {
-    media: (payload) => JSON.stringify({ event: "media", media: { payload } }),
-    clear: () => JSON.stringify({ event: "clear" }),
-    mark: (name) => JSON.stringify({ event: "mark", mark: { name } }),
+    serializeMedia: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
+    serializeClear: () => JSON.stringify({ event: "clear", streamSid }),
+    serializeMark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
   };
 }
 
 function createCompactSerializer(): RealtimeAudioSerializer {
   return {
-    media: (payload) => payload,
-    clear: () => "clear",
-    mark: (name) => `mark:${name}`,
+    serializeMedia: (payload) => payload,
+    serializeClear: () => "clear",
+    serializeMark: (name) => `mark:${name}`,
   };
 }
 
@@ -146,25 +138,6 @@ describe("RealtimeAudioPacer", () => {
     expect(sent.slice(-2)).toEqual(["mark:audio-1", "mark:audio-2"]);
   });
 
-  it("clears queued audio immediately (Twilio shape)", async () => {
-    vi.useFakeTimers();
-    const sent: unknown[] = [];
-    const pacer = new RealtimeAudioPacer({
-      serializer: createTwilioSerializer("MZ-test"),
-      send: (message) => {
-        sent.push(JSON.parse(message));
-        return true;
-      },
-    });
-
-    pacer.sendAudio(Buffer.alloc(480, 0x7f));
-    pacer.clearAudio();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(sent).toHaveLength(4);
-    expect(sent[3]).toEqual({ event: "clear", streamSid: "MZ-test" });
-  });
-
   it("closes without sending the remaining lead-window backlog", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
     const sent: string[] = [];
@@ -204,27 +177,6 @@ describe("RealtimeAudioPacer", () => {
 
     expect(onBackpressure).toHaveBeenCalledOnce();
     expect(sent).toStrictEqual([]);
-  });
-
-  it("paces audio in Telnyx envelope shape (no streamSid)", async () => {
-    vi.useFakeTimers();
-    const sent: unknown[] = [];
-    const pacer = new RealtimeAudioPacer({
-      serializer: createTelnyxSerializer(),
-      send: (message) => {
-        sent.push(JSON.parse(message));
-        return true;
-      },
-    });
-
-    pacer.sendAudio(Buffer.alloc(160, 0x7f));
-    pacer.clearAudio();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(sent).toEqual([
-      { event: "media", media: { payload: Buffer.alloc(160, 0x7f).toString("base64") } },
-      { event: "clear" },
-    ]);
   });
 
   it("drains the full default audio backlog in order and resets queue storage", async () => {

@@ -9,36 +9,6 @@ import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { parseTelegramTarget } from "./targets.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
-function resolveInspectionThread(params: {
-  kind: "direct" | "group" | "channel";
-  peerId: string;
-  target?: string;
-  threadId?: string;
-}): { chatId: string; threadSpec: TelegramThreadSpec } | null {
-  const target = parseTelegramTarget(params.target?.trim() || params.peerId);
-  const chatId = target.chatId.trim();
-  if (!chatId) {
-    return null;
-  }
-  if (target.directMessagesTopicId != null) {
-    return {
-      chatId,
-      threadSpec: { id: target.directMessagesTopicId, scope: "direct-messages" },
-    };
-  }
-  if (target.messageThreadId != null) {
-    return { chatId, threadSpec: { id: target.messageThreadId, scope: "forum" } };
-  }
-  const threadId = parseStrictNonNegativeInteger(params.threadId);
-  return {
-    chatId,
-    threadSpec:
-      threadId == null
-        ? { scope: "none" }
-        : { id: threadId, scope: params.kind === "direct" ? "dm" : "forum" },
-  };
-}
-
 export function inspectTelegramConversationRouteOwner(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -49,9 +19,23 @@ export function inspectTelegramConversationRouteOwner(params: {
     threadId?: string;
   };
 }) {
-  const parsed = resolveInspectionThread(params.conversation);
-  if (!parsed) {
+  const conversation = params.conversation;
+  const target = parseTelegramTarget(conversation.target?.trim() || conversation.peerId);
+  const chatId = target.chatId.trim();
+  if (!chatId) {
     return null;
+  }
+  let threadSpec: TelegramThreadSpec;
+  if (target.directMessagesTopicId != null) {
+    threadSpec = { id: target.directMessagesTopicId, scope: "direct-messages" };
+  } else if (target.messageThreadId != null) {
+    threadSpec = { id: target.messageThreadId, scope: "forum" };
+  } else {
+    const id = parseStrictNonNegativeInteger(conversation.threadId);
+    threadSpec =
+      id == null
+        ? { scope: "none" }
+        : { id, scope: conversation.kind === "direct" ? "dm" : "forum" };
   }
   const accountId = normalizeAccountId(params.accountId);
   const accountConfig = mergeTelegramAccountConfig(params.cfg, accountId);
@@ -62,18 +46,14 @@ export function inspectTelegramConversationRouteOwner(params: {
   ) {
     return null;
   }
-  const { topicConfig } = resolveTelegramScopedGroupConfig(
-    accountConfig,
-    parsed.chatId,
-    parsed.threadSpec.id,
-  );
+  const { topicConfig } = resolveTelegramScopedGroupConfig(accountConfig, chatId, threadSpec.id);
   const result = inspectTelegramConversationRoute({
     cfg: params.cfg,
     accountId,
-    chatId: parsed.chatId,
-    isGroup: params.conversation.kind !== "direct",
-    threadSpec: parsed.threadSpec,
-    senderId: params.conversation.kind === "direct" ? params.conversation.peerId : undefined,
+    chatId,
+    isGroup: conversation.kind !== "direct",
+    threadSpec,
+    senderId: conversation.kind === "direct" ? conversation.peerId : undefined,
     topicAgentId: topicConfig?.agentId,
   });
   if (

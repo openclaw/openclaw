@@ -470,7 +470,6 @@ describe("updater plugin degradation with a running source Gateway", () => {
           channel: "stable",
           ...(await preparePostCorePluginConfig({ requestedChannel: null })),
           pluginInstallRecords: records,
-          pluginRequirements: { [pluginId]: "optional" },
           timeoutMs: 5_000,
           json: true,
         }),
@@ -479,10 +478,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
     expect(result.status).toBe("warning");
     expect(result.reason).toBeUndefined();
     expect(result.assessment).toMatchObject({
-      kind: "optional-repair-needed",
-      failures: [
-        expect.objectContaining({ pluginId, installPath, reason: "missing-extension-entry" }),
-      ],
+      kind: "unsafe",
+      reason: "plugin-requirement-unknown",
     });
     expect(result.npm.outcomes).toContainEqual(
       expect.objectContaining({ pluginId, status: "error" }),

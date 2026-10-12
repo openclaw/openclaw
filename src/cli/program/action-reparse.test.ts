@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { reparseProgramFromActionCommand } from "./action-reparse.js";
-import { registerLazyCommand } from "./register-lazy-command.js";
+import { registerCommandGroups } from "./register-command-groups.js";
 
 function setRawArgs(command: Command, rawArgs: string[]): void {
   (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
@@ -34,20 +34,24 @@ describe("reparseProgramFromActionCommand", () => {
   ])("keeps literal flag-looking values through actual lazy reparse: $args", async ({ args }) => {
     const program = new Command().name("openclaw").enablePositionalOptions();
     const received: string[] = [];
-    registerLazyCommand({
+    registerCommandGroups(
       program,
-      name: "config",
-      description: "Read config",
-      register: () => {
-        program
-          .command("config")
-          .command("get")
-          .argument("<path>")
-          .action((value: string) => {
-            received.push(value);
-          });
-      },
-    });
+      [
+        {
+          placeholders: [{ name: "config", description: "Read config" }],
+          register: () => {
+            program
+              .command("config")
+              .command("get")
+              .argument("<path>")
+              .action((value: string) => {
+                received.push(value);
+              });
+          },
+        },
+      ],
+      { eager: false, primary: null, registerPrimaryOnly: false },
+    );
     await program.parseAsync(["node", "openclaw", ...args]);
     expect(received).toEqual(["--help"]);
   });

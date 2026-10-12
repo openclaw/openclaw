@@ -7,8 +7,8 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { certifySessionCanonicalValidationPending } from "../config/sessions/session-canonical-validation-readiness.js";
 import {
   hasPendingCanonicalSessionValidation,
@@ -36,7 +36,13 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
-const quietRuntime = { log() {}, error() {}, exit() {} };
+function begin() {
+  return beginDoctorMaintenance({
+    options: { repair: true, nonInteractive: true },
+    root: null,
+    runtime: { log() {}, error() {}, exit() {} },
+  });
+}
 
 describe("Doctor maintenance with session workers", () => {
   it("certifies pending canonical rows under Doctor without changing them or retaining worker leases", async () => {
@@ -50,11 +56,7 @@ describe("Doctor maintenance with session workers", () => {
           sessionId: `doctor-canonical-${name}`,
           sessionKey: `agent:main:doctor-canonical-${name}`,
         }));
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const maintenance = await begin();
         try {
           await maintenance!.run(async () => {
             for (const scope of scopes) {
@@ -86,11 +88,7 @@ describe("Doctor maintenance with session workers", () => {
         } finally {
           await maintenance?.release();
         }
-        const next = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const next = await begin();
         try {
           next!.run(() => {
             for (const scope of scopes) {
@@ -140,11 +138,7 @@ describe("Doctor maintenance with session workers", () => {
               message: { role: "user", content: "Preserve this history through Doctor repair." },
             },
           ];
-          const maintenance = await beginDoctorMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: quietRuntime,
-          });
+          const maintenance = await begin();
           try {
             await maintenance!.run(async () => {
               if (sharedStore) {
@@ -188,11 +182,7 @@ describe("Doctor maintenance with session workers", () => {
             await maintenance?.release();
           }
 
-          const next = await beginDoctorMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: quietRuntime,
-          });
+          const next = await begin();
           try {
             next!.run(() => {
               expect(loadExactSessionEntryReadOnly(source)).toBeUndefined();
@@ -210,11 +200,7 @@ describe("Doctor maintenance with session workers", () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-cold-workers" },
       async (state) => {
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const maintenance = await begin();
         let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
         try {
           fixture = await maintenance!.run(async () => {

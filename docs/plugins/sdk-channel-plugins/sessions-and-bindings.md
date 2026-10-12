@@ -130,6 +130,14 @@ pass prepared `inactivityExpiresAt` and `maxAgeExpiresAt` values to
 deadline and its reason, preferring idle expiration on ties; omitted deadlines
 are disabled. The plugin still owns timestamp validation and duration defaults.
 
+On the same subpath, `projectThreadBindingRecord(...)` projects prepared
+conversation identity and expiry, with an explicit metadata merge callback.
+`createAccountScopedBindingAdapter(...)` shares list, resolve, touch, and unbind
+dispatch for account-prefixed binding IDs. The plugin's manager still owns
+storage, mutation admission and settlement, child creation, and shutdown.
+Platforms with different identity grammars, such as Matrix parent-room keys,
+can use the projection without the account-prefixed adapter.
+
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use
 `isPluginOwnedSessionBindingRecord(...)` from

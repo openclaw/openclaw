@@ -355,7 +355,7 @@ module.exports = {
                 throwOnLoadError: true,
               });
             if (mode !== "acquired") {
-              activateAmbient();
+              await activateAmbient();
             }
             // Loading the public SDK must retain the host's registered metadata owners.
             const metadataReaders = readHostMetadataReaders();
@@ -402,7 +402,7 @@ module.exports = {
               await using repeated = repeatedPreparation;
               expect(repeated).not.toHaveProperty("error");
               expect(process.listenerCount(selected.ownerEvent)).toBe(1);
-              activateAmbient();
+              await activateAmbient();
             }
             // Callers use the logical API before dispatch, including CLI system-prompt selection.
             expect(prepared.model.api).toBe("openai-completions");

@@ -151,6 +151,25 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
     expect(readingPosition.top).toBeGreaterThan(readingPosition.height);
     expect(readingPosition.endDistance).toBeGreaterThan(readingPosition.height);
 
+    // The midpoint may land in a footer/turn gap. Put the fold inside actual
+    // message content before testing whether resize preserves the reader anchor.
+    if (!(await sampleAnchor(page, null)).contentVisible) {
+      const contentDelta = await scroller.evaluate((element) => {
+        const top = element.getBoundingClientRect().top;
+        const row = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].find(
+          (candidate) => candidate.getBoundingClientRect().bottom > top,
+        );
+        const content = row?.querySelector(".chat-group-messages");
+        if (!content) {
+          throw new Error("Reader anchor has no message content");
+        }
+        const bounds = content.getBoundingClientRect();
+        return bounds.top + Math.min(40, bounds.height / 2) - top;
+      });
+      await page.mouse.wheel(0, contentDelta);
+      await settleFrames(page, 30);
+    }
+
     const before = await sampleAnchor(page, null);
     expect(before.key).not.toBeNull();
     expect(before.contentVisible, "reader anchor contains visible message content").toBe(true);

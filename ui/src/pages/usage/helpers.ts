@@ -1,6 +1,4 @@
-// Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatUiError } from "../../lib/format-error.ts";
 
 type UsageQueryTerm = {
   key?: string;
@@ -35,18 +33,17 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
+  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
+  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export function createDefaultUsageDateRange(date = new Date()) {
   const start = new Date(date);
   start.setDate(start.getDate() - 29);
-  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
-}
-
-export function toUsageErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
+  return { startDate: formatIsoDate(start), endDate: formatIsoDate(date) };
 }
 
 export function toggleUsageRangeSelection<T>(
@@ -54,7 +51,7 @@ export function toggleUsageRangeSelection<T>(
   value: T,
   orderedValues: T[],
   shiftKey: boolean,
-  append: boolean,
+  mode: "toggle" | "append" | "replace",
 ): T[] {
   if (shiftKey && selected.length > 0) {
     for (const lastSelected of selected.slice(-1)) {
@@ -67,27 +64,13 @@ export function toggleUsageRangeSelection<T>(
       }
     }
   }
+  if (mode === "replace") {
+    return selected.length === 1 && selected[0] === value ? [] : [value];
+  }
   if (selected.includes(value)) {
     return selected.filter((entry) => entry !== value);
   }
-  return append ? [...selected, value] : [value];
-}
-
-export function selectUsageSessionKeys(
-  selected: string[],
-  key: string,
-  orderedKeys: string[],
-  shiftKey: boolean,
-): string[] {
-  if (shiftKey && selected.length > 0) {
-    const lastIndex = orderedKeys.indexOf(selected.at(-1) ?? "");
-    const nextIndex = orderedKeys.indexOf(key);
-    if (lastIndex !== -1 && nextIndex !== -1) {
-      const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
-      return [...new Set([...selected, ...orderedKeys.slice(start, end + 1)])];
-    }
-  }
-  return selected.length === 1 && selected[0] === key ? [] : [key];
+  return mode === "append" ? [...selected, value] : [value];
 }
 
 const globToRegex = (pattern: string): RegExp => {
@@ -139,44 +122,24 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
   });
 };
 
-const getSessionText = (session: UsageSessionQueryTarget): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items
+const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
+  items
     .filter((item): item is string => Boolean(item))
     .map((item) => normalizeLowercaseStringOrEmpty(item));
-};
 
-const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
-  const providers = new Set<string>();
-  if (session.modelProvider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
-  }
-  if (session.providerOverride) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
-  }
-  if (session.origin?.provider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.provider) {
-      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
-    }
-  }
-  return Array.from(providers);
-};
+const getSessionProviders = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.modelProvider,
+    session.providerOverride,
+    session.origin?.provider,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
+  ]);
 
-const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
-  const models = new Set<string>();
-  if (session.model) {
-    models.add(normalizeLowercaseStringOrEmpty(session.model));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.model) {
-      models.add(normalizeLowercaseStringOrEmpty(entry.model));
-    }
-  }
-  return Array.from(models);
-};
+const getSessionModels = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.model,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
+  ]);
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
@@ -258,7 +221,10 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   if (!term.key) {
-    return (session) => getSessionText(session).some((text) => text.includes(value));
+    return (session) =>
+      normalizeQueryValues([session.label, session.key, session.sessionId]).some((text) =>
+        text.includes(value),
+      );
   }
 
   switch (key) {
@@ -333,10 +299,9 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
 };
 
 export function parseToolSummary(content: string) {
-  const lines = content.split("\n");
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
-  for (const line of lines) {
+  for (const line of content.split("\n")) {
     const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
     const name = match?.[1];
     if (name) {
@@ -348,7 +313,7 @@ export function parseToolSummary(content: string) {
     }
     nonToolLines.push(line);
   }
-  const sortedTools = Array.from(toolCounts.entries()).toSorted((a, b) => b[1] - a[1]);
+  const sortedTools = Array.from(toolCounts).toSorted((a, b) => b[1] - a[1]);
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

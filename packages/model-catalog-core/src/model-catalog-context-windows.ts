@@ -37,17 +37,6 @@ function normalizeModelCatalogContextWindows(
     : undefined;
 }
 
-function normalizeModelCatalogContextWindowDefault(
-  value: unknown,
-  contextWindows: readonly ModelCatalogContextWindowOption[] | undefined,
-): string | undefined {
-  const contextWindowDefault = normalizeOptionalString(value);
-  return contextWindowDefault &&
-    contextWindows?.some((option) => option.id === contextWindowDefault)
-    ? contextWindowDefault
-    : undefined;
-}
-
 export function normalizeModelCatalogContextWindowSelection(value: {
   contextWindows?: unknown;
   contextWindowDefault?: unknown;
@@ -56,12 +45,12 @@ export function normalizeModelCatalogContextWindowSelection(value: {
   contextWindowDefault?: string;
 } {
   const contextWindows = normalizeModelCatalogContextWindows(value.contextWindows);
-  const contextWindowDefault = normalizeModelCatalogContextWindowDefault(
-    value.contextWindowDefault,
-    contextWindows,
-  );
+  const contextWindowDefault = normalizeOptionalString(value.contextWindowDefault);
   // Options and default are one atomic tuple: options without a valid default
   // would advertise a capability the picker cannot render a selection for, so
   // a missing or invalid default drops the option list with it.
-  return contextWindows && contextWindowDefault ? { contextWindows, contextWindowDefault } : {};
+  return contextWindowDefault &&
+    contextWindows?.some((option) => option.id === contextWindowDefault)
+    ? { contextWindows, contextWindowDefault }
+    : {};
 }

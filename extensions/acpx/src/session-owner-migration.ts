@@ -6,6 +6,7 @@ import {
   asObjectRecord,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";
 import { resolveAcpxPluginConfig } from "./config.js";
 import {
   hashAcpxProcessCommand,
@@ -19,7 +20,158 @@ type Claim = Awaited<
   ReturnType<NonNullable<MigrationInput["context"]["inspectAcpSessionClaims"]>>
 >["claims"][number];
 
-function sessionDirectory(input: MigrationInput): string {
+type StateDirectoryInput = {
+  rawConfig: unknown;
+  workspaceDir?: string;
+  stateDir: string;
+  openKeyedStore: MigrationInput["context"]["openPluginStateKeyedStore"];
+  assertCurrent?: () => void;
+};
+
+function openStateDirectoryMarker(input: StateDirectoryInput) {
+  return input.openKeyedStore<{ destination: string; completed: boolean }>({
+    namespace: "state-directory-migration",
+    maxEntries: 1,
+  });
+}
+
+async function directoryEntries(directory: string): Promise<string[]> {
+  return fs.readdir(directory).catch((error: unknown) => {
+    if (asObjectRecord(error)?.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  });
+}
+
+function legacyStateDirectory(input: StateDirectoryInput): string | undefined {
+  const explicit = asObjectRecord(input.rawConfig)?.stateDir;
+  return typeof explicit === "string" && explicit.trim()
+    ? undefined
+    : path.resolve(input.workspaceDir?.trim() || process.cwd(), "state");
+}
+
+async function hasLegacyState(input: StateDirectoryInput): Promise<boolean> {
+  const source = legacyStateDirectory(input);
+  return Boolean(
+    source &&
+    source !== input.stateDir &&
+    (await directoryEntries(input.stateDir)).length === 0 &&
+    (await hasSessionData(source)),
+  );
+}
+
+async function hasSessionData(directory: string): Promise<boolean> {
+  return (await directoryEntries(path.join(directory, "sessions"))).some((name) =>
+    name.endsWith(".json"),
+  );
+}
+
+/** Startup and offline Doctor share this one-time relocation of the former default. */
+export async function adoptAcpxStateDirectory(input: StateDirectoryInput) {
+  const result: { stateDir: string; changes: string[]; warnings: string[] } = {
+    stateDir: input.stateDir,
+    changes: [],
+    warnings: [],
+  };
+  const source = legacyStateDirectory(input);
+  if (!source || source === input.stateDir) {
+    return result;
+  }
+  let published = false;
+  let legacyFallback = false;
+  try {
+    const marker = openStateDirectoryMarker(input);
+    const previous = await marker.lookup("workspace-state-v1");
+    if (previous?.destination === input.stateDir && previous.completed) {
+      return result;
+    }
+    const destinationEmpty = (await directoryEntries(input.stateDir)).length === 0;
+    if (destinationEmpty) {
+      // An unreadable legacy directory still needs the documented override, not an empty store.
+      legacyFallback = true;
+      legacyFallback = await hasSessionData(source);
+    }
+    if (previous?.destination === input.stateDir) {
+      if (await hasSessionData(input.stateDir)) {
+        published = true;
+        await marker.register(
+          "workspace-state-v1",
+          { destination: input.stateDir, completed: true },
+          { assertCurrent: input.assertCurrent },
+        );
+        result.changes.push(`Completed ACPX session state adoption at ${input.stateDir}.`);
+        if ((await directoryEntries(source)).length > 0) {
+          result.warnings.push(
+            `ACPX uses ${input.stateDir}; a legacy copy remains at ${source}. Verify the migrated sessions before removing that copy.`,
+          );
+        }
+        return result;
+      }
+      if (!destinationEmpty) {
+        legacyFallback = true;
+        legacyFallback = await hasSessionData(source);
+        throw new Error("Destination became occupied before ACPX state adoption completed");
+      }
+    }
+    if (!destinationEmpty || !legacyFallback) {
+      return result;
+    }
+    if (
+      !(await fs.lstat(source)).isDirectory() ||
+      input.stateDir.startsWith(`${source}${path.sep}`)
+    ) {
+      throw new Error("Legacy state must be a directory outside the new state directory");
+    }
+    input.assertCurrent?.();
+    await fs.mkdir(path.dirname(input.stateDir), { recursive: true });
+    await marker.register(
+      "workspace-state-v1",
+      { destination: input.stateDir, completed: false },
+      { assertCurrent: input.assertCurrent },
+    );
+    await movePathWithCopyFallback({
+      from: source,
+      to: input.stateDir,
+      assertBeforeMutation: input.assertCurrent,
+      onDestinationPublished() {
+        published = true;
+      },
+    });
+    result.changes.push(`Migrated ACPX session state from ${source} to ${input.stateDir}.`);
+    await marker.register(
+      "workspace-state-v1",
+      { destination: input.stateDir, completed: true },
+      {
+        assertCurrent: input.assertCurrent,
+      },
+    );
+  } catch (error) {
+    // Once published, the destination owns the complete copy even if source cleanup fails.
+    result.stateDir = !published && legacyFallback ? source : input.stateDir;
+    result.warnings.push(
+      published
+        ? `ACPX state adopted at ${input.stateDir}; migration cleanup needs attention: ${String(error)}. Run openclaw doctor --fix.`
+        : legacyFallback
+          ? `ACPX state migration failed: ${String(error)}. Using ${source} for this process; set plugins.entries.acpx.config.stateDir to ${JSON.stringify(source)} to keep the old location.`
+          : `ACPX state migration could not be inspected: ${String(error)}. Keeping ${input.stateDir}; run openclaw doctor --fix.`,
+    );
+  }
+  return result;
+}
+
+function stateDirectoryInput(input: MigrationInput): StateDirectoryInput {
+  return {
+    rawConfig: input.config.plugins?.entries?.acpx?.config,
+    workspaceDir: input.serviceWorkspaceDir,
+    stateDir: path.dirname(sessionDirectory(input)),
+    openKeyedStore: input.context.openPluginStateKeyedStore,
+  };
+}
+
+function sessionDirectory(
+  input: Pick<MigrationInput, "config" | "serviceWorkspaceDir" | "stateDir">,
+): string {
   if (!input.serviceWorkspaceDir) {
     throw new Error(
       "ACP ownership repair requires the Gateway service workspace; upgrade OpenClaw Doctor.",
@@ -29,19 +181,17 @@ function sessionDirectory(input: MigrationInput): string {
     resolveAcpxPluginConfig({
       rawConfig: input.config.plugins?.entries?.acpx?.config,
       workspaceDir: input.serviceWorkspaceDir,
+      stateDir: input.stateDir,
     }).stateDir,
     "sessions",
   );
 }
 
-async function legacyRecords(input: MigrationInput): Promise<{ directory: string; ids: string[] }> {
-  const directory = sessionDirectory(input);
-  const names = await fs.readdir(directory).catch((error: unknown) => {
-    if (asObjectRecord(error)?.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  });
+async function legacyRecords(
+  input: MigrationInput,
+  directory = sessionDirectory(input),
+): Promise<{ directory: string; ids: string[] }> {
+  const names = await directoryEntries(directory);
   const ids = names
     .filter((name) => name.endsWith(".json"))
     .map((name) => decodeURIComponent(name.slice(0, -5)))
@@ -335,7 +485,41 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
   label: "ACP session owners",
   doctorOnly: true,
   phase: "after-session-repair",
+  collectBackupResources(input) {
+    const destination = sessionDirectory(input);
+    const explicit = asObjectRecord(input.config.plugins?.entries?.acpx?.config)?.stateDir;
+    return [
+      path.dirname(destination),
+      ...(!explicit && input.serviceWorkspaceDir
+        ? [path.join(input.serviceWorkspaceDir, "state")]
+        : []),
+    ].map((directory) => ({ path: directory, kind: "directory" as const }));
+  },
   async detectLegacyState(input) {
+    try {
+      const directoryInput = stateDirectoryInput(input);
+      const source = legacyStateDirectory(directoryInput);
+      const marker = source
+        ? await openStateDirectoryMarker(directoryInput).lookup("workspace-state-v1")
+        : undefined;
+      const matchingMarker = marker?.destination === directoryInput.stateDir;
+      if (
+        !(matchingMarker && marker.completed) &&
+        ((matchingMarker && !marker.completed) || (await hasLegacyState(directoryInput)))
+      ) {
+        return {
+          preview: [
+            "ACPX session state in <workspace>/state will be migrated automatically to the OpenClaw state directory.",
+          ],
+        };
+      }
+    } catch (error) {
+      return {
+        preview: [
+          `ACPX legacy state could not be inspected: ${String(error)}. Run openclaw doctor --fix.`,
+        ],
+      };
+    }
     const { ids } = await legacyRecords(input);
     return ids.length
       ? {
@@ -346,15 +530,19 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
       : null;
   },
   async migrateLegacyState(input) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
+    const { stateDir, changes, warnings } = await adoptAcpxStateDirectory(
+      stateDirectoryInput(input),
+    );
+    if (warnings.length) {
+      return { changes, warnings, warningDisposition: "recoverable" };
+    }
     if (!input.context.inspectAcpSessionClaims || !input.context.updateAcpSessionIdentity) {
       return {
         changes,
         warnings: ["ACP owner repair requires current offline Doctor maintenance authority."],
       };
     }
-    const { directory, ids } = await legacyRecords(input);
+    const { directory, ids } = await legacyRecords(input, path.join(stateDir, "sessions"));
     const evidence = await input.context.inspectAcpSessionClaims();
     if (evidence.incomplete.length) {
       return {

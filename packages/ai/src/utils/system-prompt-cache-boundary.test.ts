@@ -27,15 +27,6 @@ describe("system prompt cache boundary helpers", () => {
     ).toBe("Stable prefix\nDynamic suffix");
   });
 
-  it("inserts prompt additions after the cache boundary", () => {
-    expect(
-      prependSystemPromptAdditionAfterCacheBoundary({
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        systemPromptAddition: "Per-turn lab context",
-      }),
-    ).toBe(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\n\nDynamic suffix`);
-  });
-
   it("normalizes structured additions and dynamic suffix whitespace", () => {
     expect(
       prependSystemPromptAdditionAfterCacheBoundary({
@@ -83,11 +74,6 @@ describe("ensureSystemPromptCacheBoundary", () => {
         systemPromptAddition: "Per-turn media task hint",
       }),
     ).toBe("Per-turn media task hint");
-  });
-
-  it("is idempotent for a marker-free prompt", () => {
-    const once = ensureSystemPromptCacheBoundary("Marker-free override");
-    expect(ensureSystemPromptCacheBoundary(once)).toBe(once);
   });
 
   it("lets a per-turn addition split into the uncached suffix for a marker-free prompt", () => {

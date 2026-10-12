@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type ReactiveControllerHost } from "lit";
 import {
   normalizeSessionIconValue,
   SESSION_ICON_GLYPH_IDS,
@@ -6,30 +6,11 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderShortcutText } from "./kbd.ts";
+import { SESSION_ICON_EMOJI_CHOICES, sessionEmojiPickerShortcut } from "./session-icon-choices.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionColorOptions } from "./session-menu-options.ts";
-
-const SESSION_ICON_EMOJI_CHOICES = [
-  "🦞",
-  "🚀",
-  "🐛",
-  "✅",
-  "🔥",
-  "📦",
-  "🧪",
-  "📝",
-  "🔍",
-  "⚡",
-  "🎯",
-] as const;
-
-function sessionEmojiPickerShortcut(): string | null {
-  const platform = globalThis.navigator?.platform ?? "";
-  if (/Mac|iPhone|iPad|iPod/u.test(platform)) {
-    return "⌃⌘Space";
-  }
-  return /Win/u.test(platform) ? "Win+." : null;
-}
+export { sessionEmojiPickerShortcut } from "./session-icon-choices.ts";
 
 type AppearancePickerProps = {
   inline?: boolean;
@@ -50,7 +31,6 @@ type AppearancePickerProps = {
   onBack: (event: Event) => void;
   onInput: (event: InputEvent) => void;
   onApply: (event: Event) => void;
-  onGridKeydown: (event: KeyboardEvent) => void;
 };
 
 function renderCustomSessionIconEntry(props: AppearancePickerProps) {
@@ -108,9 +88,12 @@ function renderCustomSessionIconEntry(props: AppearancePickerProps) {
       <div class="session-menu__icon-custom-hint">
         ${
           shortcut
-            ? t(props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint", {
-                shortcut,
-              })
+            ? renderShortcutText(
+                t(props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint", {
+                  shortcut: "{shortcut}",
+                }),
+                renderKbd(shortcut, { inline: true }),
+              )
             : t(
                 props.allowSvg
                   ? "sessionsView.customIconHintNoShortcut"
@@ -129,18 +112,18 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
       : ([...SESSION_ICON_EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find(
           (icon) => icon === props.currentIcon,
         ) ?? SESSION_ICON_EMOJI_CHOICES[0]);
-  const renderChoice = (icon: string, glyph = false) => html`
+  const renderChoice = (icon: string | null, glyph = false) => html`
     <button
       type="button"
       class=${`session-menu__icon-choice${glyph ? " session-menu__icon-choice--glyph" : ""}`}
-      aria-label=${glyph ? icon : nothing}
+      aria-label=${glyph ? (icon ?? t("sessionsView.noIcon")) : nothing}
       aria-pressed=${String(props.currentIcon === icon)}
       tabindex=${icon === tabStop ? "0" : "-1"}
       ?disabled=${props.disabled}
-      title=${props.disabledReason ?? nothing}
+      title=${props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : nothing)}
       @click=${(event: MouseEvent) => props.onSelect(event, icon)}
     >
-      ${glyph ? resolveSessionIconGraphic(icon) : icon}
+      ${icon === null ? icons.circleX : glyph ? resolveSessionIconGraphic(icon) : icon}
     </button>
   `;
   return html`
@@ -151,7 +134,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         ?inert=${props.mode !== "grid"}
         role="group"
         aria-label=${t("sessionsView.setIconMenu")}
-        @keydown=${props.onGridKeydown}
+        @keydown=${handleAppearanceGridKeydown}
       >
         <div class="session-menu__icon-section-label">${t("sessionsView.iconEmojiSection")}</div>
         <div class="session-menu__icon-grid">
@@ -171,24 +154,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         </div>
         <div class="session-menu__icon-section-label">${t("sessionsView.iconGlyphSection")}</div>
         <div class="session-menu__icon-grid">
-          ${
-            props.clearable !== false
-              ? html`
-                  <button
-                    type="button"
-                    class="session-menu__icon-choice session-menu__icon-choice--glyph"
-                    aria-label=${t("sessionsView.noIcon")}
-                    title=${props.disabledReason ?? t("sessionsView.noIcon")}
-                    aria-pressed=${String(props.currentIcon === null)}
-                    tabindex=${tabStop === null ? "0" : "-1"}
-                    ?disabled=${props.disabled}
-                    @click=${(event: MouseEvent) => props.onSelect(event, null)}
-                  >
-                    ${icons.circleX}
-                  </button>
-                `
-              : nothing
-          }
+          ${props.clearable !== false ? renderChoice(null, true) : nothing}
           ${SESSION_ICON_GLYPH_IDS.map((icon) => renderChoice(icon, true))}
         </div>
       </div>
@@ -225,7 +191,7 @@ export function renderAppearancePicker(props: AppearancePickerProps) {
   </div>`;
 }
 
-export function handleAppearanceGridKeydown(event: KeyboardEvent) {
+function handleAppearanceGridKeydown(event: KeyboardEvent) {
   const choice = event.target;
   if (!(choice instanceof HTMLButtonElement)) {
     return;
@@ -285,4 +251,129 @@ export function handleAppearanceGridKeydown(event: KeyboardEvent) {
     next.tabIndex = 0;
     next.focus();
   }
+}
+
+/** Menu appearance state stays with the picker while the shared action owner gates writes. */
+export class SessionMenuAppearance {
+  private iconPickerMode: "grid" | "custom" = "grid";
+  private customIconValue = "";
+  constructor(
+    private readonly host: ReactiveControllerHost &
+      HTMLElement & { updateComplete: Promise<unknown> },
+    private readonly readState: () => {
+      session: { icon: string | null; color: string | null };
+      actionDisabledReasons: Partial<Record<"set-icon" | "set-color", string>>;
+    },
+    private readonly actionDisabled: (kind: "set-icon" | "set-color") => boolean,
+    private readonly runAction: (
+      action:
+        | { kind: "set-icon"; icon: string | null }
+        | { kind: "set-color"; color: string | null }
+        | { kind: "reset-appearance" },
+    ) => void,
+  ) {}
+
+  prepare() {
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+  }
+
+  render(inline = false) {
+    const state = this.readState();
+    return renderAppearancePicker({
+      inline,
+      allowSvg: true,
+      mode: this.iconPickerMode,
+      currentIcon: state.session.icon,
+      currentColor: state.session.color,
+      colorDisabled: this.actionDisabled("set-color"),
+      colorDisabledReason: state.actionDisabledReasons["set-color"],
+      onSelectColor: (event, color) => {
+        event.stopPropagation();
+        this.runAction({ kind: "set-color", color });
+      },
+      onReset: (event) => {
+        event.stopPropagation();
+        this.runAction({ kind: "reset-appearance" });
+      },
+      customIconValue: this.customIconValue,
+      disabled: this.actionDisabled("set-icon"),
+      disabledReason: state.actionDisabledReasons["set-icon"],
+      onSelect: this.selectIcon,
+      onShowCustom: this.showCustomIconEntry,
+      onBack: this.showIconGrid,
+      onInput: this.updateCustomIconValue,
+      onApply: this.applyCustomIcon,
+    });
+  }
+
+  private readonly selectIcon = (event: MouseEvent, icon: string | null) => {
+    event.stopPropagation();
+    this.runAction({ kind: "set-icon", icon });
+  };
+
+  private readonly showCustomIconEntry = (event: MouseEvent) => {
+    event.stopPropagation();
+    this.iconPickerMode = "custom";
+    this.customIconValue = "";
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      this.host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
+    });
+  };
+
+  readonly showIconGrid = (event?: Event) => {
+    event?.stopPropagation();
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      const custom = this.host.querySelector<HTMLButtonElement>(
+        ".session-menu__icon-choice--custom",
+      );
+      for (const choice of this.host.querySelectorAll<HTMLButtonElement>(
+        ".session-menu__icon-choice",
+      )) {
+        choice.tabIndex = choice === custom ? 0 : -1;
+      }
+      custom?.focus();
+    });
+  };
+
+  private readonly updateCustomIconValue = (event: InputEvent) => {
+    if (event.currentTarget instanceof HTMLTextAreaElement) {
+      this.customIconValue = event.currentTarget.value;
+      this.host.requestUpdate();
+    }
+  };
+
+  private readonly applyCustomIcon = (event?: Event) => {
+    event?.stopPropagation();
+    const icon = normalizeSessionIconValue(this.customIconValue);
+    if (icon) {
+      this.runAction({ kind: "set-icon", icon });
+    }
+  };
+
+  readonly focusOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
+    const item = event.currentTarget;
+    if (!(item instanceof HTMLElement) || event.detail.item !== item) {
+      return;
+    }
+    // Web Awesome re-runs submenu setup when grid/custom content replaces the
+    // slot. Only a closed submenu is a user reopen that should reset state.
+    if (item.getAttribute("aria-expanded") === "true") {
+      return;
+    }
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() =>
+      requestAnimationFrame(() => {
+        item
+          .querySelector<HTMLButtonElement>(".session-menu__appearance button:not(:disabled)")
+          ?.focus();
+      }),
+    );
+  };
 }

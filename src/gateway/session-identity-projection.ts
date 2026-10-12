@@ -28,23 +28,48 @@ import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  resolveCurrentUserProfileDisplay,
+  type CurrentUserProfileDisplay,
+} from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionIdentityProjection,
-} from "./session-utils-contracts.js";
+
+export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
+export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
 
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
-export function createSessionIdentityProjection(): SessionIdentityProjection {
+export function createSessionIdentityProjection() {
   let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
   let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
   let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
+  let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
   return {
     invalidate() {
       owners = new WeakMap();
       participants = new WeakMap();
       people = new WeakMap();
+      involvement = new WeakMap();
+    },
+    involvement(
+      this: void,
+      entry: SessionEntry,
+      profileId: string,
+      profiles: Parameters<typeof projectSessionProfileInvolvement>[2],
+    ) {
+      let projected = involvement.get(entry);
+      if (!projected) {
+        projected = new Map();
+        for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
+          const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity
+            .id;
+          const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
+          if (merged) {
+            projected.set(canonical, merged);
+          }
+        }
+        involvement.set(entry, projected);
+      }
+      return projected.get(profileId);
     },
     owner(this: void, ...args: Parameters<typeof projectSessionOwner>) {
       const [entry] = args;
@@ -311,22 +336,16 @@ export function* resolveSessionListProfileReference(
 }
 
 export function projectSessionPeopleFacet(
-  people: Iterable<SessionPerson>,
+  people: ReadonlyMap<string, SessionPerson>,
   selectedProfileId?: string,
 ) {
-  const entries = [...people];
+  const entries = [...people.values()];
   const compare = (a: SessionPerson, b: SessionPerson) =>
     b.sessionCount - a.sessionCount ||
     (a.label ?? a.identity.id).localeCompare(b.label ?? b.identity.id) ||
     a.identity.id.localeCompare(b.identity.id);
   const visiblePeople = sortAndLimitBy(entries, SESSIONS_LIST_OWNER_LIMIT, compare);
-  const selected = selectedProfileId
-    ? sortAndLimitBy(
-        entries.filter((person) => person.identity.id === selectedProfileId),
-        1,
-        compare,
-      )[0]
-    : undefined;
+  const selected = selectedProfileId ? people.get(selectedProfileId) : undefined;
   if (selected && !visiblePeople.includes(selected)) {
     visiblePeople.splice(-1, 1, selected);
   }

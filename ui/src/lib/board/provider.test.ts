@@ -11,6 +11,21 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "./provider.ts";
+import type { BoardWidget } from "./types.ts";
+
+function htmlWidget(name: string, overrides: Partial<BoardWidget> = {}): BoardWidget {
+  return {
+    name,
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    position: 0,
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -133,16 +148,9 @@ describe("board providers", () => {
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
       widgets: [
-        {
-          name: "pending-widget",
-          tabId: "main",
-          contentKind: "html" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
+        htmlWidget("pending-widget", {
           grantState: "pending" as const,
-          revision: 1,
-        },
+        }),
       ],
     };
     const client = {
@@ -376,28 +384,13 @@ describe("board providers", () => {
         revision: 1,
         tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
         widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
-            revision: 1,
+          htmlWidget("alpha", {
             frameUrl: "/alpha-old",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
+          }),
+          htmlWidget("beta", {
             position: 1,
-            grantState: "none" as const,
-            revision: 1,
             frameUrl: "/beta-old",
-          },
+          }),
         ],
       },
       {
@@ -405,28 +398,14 @@ describe("board providers", () => {
         revision: 2,
         tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
         widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
+          htmlWidget("alpha", {
             revision: 2,
             frameUrl: "/alpha-new",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
+          }),
+          htmlWidget("beta", {
             position: 1,
-            grantState: "none" as const,
-            revision: 1,
             frameUrl: "/beta-reminted-but-preserved",
-          },
+          }),
         ],
       },
       {
@@ -434,28 +413,14 @@ describe("board providers", () => {
         revision: 2,
         tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
         widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
+          htmlWidget("alpha", {
             revision: 2,
             frameUrl: "/alpha-reminted",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
+          }),
+          htmlWidget("beta", {
             position: 1,
-            grantState: "none" as const,
-            revision: 1,
             frameUrl: "/beta-reminted-again",
-          },
+          }),
         ],
       },
     ];
@@ -491,16 +456,7 @@ describe("board providers", () => {
 
   it("does not preserve a stale ticket when a widget generation is recreated", async () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
-    const baseWidget = {
-      name: "alpha",
-      tabId: "main",
-      contentKind: "html" as const,
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none" as const,
-      revision: 1,
-    };
+    const baseWidget = htmlWidget("alpha");
     const initial = {
       sessionKey: "agent:main:generation",
       revision: 1,
@@ -827,17 +783,9 @@ describe("board providers", () => {
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
       widgets: [
-        {
-          name: "alpha",
-          tabId: "main",
-          contentKind: "html" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "none" as const,
-          revision: 1,
+        htmlWidget("alpha", {
           frameUrl: "/old-ticket",
-        },
+        }),
       ],
     };
     const mutation = {

@@ -1,15 +1,17 @@
-// Ollama helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
-  OLLAMA_CLOUD_BASE_URL,
-  OLLAMA_CLOUD_PROVIDER_ID,
-  OLLAMA_DEFAULT_API_KEY,
-} from "./defaults.js";
+  asObjectRecord,
+  type PluginDoctorProviderRename,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
 
 const OLLAMA_PROVIDER_ID = "ollama";
 const LEGACY_OLLAMA_API_KEY_MARKER = "OLLAMA_API_KEY";
 const LEGACY_OLLAMA_PROFILE_ID = "ollama:default";
+
+export const providerRenames: readonly PluginDoctorProviderRename[] = [
+  { from: OLLAMA_PROVIDER_ID, to: "ollama-cloud", baseUrl: "https://ollama.com" },
+];
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -19,6 +21,19 @@ type LegacyConfigRule = {
 
 function isLegacyOllamaLocalConfig(provider: unknown, root?: Record<string, unknown>): boolean {
   const providerRecord = asObjectRecord(provider);
+  const baseUrl = providerRecord?.baseUrl;
+  if (typeof baseUrl === "string") {
+    if (baseUrl.includes("${")) {
+      return false;
+    }
+    try {
+      if (new URL(baseUrl).origin === "https://ollama.com") {
+        return false;
+      }
+    } catch {
+      // An invalid endpoint is handled by config validation.
+    }
+  }
   const auth = asObjectRecord(root?.auth);
   const profiles = asObjectRecord(auth?.profiles);
   const profile = asObjectRecord(profiles?.[LEGACY_OLLAMA_PROFILE_ID]);
@@ -31,38 +46,7 @@ function isLegacyOllamaLocalConfig(provider: unknown, root?: Record<string, unkn
   );
 }
 
-function isRetiredOllamaCloudBaseUrl(value: unknown): value is string {
-  if (typeof value !== "string" || !value.trim()) {
-    return false;
-  }
-  try {
-    return new URL(value.trim()).hostname.toLowerCase() === "ai.ollama.com";
-  } catch {
-    return false;
-  }
-}
-
-function findRetiredOllamaCloudBaseUrl(provider: unknown): { key: "baseUrl" | "baseURL" } | null {
-  const record = asObjectRecord(provider);
-  if (!record) {
-    return null;
-  }
-  if (isRetiredOllamaCloudBaseUrl(record.baseUrl)) {
-    return { key: "baseUrl" };
-  }
-  if (isRetiredOllamaCloudBaseUrl(record.baseURL)) {
-    return { key: "baseURL" };
-  }
-  return null;
-}
-
 export const legacyConfigRules: LegacyConfigRule[] = [
-  {
-    path: ["models", "providers", OLLAMA_CLOUD_PROVIDER_ID],
-    message:
-      'models.providers.ollama-cloud.baseUrl="https://ai.ollama.com" is retired; use "https://ollama.com". Run "openclaw doctor --fix".',
-    match: (value) => findRetiredOllamaCloudBaseUrl(value) !== null,
-  },
   {
     path: ["models", "providers", OLLAMA_PROVIDER_ID],
     message:
@@ -70,17 +54,6 @@ export const legacyConfigRules: LegacyConfigRule[] = [
     match: isLegacyOllamaLocalConfig,
   },
 ];
-
-function cloneProviderConfig(config: OpenClawConfig, providerId: string) {
-  const nextConfig = structuredClone(config);
-  const nextModels = asObjectRecord(nextConfig.models) ?? {};
-  nextConfig.models = nextModels as OpenClawConfig["models"];
-  const nextProviders = asObjectRecord(nextModels.providers) ?? {};
-  nextModels.providers = nextProviders;
-  const nextProvider = asObjectRecord(nextProviders[providerId]) ?? {};
-  nextProviders[providerId] = nextProvider;
-  return { nextConfig, nextProvider };
-}
 
 function migrateLegacyOllamaLocalConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
@@ -91,7 +64,13 @@ function migrateLegacyOllamaLocalConfig(config: OpenClawConfig): {
     return null;
   }
 
-  const { nextConfig, nextProvider } = cloneProviderConfig(config, OLLAMA_PROVIDER_ID);
+  const nextConfig = structuredClone(config);
+  const nextModels = asObjectRecord(nextConfig.models) ?? {};
+  nextConfig.models = nextModels as OpenClawConfig["models"];
+  const nextProviders = asObjectRecord(nextModels.providers) ?? {};
+  nextModels.providers = nextProviders;
+  const nextProvider = asObjectRecord(nextProviders[OLLAMA_PROVIDER_ID]) ?? {};
+  nextProviders[OLLAMA_PROVIDER_ID] = nextProvider;
   nextProvider.apiKey = OLLAMA_DEFAULT_API_KEY;
   const nextAuth = asObjectRecord(nextConfig.auth);
   const nextProfiles = asObjectRecord(nextAuth?.profiles);
@@ -112,59 +91,9 @@ function migrateLegacyOllamaLocalConfig(config: OpenClawConfig): {
   };
 }
 
-function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
-  config: OpenClawConfig;
-  changes: string[];
-} | null {
-  const provider = config.models?.providers?.[OLLAMA_CLOUD_PROVIDER_ID];
-  const retired = findRetiredOllamaCloudBaseUrl(provider);
-  if (!retired) {
-    return null;
-  }
-
-  const { nextConfig, nextProvider } = cloneProviderConfig(config, OLLAMA_CLOUD_PROVIDER_ID);
-
-  const canonicalBaseUrl = nextProvider.baseUrl;
-  if (
-    retired.key === "baseURL" &&
-    typeof canonicalBaseUrl === "string" &&
-    canonicalBaseUrl.trim() &&
-    !isRetiredOllamaCloudBaseUrl(canonicalBaseUrl)
-  ) {
-    delete nextProvider.baseURL;
-    return {
-      config: nextConfig,
-      changes: [
-        "Removed retired models.providers.ollama-cloud.baseURL while preserving models.providers.ollama-cloud.baseUrl.",
-      ],
-    };
-  }
-
-  nextProvider.baseUrl = OLLAMA_CLOUD_BASE_URL;
-  if (retired.key === "baseURL") {
-    delete nextProvider.baseURL;
-  }
-
-  return {
-    config: nextConfig,
-    changes: [
-      `Updated models.providers.ollama-cloud.${retired.key} from the retired Ollama Cloud endpoint to ${OLLAMA_CLOUD_BASE_URL}.`,
-    ],
-  };
-}
-
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
 } {
-  let config = cfg;
-  const changes: string[] = [];
-  for (const migrate of [migrateLegacyOllamaLocalConfig, migrateOllamaCloudRetiredBaseUrl]) {
-    const result = migrate(config);
-    if (result) {
-      config = result.config;
-      changes.push(...result.changes);
-    }
-  }
-  return { config, changes };
+  return migrateLegacyOllamaLocalConfig(cfg) ?? { config: cfg, changes: [] };
 }

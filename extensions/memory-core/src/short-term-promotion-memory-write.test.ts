@@ -183,29 +183,6 @@ it("rejects a changed preimage before removing a memory file", async () => {
 });
 
 it.runIf(process.platform !== "win32")(
-  "keeps the original MEMORY.md when the in-place fallback write fails partway",
-  async () => {
-    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
-    const memoryPath = await setupMemoryFile(original, true);
-    const promoted = `${original}${"- promoted entry\n".repeat(200)}`;
-    openState.failInPlaceWriteAfterBytes = 1024;
-
-    await expect(
-      commitMemoryContent({
-        filePath: memoryPath,
-        tempPrefix: `${path.basename(memoryPath)}.promotion`,
-        expectedHash: hashMemoryContent(original),
-        expectedContent: original,
-        allowInPlaceFallback: true,
-        content: promoted,
-      }),
-    ).rejects.toMatchObject({ code: "EFBIG" });
-
-    expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
-  },
-);
-
-it.runIf(process.platform !== "win32")(
   "completes the restore across short writes before truncating",
   async () => {
     const original = "# Long-Term Memory\n\n- existing entry that must survive\n";

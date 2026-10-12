@@ -6,13 +6,32 @@ import { applyAllowAlwaysDecision } from "./exec-approvals-allow-always.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import {
   countObsoleteGeneratedExecApprovals,
+  countObsoleteGeneratedExecApprovalRules,
   repairObsoleteGeneratedExecApprovals,
 } from "./exec-approvals-generated-migration.js";
-import { loadExecApprovalsReadOnly, saveExecApprovals } from "./exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import { loadExecApprovalsReadOnly } from "./exec-approvals-store.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "./exec-approvals-store.test-support.js";
 import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 
 describe("generated exec approval migration", () => {
+  it("counts only the effective generated rules without changing whole-file diagnostics", () => {
+    const effective = [
+      { pattern: "/usr/bin/old", source: "allow-always" as const },
+      { pattern: "/usr/bin/manual" },
+    ];
+    const unrelated = [{ pattern: "/usr/bin/other", source: "allow-always" as const }];
+    expect(countObsoleteGeneratedExecApprovalRules(effective)).toBe(1);
+    expect(
+      countObsoleteGeneratedExecApprovals({
+        version: 1,
+        agents: { main: { allowlist: effective }, other: { allowlist: unrelated } },
+      }),
+    ).toBe(2);
+  });
+
   it("reapproval replaces obsolete grants for the same executable", () => {
     const current = buildCwdBoundHashedArgPattern(["/usr/bin/git", "status"], "/workspace");
     const updated = applyAllowAlwaysDecision({

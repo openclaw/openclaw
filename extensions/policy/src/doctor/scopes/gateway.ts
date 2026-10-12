@@ -1,205 +1,89 @@
-// Policy doctor checks and findings for gateway exposure policy.
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
-import type { PolicyEvidence } from "../../policy-state.js";
-import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
-import { createPolicyScopedChecks } from "../check-factory.js";
+import type { HealthFinding } from "openclaw/plugin-sdk/health";
+import type { PolicyEvidence, PolicyGatewayExposureEvidence } from "../../policy-state-types.js";
+import { getPolicyPath } from "../../policy-value.js";
 import { CHECK_IDS } from "../check-ids.js";
-import { policyEvidenceFinding } from "../policy-evidence-finding.js";
-import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
-import type { PolicyDoctorCheckDeps } from "../types.js";
+import {
+  policyEvidenceFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "../policy-evidence-finding.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
-
-export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
-  return createPolicyScopedChecks(deps, [
-    [
-      CHECK_IDS.policyGatewayNonLoopbackBind,
-      "Gateway bind posture matches policy exposure requirements.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNonLoopbackBind),
-    ],
-    [
-      CHECK_IDS.policyGatewayAuthDisabled,
-      "Gateway authentication remains enabled when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayRateLimitMissing,
-      "Gateway authentication rate-limit posture is explicit when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayControlUiInsecure,
-      "Gateway Control UI insecure exposure toggles remain disabled by policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure),
-    ],
-    [CHECK_IDS.policyGatewayTailscaleFunnel, "Gateway Tailscale Funnel exposure matches policy."],
-    [
-      CHECK_IDS.policyGatewayRemoteEnabled,
-      "Remote gateway mode matches policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled),
-    ],
-    [
-      CHECK_IDS.policyGatewayHttpEndpointEnabled,
-      "Gateway HTTP API endpoints match policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayHttpEndpointEnabled),
-    ],
-    [
-      CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-      "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayNodeCommandDenied,
-      "Gateway node command allowlists match policy.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNodeCommandDenied),
-    ],
-  ]);
-}
 
 export function gatewayExposureFindings(
   policy: unknown,
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  return [
-    ...gatewayNonLoopbackBindFindings(policy, policyDocName, evidence),
-    ...gatewayAuthFindings(policy, policyDocName, evidence),
-    ...gatewayControlUiFindings(policy, policyDocName, evidence),
-    ...gatewayTailscaleFindings(policy, policyDocName, evidence),
-    ...gatewayRemoteFindings(policy, policyDocName, evidence),
-    ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
-    ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
-    ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
-  ];
-}
-
-function gatewayNonLoopbackBindFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowNonLoopbackBind"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "bind" && entry.nonLoopback === true)
-    .map((entry): HealthFinding => {
-      return policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyGatewayNonLoopbackBind,
-        message:
-          entry.explicit === false
-            ? "Gateway bind is omitted while the runtime default can permit non-loopback exposure."
-            : `Gateway bind setting '${entry.id}' permits non-loopback exposure.`,
-        requirement: `oc://${policyDocName}/gateway/exposure/allowNonLoopbackBind`,
-        fixHint: "Use gateway.bind=loopback or update policy after review.",
-      });
-    });
-}
-
-function gatewayAuthFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  if (readPolicyBoolean(policy, ["gateway", "auth", "requireAuth"]) === true) {
-    findings.push(
-      ...(evidence.gatewayExposure ?? [])
-        .filter((entry) => entry.kind === "auth" && entry.value === "none")
-        .map((entry): HealthFinding => {
-          return policyEvidenceFinding(entry, {
-            checkId: CHECK_IDS.policyGatewayAuthDisabled,
-            message: "Gateway authentication is disabled.",
-            requirement: `oc://${policyDocName}/gateway/auth/requireAuth`,
-            fixHint: "Set gateway.auth.mode to token, password, or trusted-proxy.",
-          });
-        }),
-    );
-  }
-  if (readPolicyBoolean(policy, ["gateway", "auth", "requireExplicitRateLimit"]) === true) {
-    findings.push(
-      ...(evidence.gatewayExposure ?? [])
-        .filter((entry) => entry.kind === "authRateLimit" && entry.explicit !== true)
-        .map((entry): HealthFinding => {
-          return policyEvidenceFinding(entry, {
-            checkId: CHECK_IDS.policyGatewayRateLimitMissing,
-            message: "Gateway authentication rate-limit posture is not explicit.",
-            requirement: `oc://${policyDocName}/gateway/auth/requireExplicitRateLimit`,
-            fixHint: "Configure gateway.auth.rateLimit or update policy after review.",
-          });
-        }),
-    );
-  }
-  return findings;
-}
-
-function gatewayControlUiFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "controlUi", "allowInsecure"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter(
-      (entry) =>
+  const rules = [
+    {
+      path: ["exposure", "allowNonLoopbackBind"],
+      enabled: false,
+      violates: (entry) => entry.kind === "bind" && entry.nonLoopback === true,
+      checkId: CHECK_IDS.policyGatewayNonLoopbackBind,
+      message: (entry) =>
+        entry.explicit === false
+          ? "Gateway bind is omitted while the runtime default can permit non-loopback exposure."
+          : `Gateway bind setting '${entry.id}' permits non-loopback exposure.`,
+      fixHint: "Use gateway.bind=loopback or update policy after review.",
+    },
+    {
+      path: ["auth", "requireAuth"],
+      enabled: true,
+      violates: (entry) => entry.kind === "auth" && entry.value === "none",
+      checkId: CHECK_IDS.policyGatewayAuthDisabled,
+      message: () => "Gateway authentication is disabled.",
+      fixHint: "Set gateway.auth.mode to token, password, or trusted-proxy.",
+    },
+    {
+      path: ["auth", "requireExplicitRateLimit"],
+      enabled: true,
+      violates: (entry) => entry.kind === "authRateLimit" && entry.explicit !== true,
+      checkId: CHECK_IDS.policyGatewayRateLimitMissing,
+      message: () => "Gateway authentication rate-limit posture is not explicit.",
+      fixHint: "Configure gateway.auth.rateLimit or update policy after review.",
+    },
+    {
+      path: ["controlUi", "allowInsecure"],
+      enabled: false,
+      violates: (entry) =>
         entry.kind === "controlUi" &&
         entry.value === true &&
         (entry.id === "gateway-control-ui-insecure-auth" ||
           entry.id === "gateway-control-ui-device-auth-disabled" ||
           entry.id === "gateway-control-ui-host-origin-fallback"),
-    )
-    .map((entry): HealthFinding => {
-      return policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyGatewayControlUiInsecure,
-        message: `Gateway Control UI insecure toggle '${entry.id}' is enabled.`,
-        requirement: `oc://${policyDocName}/gateway/controlUi/allowInsecure`,
-        fixHint: "Disable the insecure Control UI toggle or update policy after review.",
-      });
-    });
-}
-
-function gatewayTailscaleFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowTailscaleFunnel"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "tailscale" && entry.value === "funnel")
-    .map((entry): HealthFinding => {
-      return policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyGatewayTailscaleFunnel,
-        message: "Gateway Tailscale Funnel exposure is enabled.",
-        requirement: `oc://${policyDocName}/gateway/exposure/allowTailscaleFunnel`,
-        fixHint: "Use tailscale serve/off or update policy after review.",
-      });
-    });
-}
-
-function gatewayRemoteFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "remote", "allow"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "remote")
-    .map((entry): HealthFinding => {
-      return policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyGatewayRemoteEnabled,
-        message: `Gateway remote posture '${entry.id}' is enabled.`,
-        requirement: `oc://${policyDocName}/gateway/remote/allow`,
-        fixHint: "Disable remote gateway mode/config or update policy after review.",
-      });
-    });
+      checkId: CHECK_IDS.policyGatewayControlUiInsecure,
+      message: (entry) => `Gateway Control UI insecure toggle '${entry.id}' is enabled.`,
+      fixHint: "Disable the insecure Control UI toggle or update policy after review.",
+    },
+    {
+      path: ["exposure", "allowTailscaleFunnel"],
+      enabled: false,
+      violates: (entry) => entry.kind === "tailscale" && entry.value === "funnel",
+      checkId: CHECK_IDS.policyGatewayTailscaleFunnel,
+      message: () => "Gateway Tailscale Funnel exposure is enabled.",
+      fixHint: "Use tailscale serve/off or update policy after review.",
+    },
+    {
+      path: ["remote", "allow"],
+      enabled: false,
+      violates: (entry) => entry.kind === "remote",
+      checkId: CHECK_IDS.policyGatewayRemoteEnabled,
+      message: (entry) => `Gateway remote posture '${entry.id}' is enabled.`,
+      fixHint: "Disable remote gateway mode/config or update policy after review.",
+    },
+  ] satisfies readonly (PolicyEvidenceRule<PolicyGatewayExposureEvidence> & { enabled: boolean })[];
+  // Preserve the diagnostic order used by policy attestations.
+  return [
+    ...policyEvidenceRuleFindings(
+      evidence.gatewayExposure ?? [],
+      rules.filter((rule) => readPolicyBoolean(policy, ["gateway", ...rule.path]) === rule.enabled),
+      policyDocName,
+      "gateway",
+    ),
+    ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
+    ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
+    ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
+  ];
 }
 
 function gatewayHttpEndpointFindings(
@@ -207,11 +91,7 @@ function gatewayHttpEndpointFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const denied = new Set(
-    readStringList(policy, ["gateway", "http", "denyEndpoints"]).map((endpoint) =>
-      endpoint.toLowerCase(),
-    ),
-  );
+  const denied = new Set(readStringList(policy, ["gateway", "http", "denyEndpoints"]));
   if (denied.size === 0) {
     return [];
   }
@@ -287,13 +167,7 @@ function gatewayNodeCommandFindings(
 }
 
 function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return true;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   return (
     current === undefined ||
     (Array.isArray(current) &&

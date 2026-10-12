@@ -12,6 +12,7 @@ type PluginsPageIconsHost = {
   isConnected: () => boolean;
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
+  onLoadingChange?: () => void;
 };
 
 function renderedPluginIds(view: ParentNode): Set<string> {
@@ -25,13 +26,14 @@ function renderedPluginIds(view: ParentNode): Set<string> {
 
 export class PluginsPageIcons {
   private authCandidates: string[] = [];
-  private readonly installed: PluginIconController;
-  private readonly catalog: PluginIconController;
+  readonly installed: PluginIconController;
+  readonly catalog: PluginIconController;
 
   constructor(host: PluginsPageIconsHost) {
     const shared = {
       getFetchContext: () => pluginIconFetchContext(host.getContext()),
       isConnected: host.isConnected,
+      onLoadingChange: host.onLoadingChange,
     };
     this.installed = new PluginIconController({
       ...shared,
@@ -58,18 +60,6 @@ export class PluginsPageIcons {
     this.installed.sync(result, renderedPluginIds(view));
   }
 
-  reconcileInstalled(result: PluginListResult | null): void {
-    this.installed.reconcile(result);
-  }
-
-  invalidateInstalled(pluginId: string): void {
-    this.installed.invalidate(pluginId);
-  }
-
-  handleInstalledError(pluginId: string): void {
-    this.installed.handleError(pluginId);
-  }
-
   syncCatalog(
     discovery: Pick<PluginDiscoveryController, "result" | "featured" | "trending">,
     view: ParentNode,
@@ -78,19 +68,14 @@ export class PluginsPageIcons {
     const rendered = renderedPluginIds(view);
     this.catalog.syncCatalog(
       [
-        ...[
-          ...(discovery.result?.items ?? []),
-          ...discovery.featured,
-          ...discovery.trending,
-        ].filter((entry) => rendered.has(entry.id)),
+        ...(discovery.result?.items ?? []),
+        ...discovery.featured,
+        ...discovery.trending,
         ...(detail ? [detail.plugin] : []),
       ],
       detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
+      rendered,
     );
-  }
-
-  resetInstalled(): void {
-    this.installed.reset();
   }
 
   reset(): void {

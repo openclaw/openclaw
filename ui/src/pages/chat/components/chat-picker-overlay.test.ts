@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import "../../../components/tooltip.ts";
+import { settleTooltip } from "../../../components/tooltip.test-support.ts";
 import {
   installChatComposerPickerDismissal,
   handleChatComposerDetailsToggle,
@@ -31,7 +31,6 @@ describe("chat picker overlay", () => {
     composer.append(picker, invocationMenu);
     document.body.append(composer);
     await tooltip.updateComplete;
-    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     const dismissInvocations = vi.fn();
     composer.addEventListener("openclaw-composer-dismiss-invocations", dismissInvocations);
 
@@ -40,6 +39,8 @@ describe("chat picker overlay", () => {
     for (let opening = 0; opening < 2; opening += 1) {
       picker.open = true;
       field.focus();
+      await settleTooltip(tooltip);
+      const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
       await popup.updateComplete;
       expect(popup.open).toBe(true);
       if (opening === 0) {

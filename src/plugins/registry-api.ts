@@ -29,7 +29,7 @@ import {
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
-import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
+import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
 type BoundRegistrars = {
   [K in keyof PluginRegistrars]: PluginRegistrars[K] extends (
@@ -43,15 +43,6 @@ type BoundRegistrars = {
 // Registration exposes these async operations without loading session storage or delivery.
 const loadAttachments = createLazyRuntimeModule(() => import("./host-hook-attachments.js"));
 const loadHookState = createLazyRuntimeModule(() => import("./host-hook-state.js"));
-
-function normalizeLogger(logger: PluginLogger): PluginLogger {
-  return {
-    info: logger.info,
-    warn: logger.warn,
-    error: logger.error,
-    debug: logger.debug,
-  };
-}
 
 function resolvePluginPath(input: string, rootDir: string | undefined): string {
   const trimmed = input.trim();
@@ -69,7 +60,7 @@ export function createPluginApiFactory(
   const { registry, registryParams, getHostCronService, pushDiagnostic } = state;
   const { resolvePluginRuntime, resolveRegisteredChannelRuntime } = runtimeResolver;
 
-  const createApi = (
+  return (
     record: PluginRecord,
     params: {
       config: OpenClawPluginApi["config"];
@@ -117,7 +108,12 @@ export function createPluginApiFactory(
         registrationMode === "cli-metadata"
           ? createUnavailableRuntime(registrationMode, record.id)
           : resolvePluginRuntime(record),
-      logger: normalizeLogger(registryParams.logger),
+      logger: {
+        info: registryParams.logger.info,
+        warn: registryParams.logger.warn,
+        error: registryParams.logger.error,
+        debug: registryParams.logger.debug,
+      },
       resolvePath: (input: string) =>
         resolvePluginPath(input, registrationMode === "cli-metadata" ? undefined : record.rootDir),
       handlers: {
@@ -291,6 +287,4 @@ export function createPluginApiFactory(
       },
     });
   };
-
-  return createApi;
 }

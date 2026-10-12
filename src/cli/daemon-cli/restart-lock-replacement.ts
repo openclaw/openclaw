@@ -24,36 +24,19 @@ export async function waitForGatewayLockReplacement(params: {
   let previousOwnerReleased = false;
 
   for (;;) {
-    let currentLockIdentity: GatewayLockIdentity | undefined;
-    try {
-      currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env });
-    } catch {
-      if (params.waitIndefinitelyForPreviousOwner && !previousOwnerReleased) {
-        await sleep(params.delayMs);
-        continue;
-      }
-      if (attemptsUsed >= params.attempts) {
-        return { status: "timeout" };
-      }
-      attemptsUsed += 1;
-      await sleep(params.delayMs);
-      continue;
-    }
-
-    if (!previousOwnerReleased) {
-      if (
-        currentLockIdentity &&
-        isSameGatewayLockIdentity(params.previousLockIdentity, currentLockIdentity)
-      ) {
-        if (params.waitIndefinitelyForPreviousOwner) {
-          await sleep(params.delayMs);
-          continue;
-        }
-      } else {
-        previousOwnerReleased = true;
-        if (params.waitIndefinitelyForPreviousOwner) {
-          attemptsUsed = 0;
-        }
+    // A failed inspection is not evidence that the previous owner released its lock.
+    const currentLockIdentity = await readActiveGatewayLockIdentity({ env: params.env }).catch(
+      () => null,
+    );
+    if (
+      !previousOwnerReleased &&
+      currentLockIdentity !== null &&
+      (!currentLockIdentity ||
+        !isSameGatewayLockIdentity(params.previousLockIdentity, currentLockIdentity))
+    ) {
+      previousOwnerReleased = true;
+      if (params.waitIndefinitelyForPreviousOwner) {
+        attemptsUsed = 0;
       }
     }
 
@@ -65,10 +48,12 @@ export async function waitForGatewayLockReplacement(params: {
       return { status: "replacement", attemptsUsed, lockIdentity: currentLockIdentity };
     }
 
-    if (attemptsUsed >= params.attempts) {
-      return { status: "timeout" };
+    if (!params.waitIndefinitelyForPreviousOwner || previousOwnerReleased) {
+      if (attemptsUsed >= params.attempts) {
+        return { status: "timeout" };
+      }
+      attemptsUsed += 1;
     }
-    attemptsUsed += 1;
     await sleep(params.delayMs);
   }
 }

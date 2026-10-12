@@ -1,3 +1,4 @@
+import { readSqliteDatabaseWriteTokenForPath } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { WorkboardKeyedStore } from "../persistence-types.js";
 import { createWorkboardSqliteKernel } from "../sqlite-store-kernel.js";
 import type { createWorkboardSqliteStores } from "../sqlite-store.js";
@@ -22,8 +23,8 @@ export function createKernelStores(
 ): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
-    ready: Promise.resolve(kernel.dataVersion()),
-    dataVersion: async () => kernel.dataVersion(),
+    ready: Promise.resolve(),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(dbPath),
     close: async () => kernel.close(),
     cards: {
       ...asyncKeyedStore(kernel.cards),
@@ -38,6 +39,13 @@ export function createKernelStores(
       hasCards: async (boardId) => kernel.cards.hasCards(boardId),
     },
     boards: asyncKeyedStore(kernel.boards),
+    sessionsBoard: {
+      get: async (boardId) => kernel.sessionsBoard.get(boardId),
+      update: async (boardId, patch) => kernel.sessionsBoard.update(boardId, patch),
+      listPlacements: async (boardId) => kernel.sessionsBoard.listPlacements(boardId),
+      repairPlacements: async () => kernel.sessionsBoard.repairPlacements(),
+      writePlacement: async (...args) => kernel.sessionsBoard.writePlacement(...args),
+    },
     subscriptions: asyncKeyedStore(kernel.subscriptions),
     attachments: asyncKeyedStore(kernel.attachments),
   };

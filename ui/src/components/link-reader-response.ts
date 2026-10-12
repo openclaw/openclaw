@@ -17,15 +17,11 @@ export function linkReaderAuthorHref(value: unknown, source: string): string | u
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const url = new URL(value, source);
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      url.origin === new URL(source).origin
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value, source);
+  return url?.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    url.origin === URL.parse(source)?.origin
+    ? url.href
+    : undefined;
 }

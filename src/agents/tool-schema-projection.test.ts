@@ -4,48 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
-  inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("runtime tool input schema projection", () => {
-  it("accepts JSON object input schemas", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      }),
-    ).toEqual({
-      schema: {
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      },
-      violations: [],
-    });
-  });
-
-  it("reports non-object dynamic tool input schemas", () => {
-    expect(
-      inspectRuntimeToolInputSchemas([
-        {
-          name: "fuzzplugin_move_angles",
-          parameters: { type: "array", items: { type: "number" } },
-        },
-      ] as never),
-    ).toEqual([
-      {
-        toolName: "fuzzplugin_move_angles",
-        toolIndex: 0,
-        violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
-      },
-    ]);
-  });
-
   it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
     expect(
       projectRuntimeToolInputSchema({
@@ -80,20 +43,6 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
-  it("reports non-finite numeric schema values before JSON projection", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          score: { type: "number", default: Number.NaN },
-        },
-      }),
-    ).toEqual({
-      schema: {},
-      violations: ["parameters.properties.score.default is not JSON-serializable"],
-    });
-  });
-
   it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
     if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
       skip();
@@ -110,24 +59,6 @@ describe("runtime tool input schema projection", () => {
         violations: ["parameters is not a JSON value"],
       });
     }
-  });
-
-  it("reports non-finite values returned by nested toJSON serializers", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          score: {
-            toJSON() {
-              return { type: "number", maximum: Number.POSITIVE_INFINITY };
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      schema: {},
-      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
-    });
   });
 
   it("keeps empty property names in non-finite diagnostic paths", () => {

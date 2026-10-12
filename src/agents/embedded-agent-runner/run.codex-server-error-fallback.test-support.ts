@@ -73,7 +73,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow(
-      "⚠️ openai/gpt-5.4 request failed (provider internal error). This is usually temporary — try again shortly.",
+      "⚠️ The AI service is having trouble. Please try again in a moment.",
     );
     // Initial attempt plus the full same-model transient retry budget.
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(9);

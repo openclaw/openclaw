@@ -10,6 +10,16 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 
 Node remains the recommended runtime. Matrix also accepts the [opt-in Bun runtime](/install/bun); E2EE requires the Matrix SDK's native crypto bindings to be available for your platform.
 
+`openclaw matrix verify status`, `verify bootstrap`, and `verify device` route
+through the local Gateway when it is running. Update an older Gateway if it does
+not support this routing; failed requests are never replayed locally.
+
+Other `openclaw matrix` commands require the local Gateway to be stopped,
+including device diagnostics: preparing the account can update its crypto state.
+Stop the Gateway through its service owner, run the command, then restart it.
+Commands refuse before loading account state when a Gateway owns the state
+directory. Offline ownership lasts through crypto persistence and client shutdown.
+
 <CardGroup cols={3}>
   <Card title="Setup" icon="download" href="/channels/matrix/setup">
     Install the plugin and connect a homeserver account.
@@ -132,7 +142,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `allowlistOnly`: when `true`, forces all active DM policies (except `"disabled"`) and `"open"` group policies to `"allowlist"`. Does not change `"disabled"` policies.
 - `dangerouslyAllowNameMatching`: when `true`, allows Matrix display-name directory lookup for user allowlist entries and joined-room name lookup for room allowlist keys. Prefer full `@user:server` IDs and room IDs or aliases.
 - `autoJoin`: `"always"`, `"allowlist"`, or `"off"`. Default: `"off"`. Applies to every Matrix invite, including DM-style invites.
-- `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Alias entries resolve against the homeserver, not against state claimed by the invited room.
+- `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Only room IDs, aliases, or `*` can match; the runtime warns about and ignores other entries (for example a user ID, which belongs in `dm.allowFrom`). Alias entries resolve against the homeserver, not against state claimed by the invited room.
 - `contextVisibility`: supplemental context visibility (`"all"` default, `"allowlist"`, `"allowlist_quote"`).
 
 ### Reply behavior

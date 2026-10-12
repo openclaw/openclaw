@@ -85,7 +85,7 @@ describe("session-derived Google Chat delivery", () => {
   it("delivers to the canonical mixed-case space recorded by the session", async () => {
     await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
       const config: OpenClawConfig = {
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
         channels: {
           googlechat: {
             accounts: {

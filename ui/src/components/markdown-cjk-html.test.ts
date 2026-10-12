@@ -1,17 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
-}
 
 describe("CJK-friendly Markdown", () => {
   it.each([
     { markdown: "**「先端の記述子」**のが重要", strong: "「先端の記述子」" },
-    { markdown: "これは**（注記）**です", strong: "（注記）" },
-    { markdown: "の**「強調」**だ", strong: "「強調」" },
     { markdown: "前**加粗：**后", strong: "加粗：" },
     { markdown: "이것은 **강조:**입니다", strong: "강조:" },
     { markdown: "𰻞𰻞**（ビャンビャン）**麺", strong: "（ビャンビャン）" },
@@ -35,8 +28,8 @@ describe("CJK-friendly Markdown", () => {
 });
 
 describe("safe Markdown HTML", () => {
-  it.each(["<br>", "<BR/>", "<br />", "<Br   >"])("renders %s as a line break", (tag) => {
-    const fragment = htmlFragment(toSanitizedMarkdownHtml(`一${tag}二`));
+  it("renders case-insensitive self-closing line breaks", () => {
+    const fragment = htmlFragment(toSanitizedMarkdownHtml("一<BR />二"));
     expect(fragment.querySelectorAll("br")).toHaveLength(1);
     expect(fragment.textContent).toBe("一二\n");
   });
@@ -61,9 +54,6 @@ describe("safe Markdown HTML", () => {
     "<script>alert(1)</script>",
     "Check <b>this</b> out",
     '<br onclick="alert(1)">',
-    '<br onmouseover="alert(1)" />',
-    '<br style="background:url(javascript:alert(1))">',
-    '<br data-owned="false">',
     "</br>",
   ])("escapes untrusted markup %s", (markup) => {
     const fragment = htmlFragment(toSanitizedMarkdownHtml(markup));

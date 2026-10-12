@@ -1,5 +1,4 @@
 // Control Ui I18N script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -9,7 +8,6 @@ import { createLlmRuntime, type AssistantMessage, type Model } from "@openclaw/a
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
@@ -17,7 +15,7 @@ import {
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
 } from "./lib/control-ui-i18n-catalog-values.ts";
-import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
@@ -30,17 +28,11 @@ import {
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 // Translation is standalone tooling: Gateway host hooks open operator state
 // and log model identifiers before this script can redact provider failures.
 const translationRuntime = createLlmRuntime();
 registerBuiltInApiProviders(translationRuntime.registry);
-
-type RunProcessParentSignalState = {
-  done: boolean;
-  signal: NodeJS.Signals | null;
-};
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-6-astra";
@@ -55,10 +47,6 @@ const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
-const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
-const RUN_PROCESS_TIMEOUT_MS = 120_000;
-const RUN_PROCESS_KILL_GRACE_MS = 5_000;
-const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -179,57 +167,6 @@ function parseArgs(argv: string[]) {
   };
 }
 
-function prettyLanguageLabel(locale: string): string {
-  switch (locale) {
-    case "en":
-      return "English";
-    case "zh-CN":
-      return "Simplified Chinese";
-    case "zh-TW":
-      return "Traditional Chinese";
-    case "pt-BR":
-      return "Brazilian Portuguese";
-    case "ja-JP":
-      return "Japanese";
-    case "ko":
-      return "Korean";
-    case "fr":
-      return "French";
-    case "hi":
-      return "Hindi";
-    case "ar":
-      return "Arabic";
-    case "it":
-      return "Italian";
-    case "tr":
-      return "Turkish";
-    case "uk":
-      return "Ukrainian";
-    case "id":
-      return "Indonesian";
-    case "pl":
-      return "Polish";
-    case "th":
-      return "Thai";
-    case "vi":
-      return "Vietnamese";
-    case "nl":
-      return "Dutch";
-    case "fa":
-      return "Persian";
-    case "ru":
-      return "Russian";
-    case "sv":
-      return "Swedish";
-    case "de":
-      return "German";
-    case "es":
-      return "Spanish";
-    default:
-      return locale;
-  }
-}
-
 function resolveConfiguredProvider(): string {
   const configured = process.env[ENV_PROVIDER]?.trim();
   if (configured) {
@@ -242,16 +179,6 @@ function resolveConfiguredProvider(): string {
     return "anthropic";
   }
   return DEFAULT_PROVIDER;
-}
-
-function resolveConfiguredModel(): string {
-  const configured = process.env[ENV_MODEL]?.trim();
-  if (configured) {
-    return configured;
-  }
-  return resolveConfiguredProvider() === "anthropic"
-    ? DEFAULT_ANTHROPIC_MODEL
-    : DEFAULT_OPENAI_MODEL;
 }
 
 function hasTranslationProvider(): boolean {
@@ -270,12 +197,16 @@ function sha256(input: string | Uint8Array): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-function cacheNamespace(): string {
-  return `wf=${CONTROL_UI_I18N_WORKFLOW}|engine=openclaw-llm`;
-}
-
 function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
-  return sha256([cacheNamespace(), SOURCE_LOCALE, targetLocale, segmentId, textHash].join("|"));
+  return sha256(
+    [
+      `wf=${CONTROL_UI_I18N_WORKFLOW}|engine=openclaw-llm`,
+      SOURCE_LOCALE,
+      targetLocale,
+      segmentId,
+      textHash,
+    ].join("|"),
+  );
 }
 
 function glossaryPath(entry: LocaleEntry): string {
@@ -397,7 +328,7 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   const glossaryBlock = buildGlossaryPrompt(glossary);
   const lines = [
     "You are a translation function, not a chat assistant.",
-    `Translate UI strings from ${prettyLanguageLabel(SOURCE_LOCALE)} to ${prettyLanguageLabel(targetLocale)}.`,
+    `Translate UI strings from ${controlUiLanguageLabel(SOURCE_LOCALE)} to ${controlUiLanguageLabel(targetLocale)}.`,
     "",
     "Rules:",
     "- Output ONLY valid JSON.",
@@ -509,276 +440,6 @@ function resolveBatchCharBudget(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BATCH_CHAR_BUDGET;
 }
 
-function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
-  return JSON.stringify(buildBatchPayload(items)).length;
-}
-
-type RunProcessOptions = {
-  cwd?: string;
-  input?: string;
-  killGraceMs?: number;
-  maxOutputChars?: number;
-  rejectOnFailure?: boolean;
-  timeoutMs?: number;
-};
-
-type ProcessOutputCapture = {
-  text: string;
-  truncatedChars: number;
-};
-
-function resolveRunProcessOutputLimit(options: RunProcessOptions): number {
-  const value = options.maxOutputChars;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return RUN_PROCESS_OUTPUT_MAX_CHARS;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-export function appendBoundedProcessOutput(
-  capture: ProcessOutputCapture,
-  chunk: unknown,
-  maxChars: number,
-): ProcessOutputCapture {
-  const nextText = capture.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: capture.truncatedChars };
-  }
-  const text = sliceUtf16Safe(nextText, -maxChars);
-  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
-  return { text, truncatedChars };
-}
-
-function formatProcessOutput(capture: ProcessOutputCapture): string {
-  if (capture.truncatedChars === 0) {
-    return capture.text;
-  }
-  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
-}
-
-function maybeReraiseRunProcessParentSignal(signal: NodeJS.Signals): void {
-  for (const state of activeRunProcessParentSignals) {
-    if (state.signal === null || !state.done) {
-      return;
-    }
-  }
-  process.kill(process.pid, signal);
-}
-
-export async function runProcess(
-  executable: string,
-  args: string[],
-  options: RunProcessOptions = {},
-): Promise<{ code: number; stderr: string; stdout: string }> {
-  return await new Promise((resolve, reject) => {
-    const useProcessGroup = process.platform !== "win32";
-    const child = spawn(executable, args, {
-      cwd: options.cwd ?? ROOT,
-      detached: useProcessGroup,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const maxOutputChars = resolveRunProcessOutputLimit(options);
-    const timeoutMs = options.timeoutMs ?? RUN_PROCESS_TIMEOUT_MS;
-    const killGraceMs = options.killGraceMs ?? RUN_PROCESS_KILL_GRACE_MS;
-    let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
-    let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
-    let timedOut = false;
-    let settled = false;
-    let waitingForKillGrace = false;
-    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let parentSignalPending: NodeJS.Signals | null = null;
-    const parentSignalState: RunProcessParentSignalState = { done: false, signal: null };
-    activeRunProcessParentSignals.add(parentSignalState);
-    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
-    const cleanupParentSignalHandlers = () => {
-      for (const { signal, handler } of parentSignalHandlers) {
-        process.off(signal, handler);
-      }
-      parentSignalHandlers.length = 0;
-    };
-    const signalWindowsProcessTree = (force: boolean): boolean => {
-      if (process.platform !== "win32" || typeof child.pid !== "number") {
-        return false;
-      }
-      const taskkillArgs = ["/PID", String(child.pid), "/T"];
-      if (force) {
-        taskkillArgs.push("/F");
-      }
-      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
-      return result.status === 0;
-    };
-    const signalChild = (signal: NodeJS.Signals) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            stderr = appendBoundedProcessOutput(
-              stderr,
-              `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
-              maxOutputChars,
-            );
-          }
-        }
-      }
-      if (process.platform === "win32") {
-        const force = signal === "SIGKILL";
-        if (signalWindowsProcessTree(force) || (!force && signalWindowsProcessTree(true))) {
-          return;
-        }
-      }
-      child.kill(signal);
-    };
-    const relayParentSignal = (signal: NodeJS.Signals) => {
-      const handler = () => {
-        parentSignalPending = signal;
-        parentSignalState.signal = signal;
-        signalChild(signal);
-        cleanupParentSignalHandlers();
-        if (!processGroupIsAlive()) {
-          parentSignalState.done = true;
-          maybeReraiseRunProcessParentSignal(signal);
-          return;
-        }
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
-        waitingForKillGrace = true;
-        // Keep this timer ref'ed so parent signal relay can force-kill stubborn
-        // process groups before re-raising the original signal.
-        killTimer = setTimeout(() => {
-          waitingForKillGrace = false;
-          killTimer = undefined;
-          signalChild("SIGKILL");
-          parentSignalState.done = true;
-          maybeReraiseRunProcessParentSignal(signal);
-        }, killGraceMs);
-      };
-      parentSignalHandlers.push({ handler, signal });
-      process.once(signal, handler);
-    };
-    const relayedSignals: NodeJS.Signals[] =
-      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-    for (const signal of relayedSignals) {
-      relayParentSignal(signal);
-    }
-    const processGroupIsAlive = () => {
-      if (!useProcessGroup || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
-    };
-    const settle = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (!parentSignalPending && killTimer) {
-        clearTimeout(killTimer);
-      }
-      if (!parentSignalPending) {
-        activeRunProcessParentSignals.delete(parentSignalState);
-      }
-      cleanupParentSignalHandlers();
-      callback();
-    };
-    const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      settle(() => {
-        const stdoutText = formatProcessOutput(stdout);
-        const stderrText = formatProcessOutput(stderr);
-        if (timedOut) {
-          reject(new Error(`${executable} ${args.join(" ")} timed out after ${timeoutMs}ms`));
-          return;
-        }
-        if ((code ?? 1) !== 0 && options.rejectOnFailure) {
-          reject(
-            new Error(
-              `${executable} ${args.join(" ")} failed: ${
-                stderrText.trim() || stdoutText.trim() || (signal ? `terminated by ${signal}` : "")
-              }`,
-            ),
-          );
-          return;
-        }
-        if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
-          reject(
-            new Error(
-              `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
-            ),
-          );
-          return;
-        }
-        resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
-      });
-    };
-    const scheduleKill = () => {
-      if (waitingForKillGrace) {
-        return;
-      }
-      waitingForKillGrace = true;
-      killTimer = setTimeout(() => {
-        waitingForKillGrace = false;
-        killTimer = undefined;
-        signalChild("SIGKILL");
-        if (childClosedResult) {
-          finishClose(childClosedResult.code, childClosedResult.signal);
-        }
-      }, killGraceMs);
-    };
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      signalChild("SIGTERM");
-      scheduleKill();
-    }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
-    });
-    child.once("error", (error) => {
-      settle(() => {
-        reject(error);
-      });
-    });
-    if (options.input !== undefined) {
-      child.stdin.end(options.input);
-    } else {
-      child.stdin.end();
-    }
-    child.once("close", (code, signal) => {
-      if (parentSignalPending) {
-        if (processGroupIsAlive()) {
-          childClosedResult = { code, signal };
-          return;
-        }
-        if (killTimer) {
-          clearTimeout(killTimer);
-          killTimer = undefined;
-        }
-        parentSignalState.done = true;
-        maybeReraiseRunProcessParentSignal(parentSignalPending);
-        return;
-      }
-      if (waitingForKillGrace && processGroupIsAlive()) {
-        childClosedResult = { code, signal };
-        return;
-      }
-      finishClose(code, signal);
-    });
-  });
-}
-
 type LocaleRunContext = {
   localeCount: number;
   localeIndex: number;
@@ -788,34 +449,11 @@ type TranslationBatchContext = LocaleRunContext & {
   batchCount: number;
   batchIndex: number;
   locale: string;
-  splitDepth?: number;
   segmentLabel?: string;
   validateTranslation?: TranslationValidator;
 };
 
 type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
-
-type ClientAccess = {
-  getClient: () => Promise<TranslationClient>;
-  resetClient: () => Promise<void>;
-};
-
-function createTranslationClientAccess(
-  targetLocale: string,
-  glossary: readonly GlossaryEntry[],
-): ClientAccess {
-  let client: TranslationClient | null = null;
-  return {
-    async getClient() {
-      client ??= await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
-      return client;
-    },
-    async resetClient() {
-      await client?.close();
-      client = null;
-    },
-  };
-}
 
 function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
   return `[${context.localeIndex}/${context.localeCount}] ${locale}`;
@@ -833,7 +471,7 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
   let currentChars = 2;
 
   for (const item of items) {
-    const itemChars = estimateBatchChars([item]);
+    const itemChars = JSON.stringify(buildBatchPayload([item])).length;
     const wouldOverflow = current.length > 0 && currentChars + itemChars > budget;
     const reachedMaxItems = current.length >= MAX_BATCH_ITEMS;
     if (wouldOverflow || reachedMaxItems) {
@@ -854,7 +492,9 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
 
 export function resolveTranslationModel(): Model {
   const provider = resolveKnownTranslationProvider();
-  const modelId = resolveConfiguredModel();
+  const modelId =
+    process.env[ENV_MODEL]?.trim() ||
+    (provider === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL);
   return {
     ...TRANSLATION_PROVIDER_DEFAULTS[provider],
     id: modelId,
@@ -863,102 +503,83 @@ export function resolveTranslationModel(): Model {
 }
 
 class TranslationClient {
-  private closed = false;
-  private sequence: Promise<unknown> = Promise.resolve();
-  private model: Model;
+  private model: Model | undefined;
   private readonly systemPrompt: string;
 
-  private constructor(systemPrompt: string) {
-    this.systemPrompt = systemPrompt;
-    this.model = resolveTranslationModel();
+  constructor(targetLocale: string, glossary: readonly GlossaryEntry[]) {
+    this.systemPrompt = buildSystemPrompt(targetLocale, glossary);
   }
 
-  static async create(systemPrompt: string): Promise<TranslationClient> {
-    return new TranslationClient(systemPrompt);
+  reset() {
+    this.model = undefined;
   }
 
   async prompt(message: string, label: string): Promise<string> {
-    const result = this.sequence.then(async () => {
-      if (this.closed) {
-        throw new Error("translation runtime unavailable");
-      }
+    let model = (this.model ??= resolveTranslationModel());
+    const timeoutMs = resolvePromptTimeoutMs();
+    const startedAt = Date.now();
+    const controller = new AbortController();
 
-      const timeoutMs = resolvePromptTimeoutMs();
-      const startedAt = Date.now();
-      const controller = new AbortController();
+    return await new Promise<string>((resolve, reject) => {
+      const heartbeat = setInterval(() => {
+        logProgress(
+          `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
+        );
+      }, PROGRESS_HEARTBEAT_MS);
+      const timer = setTimeout(() => {
+        clearInterval(heartbeat);
+        controller.abort();
+        reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
 
-      return await new Promise<string>((resolve, reject) => {
-        const heartbeat = setInterval(() => {
-          logProgress(
-            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
-          );
-        }, PROGRESS_HEARTBEAT_MS);
-        const timer = setTimeout(() => {
+      const complete = () =>
+        translationRuntime
+          .completeSimple(
+            model,
+            {
+              systemPrompt: this.systemPrompt,
+              messages: [{ role: "user", content: message, timestamp: Date.now() }],
+            },
+            {
+              maxTokens: 4096,
+              reasoning: resolveThinkingLevel(),
+              signal: controller.signal,
+              timeoutMs,
+            },
+          )
+          .then(extractTranslationResult);
+      complete()
+        .catch(async (error: unknown) => {
+          const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
+          if (
+            error instanceof TranslationProviderError &&
+            error.code === "model_not_found" &&
+            !controller.signal.aborted &&
+            model.provider === "openai" &&
+            fallback &&
+            fallback !== model.id
+          ) {
+            logProgress(`${label}: primary model unavailable; using configured fallback`);
+            this.model = model = { ...model, id: fallback, name: fallback };
+            return await complete();
+          }
+          throw error;
+        })
+        .then((translation) => {
+          clearTimeout(timer);
           clearInterval(heartbeat);
-          controller.abort();
-          reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-
-        const complete = () =>
-          translationRuntime
-            .completeSimple(
-              this.model,
-              {
-                systemPrompt: this.systemPrompt,
-                messages: [{ role: "user", content: message, timestamp: Date.now() }],
-              },
-              {
-                maxTokens: 4096,
-                reasoning: resolveThinkingLevel(),
-                signal: controller.signal,
-                timeoutMs,
-              },
-            )
-            .then(extractTranslationResult);
-        complete()
-          .catch(async (error: unknown) => {
-            const fallback = process.env[ENV_FALLBACK_MODEL]?.trim();
-            if (
-              error instanceof TranslationProviderError &&
-              error.code === "model_not_found" &&
-              !controller.signal.aborted &&
-              !this.closed &&
-              this.model.provider === "openai" &&
-              fallback &&
-              fallback !== this.model.id
-            ) {
-              logProgress(`${label}: primary model unavailable; using configured fallback`);
-              this.model = { ...this.model, id: fallback, name: fallback };
-              return await complete();
-            }
-            throw error;
-          })
-          .then((translation) => {
-            clearTimeout(timer);
-            clearInterval(heartbeat);
-            resolve(translation);
-          })
-          .catch((error: unknown) => {
-            clearTimeout(timer);
-            clearInterval(heartbeat);
-            reject(
-              error instanceof TranslationProviderError
-                ? error
-                : new TranslationProviderError("provider_error"),
-            );
-          });
-      });
+          resolve(translation);
+        })
+        .catch((error: unknown) => {
+          clearTimeout(timer);
+          clearInterval(heartbeat);
+          reject(
+            error instanceof TranslationProviderError
+              ? error
+              : new TranslationProviderError("provider_error"),
+          );
+        });
     });
-
-    this.sequence = result.catch(() => undefined);
-    return await result;
-  }
-
-  async close() {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
   }
 }
 
@@ -1035,12 +656,11 @@ export function parseTranslationBatchReply(
 }
 
 async function translateBatch(
-  clientAccess: ClientAccess,
+  client: TranslationClient,
   items: readonly TranslationBatchItem[],
   context: TranslationBatchContext,
 ): Promise<Map<string, string>> {
   const batchLabel = formatBatchLabel(context);
-  const splitDepth = context.splitDepth ?? 0;
   let lastError: Error | null = null;
   let validationError: string | undefined;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
@@ -1050,9 +670,7 @@ async function translateBatch(
     logProgress(`${attemptLabel}: start keys=${items.length}`);
     let promptCompleted = false;
     try {
-      const raw = await (
-        await clientAccess.getClient()
-      ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
+      const raw = await client.prompt(buildBatchPrompt(items, validationError), attemptLabel);
       promptCompleted = true;
       const translated = parseTranslationBatchReply(
         raw,
@@ -1067,7 +685,7 @@ async function translateBatch(
       if (promptCompleted) {
         validationError = lastError.message;
       }
-      await clientAccess.resetClient();
+      client.reset();
       logProgress(
         `${attemptLabel}: failed after ${formatDuration(Date.now() - startedAt)}: ${lastError.message}`,
       );
@@ -1076,14 +694,12 @@ async function translateBatch(
         logProgress(
           `${batchLabel}: splitting timed out batch into ${midpoint} + ${items.length - midpoint} keys`,
         );
-        const left = await translateBatch(clientAccess, items.slice(0, midpoint), {
+        const left = await translateBatch(client, items.slice(0, midpoint), {
           ...context,
-          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}a`,
         });
-        const right = await translateBatch(clientAccess, items.slice(midpoint), {
+        const right = await translateBatch(client, items.slice(midpoint), {
           ...context,
-          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}b`,
         });
         return new Map([...left, ...right]);
@@ -1126,26 +742,22 @@ export async function translateNativeEntries(
     sourceContext: entry.sourceContext,
   }));
   const batches = buildTranslationBatches(pending);
-  const clientAccess = createTranslationClientAccess(targetLocale, glossary);
-  try {
-    const translated = new Map<string, string>();
-    for (const [batchIndex, batch] of batches.entries()) {
-      const result = await translateBatch(clientAccess, batch, {
-        locale: targetLocale,
-        localeCount: 1,
-        localeIndex: 1,
-        batchCount: batches.length,
-        batchIndex: batchIndex + 1,
-        validateTranslation,
-      });
-      for (const [id, value] of result) {
-        translated.set(id, value);
-      }
+  const client = new TranslationClient(targetLocale, glossary);
+  const translated = new Map<string, string>();
+  for (const [batchIndex, batch] of batches.entries()) {
+    const result = await translateBatch(client, batch, {
+      locale: targetLocale,
+      localeCount: 1,
+      localeIndex: 1,
+      batchCount: batches.length,
+      batchIndex: batchIndex + 1,
+      validateTranslation,
+    });
+    for (const [id, value] of result) {
+      translated.set(id, value);
     }
-    return translated;
-  } finally {
-    await clientAccess.resetClient();
   }
+  return translated;
 }
 
 type SyncOutcome = {
@@ -1240,10 +852,10 @@ async function syncLocale(
     logProgress(
       `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    const clientAccess = createTranslationClientAccess(entry.locale, glossary);
+    const client = new TranslationClient(entry.locale, glossary);
     try {
       for (const [batchIndex, batch] of batches.entries()) {
-        const translated = await translateBatch(clientAccess, batch, {
+        const translated = await translateBatch(client, batch, {
           ...context,
           batchCount,
           batchIndex: batchIndex + 1,
@@ -1270,8 +882,6 @@ async function syncLocale(
         } satisfies SyncOutcome;
       }
       throw failure;
-    } finally {
-      await clientAccess.resetClient();
     }
   } else if (allowTranslate) {
     logProgress(
@@ -1309,25 +919,7 @@ async function syncLocale(
     currentGlossary !== expectedGlossary ||
     currentTm !== expectedTm;
 
-  if (
-    !changed ||
-    (previousMeta?.sourceHash === sourceHash &&
-      !options.force &&
-      !options.checkOnly &&
-      !options.write)
-  ) {
-    logProgress(
-      `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
-    );
-    return {
-      changed,
-      fallbackCount: artifacts.fallbackCount,
-      locale: entry.locale,
-      wrote: false,
-    } satisfies SyncOutcome;
-  }
-
-  if (!options.checkOnly && options.write) {
+  if (changed && !options.checkOnly && options.write) {
     await mkdir(I18N_ASSETS_DIR, { recursive: true });
     await writeFile(metaPath(entry), expectedMeta, "utf8");
     await writeFile(glossaryFilePath, expectedGlossary, "utf8");
@@ -1357,10 +949,7 @@ async function main() {
     verifyRuntimeLocaleConfig,
   } = await import("./control-ui-i18n-verify.ts");
   if (args.command === "check") {
-    await verifyControlUiGeneratedCatalogs({
-      checkOnly: true,
-      write: false,
-    });
+    await verifyControlUiGeneratedCatalogs();
   } else {
     await verifyRuntimeLocaleConfig();
   }
@@ -1441,12 +1030,7 @@ async function main() {
   }
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main().catch((error: unknown) => {
     console.error(
       formatErrorMessage(error, {

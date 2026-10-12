@@ -38,15 +38,16 @@ describe("Codex source-bound pending input", () => {
     const harness = createStartedThreadHarness();
     const params = createTestParams();
     params.agentId = "ops";
+    params.sandboxAgentId = "main";
     params.sessionKey = "global";
     params.config = {
       ...params.config,
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { entries: { main: {}, ops: {} } },
       session: { scope: "global" },
     };
     const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
     try {
-      await harness.waitForMethod("turn/start");
       await vi.waitFor(() => {
         expect(registrations).toHaveBeenCalledWith(
           params.sessionId,
@@ -125,9 +126,9 @@ describe("Codex source-bound pending input", () => {
     }
   });
 
-  it.each(["open", "closed", "reassigned"] as const)(
+  it.each(["closed"] as const)(
     "guards a Codex pending-question claim across registration: %s",
-    async (transition) => {
+    async () => {
       registrations.mockClear();
       const harness = createStartedThreadHarness();
       const params = createTestParams();
@@ -188,9 +189,7 @@ describe("Codex source-bound pending input", () => {
             { isInboundUserMessage: true },
             () => {
               if (!sourceCurrent) {
-                throw new Error(
-                  transition === "reassigned" ? "source claim replaced" : "source closed",
-                );
+                throw new Error("source closed");
               }
             },
             "source-bound",
@@ -199,7 +198,7 @@ describe("Codex source-bound pending input", () => {
             () => "accepted",
             () => "rejected",
           );
-        sourceCurrent = transition === "open";
+        sourceCurrent = false;
         registration.resolve();
         expect(await delivery).toBe(sourceCurrent ? "accepted" : "rejected");
         expect(

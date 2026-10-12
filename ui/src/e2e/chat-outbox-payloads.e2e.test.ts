@@ -10,6 +10,8 @@ import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
+  requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
 import {
   holdOutboxPreviewReads,
@@ -24,6 +26,7 @@ import {
   outboxChatUrl as chatUrl,
 } from "./chat-outbox-payloads.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
   args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
@@ -36,7 +39,9 @@ suite.define(() => {
         serviceWorkers: "block",
         locale: "en-US",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: path.join(suite.artifactDir, "plain-http-video") },
+        recordVideo: captureUiProof
+          ? { dir: path.join(suite.artifactDir, "plain-http-video") }
+          : undefined,
       },
       async ({ context, page }) => {
         const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
@@ -138,7 +143,9 @@ suite.define(() => {
       {
         serviceWorkers: "block",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: path.join(suite.artifactDir, "lifecycle-video") },
+        recordVideo: captureUiProof
+          ? { dir: path.join(suite.artifactDir, "lifecycle-video") }
+          : undefined,
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -632,7 +639,22 @@ suite.define(() => {
         }),
       );
       expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer input must survive");
-      expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(0);
+      const firstRunId = requireString(
+        requireRecord(sent.params).idempotencyKey,
+        "first send run id",
+      );
+      await gateway.resolveDeferred("chat.send");
+      await gateway.emitChatFinal({
+        runId: firstRunId,
+        text: "Mock Gateway: first message completed.",
+      });
+      await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+      const next = await gateway.waitForRequest("chat.send", { after: 1 });
+      const nextParams = requireRecord(next.params);
+      expect(nextParams.message).toBe("Mock Gateway: newer input must survive");
+      expect(nextParams).not.toHaveProperty("attachments");
+      expect(requireString(nextParams.idempotencyKey, "second send run id")).not.toBe(firstRunId);
     });
   });
   it("keeps another credential owner isolated and retains a corrupt bundle without sending partial content", async () => {

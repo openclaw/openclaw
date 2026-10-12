@@ -16,28 +16,21 @@ import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
-import {
-  openTelegramIngressQueue,
-  resolveTelegramIngressSpoolDir,
-  resolveTelegramUpdateId,
-} from "./telegram-ingress-spool.js";
+import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
 
-async function withTempState<T>(
-  fn: (stateDir: string, spoolDir: string) => Promise<T>,
-): Promise<T> {
+async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-spool-"));
-  const spoolDir = resolveTelegramIngressSpoolDir({
-    accountId: "acct",
-    env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
-  });
-  const openKeyedStore = <StoreValue>(
+  const openKeyedStoreV2 = <StoreValue>(
     options: Parameters<typeof createPluginStateKeyedStoreForTests<StoreValue>>[1],
-  ) => createPluginStateKeyedStoreForTests<StoreValue>("telegram", options);
+  ) =>
+    createPluginStateKeyedStoreForTests<StoreValue>("telegram", options).withCurrent({
+      assertCurrent: () => {},
+    });
   setTelegramRuntime({
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     state: {
       resolveStateDir: () => stateDir,
-      openKeyedStore,
+      openKeyedStoreV2,
       openSyncKeyedStore: <StoreValue>(
         options: Parameters<typeof createPluginStateSyncKeyedStoreForTests<StoreValue>>[1],
       ) => createPluginStateSyncKeyedStoreForTests<StoreValue>("telegram", options),
@@ -47,7 +40,7 @@ async function withTempState<T>(
     },
   } as never);
   try {
-    return await fn(stateDir, spoolDir);
+    return await fn(stateDir);
   } finally {
     clearTelegramRuntimeForTest();
     await closeOpenClawStateDatabaseAsync();
@@ -64,7 +57,7 @@ afterEach(async () => {
 
 describe("telegram ingress spool ordering", () => {
   it("keeps a poll vote ahead of a later message from the same topic", async () => {
-    await withTempState(async (_stateDir, spoolDir) => {
+    await withTempState(async (stateDir) => {
       await recordTelegramPollRegistryEntry({
         accountId: "acct",
         pollId: "poll-topic-order",
@@ -103,7 +96,7 @@ describe("telegram ingress spool ordering", () => {
       }
       const dispatchOrder: number[] = [];
       const onError = vi.fn();
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ accountId: "acct", stateDir });
       const monitor = createTelegramIngressMonitor({
         queue,
         getConfig: () => ({ channels: { telegram: { groupPolicy: "open" } } }) as OpenClawConfig,
@@ -161,7 +154,7 @@ describe("telegram ingress spool ordering", () => {
   });
 
   it("fences a pending poll vote to its topic without blocking unrelated admission", async () => {
-    await withTempState(async (_stateDir, spoolDir) => {
+    await withTempState(async (stateDir) => {
       const entry = {
         pollId: "poll-pending-topic",
         chat: {
@@ -207,7 +200,7 @@ describe("telegram ingress spool ordering", () => {
         },
       };
       const dispatchOrder: number[] = [];
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ accountId: "acct", stateDir });
       const monitor = createTelegramIngressMonitor({
         queue,
         getConfig: () => ({ channels: { telegram: { groupPolicy: "open" } } }) as OpenClawConfig,

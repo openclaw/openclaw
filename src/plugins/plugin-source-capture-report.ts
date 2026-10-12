@@ -2,9 +2,15 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { walkDirectory } from "../infra/fs-safe.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import type { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { prunePluginNativeCaptureDirectories } from "./plugin-source-capture-directory.js";
 import { isLegacyPluginSourceCaptureName } from "./plugin-source-capture-path.js";
 
 type LegacyCapture = {
@@ -155,6 +161,10 @@ export async function pruneLegacyPluginSourceCaptures(
           skipped.push({ path: root.path, reason: "capture inspection is incomplete" });
           continue;
         }
+        if (process.getuid && current.identity.uid !== process.getuid()) {
+          skipped.push({ path: root.path, reason: "owned by another UID" });
+          continue;
+        }
         if (current.changedAtMs >= performance.timeOrigin) {
           skipped.push({
             path: root.path,
@@ -185,4 +195,69 @@ export async function pruneLegacyPluginSourceCaptures(
     }
   }
   return { removed, skipped, warnings, blockedReason };
+}
+
+/** Durable native payload is reclaimed only against current receipts under maintenance. */
+export async function pruneUnreferencedPluginNativeCaptures(
+  stateDir: string,
+  assertCurrent: () => void | Promise<void>,
+  env?: NodeJS.ProcessEnv,
+  options: {
+    startup?: boolean;
+    installedIndex?: Awaited<ReturnType<typeof preparePersistedInstalledPluginIndexCacheEntry>>;
+  } = {},
+) {
+  const assertCleanupCurrent = async () => {
+    await assertCurrent();
+    options.installedIndex?.assertCurrent();
+  };
+  try {
+    await assertCleanupCurrent();
+    let state = options.installedIndex?.entry.state;
+    if (!state) {
+      const row = await readPluginMetadataStateRow(
+        "installed-index",
+        resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
+      );
+      await assertCleanupCurrent();
+      state = row
+        ? { status: "present", value: JSON.parse(row.value_json) }
+        : { status: "missing" };
+    }
+    const retainedPaths = new Set<string>();
+    if (state.status !== "missing") {
+      const payload: unknown = state.status === "present" ? state.value : undefined;
+      const rawIndex = isRecord(payload) ? payload.index : undefined;
+      const index = parseInstalledPluginIndex(rawIndex);
+      if (!index || !isRecord(rawIndex) || !Array.isArray(rawIndex.plugins)) {
+        throw new Error("Installed plugin index is invalid; native captures were preserved.");
+      }
+      for (const [position, plugin] of index.plugins.entries()) {
+        const rawPlugin: unknown = rawIndex.plugins[position];
+        if (
+          isRecord(rawPlugin) &&
+          rawPlugin.sourceAdmissions !== undefined &&
+          !plugin.sourceAdmissions
+        ) {
+          throw new Error("Plugin native admission receipts are invalid; captures were preserved.");
+        }
+        for (const receipt of Object.values(plugin.sourceAdmissions ?? {})) {
+          for (const namespace of Object.values(receipt.nativeNamespaces)) {
+            retainedPaths.add(path.join(path.resolve(namespace.capturedRoot), "content"));
+          }
+          for (const artifact of Object.values(receipt.nativeArtifacts)) {
+            retainedPaths.add(path.resolve(artifact.capturedPath));
+          }
+        }
+      }
+    }
+    return await prunePluginNativeCaptureDirectories(
+      stateDir,
+      retainedPaths,
+      assertCleanupCurrent,
+      { startup: options.startup },
+    );
+  } catch (error) {
+    return { removed: [], warnings: [`Native capture cleanup skipped: ${String(error)}`] };
+  }
 }

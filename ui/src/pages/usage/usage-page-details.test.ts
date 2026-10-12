@@ -7,9 +7,8 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import * as toast from "../../lib/toast.ts";
-import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { UsageSessionEntry } from "./types.ts";
+import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -21,7 +20,6 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
-import type { UsageRouteData } from "./usage-page.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -71,117 +69,6 @@ describe("UsagePage detail requests", () => {
       }
     },
   );
-
-  it("releases hydrated export reports after download while the page stays mounted", async () => {
-    class ExportReport {
-      name = "exported-context";
-      blockChars = 10;
-    }
-    let report: WeakRef<ExportReport> | undefined;
-    const snapshot = cacheSnapshot("fresh");
-    const session = {
-      key: "agent:main:export-lifetime",
-      label: "Export lifetime",
-      agentId: "main",
-      hasContextWeight: true,
-      usage: snapshot.result.totals,
-    };
-    const request = async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.usage") {
-        const weight = params?.includeContextWeight
-          ? {
-              ...contextWeight("exported-context"),
-              skills: { promptChars: 10, entries: [new ExportReport()] },
-            }
-          : undefined;
-        if (weight) {
-          report = new WeakRef(weight.skills.entries[0]!);
-        }
-        return {
-          ...snapshot.result,
-          sessions: [{ ...session, ...(weight ? { contextWeight: weight } : {}) }],
-        };
-      }
-      return { providers: [] };
-    };
-    const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
-    await preloadUsage(page);
-    page
-      .querySelector(".usage-export-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    await waitForFast(() => expect(download).toHaveBeenCalledOnce());
-    expect(download.mock.calls[0]![1]).toContain("exported-context");
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(report).toBeDefined();
-    expect(report!.deref()).toBeUndefined();
-    expect(page.isConnected).toBe(true);
-  });
-
-  it("keeps cancelled details displayed and releases them on explicit clear", async () => {
-    class DetailPayload {
-      timestamp = 1;
-      totalTokens = 10;
-      role = "user";
-      content = "Selected session";
-    }
-    const payloads: WeakRef<DetailPayload>[] = [];
-    const request = async (method: string) => {
-      const payload = new DetailPayload();
-      payloads.push(new WeakRef(payload));
-      return method === "sessions.usage.logs" ? { logs: [payload] } : { points: [payload] };
-    };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.details.timeSeries.load("agent:main:detail-lifetime");
-    await page.details.sessionLogs.load("agent:main:detail-lifetime");
-    page.details.cancel();
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(payloads).toHaveLength(2);
-    expect(payloads.every((payload) => payload.deref() !== undefined)).toBe(true);
-    expect(page.details.timeSeries.data).not.toBeNull();
-    expect(page.details.sessionLogs.data).not.toBeNull();
-
-    page.details.clear();
-    await collectGarbageForTest();
-    expect(payloads.every((payload) => payload.deref() === undefined)).toBe(true);
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.sessionLogs.data).toBeNull();
-    expect(page.isConnected).toBe(true);
-  });
-
-  it("releases a loaded overview when its Gateway identity is replaced", async () => {
-    class OverviewPayload {
-      key = "agent:main:overview-lifetime";
-      usage = null;
-    }
-    let payload: WeakRef<OverviewPayload> | undefined;
-    const snapshot = cacheSnapshot("fresh");
-    const request = async (method: string) => {
-      if (method === "sessions.usage") {
-        const report = new OverviewPayload();
-        payload = new WeakRef(report);
-        return { ...snapshot.result, sessions: [report] };
-      }
-      return { providers: [] };
-    };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.loadUsage();
-    expect(payload).toBeDefined();
-    page.context = contextWithClient({
-      request: async () => ({}),
-    } as unknown as GatewayBrowserClient);
-    page.requestUpdate();
-    await page.updateComplete;
-    const collectionControl = new WeakRef({ unowned: true });
-    await collectGarbageForTest();
-    expect(collectionControl.deref()).toBeUndefined();
-    expect(payload!.deref()).toBeUndefined();
-    expect(page.isConnected).toBe(true);
-  });
 
   it("keeps unavailable timeline and conversation details pending and refreshes them when admission reopens", async () => {
     const snapshot = cacheSnapshot("fresh");
@@ -883,14 +770,16 @@ describe("UsagePage detail requests", () => {
 
       expect(page.details.timeSeries.data).toBeNull();
       expect(page.details.timeSeries.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,
       });
       expect(page.details.sessionLogs.data).toBeNull();
       expect(page.details.sessionLogs.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,

@@ -79,7 +79,3 @@ export function extractAgentRunTerminalError(result: AgentRunResultView): string
     (outcome.status === "timeout" ? "Inference timed out." : `Inference ${outcome.reason}.`)
   );
 }
-
-export function agentRunHasVisibleReply(result: AgentRunResultView): boolean {
-  return Boolean(extractAgentRunText(result));
-}

@@ -1,10 +1,55 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  attestCodexThreadToolSurface,
   checkCodexThreadAppAvailability,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import type { v2 } from "./protocol.js";
+import { createClientHarness } from "./test-support.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+
+describe("Codex thread tool-surface admission", () => {
+  it.each(["current", "superseded", "aborted"] as const)(
+    "skips durable admission for an empty unrestricted surface (%s)",
+    async (state) => {
+      const h = createClientHarness();
+      const failure = new Error("attempt is no longer current");
+      const controller = new AbortController();
+      const withCurrent = vi.fn(async (consume: () => void) => consume());
+      const assertCurrent = vi.fn(() => {
+        if (state === "superseded") {
+          throw failure;
+        }
+      });
+      if (state === "aborted") {
+        controller.abort(failure);
+      }
+      try {
+        const attestation = attestCodexThreadToolSurface({
+          client: h.client,
+          threadId: "thread-empty",
+          appIds: [],
+          restrictedToolSurface: false,
+          lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+          signal: controller.signal,
+          assertCurrent,
+          withCurrent,
+        });
+        if (state === "current") {
+          await expect(attestation).resolves.toBeUndefined();
+          expect(assertCurrent).toHaveBeenCalledOnce();
+        } else {
+          await expect(attestation).rejects.toBe(failure);
+        }
+        expect(withCurrent).not.toHaveBeenCalled();
+        expect(h.writes).toHaveLength(0);
+      } finally {
+        h.client.close();
+      }
+    },
+  );
+});
 
 describe("Codex thread app availability", () => {
   afterEach(() => vi.restoreAllMocks());

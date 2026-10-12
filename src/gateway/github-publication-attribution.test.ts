@@ -20,8 +20,8 @@ import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { setUserPreferences } from "../state/user-preferences.js";
-import { syncGitHubIdentity } from "../state/user-profiles.js";
+import { setUserPreferences } from "../state/user-preferences.test-support.js";
+import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import * as publicationExecutor from "./github-publication-executor.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
@@ -136,8 +136,8 @@ describe("Gateway GitHub publication attribution", () => {
             .mockImplementation((params) =>
               execute({
                 ...params,
-                recordEffect: (effect, observed) => {
-                  params.recordEffect?.(effect, observed);
+                recordEffect: async (effect, observed) => {
+                  await params.recordEffect?.(effect, observed);
                   if (effect === boundary && observed === undefined) {
                     optOut();
                   }
@@ -154,8 +154,8 @@ describe("Gateway GitHub publication attribution", () => {
                 ...params,
                 execution: {
                   ...params.execution,
-                  recordEffect: (effect, observed) => {
-                    params.execution.recordEffect(effect, observed);
+                  recordEffect: async (effect, observed) => {
+                    await params.execution.recordEffect(effect, observed);
                     if (effect === boundary && observed === undefined) {
                       optOut();
                     }
@@ -301,6 +301,7 @@ describe("Gateway GitHub publication attribution", () => {
     const childKey = "agent:main:subagent:delegated-publication";
     const child = await createInitialSubagentSession({
       cfg: config,
+      requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey: childKey,
       incognito: false,
@@ -336,7 +337,7 @@ describe("Gateway GitHub publication attribution", () => {
       createdAt: 1,
       lastActiveAt: 1,
     };
-    insertRegistryWorktree(process.env, worktree);
+    await insertRegistryWorktree(process.env, worktree);
     mocks.findWorktree.mockReturnValue(worktree);
     mocks.findWorktreeById.mockReturnValue(worktree);
     mocks.resolveRepository.mockResolvedValue({

@@ -3,11 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   claimDeliveryQueueEntryPlatformSendInDatabase,
   renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
@@ -52,7 +50,10 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   let fixtureCount = 0;
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-"));
+    fixtureRoot = fs.realpathSync.native(
+      // openclaw-temp-dir: allow suite-owned queues drain their agent stores before removal
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-")),
+    );
   });
 
   beforeEach(() => {
@@ -61,17 +62,15 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   });
 
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      tmpDir = "";
-    }
+    await closeStateDatabaseForTest();
+    tmpDir = "";
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    if (fixtureRoot) {
+      await closeOpenClawAgentDatabasesAsync(fixtureRoot);
+    }
+    await closeStateDatabaseForTest();
     if (!fixtureRoot) {
       return;
     }
@@ -194,3 +193,10 @@ export function createRecoveryLog(): RecoveryLogger & {
 export function asDeliverFn(deliver: ReturnType<typeof vi.fn>): DeliverFn {
   return deliver as DeliverFn;
 }
+
+export const RECOVERY_SUMMARY = {
+  empty: { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  failed: { recovered: 0, failed: 1, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
+} as const;

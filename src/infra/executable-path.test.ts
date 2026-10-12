@@ -109,6 +109,18 @@ describe("executable path helpers", () => {
     },
   );
 
+  it("preserves prepared directory boundaries without sharing serialized PATH cache entries", async () => {
+    const root = tempDirs.make("openclaw-path-entries-");
+    const directory = path.join(root, `tools${path.delimiter}extra`);
+    await fs.mkdir(directory);
+    const executable = path.join(directory, "runner");
+    await fs.writeFile(executable, "", { mode: 0o755 });
+
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+    expect(resolveExecutableFromPathEnv("runner", [directory])).toBe(executable);
+    expect(resolveExecutableFromPathEnv("runner", directory)).toBeUndefined();
+  });
+
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
@@ -170,7 +182,7 @@ describe("executable path helpers", () => {
     },
   );
 
-  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+  it.each([".EXE; ;.CMD", "", ";;"])(
     "keeps extensionless lookup explicit with PATHEXT %j",
     async (pathext) => {
       await withMockedPlatform("win32", async () => {

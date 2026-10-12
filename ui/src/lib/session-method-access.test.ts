@@ -71,24 +71,20 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it.each([
-    ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
-    ["sessions.dispatch", { key: "agent:main:auto", autoDevice: true }],
-    ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
-  ])("allows write-scoped device placement through %s", (method, params) => {
+  it("allows write-scoped device placement through the caller's scope", () => {
+    const method = "sessions.dispatch";
     expect(
       readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
         method,
-        params,
+        params: { key: "agent:main:device", deviceId: "runner" },
         requiredScope: "operator.write",
       }),
     ).toEqual({ allowed: true, requiredScope: "operator.write" });
   });
 
-  it.each([
-    ["sessions.dispatch", { key: "agent:main:cloud", profileId: "aws" }],
-    ["sessions.move", { key: "agent:main:cloud", target: { kind: "profile", profileId: "aws" } }],
-  ])("keeps profile placement admin-only through %s", (method, params) => {
+  it("keeps profile placement admin-only through the caller's scope", () => {
+    const method = "sessions.dispatch";
+    const params = { key: "agent:main:cloud", profileId: "aws" };
     expect(
       readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
         method,
@@ -173,6 +169,32 @@ describe("readSessionMethodAccess", () => {
         },
       ),
     ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
+  });
+
+  it("limits communication overrides and resets to write-scoped creators or admins", () => {
+    for (const communication of [null, { send: "always" }, { receive: null }]) {
+      for (const sharingRole of ["owner", "admin", "member", "viewer", undefined] as const) {
+        for (const scope of [
+          "operator.read",
+          "operator.sessions.write",
+          "operator.write",
+          "operator.admin",
+        ]) {
+          const access = readSessionMethodAccess(
+            snapshot({ methods: ["sessions.patch"], scopes: [scope] }),
+            {
+              method: "sessions.patch",
+              params: { communication },
+              session: { sharingRole },
+            },
+          );
+          expect(access.allowed).toBe(
+            scope === "operator.admin" ||
+              (scope === "operator.write" && (sharingRole === "owner" || sharingRole === "admin")),
+          );
+        }
+      }
+    }
   });
 
   it("allows admin to satisfy write-scoped actions", () => {

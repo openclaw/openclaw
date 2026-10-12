@@ -12,18 +12,14 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
-function buildCurrentCliEntryArgs(): string[] {
+function buildTuiCliArgs(opts: TuiOptions): string[] {
   const entry = process.argv[1]?.trim();
   if (!entry) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
-  return path.isAbsolute(entry) ? [entry] : [];
-}
-
-function buildTuiCliArgs(opts: TuiOptions): string[] {
   const args = [
     ...filterOpenClawChildExecArgv(process.execArgv),
-    ...buildCurrentCliEntryArgs(),
+    ...(path.isAbsolute(entry) ? [entry] : []),
     "tui",
   ];
   if (opts.local) {

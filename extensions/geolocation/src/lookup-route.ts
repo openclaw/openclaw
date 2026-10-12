@@ -2,16 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { GeolocationSettings } from "./config.js";
-import type { GeolocationDatabase } from "./database-store.js";
-import { projectGeolocationRecord } from "./lookup.js";
-
-type RouteDeps = {
-  loadDatabase: () => Promise<GeolocationDatabase>;
-  settings: GeolocationSettings;
-  logger?: { warn: (msg: string) => void };
-};
+import type { GeolocationLookup } from "./lookup.js";
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -22,7 +13,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-export function createGeolocationLookupHandler(deps: RouteDeps) {
+export function createGeolocationLookupHandler(lookup: GeolocationLookup) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.endsWith("/lookup")) {
@@ -33,28 +24,18 @@ export function createGeolocationLookupHandler(deps: RouteDeps) {
       sendJson(res, 400, { error: "ip must be a valid IPv4 or IPv6 address" });
       return true;
     }
-    // Private, loopback, link-local, and carrier-grade-NAT addresses are absent
-    // from every geolocation database, so answering them here keeps a tailnet or
-    // LAN-only deployment from ever downloading one.
-    if (isPrivateOrLoopbackHost(ip)) {
-      sendJson(res, 200, { found: false, attribution: deps.settings.attribution });
-      return true;
-    }
-    await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
-    try {
-      const database = await deps.loadDatabase();
-      const location = projectGeolocationRecord(database.lookup(ip));
-      sendJson(res, 200, {
-        found: Boolean(location),
-        ...location,
-        attribution: deps.settings.attribution,
-      });
-    } catch (err) {
-      // A missing database is an availability problem, never a lookup answer:
-      // reporting "not found" here would read as "this IP has no location".
-      const message = err instanceof Error ? err.message : String(err);
-      deps.logger?.warn(`geolocation: lookup unavailable: ${message}`);
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const result = await lookup(ip, async () => {
+      await scope?.revalidate?.();
+    });
+    if (result.status === "unavailable") {
       sendJson(res, 503, { error: "geolocation database unavailable" });
+    } else {
+      const { ip: _ip, status, ...location } = result;
+      sendJson(res, 200, {
+        found: status === "found",
+        ...location,
+      });
     }
     return true;
   };

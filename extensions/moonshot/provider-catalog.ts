@@ -1,4 +1,3 @@
-// Moonshot provider module implements model/runtime integration.
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,

@@ -18,7 +18,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   return {
     ...actual,
     readSessionResetRecallCutoff: vi.fn(async () => ({ state: "absent" })),
-    loadArchivedSessions: vi.fn(() => []),
+    loadArchivedSessionsAsync: vi.fn(async () => []),
   };
 });
 
@@ -39,8 +39,8 @@ describe("reset-generation session search visibility", () => {
     vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
     vi.mocked(engineSessions.readSessionResetRecallCutoff).mockReset();
     vi.mocked(engineSessions.readSessionResetRecallCutoff).mockResolvedValue({ state: "absent" });
-    vi.mocked(engineSessions.loadArchivedSessions).mockReset();
-    vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([]);
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockReset();
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockResolvedValue([]);
     combinedSessionStore = {};
   });
 
@@ -56,7 +56,7 @@ describe("reset-generation session search visibility", () => {
         { chatType: "direct" },
       ),
     };
-    vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockResolvedValue([
       { agentId: "main", archiveName, sessionId: archivedSessionId, sessionKey, createdAt: 1 },
     ]);
     const hit: MemorySearchResult = searchHit(
@@ -67,18 +67,49 @@ describe("reset-generation session search visibility", () => {
 
     await expect(
       filterMemorySearchHitsBySessionVisibility({
-        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
+        cfg: asOpenClawConfig({
+          session: { store: "/tmp/memory-search-archive-test/sessions.json" },
+          tools: { sessions: { visibility: "self" } },
+        }),
         agentId: "main",
         requesterSessionKey: sessionKey,
         sandboxed: false,
         hits: [hit],
       }),
     ).resolves.toEqual([hit]);
-    expect(engineSessions.loadArchivedSessions).toHaveBeenCalledWith({
+    expect(engineSessions.loadArchivedSessionsAsync).toHaveBeenCalledWith({
       agentId: "main",
       archiveNames: [archiveName],
-      storePath: "(test)",
+      storePath: "/tmp/memory-search-archive-test/sessions.json",
     });
+  });
+
+  it("rechecks private conversation metadata after awaiting archive inventory", async () => {
+    const sessionKey = "agent:main:telegram:direct:owner";
+    const archiveName = "previous.jsonl.reset.2026-08-11T08-00-00.000Z";
+    combinedSessionStore = {
+      [sessionKey]: sessionEntry("current", 2, "/tmp/current.jsonl", { chatType: "direct" }),
+    };
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockImplementationOnce(async () => {
+      combinedSessionStore = {
+        [sessionKey]: sessionEntry("current", 3, "/tmp/current.jsonl", { chatType: "group" }),
+      };
+      return [{ agentId: "main", archiveName, sessionId: "previous", sessionKey, createdAt: 1 }];
+    });
+    await expect(
+      filterMemorySearchHitsBySessionVisibility({
+        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
+        agentId: "main",
+        requesterSessionKey: sessionKey,
+        sandboxed: false,
+        hits: [searchHit(`sessions/main/${archiveName}`, "sessions", "private context")],
+        conversationRecall: {
+          anchorSessionKey: sessionKey,
+          scope: "same-agent-private",
+          corpus: "sessions",
+        },
+      }),
+    ).resolves.toEqual([]);
   });
 
   it.each([

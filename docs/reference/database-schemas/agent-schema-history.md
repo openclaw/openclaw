@@ -8,31 +8,166 @@ title: "Agent schema history"
 
 ## Agent schema history
 
-| Version | Change                                                                                                                                                                                                                                                 | First release                                   |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                    | `v2026.5.30-beta.1`, stable through `v2026.7.1` |
-| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                 | `v2026.7.2-beta.1`                              |
-| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                   | `v2026.7.2-beta.1`                              |
-| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                        | `v2026.7.2-beta.2`                              |
-| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                          | `v2026.7.2-beta.2`                              |
-| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                     | Unreleased                                      |
-| 11      | Durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | Unreleased                                      |
-| 12      | Session-owned ACP parent-stream events                                                                                                                                                                                                                 | Unreleased                                      |
-| 13      | Durable transcript rewrite watermarks                                                                                                                                                                                                                  | Unreleased                                      |
-| 14      | Logical session nodes, generation windows, and node-owned artifact foreign keys                                                                                                                                                                        | Unreleased                                      |
-| 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
-| 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
-| 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
-| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
-| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
-| 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | Unreleased                                      |
-| 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
-| 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | Unreleased                                      |
-| 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | Unreleased                                      |
+**Published in** names the first stable release tag containing each change,
+or the first beta tag when no stable release contains it yet. Several schema
+changes can first ship together in a release that writes a higher version.
+`Unreleased` is reserved for changes absent from both stable and beta tags.
+Use the target release's history when planning an upgrade: the installed
+version's `openclaw update --dry-run` does not reveal the target's migration plan.
+Older builds refuse newer schemas; rollback requires the verified pre-upgrade
+backup and its matching build, not just reinstalling the older package.
 
-Version 3 was an unshipped development step folded into version 4.
+| Version | Change                                                                                                                                                                                                                                                 | Published in |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                    | `v2026.6.1`  |
+| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                    | `v2026.8.1`  |
+| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                 | `v2026.8.1`  |
+| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                   | `v2026.8.1`  |
+| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                    | `v2026.8.1`  |
+| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                        | `v2026.8.1`  |
+| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                          | `v2026.8.1`  |
+| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                     | `v2026.8.1`  |
+| 11      | Durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | `v2026.8.1`  |
+| 12      | Session-owned ACP parent-stream events                                                                                                                                                                                                                 | `v2026.8.1`  |
+| 13      | Durable transcript rewrite watermarks                                                                                                                                                                                                                  | `v2026.8.1`  |
+| 14      | Logical session nodes, generation windows, and node-owned artifact foreign keys                                                                                                                                                                        | `v2026.8.1`  |
+| 15      | Board and session-sharing tables                                                                                                                                                                                                                       | `v2026.8.1`  |
+| 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | `v2026.8.1`  |
+| 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | `v2026.8.1`  |
+| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | `v2026.8.1`  |
+| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | `v2026.8.1`  |
+| 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | `v2026.9.5`  |
+| 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | `v2026.9.5`  |
+| 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | `v2026.9.6`  |
+| 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | `v2026.9.6`  |
+| 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | `v2026.9.7`  |
+| 25      | Canonical writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                        | `Unreleased` |
+| 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
+
+Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
+extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
+intermediates whose changes first shipped with schema 8 in `v2026.7.2-beta.1`.
+Version 3 was an unshipped development step folded into version 4. Schema 9
+first appeared in `v2026.7.2-beta.2`.
+
+Shipped schema-1 agent databases contain cache, auth, and memory data, not SQLite
+session tables. Their upgrades remain supported under the [July retention
+policy](/gateway/doctor/config-migrations#retention-policy). The earlier
+development layouts with session tables and a schema version below 8, the
+`session_transcript_files` cache, and the session-key-based transcript search
+index are no longer migrated. Doctor preserves those databases and refuses before
+repair. Preserve a complete copy of the state directory and configuration,
+including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
+`2026.9.7` against that copy. If Doctor holds a store because its ownership cannot
+be verified, follow the explicit agent-restoration instructions it reports, then
+rerun Doctor before upgrading the copy. Schema-8 and later session migrations
+remain supported.
+
+### JSON predicate columns
+
+Agent schema **26** promotes query fields from canonical JSON into `TEXT` and
+`INTEGER` columns. Session nodes record the session start time and whether optional
+history references are present. Transcript events record navigation type, custom
+type, display visibility, message role, and the last type/custom-type member used
+by legacy navigation; a validity flag preserves the existing malformed-input path.
+The context-engine turn outbox records its payload state. Shared TypeScript
+derivations populate these fields in the same statement as each JSON write.
+The session actor uses the same session derivation.
+
+The migration classifies every existing row once in its owning agent database's
+transaction, preserving canonical JSON and compressed transcript bytes. SQLite
+classification retains first-member JSON lookup and last-member legacy navigation
+semantics. Optional outbox tables remain absent until first use. Fresh and
+incognito databases start at schema 26. Later opens reuse admitted schema facts;
+runtime predicates do not fall back to JSON or re-run the backfill.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/169254) keeps
+predicate types portable and uses the same derivations for future engine adapters.
+PostgreSQL bootstrap DDL is generated from the canonical schema; an engine that
+supports this database must provide each forward migration under the same version.
+Size-limiting JSON projections and current writer-authority checks keep their
+existing owners and semantics.
+
+Schema 25 and older builds refuse schema 26. Rollback requires restoring the
+verified pre-migration backup with its matching build; never lower either version
+marker. Update-time Doctor retains its private rehearsal and verified backup
+requirements for older update drivers. First-upgrade cost scales with retained
+rows in each agent database and the number of databases on a host; implementation
+proof records both measurements.
+
+### Canonical writer validation
+
+Agent schema **25** retires the three `entry_valid` reset triggers and the nine
+node, window, and main-key canonical-validation triggers. The canonical session
+writer validates its serialized row before persisting it and writes the final
+validity value directly. Ordinary writes leave no pending validation marker and
+need no post-write row reread or validity update.
+
+`session_canonical_validation_pending` remains a derived admission queue.
+Offline imports, Doctor repairs, and main-key policy changes explicitly queue
+affected keys and revoke the canonical receipt. Gateway startup applies policy
+changes before readiness; external imports and repairs require exclusive
+maintenance custody while the Gateway is stopped. Other processes cannot write
+session tables alongside the Gateway. Live-authority checks remain with the
+existing effect and transaction owners.
+
+Doctor retains its backed-up orphan-window repair for both schemas 24 and 25
+before migration or the full migration backup. It validates the exact historical
+schema and removes only windows without a logical node, preserving their original
+history in the repair backup. Older media migrations use the same historical
+schema owner as the database upgrader.
+
+The migration checks the previous schema before retiring its triggers, seeds
+every existing node, and clears the persisted canonical receipt in the same
+transaction as both version markers. Admission then validates imported rows,
+including rows whose old pending table was empty. Invalid rows still require
+Doctor repair. Failed publication rolls back the trigger retirement, pending
+work, receipt change, and schema markers together. The migration preserves
+canonical session and transcript payloads; retention, permissions, and durability
+are unchanged.
+
+Schema 24 and older builds refuse schema 25. Binary rollback requires restoring
+the verified pre-upgrade backup with its matching older build and loses later
+writes; manually lowering version markers is unsupported. Published updaters use
+the existing [schema migration handoff](/reference/database-schemas/versioning#schema-bumps-and-older-updaters).
+
+### Session hot facts and snapshots
+
+Agent schema **24** keeps exact hot session facts in `session_nodes.entry_json`
+and moves `sessionDiffBaseline`, `skillsSnapshot`, and `systemPromptReport` into
+`session_entry_snapshots`, keyed by session key and field. Existing indexed
+columns remain query projections; they do not replace canonical values such as
+the distinct `interrupted` status. Full entry consumers select hot facts and
+requested snapshot columns in one SQLite statement. List and resident projection
+readers select only hot facts. Public full-entry reads retain their existing shape.
+
+The entry writer retains policy, lifecycle, and publication ownership. It writes
+only changed snapshot values, in the same transaction as the hot entry. Snapshot
+table triggers advance the node's `snapshot_revision`, including raw SQL changes;
+prepared mutations compare that revision before reusing their original snapshot.
+Rollback restores both data and revision. Existing cache revisions and foreign
+commit checks remain authoritative. Cached hot facts are immutable; internal
+borrowers share them while public mutable readers receive detached values.
+
+The existing startup/Doctor schema owner extracts the three fields in bounded
+keyed batches and commits the representation change with both schema markers.
+Malformed or identity-mismatched entries remain unchanged for Doctor repair.
+Snapshot JSON retains JavaScript parsing semantics, including values beyond
+SQLite's JSON nesting limit. Transcript bytes, pending inputs, progress cards,
+retention, and permissions are unchanged. Deleting a logical node cascades its
+snapshots; clearing an entry while retaining transcript windows clears its
+snapshots too. Doctor repair/import and full-entry copy consumers preserve the
+selected entry's snapshots.
+
+This is a versioned representation change under the
+[material-change checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+The accepted storage split and migration are recorded in
+[#160358](https://github.com/openclaw/openclaw/pull/160358).
+Use the existing verified backup and candidate Doctor update flow, including the
+[published updater migration rules](/reference/database-schemas/versioning#schema-bumps-and-older-updaters).
+Interrupted extraction rolls back. Older builds refuse schema 24; rollback
+requires the pre-upgrade database backup and matching build, not lower version
+markers. Freed SQLite pages remain available for reuse under existing maintenance.
 
 ### Compact agent payload storage
 
@@ -75,13 +210,21 @@ existing rebuild claims, cursors, active-path rows, and canonical-validation
 pending rows are preserved. The unpublished compressed schema-22 draft is not
 a supported predecessor.
 
-The admitted migration converts one transcript record at a time, verifies each
-compressed frame against its original bytes, preserves row identities and
-timestamps, and commits table replacements with both schema markers. Unknown
-columns or dependencies that a rebuild would discard cause a refusal. Earlier
-supported schemas run their prerequisite migrations first. Conversion needs
-temporary space for old and replacement tables, journal/WAL activity, and the
-verified backup. Freed pages are reusable; a smaller payload does not by itself
+The admitted migration converts one transcript record or memory vector at a time,
+verifies each compressed transcript frame against its original bytes, preserves
+row identities and timestamps, and commits table replacements with both schema
+markers. Memory validation and conversion return from SQLite after each row so
+large legacy embedding caches do not accumulate their JSON strings in the
+JavaScript heap. Cache conversion reads windows of 128 rowids and checks the
+embedding byte length inside SQLite before returning text to JavaScript. Invalid
+JSON vectors and cache embeddings larger than 1 MiB are skipped and rebuilt on
+demand. Doctor records their count and first eight rowids as recoverable warnings;
+these derived cache entries do not block the update. The existing transaction
+retains rollback of an interrupted migration, and an already converted cache is
+not reread on rerun. Unknown columns or dependencies that a rebuild would discard
+cause a refusal. Earlier supported schemas run their prerequisite migrations
+first. Conversion needs temporary space for old and replacement tables,
+journal/WAL activity, and the verified backup. Freed pages are reusable; a smaller payload does not by itself
 shrink the database file. Existing maintenance owns physical reclamation.
 
 Stop all writers and take a verified WAL-aware backup before upgrading. Supported

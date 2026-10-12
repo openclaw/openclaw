@@ -4,11 +4,8 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-// Force the mocked module to load here: the factory below captures the real reader as a
-// side effect, and beforeEach needs that capture. Without this import the factory only ran
-// if some other module in the graph pulled it in first, which is not guaranteed once a
-// shard shares a worker (--isolate=false).
-import "../config/sessions/session-accessor.sqlite-read.js";
+// Install the mocked reader before the Gateway loads its accessor graph.
+import "../config/sessions/session-transcript-stats.js";
 import { rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -20,40 +17,32 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-type ReadTranscriptStatsSync =
-  (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["readTranscriptStatsSync"];
+type ReadTranscriptStatsAsync =
+  (typeof import("../config/sessions/session-transcript-stats.js"))["readTranscriptStatsAsync"];
 
 const transcriptReads = vi.hoisted(() => ({
-  stats: vi.fn<ReadTranscriptStatsSync>(),
+  stats: vi.fn<ReadTranscriptStatsAsync>(),
 }));
 
-vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
+vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
+    await importOriginal<typeof import("../config/sessions/session-transcript-stats.js")>();
   return {
     ...actual,
-    readTranscriptStatsSync: transcriptReads.stats,
+    readTranscriptStatsAsync: transcriptReads.stats,
   };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-// Read the real implementation back here rather than capturing it inside the mock
-// factory: Vitest runs that factory on first import of the mocked module, and this
-// project is `isolate: false`, so on a warm module graph the factory can still be
-// unrun when the first `beforeEach` fires.
-async function actualTranscriptStatsReader(): Promise<ReadTranscriptStatsSync> {
-  const actual = await vi.importActual<
-    typeof import("../config/sessions/session-accessor.sqlite-read.js")
-  >("../config/sessions/session-accessor.sqlite-read.js");
-  return actual.readTranscriptStatsSync;
-}
-
-let realTranscriptStatsReader: ReadTranscriptStatsSync;
+let realTranscriptStatsReader: ReadTranscriptStatsAsync;
 
 beforeEach(async () => {
   transcriptReads.stats.mockReset();
-  realTranscriptStatsReader = await actualTranscriptStatsReader();
+  const actual = await vi.importActual<
+    typeof import("../config/sessions/session-transcript-stats.js")
+  >("../config/sessions/session-transcript-stats.js");
+  realTranscriptStatsReader = actual.readTranscriptStatsAsync;
   transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
 });
 
@@ -103,18 +92,13 @@ async function seedCompactionSession(params: {
 const transcriptReadError = () =>
   new Error("SQLITE_IOERR: failed to read session transcript storage");
 
-/**
- * Injects the read failure for one seeded session instead of the next global call.
- * `--isolate=false` shares a worker, so any sibling transcript read can consume a
- * `*Once` mock before the compaction RPC issues its own and the failure silently
- * disappears. Keying on sessionId makes the injection independent of call order.
- */
+// Background reads must not consume the failure intended for the compaction RPC.
 function failTranscriptStatsForSession(
   sessionId: string,
-  options?: { succeedFirstWith: ReturnType<ReadTranscriptStatsSync> },
+  options?: { succeedFirstWith: Awaited<ReturnType<ReadTranscriptStatsAsync>> },
 ): void {
   let sessionReads = 0;
-  transcriptReads.stats.mockImplementation((scope) => {
+  transcriptReads.stats.mockImplementation(async (scope) => {
     if (scope.sessionId !== sessionId) {
       return realTranscriptStatsReader(scope);
     }
@@ -141,7 +125,7 @@ test.each([
     const scope = await seedCompactionSession({ sessionId, storePath, nativeHarness });
     failTranscriptStatsForSession(
       sessionId,
-      nativeHarness ? { succeedFirstWith: realTranscriptStatsReader(scope) } : undefined,
+      nativeHarness ? { succeedFirstWith: await realTranscriptStatsReader(scope) } : undefined,
     );
 
     const { ws } = await openClient();
@@ -162,29 +146,48 @@ test.each([
   },
 );
 
-test.each([{ maxLines: undefined }, { maxLines: 50 }])(
-  "sessions.compact keeps an empty transcript as a successful no-op (maxLines=$maxLines)",
-  async ({ maxLines }) => {
-    const { storePath } = await createSessionStoreDir();
-    await seedCompactionSession({
-      sessionId: `sess-empty-${maxLines ?? "model"}`,
-      storePath,
-      withTranscript: false,
-    });
+test("sessions.compact keeps an empty transcript as a successful no-op", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedCompactionSession({
+    sessionId: "sess-empty-model",
+    storePath,
+    withTranscript: false,
+  });
 
+  const { ws } = await openClient();
+  try {
+    const response = await rpcReq<{ compacted: boolean; ok: true; reason: string }>(
+      ws,
+      "sessions.compact",
+      { key: "main" },
+    );
+
+    expect(response.ok).toBe(true);
+    expect(response.payload).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no transcript",
+    });
+  } finally {
+    ws.close();
+  }
+});
+
+test.each([undefined, 2])(
+  "sessions.compact rejects a missing session with maxLines=%s",
+  async (maxLines) => {
+    await createSessionStoreDir();
     const { ws } = await openClient();
     try {
-      const response = await rpcReq<{ compacted: boolean; ok: true; reason: string }>(
-        ws,
-        "sessions.compact",
-        { key: "main", ...(maxLines === undefined ? {} : { maxLines }) },
-      );
+      const response = await rpcReq(ws, "sessions.compact", {
+        key: "agent:main:missing",
+        ...(maxLines === undefined ? {} : { maxLines }),
+      });
 
-      expect(response.ok).toBe(true);
-      expect(response.payload).toMatchObject({
-        ok: true,
-        compacted: false,
-        reason: "no transcript",
+      expect(response.ok).toBe(false);
+      expect(response.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("Session agent:main:missing not found"),
       });
     } finally {
       ws.close();

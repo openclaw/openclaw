@@ -205,6 +205,7 @@ describe("thread binding current authority", () => {
         setImmediate(resolve);
       });
       expect(stopped).toBe(false);
+      await expect(manager.touchThread({ threadId: THREAD_ID })).rejects.toThrow("stopping");
       expect(unbindingCompleted).toBe(false);
       expect(touchFailure).toBeUndefined();
       expect(touchCompleted).toBe(true);
@@ -239,8 +240,8 @@ describe("thread binding current authority", () => {
           conversation: {
             channel: "discord",
             accountId: "default",
-            conversationId: PARENT_ID,
-            parentConversationId: PARENT_ID,
+            conversationId: `channel:${PARENT_ID}`,
+            parentConversationId: `channel:${PARENT_ID}`,
           },
           placement: "child",
           metadata: { introText: "Binding ready" },

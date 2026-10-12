@@ -1,8 +1,5 @@
-// Control UI content-security-policy helpers.
-// Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -16,7 +13,11 @@ export function computeInlineScriptHashes(html: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     const openTag = match[0].slice(0, match[0].indexOf(">") + 1);
-    if (hasScriptSrcAttribute(openTag)) {
+    if (
+      Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
+        (attribute) => attribute[1]?.toLowerCase() === "src",
+      )
+    ) {
       continue;
     }
     const content = match[1];
@@ -27,12 +28,6 @@ export function computeInlineScriptHashes(html: string): string[] {
     hashes.push(`sha256-${hash}`);
   }
   return hashes;
-}
-
-function hasScriptSrcAttribute(openTag: string): boolean {
-  return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
-    (match) => normalizeLowercaseStringOrEmpty(match[1]) === "src",
-  );
 }
 
 /** Build the CSP header applied to Gateway-served Control UI HTML. */
@@ -67,19 +62,16 @@ export function buildControlUiCspHeader(opts?: {
     "https://tweakcn.com",
   ];
   if (opts?.portalHost) {
-    try {
-      const parsed = new URL(`http://${opts.portalHost}`);
-      const isHostOnly =
-        !parsed.username &&
-        !parsed.password &&
-        parsed.pathname === "/" &&
-        !parsed.search &&
-        !parsed.hash;
-      if (isHostOnly && parsed.hostname) {
-        connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
-      }
-    } catch {
-      // Invalid Host headers do not relax the baseline policy.
+    const parsed = URL.parse(`http://${opts.portalHost}`);
+    if (
+      parsed?.hostname &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.pathname === "/" &&
+      !parsed.search &&
+      !parsed.hash
+    ) {
+      connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
     }
   }
   return [
@@ -89,7 +81,7 @@ export function buildControlUiCspHeader(opts?: {
     "frame-ancestors 'none'",
     // Gateway selection can move to a remote dedicated MCP Apps origin after
     // this document loads. The component still validates the exact endpoint.
-    "frame-src 'self' http: https:",
+    "frame-src 'self' blob: http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https:",

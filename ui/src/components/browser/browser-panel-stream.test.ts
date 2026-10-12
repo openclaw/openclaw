@@ -227,8 +227,10 @@ describe("Browser panel stream ownership", () => {
     );
     const initial = controller.refreshAll();
     await flush();
-    await vi.advanceTimersByTimeAsync(1500);
+    sockets[0]!.disconnect(1006);
+    await flush();
     expect(calls("/screenshot")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
     const images: EventTarget[] = [];
     vi.stubGlobal(
       "Image",
@@ -240,8 +242,8 @@ describe("Browser panel stream ownership", () => {
         src = "";
       },
     );
-    sockets[0]!.receive(screencastFrame());
-    sockets[0]!.disconnect(1006);
+    sockets[1]!.receive(screencastFrame());
+    sockets[1]!.disconnect(1006);
     screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
     await initial;
     stubScreenshotMedia();
@@ -340,17 +342,17 @@ describe("Browser panel stream ownership", () => {
       );
       const pending = controller.refreshAll();
       await flush();
-      await vi.advanceTimersByTimeAsync(1499);
-      expect(calls("/screenshot")).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(1);
+      sockets[0]!.disconnect(1006);
+      await flush();
       expect(calls("/screenshot")).toHaveLength(1);
-      sockets[0]!.receive(screencastFrame());
+      await vi.advanceTimersByTimeAsync(10_000);
+      sockets[1]!.receive(screencastFrame());
       await flush();
       const streamedView = controller.view;
       expect(streamedView?.dataUrl).toBe("blob:frame-0");
       expect(controller.loading).toBe(false);
       if (closes) {
-        sockets[0]!.disconnect(1006);
+        sockets[1]!.disconnect(1006);
       }
       screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
       await pending;

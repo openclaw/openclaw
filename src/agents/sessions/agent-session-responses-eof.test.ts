@@ -22,15 +22,21 @@ import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+function responseCall(callId: string, args = "", status = "in_progress") {
+  return {
+    type: "function_call",
+    id: `fc_${callId}`,
+    call_id: callId,
+    name: "record",
+    arguments: args,
+    status,
+  };
+}
+
 it.each([
   { failure: "eof", recover: true },
   { failure: "max_output_tokens", recover: true },
-  { failure: "max_output_tokens", responseStatus: "absent", recover: true },
-  ...["completed", "failed", "cancelled", "in_progress", "queued"].map((responseStatus) => ({
-    failure: "max_output_tokens",
-    responseStatus,
-    recover: false,
-  })),
+  { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
   { failure: "unknown", recover: false },
   { failure: "completed", recover: false },
@@ -90,14 +96,7 @@ it.each([
           yield {
             type: "response.output_item.added",
             output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_unfinished",
-              call_id: "unfinished",
-              name: "record",
-              arguments: "",
-              status: "in_progress",
-            },
+            item: responseCall("unfinished"),
           };
           yield {
             type: "response.function_call_arguments.delta",
@@ -111,12 +110,8 @@ it.each([
                 type: "response.output_item.done",
                 output_index: 0,
                 item: {
-                  type: "function_call",
-                  id: "fc_unfinished",
+                  ...responseCall("unfinished", "{}", "completed"),
                   call_id: "different_call",
-                  name: "record",
-                  arguments: "{}",
-                  status: "completed",
                 },
               };
               yield {
@@ -149,14 +144,7 @@ it.each([
                           ],
                     }
                   : beforeConflict === "function"
-                    ? {
-                        type: "function_call",
-                        id: "fc_completed",
-                        call_id: "completed",
-                        name: "record",
-                        arguments: "{}",
-                        status: "completed",
-                      }
+                    ? responseCall("completed", "{}", "completed")
                     : { type: "mcp_call", id: "mcp_completed", status: "completed" };
               if (beforeConflict === "function") {
                 yield { type: "response.output_item.added", output_index: 1, item };
@@ -197,12 +185,8 @@ it.each([
                     : failure === "identity_type"
                       ? { type: "message", id: "msg_conflicting", content: [] }
                       : {
-                          type: "function_call",
-                          id: "fc_unfinished",
+                          ...responseCall("unfinished", "{}", "completed"),
                           call_id: "different_call",
-                          name: "record",
-                          arguments: "{}",
-                          status: "completed",
                         },
                   ...(terminalRefusal
                     ? [
@@ -223,23 +207,9 @@ it.each([
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
                 id: "resp_incomplete",
-                ...(responseStatus === "absent"
-                  ? {}
-                  : {
-                      status:
-                        responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
-                    }),
+                status: responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
                 incomplete_details: { reason: failure },
-                output: [
-                  {
-                    type: "function_call",
-                    id: "fc_unfinished",
-                    call_id: "unfinished",
-                    name: "record",
-                    arguments: '{"value":',
-                    status: "incomplete",
-                  },
-                ],
+                output: [responseCall("unfinished", '{"value":', "incomplete")],
               },
             };
           }
@@ -362,7 +332,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       };
     });
     streamMocks.streamSimple.mockImplementation(
-      (model: Model, context: Context, options: SimpleStreamOptions) => {
+      (model: Model, context: Context, options?: SimpleStreamOptions) => {
         requests.push({ ...context, messages: [...context.messages] });
         const requestNumber = requests.length;
         if (requestNumber > (mode === "exhaust" || mode === "cancel-retry" ? 2 : 1)) {
@@ -380,12 +350,8 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
             type: "response.output_item.done",
             output_index: 0,
             item: {
-              type: "function_call",
-              id: "fc_settled",
+              ...responseCall("settled", "{}", "completed"),
               call_id: `settled-${requestNumber}`,
-              name: "record",
-              arguments: "{}",
-              status: "completed",
               async: true,
             },
           };
@@ -393,14 +359,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
           yield {
             type: "response.output_item.added",
             output_index: 1,
-            item: {
-              type: "function_call",
-              id: "fc_unfinished",
-              call_id: "unfinished",
-              name: "record",
-              arguments: "",
-              status: "in_progress",
-            },
+            item: responseCall("unfinished"),
           };
           yield {
             type: "response.incomplete",
@@ -408,16 +367,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
               id: "resp_incomplete",
               status: "incomplete",
               incomplete_details: { reason: "max_output_tokens" },
-              output: [
-                {
-                  type: "function_call",
-                  id: "fc_unfinished",
-                  call_id: "unfinished",
-                  name: "record",
-                  arguments: '{"value":',
-                  status: "incomplete",
-                },
-              ],
+              output: [responseCall("unfinished", '{"value":', "incomplete")],
             },
           };
         })();
@@ -481,7 +431,10 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       }
       expect(session.getLastAssistantText()).toBe("Recovered using saved result.");
       expect(requests[1]?.messages.filter((message) => message.role === "assistant")).toMatchObject(
-        [{ stopReason: "toolUse", content: [{ type: "toolCall", id: "settled-1|fc_settled" }] }],
+        [
+          { stopReason: "toolUse", content: [{ type: "toolCall", id: "settled-1|fc_settled" }] },
+          { stopReason: "error", content: [], errorCode: "incomplete_tool_call" },
+        ],
       );
       expect(
         requests[1]?.messages.filter((message) => message.role === "toolResult"),
@@ -515,6 +468,55 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       finish.resolve();
       await session.abort();
       await pending;
+    }
+  },
+);
+
+it.each(["", "Partial response before the disconnect"])(
+  "preserves a failed assistant through retry and transcript replay: %j",
+  async (partialText) => {
+    vi.useFakeTimers();
+    try {
+      const requests: Context["messages"][] = [];
+      streamMocks.streamSimple.mockImplementation((model, context) => {
+        requests.push(structuredClone(context.messages));
+        return createAssistantResultStream({
+          ...createAssistant(
+            model,
+            [{ type: "text", text: requests.length === 1 ? partialText : "Recovered response" }],
+            requests.length === 1 ? "error" : "stop",
+          ),
+          ...(requests.length === 1 ? { errorMessage: "HTTP 503 temporary failure" } : {}),
+        });
+      });
+      const { session, sessionManager } = await createTestSession({
+        settingsManager: SettingsManager.inMemory({
+          compaction: { enabled: false },
+          retry: { enabled: true, baseDelayMs: 1, maxRetries: 1 },
+        }),
+      });
+      const run = session.prompt("Original request");
+      await vi.runAllTimersAsync();
+      await run;
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: partialText }],
+          stopReason: "error",
+          errorMessage: "HTTP 503 temporary failure",
+        }),
+      );
+      expect(session.messages).toEqual(sessionManager.buildSessionContext().messages);
+
+      session.dispose();
+      const reopened = await createTestSession({ sessionManager });
+      await reopened.session.prompt("Next request");
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.slice(0, requests[1]?.length)).toEqual(requests[1]);
+    } finally {
+      vi.useRealTimers();
     }
   },
 );

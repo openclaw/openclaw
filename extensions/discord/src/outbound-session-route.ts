@@ -56,7 +56,7 @@ export function resolveDiscordOutboundSessionRoute(
 function resolveDiscordOutboundTargetKindHint(params: {
   target: string;
   resolvedTarget?: { kind: string };
-}): "user" | "channel" | undefined {
+}): "user" | "channel" {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "user";
@@ -65,12 +65,5 @@ function resolveDiscordOutboundTargetKindHint(params: {
     return "channel";
   }
 
-  const target = params.target.trim();
-  if (/^channel:/i.test(target)) {
-    return "channel";
-  }
-  if (/^(user:|discord:|@|<@!?)/i.test(target)) {
-    return "user";
-  }
-  return "channel";
+  return /^(user:|discord:|@|<@!?)/i.test(params.target.trim()) ? "user" : "channel";
 }

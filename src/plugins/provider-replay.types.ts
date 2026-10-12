@@ -25,6 +25,8 @@ export type ProviderReplayPolicy = {
   preserveSignatures?: boolean;
   /** Keep per-turn runtime context in place to preserve signed thinking prefixes. */
   appendOnlyRuntimeContext?: boolean;
+  /** Append system-authority updates instead of rewriting the stable prompt prefix. */
+  inHistorySystemUpdates?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -53,6 +55,8 @@ export type ProviderReplayPolicyContext = {
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  /** Host-resolved model, endpoint, and authentication eligibility. */
+  inHistorySystemUpdates?: boolean;
 };
 
 export type ProviderReplaySessionEntry = {
@@ -60,9 +64,16 @@ export type ProviderReplaySessionEntry = {
   data?: unknown;
 };
 
+/** @deprecated Use ProviderReplaySessionStateV2; removed in the next Plugin SDK major. */
 export type ProviderReplaySessionState = {
   getCustomEntries(): ProviderReplaySessionEntry[];
+  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; removed in the next Plugin SDK major. */
   appendCustomEntry(customType: string, data: unknown): void;
+};
+
+/** Worker-backed host state. The legacy synchronous adapter remains available for its deprecation window. */
+export type ProviderReplaySessionStateV2 = ProviderReplaySessionState & {
+  appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
 };
 
 /**
@@ -70,6 +81,7 @@ export type ProviderReplaySessionState = {
  *
  * Runs after core applies generic transcript cleanup so plugins can make
  * provider-specific replay rewrites without owning the whole compaction flow.
+ * @deprecated Use ProviderSanitizeReplayHistoryContextV2; removed in the next Plugin SDK major.
  */
 export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
   sessionId: string;
@@ -77,6 +89,12 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
   allowedToolNames?: Iterable<string>;
   sessionState?: ProviderReplaySessionState;
 };
+
+/** Replay input with required worker-backed persistence when session state is present. */
+export type ProviderSanitizeReplayHistoryContextV2 = Omit<
+  ProviderSanitizeReplayHistoryContext,
+  "sessionState"
+> & { sessionState?: ProviderReplaySessionStateV2 };
 
 /**
  * Provider-owned final replay-turn validation input.

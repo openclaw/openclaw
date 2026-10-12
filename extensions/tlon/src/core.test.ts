@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
@@ -81,13 +82,18 @@ describe("tlon core", () => {
             "chat/~zod/test": {
               mode: "open",
               allowedShips: ["~zod"],
+              requireMentionInBotThreads: false,
             },
           },
         },
       }),
     ).toMatchObject({
       success: true,
-      data: { authorization: { channelRules: { "chat/~zod/test": { mode: "open" } } } },
+      data: {
+        authorization: {
+          channelRules: { "chat/~zod/test": { mode: "open", requireMentionInBotThreads: false } },
+        },
+      },
     });
   });
 
@@ -120,15 +126,25 @@ describe("tlon core", () => {
     });
   });
 
-  it("accepts implicit mention policy at root and account scope", () => {
+  it("preserves mention policy at root and account scope", () => {
     expect(
       parseTlonConfig({
         implicitMentions: { threadParticipation: false },
+        requireMentionInBotThreads: true,
         accounts: {
-          primary: { implicitMentions: { replyToBot: false } },
+          primary: {
+            implicitMentions: { replyToBot: false },
+            requireMentionInBotThreads: false,
+          },
         },
       }),
-    ).toMatchObject({ success: true });
+    ).toMatchObject({
+      success: true,
+      data: {
+        requireMentionInBotThreads: true,
+        accounts: { primary: { requireMentionInBotThreads: false } },
+      },
+    });
   });
 
   it("configures ship, auth, and discovery settings", async () => {
@@ -313,6 +329,27 @@ describe("tlon core", () => {
     expect(resolved.groupInviteAllowlist).toEqual(["~bus"]);
     expect(resolved.defaultAuthorizedShips).toEqual(["~marzod"]);
     expect(resolved.configured).toBe(true);
+  });
+
+  it.each([
+    { legacy: true, canonical: undefined, before: null, after: true },
+    { legacy: false, canonical: undefined, before: null, after: false },
+    { legacy: true, canonical: false, before: false, after: false },
+    { legacy: false, canonical: true, before: true, after: true },
+  ])("requires Doctor for private-network aliases: %j", ({ legacy, canonical, before, after }) => {
+    const cfg = {
+      channels: {
+        tlon: {
+          ship: "~zod",
+          allowPrivateNetwork: legacy,
+          network: { dangerouslyAllowPrivateNetwork: canonical },
+        },
+      },
+    };
+
+    expect(resolveTlonAccount(cfg).dangerouslyAllowPrivateNetwork).toBe(before);
+    const repaired = normalizeCompatibilityConfig({ cfg });
+    expect(resolveTlonAccount(repaired.config).dangerouslyAllowPrivateNetwork).toBe(after);
   });
 
   it("keeps the default account on channel-level config only", () => {

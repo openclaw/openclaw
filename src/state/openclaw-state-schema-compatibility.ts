@@ -3,6 +3,7 @@ import {
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
@@ -44,6 +45,7 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
 ] as const;
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
+  "idx_meeting_transcript_utterances_id",
   "idx_operator_approvals_source_run_resolved",
   "idx_task_runs_requester_session_key",
   "idx_worker_session_placements_environment",
@@ -79,13 +81,12 @@ export function getOpenClawStateRuntimeSchema(options: {
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
-    const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${tableName} (`);
-    const endMarker = "\n) STRICT;";
-    const end = start >= 0 ? schema.indexOf(endMarker, start) : -1;
-    if (start < 0 || end < 0) {
-      throw new Error(`lazy additive state schema block is missing for ${tableName}`);
-    }
-    schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
+    schema = schema.replace(
+      extractSqliteTableSchema(schema, tableName, {
+        errorMessage: `lazy additive state schema block is missing for ${tableName}`,
+      }),
+      "",
+    );
   }
   for (const indexName of omittedIndexes) {
     const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
@@ -101,7 +102,7 @@ export function getOpenClawStateRuntimeSchema(options: {
   return schema;
 }
 
-export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
@@ -126,6 +127,12 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
     "worker_session_placements.terminal_reason": ["terminal_reason TEXT"],
     "worker_session_placements.terminal_at_ms": ["terminal_at_ms INTEGER"],
   },
+};
+
+export const STATE_RUNTIME_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  excludedTables: LAZY_ADDITIVE_STATE_TABLES,
+  excludedIndexes: LAZY_ADDITIVE_STATE_INDEXES,
 };
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {

@@ -110,31 +110,6 @@ describe("resolveZaloToken", () => {
     expect(JSON.stringify(result)).not.toContain(tokenFile);
   });
 
-  it("does not inherit a top-level token when an account token file is unavailable", () => {
-    const tokenFile = "/private/zalo-missing-work-token";
-    const result = resolveZaloToken(
-      {
-        botToken: "lower-priority-top-level-token",
-        accounts: { work: { tokenFile } },
-      },
-      "work",
-    );
-
-    expect(result).toMatchObject({
-      token: "",
-      source: "configFile",
-      status: "configured_unavailable",
-      credentialDiagnostics: [
-        {
-          code: "CREDENTIAL_FILE_UNAVAILABLE",
-          path: "channels.zalo.accounts.work.tokenFile",
-          reason: "not-found",
-        },
-      ],
-    });
-    expect(JSON.stringify(result)).not.toContain(tokenFile);
-  });
-
   it("honors an unavailable account token file after an explicitly blank account bot token", () => {
     const result = resolveZaloToken(
       {

@@ -1,20 +1,8 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GithubCounts, GithubItemKind, PersonReport } from "../types.js";
 
-export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
+export function metric(label: string, value: string | number, detail = "", trend = ""): string {
+  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
 }
 
 export function renderAvatar(
@@ -38,15 +26,13 @@ export function renderAvatar(
 }
 
 export function safeExternalUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password) {
-      return url.href;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
+  const url = URL.parse(value);
+  return url &&
+    (url.protocol === "https:" || url.protocol === "http:") &&
+    !url.username &&
+    !url.password
+    ? url.href
+    : undefined;
 }
 
 export const ITEM_LABELS: Record<GithubItemKind, string> = {

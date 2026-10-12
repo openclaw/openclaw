@@ -10,9 +10,6 @@ function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Erro
   if (state === "STOPPED") {
     return new Error(message ?? "Matrix sync stopped unexpectedly");
   }
-  if (state === "ERROR") {
-    return new Error(message ?? "Matrix sync entered ERROR unexpectedly");
-  }
   return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 

@@ -6,11 +6,11 @@ import {
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import { resolveSessionThreadInfo } from "../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
-import { getUpdateRun, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
+import { recordUpdateRunVerificationAsync as recordUpdateRunVerification } from "../infra/update-run-write.async.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -145,14 +145,14 @@ export function authorizeUpdateRunNoticeTarget(
     : target;
 }
 
-export function recordUpdateRunNoticeSkipped(
+export async function recordUpdateRunNoticeSkipped(
   runId: string | undefined,
   reason: string,
   env?: NodeJS.ProcessEnv,
-): void {
+): Promise<void> {
   log.warn(`lifecycle notice skipped: ${reason}`, { runId });
-  if (runId && getUpdateRun(runId, { env })?.verification.noticeDelivered !== true) {
-    recordUpdateRunVerification(runId, { noticeDelivered: false }, { env });
+  if (runId) {
+    await recordUpdateRunVerification(runId, { noticeDelivered: false }, { env });
   }
 }
 
@@ -169,7 +169,7 @@ export async function resolveUpdateRunNoticeTarget(params: {
     params.session ??
     (params.sessionKey ? loadSessionEntry(params.sessionKey, { env: params.env }) : undefined);
   const routingKey = params.sessionKey ?? session?.canonicalKey;
-  const { baseSessionKey, threadId } = parseSessionThreadInfo(routingKey);
+  const { baseSessionKey, threadId } = resolveSessionThreadInfo(routingKey);
   let context = deliveryContextFromSession(session?.entry);
   let chatType = sessionDeliveryOrigin(session?.entry)?.chatType ?? "direct";
   if (!hasDeliveryTargetFields(context) && baseSessionKey && baseSessionKey !== routingKey) {
@@ -189,7 +189,7 @@ export async function resolveUpdateRunNoticeTarget(params: {
       ? { kind: "internal", session: { ...session, entry: session.entry } }
       : { kind: "none", reason: "no delivery target" };
   }
-  const route = resolveGatewayLifecycleNoticeRoute({
+  const route = await resolveGatewayLifecycleNoticeRoute({
     cfg: params.cfg,
     deliveryContext: origin,
     // Ambient recovery keeps the persisted system route thread; origin keys can supply hints.

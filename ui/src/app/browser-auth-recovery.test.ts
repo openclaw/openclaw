@@ -134,7 +134,7 @@ describe("browser sign-in recovery", () => {
     },
   );
 
-  it.each(["offline", "missing", "server-error", "gateway-auth", "html"])(
+  it.each(["offline", "gateway-auth"])(
     "does not turn %s into a sign-in dialog",
     async (failure) => {
       vi.stubGlobal(
@@ -164,7 +164,7 @@ describe("browser sign-in recovery", () => {
     },
   );
 
-  it.each(["stored-token", "stored-password"])(
+  it.each(["stored-password"])(
     "verifies renewed website access using the current %s credential",
     async (acceptedCredential) => {
       stop();

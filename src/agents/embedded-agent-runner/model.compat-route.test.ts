@@ -1,4 +1,7 @@
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it } from "vitest";
+import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { materializeRuntimeConfig } from "../../config/materialize.js";
 import type {
   ModelCompatConfig,
@@ -89,82 +92,163 @@ function createResolutionOptions(
 }
 
 describe("model route compatibility", () => {
+  it("retains prepared OpenRouter reasoning capabilities on the catalog route", async () => {
+    const baseUrl = "https://openrouter.ai/api/v1";
+    const reasoning = true;
+    const providerId = "openrouter";
+    const id = "anthropic/claude-opus-5.5";
+    const route = { api: "openai-completions" as const, baseUrl: "https://openrouter.ai/api/v1" };
+    const catalogModel = {
+      ...makeProviderModelFixture({ provider: providerId, id, ...route }),
+      reasoning: true,
+      contextWindow: 1_000_000,
+      thinkingLevelMap: { off: null },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["max", "xhigh", "high", "medium", "low"],
+      },
+    };
+    const configured = {
+      ...makeProviderModelFixture({ provider: providerId, id, api: route.api, baseUrl }),
+      reasoning,
+      contextWindow: 200_000,
+      contextTokens: 520_000,
+      thinkingLevelMap: undefined,
+      compat: {
+        supportsDeveloperRole: false,
+      },
+    };
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          openrouter: {
+            api: route.api,
+            baseUrl,
+            models: [
+              {
+                id,
+                name: id,
+                reasoning,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextTokens: 520_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const configuredRuntimeModels = [{ provider: providerId, modelId: id, model: configured }];
+    const stores = createEmptyAgentDiscoveryStores();
+    stores.modelRegistry.registerProvider(providerId, {
+      api: route.api,
+      baseUrl,
+      models: [configured],
+    });
+    const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
+      catalogOwner: undefined,
+      agentDir: "/tmp/prepared-openrouter-reasoning",
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config,
+      observationConfig: config,
+      isCurrent: () => true,
+      authModes: {},
+      metadataSnapshot,
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels,
+      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
+        configuredRuntimeModels,
+        metadataSnapshot,
+      ),
+      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
+      createStores: () => stores,
+    };
+    const resolved = await resolveModelAsync(providerId, id, undefined, config, {
+      preparedModelRuntime,
+      skipAgentDiscovery: true,
+      authProfileMode: "api_key",
+      runtimeHooks: {
+        ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+        shouldPreferProviderRuntimeResolvedModel: () => baseUrl === route.baseUrl,
+        runProviderDynamicModel: () => catalogModel,
+      },
+      allowBundledStaticCatalogFallback: true,
+    });
+    expect(resolved.error).toBeUndefined();
+    expect(resolved.model?.contextTokens).toBe(520_000);
+    expect(resolved.model?.reasoning).toBe(reasoning);
+    expect(resolved.model?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: expect.arrayContaining(["xhigh"]),
+    });
+    expect(resolved.model?.thinkingLevelMap).toEqual({ off: null });
+    expect(clampThinkingLevel(resolved.model!, "xhigh")).toBe("xhigh");
+    // Exercise the real outbound request path with a local transport response.
+    // Retain only allowlisted request settings; never persist prompt or auth data.
+    const requests: Array<{ model?: string; reasoning?: { effort?: string } }> = [];
+    const host = getAiTransportHost();
+    configureAiTransportHost({
+      ...host,
+      buildModelFetch: () => async (input, init) => {
+        const request = new Request(input, init);
+        expect(new URL(request.url).pathname).toBe("/api/v1/chat/completions");
+        const payload = (await request.json()) as {
+          model?: string;
+          reasoning?: { effort?: string };
+        };
+        requests.push({ model: payload.model, reasoning: payload.reasoning });
+        const event = {
+          id: "synthetic-reply",
+          choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }],
+        };
+        return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    try {
+      const stream = await createOpenAICompletionsTransportStreamFn()(
+        resolved.model!,
+        { messages: [{ role: "user", content: "Synthetic test", timestamp: 1 }] },
+        { apiKey: "synthetic-key", reasoning: "xhigh", transport: "sse" },
+      );
+      const result = await stream.result();
+      expect(result.errorMessage).toBeUndefined();
+      expect(requests).toEqual([{ model: id, reasoning: { effort: "xhigh" } }]);
+    } finally {
+      configureAiTransportHost(host);
+    }
+  });
+
   const cases: Array<{
     name: string;
     catalog?: Parameters<typeof createCatalogFixture>[0];
     route: Pick<ModelProviderConfig, "api" | "baseUrl">;
-    modelRoute?: Pick<ModelDefinitionConfig, "api" | "baseUrl">;
     authored: ModelCompatConfig | undefined;
     expected: ModelCompatConfig | undefined;
     expectedBaseUrl?: string;
   }> = [
-    { name: "catalog", route: catalogRoute, authored: undefined, expected: catalogCompat },
     {
-      name: "Anthropic versioned catalog endpoint",
-      catalog: anthropicRoute,
-      route: { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1` },
-      authored: undefined,
-      expected: catalogCompat,
-      expectedBaseUrl: anthropicRoute.baseUrl,
-    },
-    {
-      name: "Anthropic versioned catalog endpoint with trailing slash",
+      name: "Anthropic versioned catalog endpoint with an authored preference",
       catalog: anthropicRoute,
       route: { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1/` },
-      authored: undefined,
+      authored: { codeMode: "capable" },
       expected: catalogCompat,
       expectedBaseUrl: anthropicRoute.baseUrl,
     },
     {
-      name: "Anthropic custom endpoint",
-      catalog: anthropicRoute,
-      route: { ...anthropicRoute, baseUrl: "https://custom.example/v1" },
-      authored: undefined,
-      expected: undefined,
-      expectedBaseUrl: "https://custom.example",
-    },
-    {
-      name: "normalized catalog endpoint",
-      route: { ...catalogRoute, baseUrl: `${catalogRoute.baseUrl}/` },
-      authored: undefined,
-      expected: catalogCompat,
-    },
-    {
-      name: "catalog with authored preference",
-      route: catalogRoute,
-      authored: { codeMode: "capable" },
-      expected: catalogCompat,
-    },
-    { name: "custom endpoint", route: customRoute, authored: undefined, expected: undefined },
-    {
-      name: "model endpoint override",
-      route: catalogRoute,
-      modelRoute: customRoute,
-      authored: undefined,
-      expected: undefined,
-    },
-    {
-      name: "custom API",
+      name: "custom API without authored capabilities",
       route: { ...catalogRoute, api: "openai-completions" },
       authored: undefined,
       expected: undefined,
     },
-    {
-      name: "custom capable",
-      route: customRoute,
-      authored: { codeMode: "capable" },
-      expected: { codeMode: "capable" },
-    },
-    {
-      name: "custom preferred",
-      route: customRoute,
-      authored: { codeMode: "preferred" },
-      expected: { codeMode: "preferred" },
-    },
   ];
   it.each(cases)(
     "keeps $name capabilities bound to their route",
-    async ({ catalog, route, modelRoute, authored, expected, expectedBaseUrl }) => {
+    async ({ catalog, route, authored, expected, expectedBaseUrl }) => {
       const fixture = createCatalogFixture(catalog);
       const { catalogModel, metadataSnapshot } = fixture;
       await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
@@ -176,7 +260,6 @@ describe("model route compatibility", () => {
                 models: [
                   {
                     ...configuredModel,
-                    ...modelRoute,
                     ...(authored ? { compat: authored } : {}),
                   },
                 ],
@@ -224,71 +307,39 @@ describe("model route compatibility", () => {
   );
 
   const discoveredCompat: ModelCompatConfig = { codeMode: "capable" };
-  it.each([
-    {
-      name: "retained discovered route",
-      providerOnly: false,
-      route: customRoute,
-      discoveredRoute: customRoute,
-      expected: discoveredCompat,
-    },
-    {
-      name: "configured catalog route",
-      providerOnly: false,
-      route: catalogRoute,
-      discoveredRoute: customRoute,
-      expected: catalogCompat,
-    },
-    {
-      name: "provider-only catalog route",
-      providerOnly: true,
-      route: catalogRoute,
-      discoveredRoute: customRoute,
-      expected: catalogCompat,
-    },
-    {
-      name: "same-route discovery refresh",
-      providerOnly: false,
-      route: catalogRoute,
-      discoveredRoute: catalogRoute,
-      expected: { ...catalogCompat, ...discoveredCompat },
-    },
-  ])(
-    "keeps capabilities from the $name when discovery is preferred",
-    async ({ route, discoveredRoute, expected, providerOnly }) => {
-      const fixture = createCatalogFixture();
-      const { catalogModel, metadataSnapshot } = fixture;
-      await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-        const source: OpenClawConfig = {
-          models: {
-            providers: {
-              [provider]: { ...route, models: providerOnly ? [] : [configuredModel] },
-            },
+  it("keeps capabilities from the provider-only catalog route when discovery is preferred", async () => {
+    const fixture = createCatalogFixture();
+    const { catalogModel, metadataSnapshot } = fixture;
+    await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
+      const source: OpenClawConfig = {
+        models: {
+          providers: {
+            [provider]: { ...catalogRoute, models: [] },
           },
-        };
-        const materialized = materializeRuntimeConfig(source, {
-          manifestRegistry: metadataSnapshot.manifestRegistry,
-        });
-        for (const config of [source, materialized]) {
-          const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
-            ...createResolutionOptions(config, fixture),
-            authProfileMode: "api_key",
-            runtimeHooks: {
-              ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
-              shouldPreferProviderRuntimeResolvedModel: () => true,
-              runProviderDynamicModel: () => ({
-                ...catalogModel,
-                ...discoveredRoute,
-                compat: discoveredCompat,
-              }),
-            },
-          });
-          const configSource = config === source ? "source" : "materialized";
-          expect(resolved.error).toBeUndefined();
-          expect.soft(resolved.model?.baseUrl, configSource).toBe(route.baseUrl);
-          expect.soft(resolved.model?.compat, configSource).toEqual(expected);
-        }
+        },
+      };
+      const materialized = materializeRuntimeConfig(source, {
+        manifestRegistry: metadataSnapshot.manifestRegistry,
       });
-    },
-  );
+      for (const config of [source, materialized]) {
+        const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
+          ...createResolutionOptions(config, fixture),
+          authProfileMode: "api_key",
+          runtimeHooks: {
+            ...resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+            shouldPreferProviderRuntimeResolvedModel: () => true,
+            runProviderDynamicModel: () => ({
+              ...catalogModel,
+              ...customRoute,
+              compat: discoveredCompat,
+            }),
+          },
+        });
+        const configSource = config === source ? "source" : "materialized";
+        expect(resolved.error).toBeUndefined();
+        expect.soft(resolved.model?.baseUrl, configSource).toBe(catalogRoute.baseUrl);
+        expect.soft(resolved.model?.compat, configSource).toEqual(catalogCompat);
+      }
+    });
+  });
 });

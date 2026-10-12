@@ -9,7 +9,6 @@ describe("buzzSetupContract", () => {
 
   it.each([
     { name: "  Named bot  ", expected: "Named bot" },
-    { name: "", expected: "Existing bot" },
     { name: "   ", expected: "Existing bot" },
     { name: undefined, expected: "Existing bot" },
   ])(

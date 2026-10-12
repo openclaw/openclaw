@@ -1,23 +1,23 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { TaskSummary } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat startup request priority" });
 const sessionKey = "agent:research:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const historyText = "Authoritative selected conversation.";
 const bulkMethods = ["sessions.list", "sessions.catalog.list"];
 const secondaryMethods = [
-  "tasks.list",
   "taskSuggestions.list",
   "progressCard.get",
   "sessions.groups.list",
@@ -32,7 +32,15 @@ async function installStartupGateway(page: Page) {
     assistantAgentId: "main",
     mainSessionKey: "agent:main:main",
     sessionKey,
-    sessions: [{ key: sessionKey, kind: "direct", label: "Selected conversation", updatedAt: 1 }],
+    sessions: [
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Selected conversation",
+        updatedAt: 1,
+        owner: { actor: { type: "human", id: "reader" } },
+      },
+    ],
     historyMessages: [{ role: "assistant", content: historyText }],
     deferredMethods: ["chat.startup"],
     heldMethods: bulkMethods,
@@ -59,7 +67,6 @@ async function installStartupGateway(page: Page) {
         ],
       },
       "sessions.catalog.list": { catalogs: [] },
-      "tasks.list": { tasks: [] },
       "taskSuggestions.list": { suggestions: [] },
       "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },
       "progressCard.get": { card: null },
@@ -128,18 +135,6 @@ suite.define(() => {
         }
         await expectBulkReadsHeld(gateway);
         const fixtureTime = Date.now();
-        const task = {
-          id: "startup-task",
-          taskId: "startup-task",
-          status: "running",
-          runtime: "subagent",
-          agentId: "research",
-          title: "Queued task during startup",
-          sessionKey,
-          createdAt: fixtureTime,
-          updatedAt: fixtureTime,
-          startedAt: fixtureTime,
-        } satisfies TaskSummary;
         const suggestion = {
           id: "startup-suggestion",
           title: "Queued suggestion during startup",
@@ -150,7 +145,6 @@ suite.define(() => {
           agentId: "research",
           createdAt: fixtureTime,
         };
-        await gateway.setMethodResponse("tasks.list", { tasks: [task] });
         await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [suggestion] });
         await gateway.setMethodResponse("progressCard.get", {
           card: {
@@ -160,7 +154,6 @@ suite.define(() => {
             markdown: "Current rollout progress",
           },
         });
-        await gateway.emitGatewayEvent("task", { action: "upserted", task });
         await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -201,7 +194,7 @@ suite.define(() => {
               ),
           )
           .toBe(true);
-        for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+        for (const method of ["taskSuggestions.list", "progressCard.get"]) {
           expect(await gateway.getRequests(method), `${method} while hidden`).toEqual([]);
         }
         await page.evaluate(() => {
@@ -212,15 +205,39 @@ suite.define(() => {
           document.dispatchEvent(new Event("visibilitychange"));
         });
         await transcript.getByText(historyText, { exact: true }).waitFor();
-        for (const method of secondaryMethods) {
+        // Held roster and owner-count reads occupy both bootstrap slots. Inbox
+        // hydration stays queued until those replies are released below.
+        for (const method of secondaryMethods.filter(
+          (candidate) => candidate !== "mentions.list",
+        )) {
           await gateway.waitForRequest(method);
-          expect(await gateway.getRequests(method)).toHaveLength(method === "tasks.list" ? 2 : 1);
+          expect(await gateway.getRequests(method)).toHaveLength(1);
         }
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const activePane = page.locator(".chat-pane-cache__pane--active");
+        await expect
+          .poll(() =>
+            activePane.evaluate((element) => {
+              const trigger = element
+                .querySelector(".chat-details-toggle")
+                ?.getBoundingClientRect();
+              const suggestionBounds = element
+                .querySelector(".task-suggestion")
+                ?.getBoundingClientRect();
+              return Boolean(trigger && suggestionBounds && trigger.bottom <= suggestionBounds.top);
+            }),
+          )
+          .toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "details-with-suggestion.png"),
+          });
+        }
+        const details = await openChatDetails(activePane);
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -254,6 +271,8 @@ suite.define(() => {
           });
         }
         await expectBulkReadsReleased(gateway);
+        await gateway.waitForRequest("mentions.list");
+        expect(await gateway.getRequests("mentions.list")).toHaveLength(1);
         await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
       } finally {
         await writeFile(
@@ -263,78 +282,6 @@ suite.define(() => {
       }
     });
   });
-
-  it.each([
-    { outcome: "success", opener: "toolbar" },
-    { outcome: "hidden failure", opener: "toolbar" },
-    { outcome: "hidden retry", opener: "toolbar" },
-    { outcome: "success", opener: "keyboard" },
-  ] as const)(
-    "keeps explicitly opened Tasks current after $outcome via $opener while chat remains held",
-    async ({ outcome, opener }) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const gateway = await installStartupGateway(page);
-        await openPendingChat(page, gateway);
-        for (const method of secondaryMethods) {
-          expect(await gateway.getRequests(method)).toEqual([]);
-        }
-        await gateway.deferNext("tasks.list");
-        if (opener === "keyboard") {
-          await page.keyboard.press("Meta+Alt+Shift+K");
-        } else {
-          await page.locator(".chat-pane-cache__pane--active .chat-tasks-toggle").click();
-        }
-        await gateway.waitForRequest("tasks.list");
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-        await gateway.emitGatewayEvent("task", { action: "restored" });
-        if (outcome !== "success") {
-          await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-              configurable: true,
-              get: () => "hidden",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-          });
-          await gateway.rejectDeferred("tasks.list", {
-            code: "UNAVAILABLE",
-            message: "Superseded task snapshot failed.",
-            ...(outcome === "hidden retry" ? { retryable: true, retryAfterMs: 1 } : {}),
-          });
-          await expect
-            .poll(() =>
-              page.locator(".chat-pane-cache__pane--active").evaluate(
-                (pane) =>
-                  (
-                    pane as HTMLElement & {
-                      state: { backgroundTasksState: { loading: boolean } };
-                    }
-                  ).state.backgroundTasksState.loading,
-              ),
-            )
-            .toBe(false);
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-          await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-              configurable: true,
-              get: () => "visible",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-          });
-        } else {
-          await gateway.resolveDeferred("tasks.list");
-        }
-        await gateway.waitForRequest("tasks.list", { after: 2 });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
-        for (const method of secondaryMethods.filter((candidate) => candidate !== "tasks.list")) {
-          expect(await gateway.getRequests(method)).toEqual([]);
-        }
-        expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
-        await gateway.resolveDeferred("chat.startup");
-        await page.locator(".chat-thread").getByText(historyText, { exact: true }).waitFor();
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
-      });
-    },
-  );
 
   it.each([
     { visibility: "hidden document", pendingSnapshot: false },
@@ -363,7 +310,9 @@ suite.define(() => {
             document.dispatchEvent(new Event("visibilitychange"));
           });
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page
+            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+            .click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
           await expect
@@ -393,81 +342,13 @@ suite.define(() => {
           await gateway.resolveDeferred("progressCard.get");
         }
         // Sidebar hovercards mirror this markdown; verify the active pane's card.
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();
-        // A pending snapshot already carrying revision 3 satisfies the hidden event.
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(pendingSnapshot ? 1 : 2);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "keeps task events through initial snapshot failure (before admission: %s)",
-    async (early) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const gateway = await installStartupGateway(page);
-        await openPendingChat(page, gateway);
-        const task = {
-          id: "resumed-task",
-          taskId: "resumed-task",
-          status: "running",
-          runtime: "subagent",
-          agentId: "research",
-          title: "Task received around snapshot failure",
-          sessionKey,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        } satisfies TaskSummary;
-        if (early) {
-          await gateway.emitGatewayEvent("task", { action: "upserted", task });
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(0);
-        }
-        await gateway.deferNext("tasks.list");
-        await gateway.resolveDeferred("chat.startup");
-        await gateway.waitForRequest("tasks.list");
-        await gateway.rejectDeferred("tasks.list", {
-          code: "INVALID_REQUEST",
-          message: "Synthetic task snapshot failure.",
-        });
-        await expect
-          .poll(() =>
-            page.locator(".chat-pane-cache__pane--active").evaluate(
-              (pane) =>
-                (
-                  pane as HTMLElement & {
-                    state: { backgroundTasksState: { error: string | null } };
-                  }
-                ).state.backgroundTasksState.error,
-            ),
-          )
-          .toBe("Synthetic task snapshot failure.");
-        if (early) {
-          await page.getByText(task.title, { exact: true }).waitFor();
-          expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-          return;
-        }
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await gateway.setMethodResponse("tasks.list", { tasks: [task] });
-        await gateway.emitGatewayEvent("task", { action: "upserted", task });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(2);
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "visible",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await gateway.waitForRequest("tasks.list", { after: 2 });
-        expect(await gateway.getRequests("tasks.list")).toHaveLength(4);
+        // One coalesced follow-up reconciles events received during the pending snapshot.
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
       });
     },
   );
@@ -546,19 +427,19 @@ suite.define(() => {
             key: "agent:research:archived-fixture",
             kind: "direct",
             label: "Archived fixture",
+            owner: { actor: { type: "human", id: "reader" } },
             updatedAt: 2,
             archived: true,
           },
         ],
       });
-      await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived", exact: true })
-        .click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.list", {
         match: { agentId: "research", archived: true },
       });
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(1);
       await gateway.resolveDeferred("sessions.list");
       await page
         .locator("openclaw-app-sidebar")
@@ -589,11 +470,13 @@ suite.define(() => {
             message: "Synthetic history unavailable.",
           });
           await page.getByRole("alert").getByText("Synthetic history unavailable.").waitFor();
-          for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+          for (const method of ["taskSuggestions.list", "progressCard.get"]) {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+          await page
+            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+            .click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
         }
@@ -602,7 +485,7 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.startup");
           expect(new URL(page.url()).pathname).toBe("/new");
           expect(await page.getByText(historyText, { exact: true }).isVisible()).toBe(false);
-          for (const method of ["tasks.list", "taskSuggestions.list", "progressCard.get"]) {
+          for (const method of ["taskSuggestions.list", "progressCard.get"]) {
             expect(await gateway.getRequests(method), `${method} from retired chat`).toEqual([]);
           }
         }

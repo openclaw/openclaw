@@ -13,6 +13,7 @@ import { createGatewayKernel } from "./server-kernel.js";
 import * as lifecycleRuntime from "./server-lifecycle.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 
 describe("Gateway startup", () => {
@@ -22,16 +23,8 @@ describe("Gateway startup", () => {
       label: "gateway-kernel-placement-projection",
       layout: "home",
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
+        ...KERNEL_TEST_ENV,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
       },
     });
     const token = "gateway-kernel-placement-token";
@@ -70,13 +63,13 @@ describe("Gateway startup", () => {
           { key: identity.sessionKey },
           dispatchOptions,
         );
-      reportPlacementTransition(undefined, placements.startDispatch(identity));
+      reportPlacementTransition(undefined, await placements.startDispatch(identity));
       const requested = await describePlacement();
       expect(requested.session?.sessionId).toBe(identity.sessionId);
       expect(requested.session?.placement?.state).toBe("requested");
       reportPlacementTransition(
         undefined,
-        placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" }),
+        await placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" }),
       );
       const failed = await describePlacement();
       expect(failed.session?.sessionId).toBe(identity.sessionId);
@@ -100,18 +93,7 @@ describe("Gateway startup", () => {
         layout: "home",
         scenario: "gateway-loopback",
         gateway: { port, token },
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...KERNEL_TEST_ENV },
       });
       const events: string[] = [];
       const prepareLifecycle = lifecycleRuntime.prepareGatewayLifecycle;
@@ -125,7 +107,7 @@ describe("Gateway startup", () => {
         pendingTask = delay(0).then(async () => {
           events.push("queued task");
           if (cancel) {
-            await prepared.beginClosePrelude();
+            await prepared.prepareClose();
           }
         });
         void pendingTask.catch(() => {});

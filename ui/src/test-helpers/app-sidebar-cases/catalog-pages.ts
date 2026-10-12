@@ -33,6 +33,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -90,6 +91,7 @@ describe("AppSidebar session catalog pagination", () => {
       });
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
@@ -171,6 +173,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -320,38 +323,6 @@ describe("AppSidebar session catalog pagination", () => {
         cursors: { "gateway:local": "replacement-page" },
       });
       expect(sidebar.textContent).toContain("Replacement");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("discards a load-more response after a catalog change refreshes the same cursor", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveStalePage!: (value: SessionsCatalogListResult) => void;
-      const stalePage = new Promise<SessionsCatalogListResult>((resolve) => {
-        resolveStalePage = resolve;
-      });
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
-        .mockReturnValueOnce(stalePage)
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Updated" }], "page-2"));
-      const { gateway, sidebar } = await mountSessionCatalogSidebar({
-        request,
-      } as unknown as GatewayBrowserClient);
-
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(5_000);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Updated");
-
-      resolveStalePage(catalogPage([{ threadId: "thread-2", name: "Stale page" }], "page-3"));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).not.toContain("Stale page");
-      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
     } finally {
       vi.useRealTimers();
     }

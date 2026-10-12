@@ -1,23 +1,16 @@
-import {
-  reuseCodexCatalogPreview,
-  type CodexCatalogPreviewCache,
-} from "../session-catalog-native-projection.js";
+import { reuseCodexCatalogPreview } from "../session-catalog-native-projection.js";
 import {
   recordCodexCatalogResponseSource,
   type CodexCatalogSource,
 } from "../session-catalog-source.js";
+import type { CodexClientRequestAttempt } from "./client-catalog-response.js";
 import { isJsonObject, type RpcResponse } from "./protocol.js";
-import type { CodexRequestAttempt } from "./request-attempt.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
 
 /** Settles one wire attempt and reports newly observed native execution. */
 export function dispatchCodexAppServerResponse(
   response: RpcResponse,
-  attempts: Map<number | string, CodexRequestAttempt>,
-  catalogResponses: WeakMap<
-    CodexRequestAttempt,
-    { preview?: CodexCatalogPreviewCache; remainingRows?: number }
-  >,
+  attempts: Map<number | string, CodexClientRequestAttempt>,
   source: CodexCatalogSource,
   previewStates?: (boolean | undefined)[],
 ): boolean {
@@ -36,7 +29,7 @@ export function dispatchCodexAppServerResponse(
     isJsonObject(response.result) &&
     Array.isArray(response.result.data) &&
     response.result.data.length > 0;
-  const cache = catalogResponses.get(pending)?.preview;
+  const cache = pending.catalogProjection?.preview;
   if (
     cache &&
     previewStates &&

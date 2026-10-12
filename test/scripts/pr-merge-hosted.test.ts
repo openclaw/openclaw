@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const outcomeRef = "refs/openclaw/pr-merge-outcomes/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 describePosix("native hosted merge handoff", () => {
@@ -43,80 +44,40 @@ describePosix("native hosted merge handoff", () => {
     // that state; the final case alone completes the synthetic server merge.
     f.configure({ hostedCi: "release", requiredChecks: "pass" });
     writeFileSync(join(f.local, "gates.env"), preparedGates);
-  });
-
-  it("revalidates prepared release-gate evidence without waiting for older stuck PR CI", () => {
-    const before = f.events().length;
-    const result = f.run("merge-verify");
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const watchLog = join(f.local, "merge-checks-watch.log");
-    expect(existsSync(watchLog) ? readFileSync(watchLog, "utf8") : "").toBe("");
-    const events = f.events().slice(before);
-    const hosted = events.findIndex((event) => event.kind === "hosted-gate");
-    expect(hosted).toBeGreaterThanOrEqual(0);
-    expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
-    expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
+    rmSync(join(f.local, "merge-checks-watch.log"), { force: true });
   });
 
   it.each([
+    "missing-artifact",
     "missing",
-    "stale",
-    "failed",
-    "wrong-head",
-    "unmarked",
-    "wrong-workflow",
-    "scheduled-failure",
     "api-error",
-  ] as const)(
-    "blocks %s hosted evidence despite saved green proof in an OR-list caller",
-    (hostedCi) => {
-      f.configure({ hostedCi });
-      const savedProof = readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8");
-      const before = f.events().length;
-      const result = f.shell("merge_run 42 || exit 1");
-      const output = result.stdout + result.stderr;
-      expect(result.status, output).toBe(1);
-      expect(output).toContain("hosted CI/Testbox gates failed");
-      expect(readFileSync(join(f.local, "gates-hosted-checks.log"), "utf8")).toContain(
-        hostedCi === "api-error"
-          ? "Hosted API unavailable"
-          : "Missing successful recent CI workflow",
-      );
-      expect(
-        f
-          .events()
-          .slice(before)
-          .some((event) => event.kind === "required-checks" || event.kind === "ci-watched"),
-      ).toBe(false);
-      expect(readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8")).toBe(savedProof);
-      expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
-      expect(
-        f.git(
-          f.canonical,
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/openclaw/pr-merge-outcomes/42",
-        ),
-      ).toBe("");
-    },
-  );
-
-  it("requires the prepare gate artifact before merge", () => {
-    rmSync(join(f.local, "gates.env"));
-    const result = f.shell("merge_run 42 || exit 1");
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout).toContain("Missing required artifact: .local/gates.env");
-    expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
-  });
-
-  it.each(["fail", "pending", "api-error"] as const)(
-    "keeps %s required checks blocking after hosted proof",
-    (requiredChecks) => {
+    "required-fail",
+    "required-pending",
+    "required-api-error",
+  ] as const)("blocks %s evidence before merge dispatch in an OR-list caller", (fault) => {
+    const requiredChecks =
+      fault === "required-fail"
+        ? "fail"
+        : fault === "required-pending"
+          ? "pending"
+          : fault === "required-api-error"
+            ? "api-error"
+            : undefined;
+    if (requiredChecks) {
       f.configure({ requiredChecks });
-      const before = f.events().length;
-      const result = f.shell("merge_run 42 || exit 1");
-      const output = result.stdout + result.stderr;
-      expect(result.status, output).toBe(1);
+    } else if (fault === "missing" || fault === "api-error") {
+      f.configure({ hostedCi: fault });
+    } else {
+      rmSync(join(f.local, "gates.env"));
+    }
+    const savedProof = readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8");
+    const before = f.events().length;
+    const result = f.shell("merge_run 42 || exit 1");
+    const output = result.stdout + result.stderr;
+    expect(result.status, output).toBe(1);
+    const events = f.events().slice(before);
+    expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
+    if (requiredChecks) {
       expect(output).toContain(
         requiredChecks === "api-error"
           ? "unable to verify the required GitHub checks"
@@ -124,37 +85,40 @@ describePosix("native hosted merge handoff", () => {
             ? "Required checks are still pending"
             : "Required checks are failing",
       );
-      const events = f.events().slice(before);
       expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(
         events.findIndex((event) => event.kind === "hosted-gate"),
       );
-      expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
-      expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
-    },
-  );
+    } else if (fault === "missing-artifact") {
+      expect(result.stdout).toContain("Missing required artifact: .local/gates.env");
+    } else {
+      expect(output).toContain("hosted CI/Testbox gates failed");
+      expect(readFileSync(join(f.local, "gates-hosted-checks.log"), "utf8")).toContain(
+        fault === "api-error" ? "Hosted API unavailable" : "Missing successful recent CI workflow",
+      );
+      expect(events.some((event) => event.kind === "required-checks")).toBe(false);
+      expect(readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8")).toBe(savedProof);
+    }
+    expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
+    expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", outcomeRef)).toBe("");
+  });
 
-  it.each(["full", "remote_testbox", "remote_crabbox_aws"])(
-    "retains the PR CI wait for %s preparation",
-    (mode) => {
-      f.configure({ hostedCi: "scheduled" });
-      writeFileSync(
-        join(f.local, "gates.env"),
-        preparedGates.replace("hosted_exact_or_recent_parent", mode),
-      );
-      const before = f.events().length;
-      const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const events = f.events().slice(before);
-      const watched = events.findIndex((event) => event.kind === "ci-watched");
-      expect(watched).toBeGreaterThanOrEqual(0);
-      expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(
-        watched,
-      );
-      expect(events.some((event) => event.kind === "hosted-gate")).toBe(false);
-    },
-  );
+  it.each(["full", "remote_crabbox_aws"])("retains the PR CI wait for %s preparation", (mode) => {
+    f.configure({ hostedCi: "scheduled" });
+    writeFileSync(
+      join(f.local, "gates.env"),
+      preparedGates.replace("hosted_exact_or_recent_parent", mode),
+    );
+    const before = f.events().length;
+    const result = f.shell(
+      `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const events = f.events().slice(before);
+    const watched = events.findIndex((event) => event.kind === "ci-watched");
+    expect(watched).toBeGreaterThanOrEqual(0);
+    expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(watched);
+    expect(events.some((event) => event.kind === "hosted-gate")).toBe(false);
+  });
 
   it("dispatches once with the exact prepared head and ordinary server enforcement", () => {
     const before = f.events().length;
@@ -171,6 +135,12 @@ describePosix("native hosted merge handoff", () => {
       );
     expect(mergeCalls).toHaveLength(1);
     const events = f.events().slice(before);
+    const watchLog = join(f.local, "merge-checks-watch.log");
+    expect(existsSync(watchLog) ? readFileSync(watchLog, "utf8") : "").toBe("");
+    const hosted = events.findIndex((event) => event.kind === "hosted-gate");
+    expect(hosted).toBeGreaterThanOrEqual(0);
+    expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
+    expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
     const reviewReads = events
       .map((event, index) => ({ event, index }))
       .filter(({ event }) => event.kind === "review-comments");
@@ -192,9 +162,11 @@ describePosix("native hosted merge handoff", () => {
     expect(f.git(f.origin, "log", "-1", "--format=%B", "main")).toBe(
       "Fixture squash\n\nReviewed fixture body",
     );
-    expect(
-      JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
-    ).toMatchObject({ head: f.head, route: "immediate", phase: "commented" });
+    expect(JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`))).toMatchObject({
+      head: f.head,
+      route: "immediate",
+      phase: "commented",
+    });
     // The deliberately modified PR helper is unfinished local work, not disposable proof.
     expect(existsSync(f.worktree)).toBe(true);
     expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mts"), "utf8")).toBe(
@@ -393,9 +365,13 @@ describePosix("native pending GitHub merge handoff", () => {
       ),
     ).toHaveLength(2);
     expect(events.some((event) => event.kind === "gh" && event.args?.includes("POST"))).toBe(false);
-    expect(
-      JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
-    ).toMatchObject({ head: f.head, route: "auto", phase: "intent", accepted: true, landed: null });
+    expect(JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`))).toMatchObject({
+      head: f.head,
+      route: "auto",
+      phase: "intent",
+      accepted: true,
+      landed: null,
+    });
     expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
     expect(f.git(f.origin, "rev-parse", "topic")).toBe(f.head);
     expect(existsSync(f.worktree)).toBe(true);

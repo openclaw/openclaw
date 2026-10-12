@@ -6,40 +6,6 @@ import {
 const isImageMimeType = (value: unknown): value is string =>
   typeof value === "string" && /^image\//iu.test(value.trim());
 
-const normalizeImageMimeType = (value: unknown): string | undefined =>
-  isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
-
-function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefined {
-  return (
-    normalizeImageMimeType(value.mimeType) ??
-    normalizeImageMimeType(value.mediaType) ??
-    normalizeImageMimeType(value.media_type)
-  );
-}
-
-function imageMimeTypeFieldsForRecord(value: Record<string, unknown>): string[] {
-  return ["mimeType", "mediaType", "media_type"].filter((key) => isImageMimeType(value[key]));
-}
-
-function sanitizeOpaqueImageBase64(
-  base64: string,
-  mimeType: string | undefined,
-): { mimeType: string; base64: string } | undefined {
-  return mimeType ? sanitizeInlineImageBase64({ mimeType, base64 }) : undefined;
-}
-
-function isValidOpaqueImageBase64(base64: string, mimeType: string | undefined): boolean {
-  return sanitizeOpaqueImageBase64(base64, mimeType) !== undefined;
-}
-
-function isOpaqueImageDataBlock(value: Record<string, unknown>): boolean {
-  return (
-    (value.type === "image" || value.type === "base64") &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
 export function sanitizeTranscriptImageRecord(
   source: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -48,11 +14,17 @@ export function sanitizeTranscriptImageRecord(
   if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
     return undefined;
   }
-  const mimeTypeFields = imageMimeTypeFieldsForRecord(source);
-  if (mimeTypeFields.length === 0) {
+  const mimeTypeFields = ["mimeType", "mediaType", "media_type"].filter((key) =>
+    isImageMimeType(source[key]),
+  );
+  const mimeType = mimeTypeFields.map((key) => source[key]).find(isImageMimeType);
+  if (!mimeType) {
     return undefined;
   }
-  const sanitized = sanitizeOpaqueImageBase64(source.data, imageMimeTypeForRecord(source));
+  const sanitized = sanitizeInlineImageBase64({
+    base64: source.data,
+    mimeType: mimeType.trim().toLowerCase(),
+  });
   if (!sanitized) {
     return undefined;
   }
@@ -67,55 +39,26 @@ export function sanitizeTranscriptImageRecord(
   return next;
 }
 
-function startsWithDataUrl(value: string): boolean {
-  return value.slice(0, "data:".length).toLowerCase() === "data:";
-}
-
-function sanitizeImageDataUrlField(
-  source: Record<string, unknown>,
-  key: string,
-  value: string,
-): string | undefined {
-  if (!startsWithDataUrl(value)) {
-    return undefined;
-  }
-  const isImageDataUrlField =
-    (source.type === "input_image" && key === "image_url") ||
-    ((source.type === "image" || source.type === "image_url") && key === "url") ||
-    (source.type === "image" && (key === "source" || key === "data"));
-  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
-}
-
-export function sanitizeTranscriptImageDataUrlField(params: {
+export function sanitizeTranscriptImageDataUrlField({
+  source,
+  key,
+  value,
+  preserveImageDataUrlFields,
+}: {
   source: Record<string, unknown>;
   key: string;
   value: string;
   preserveImageDataUrlFields: boolean;
 }): string | undefined {
-  if (params.preserveImageDataUrlFields && params.key === "url") {
-    return startsWithDataUrl(params.value)
-      ? sanitizeInlineImageDataUrlForStorage(params.value)
-      : undefined;
+  if (value.slice(0, "data:".length).toLowerCase() !== "data:") {
+    return undefined;
   }
-  return sanitizeImageDataUrlField(params.source, params.key, params.value);
-}
-
-export function shouldPreserveTranscriptImagePayload(
-  source: Record<string, unknown>,
-  key: string,
-  item: unknown,
-  preserveImageDataUrlFields: boolean,
-): boolean {
-  if (typeof item !== "string") {
-    return false;
-  }
-  if (key === "data" && isOpaqueImageDataBlock(source)) {
-    return true;
-  }
-  if (preserveImageDataUrlFields && key === "url") {
-    return startsWithDataUrl(item) && sanitizeInlineImageDataUrlForStorage(item) !== undefined;
-  }
-  return sanitizeImageDataUrlField(source, key, item) !== undefined;
+  const isImageDataUrlField =
+    (preserveImageDataUrlFields && key === "url") ||
+    (source.type === "input_image" && key === "image_url") ||
+    ((source.type === "image" || source.type === "image_url") && key === "url") ||
+    (source.type === "image" && (key === "source" || key === "data"));
+  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
 }
 
 export function shouldPreserveNestedTranscriptImageDataUrlFields(

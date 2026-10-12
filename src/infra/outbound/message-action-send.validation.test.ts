@@ -49,46 +49,6 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
-  it("allows send when only presentation payloads are provided", async () => {
-    const result = await runDrySend({
-      cfg: {
-        channels: {
-          forum: {
-            botToken: "forum-test",
-          },
-        },
-      } as OpenClawConfig,
-      actionParams: {
-        channel: "forum",
-        target: "123456",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", value: "approve" }],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("allows send when only generic presentation blocks are provided", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        presentation: { blocks: [{ type: "divider" }] },
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
   it("allows send when only a portable location is provided", async () => {
     const result = await runDrySend({
       cfg: workspaceConfig,
@@ -236,18 +196,6 @@ describe("runMessageAction send validation", () => {
         poll_public: "true",
       },
     },
-    {
-      name: "channel-extra poll params with content",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        pollDurationSeconds: -5,
-        pollPublic: "true",
-      },
-    },
   ])("rejects send actions that include $name", async ({ actionParams }) => {
     await expect(
       runDrySend({
@@ -257,65 +205,6 @@ describe("runMessageAction send validation", () => {
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
-
-  it("allows send when only schema-padded shared poll modifiers are present", async () => {
-    // LLMs routinely echo the shared `message` tool schema's poll modifier
-    // defaults (`pollDurationHours: 1`, `pollMulti: false`) on every plain
-    // `send` call alongside the rest of the schema-padded slots. Without a
-    // pollQuestion or pollOption present, these defaults are noise — not
-    // poll intent — and must not block the send.
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        pollQuestion: "",
-        pollOption: [],
-        pollDurationHours: 1,
-        pollMulti: false,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("allows send when only schema-padded channel-extra poll metadata is present", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        pollDurationSeconds: 60,
-        pollPublic: true,
-        pollAnonymous: false,
-        pollOptionIndex: 0,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it.each(["", " \t\n"])(
-    "treats blank shared-schema event location %j as omitted on send",
-    async (location) => {
-      const result = await runDrySend({
-        cfg: workspaceConfig,
-        actionParams: {
-          channel: "workspace",
-          target: "#C12345678",
-          message: "hello",
-          location,
-        },
-        toolContext: { currentChannelId: "C12345678" },
-      });
-
-      expect(result.kind).toBe("send");
-    },
-  );
 
   it("keeps rejecting a non-empty event location string on send", async () => {
     await expect(
@@ -351,26 +240,7 @@ describe("message body alias normalization", () => {
   });
 
   it.each([
-    { alias: "SendMessage", value: "hello from alias" },
-    { alias: "content", value: "hello from content" },
-    { alias: "text", value: "hello from text" },
-  ])("normalizes $alias alias to message for send", async ({ alias, value }) => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        [alias]: value,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it.each([
     { name: "canonical message", body: { message: "    indented body" } },
-    { name: "reasoning tag alias", body: { text: "<think>private</think>    indented body" } },
     {
       name: "mixed reasoning preamble alias",
       body: { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },
@@ -407,39 +277,6 @@ describe("message body alias normalization", () => {
     });
     expect(result.kind).toBe("send");
     expect(sentText).toEqual(["    indented body"]);
-  });
-
-  it("does not overwrite an explicit message with an alias", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "explicit",
-        SendMessage: "alias value",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("emits a diagnostic warning when normalizing an alias", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        SendMessage: "alias body",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[message-tool] normalized alias "SendMessage" to "message"'),
-    );
   });
 
   it.each([

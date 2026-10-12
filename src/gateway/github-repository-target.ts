@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 type GitHubRepositoryRef = {
   owner: string;
@@ -17,8 +17,8 @@ export function resolveGitHubForkParent(value: unknown): GitHubRepositoryRef | u
     return undefined;
   }
   const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : undefined;
-  const owner = readNonBlankString(parentOwner?.login)?.trim();
-  const repo = readNonBlankString(value.parent.name)?.trim();
+  const owner = normalizeOptionalString(parentOwner?.login);
+  const repo = normalizeOptionalString(value.parent.name);
   return owner && repo ? { owner, repo } : undefined;
 }
 
@@ -30,7 +30,7 @@ export function resolveGitHubRepositoryTarget(
   if (!isRecord(value)) {
     return undefined;
   }
-  const defaultBranch = readNonBlankString(value.default_branch)?.trim();
+  const defaultBranch = normalizeOptionalString(value.default_branch);
   if (value.fork !== true) {
     return defaultBranch
       ? { fork: false, push, pullRequest: { ...push, defaultBranch } }
@@ -38,7 +38,7 @@ export function resolveGitHubRepositoryTarget(
   }
   const parent = resolveGitHubForkParent(value);
   const parentRecord = isRecord(value.parent) ? value.parent : undefined;
-  const parentDefaultBranch = readNonBlankString(parentRecord?.default_branch)?.trim();
+  const parentDefaultBranch = normalizeOptionalString(parentRecord?.default_branch);
   return parent && parentDefaultBranch
     ? {
         fork: true,

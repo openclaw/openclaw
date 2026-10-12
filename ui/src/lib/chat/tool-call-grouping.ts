@@ -21,8 +21,16 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
-export function describeToolGroup(items: readonly AgentActivityItem[]) {
-  const summary = summarizeAgentActivity(items);
+type ToolGroupOptions = {
+  /** Calls of launches that opened a session in its own right, not a subagent. */
+  ownSessionLaunches?: ReadonlySet<string>;
+};
+
+export function describeToolGroup(
+  items: readonly AgentActivityItem[],
+  options: ToolGroupOptions = {},
+) {
+  const summary = summarizeAgentActivity(items, options);
   const label = Object.entries(summary.counts)
     .filter(([, count]) => count > 0)
     .map(([kind, count]) =>
@@ -33,21 +41,29 @@ export function describeToolGroup(items: readonly AgentActivityItem[]) {
     .filter(([, count]) => count > 0)
     .map(([kind, count]) => ({
       kind,
-      label: t(`chat.toolCards.activity.${kind}`, { count: String(count) }),
+      label: t(
+        kind === "skipped" ? "chat.toolCards.skippedCount" : `chat.toolCards.activity.${kind}`,
+        {
+          count: String(count),
+        },
+      ),
     }));
   return { total: summary.total, label, outcomes };
 }
 
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
-  options: { includeFailureCount?: boolean } = {},
+  options: ToolGroupOptions & { includeInlineOutcomes?: boolean } = {},
 ): string {
-  const summary = describeToolGroup(items);
+  const summary = describeToolGroup(items, options);
   return (
     [
       summary.label,
       ...summary.outcomes
-        .filter(({ kind }) => options.includeFailureCount !== false || kind !== "failed")
+        .filter(
+          ({ kind }) =>
+            options.includeInlineOutcomes !== false || (kind !== "failed" && kind !== "skipped"),
+        )
         .map(({ label }) => label),
     ]
       .filter(Boolean)

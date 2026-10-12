@@ -9,14 +9,14 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 describe("Gateway startup node capabilities", () => {
   it("reconnects affected nodes when plugins attach after their handshake", async () => {
-    const port = await getDeterministicFreePortBlock({ offsets: [0] });
     const state = await createOpenClawTestState({
       label: "gateway-startup-node-capabilities",
       layout: "home",
@@ -108,17 +108,24 @@ describe("Gateway startup node capabilities", () => {
       });
     try {
       const token = "startup-node-capability-token";
-      await state.writeConfig({
-        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-      });
-      state.applyEnv();
-      stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
-      const { startGatewayServerCore } = await import("./server-start.js");
-      server = await startGatewayServerCore(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      server = await startClaimedGateway(claim, async () => {
+        await state.writeConfig({
+          gateway: {
+            auth: { mode: "token", token },
+            controlUi: { enabled: false },
+            port: claim.port,
+          },
+        });
+        state.applyEnv();
+        stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+        const { startGatewayServerCore } = await import("./server-start.js");
+        return await startGatewayServerCore(claim.port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        });
       });
       expect(affected.client.invalidated).toBe(true);
       await expect(affected.closed).resolves.toEqual({

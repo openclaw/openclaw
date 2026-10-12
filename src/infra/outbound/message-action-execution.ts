@@ -4,6 +4,7 @@ import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-cl
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -24,7 +25,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -32,19 +32,21 @@ import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./de
 import {
   createChannelActionContext,
   type MessageActionGateway,
+  type MessageActionInput,
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundGatewayRequestContext,
 } from "./message-gateway-options.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
-  type CrossContextDecoration,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
@@ -54,19 +56,28 @@ import {
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
-export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
-
 const log = createSubsystemLogger("outbound/message-action");
-
-// Gateway runtime is only needed for remote message action dispatch or
-// idempotency keys; keep normal in-process actions import-light.
-const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
-);
 
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
+export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+  throwIfAborted(input.abortSignal);
+  input.assertDirectAdapterHandoff?.();
+  input.messageActionAuthorization?.scheduled?.assertCurrent();
+  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+export async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
+  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
+  if (!deliveryAttempt) {
+    return;
+  }
+  assertMessageDeliveryCurrent(input);
+  await deliveryAttempt.beforeAttempt();
+  assertMessageDeliveryCurrent(input);
+}
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionGateway;
@@ -76,8 +87,7 @@ async function callGatewayMessageAction<T>(params: {
   abortSignal?: AbortSignal;
   onUnknownDeliveryOutcome?: () => void;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege, isGatewayTransportError } =
-    await loadMessageActionGatewayRuntime();
+  const { callGatewayLeastPrivilege, isGatewayTransportError } = await loadMessageGatewayRuntime();
   const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // A timed-out send is reattached with the same idempotency key. Cap only the
   // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -194,43 +204,6 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
   };
 }
 
-async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
-  return randomIdempotencyKey();
-}
-
-function applyCrossContextMessageDecoration({
-  params,
-  message,
-  decoration,
-  preferPresentation,
-}: {
-  params: Record<string, unknown>;
-  message: string;
-  decoration: CrossContextDecoration;
-  preferPresentation: boolean;
-}): string {
-  const applied = applyCrossContextDecoration({
-    message,
-    decoration,
-    preferPresentation,
-  });
-  params.message = applied.message;
-  if (applied.presentation) {
-    const existing = normalizeMessagePresentation(params.presentation);
-    params.presentation = existing
-      ? {
-          ...existing,
-          blocks: [...applied.presentation.blocks, ...existing.blocks],
-        }
-      : applied.presentation;
-  }
-  return applied.message;
-}
-
 export async function applyMessageCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -257,12 +230,22 @@ export async function applyMessageCrossContextMarker(params: {
   if (!decoration) {
     return params.message;
   }
-  return applyCrossContextMessageDecoration({
-    params: params.args,
+  const applied = applyCrossContextDecoration({
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
   });
+  params.args.message = applied.message;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.args.presentation);
+    params.args.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
+  }
+  return applied.message;
 }
 
 export async function executeGatewayAction(
@@ -296,7 +279,7 @@ export async function executeGatewayAction(
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     ctx.input.conversationReadOrigin,
   );
-  const idempotencyKey = await resolveGatewayActionIdempotencyKey(
+  const idempotencyKey = await resolveGatewayIdempotencyKey(
     normalizeOptionalString(ctx.params.idempotencyKey),
   );
   const callerOwnsTerminalReceipt =
@@ -402,28 +385,21 @@ export async function executeGatewayAction(
     return result;
   }
   const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
-  if (result.kind === "send") {
+  if (result.kind === "send" || result.kind === "poll") {
     return {
       ...result,
       handledBy: "core",
       ...(partialDelivery
         ? {}
-        : {
-            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
-          }),
-    };
-  }
-  if (result.kind === "poll") {
-    return {
-      ...result,
-      handledBy: "core",
-      ...(partialDelivery
-        ? {}
-        : {
-            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
-            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
-          }),
+        : result.kind === "send"
+          ? {
+              // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+              sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            }
+          : {
+              // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+              pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+            }),
     };
   }
   return result;
@@ -578,7 +554,7 @@ export async function executeMessagePlugin(
   }
 
   if (!channelPlugin?.actions?.handleAction) {
-    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 
   // Plugin actions bypass buildSendPayloadParts, so model-authored text here
@@ -623,6 +599,17 @@ export async function executeMessagePlugin(
     return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
+  const finishPluginAction = (payload: unknown, toolResult?: AgentToolResult<unknown>) =>
+    annotateSourceDelivery(
+      {
+        ...actionResult,
+        handledBy: "plugin",
+        payload,
+        ...(toolResult ? { toolResult } : {}),
+      },
+      ctx,
+      replyToIsExplicit,
+    );
   const authorization = input.messageActionAuthorization;
   let handled;
   try {
@@ -647,29 +634,12 @@ export async function executeMessagePlugin(
       ? projectMessageActionPartialDelivery(error)
       : undefined;
     if (partialDelivery) {
-      return await annotateSourceDelivery(
-        {
-          ...actionResult,
-          handledBy: "plugin",
-          payload: partialDelivery,
-        },
-        ctx,
-        replyToIsExplicit,
-      );
+      return await finishPluginAction(partialDelivery);
     }
     throw error;
   }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return await annotateSourceDelivery(
-    {
-      ...actionResult,
-      handledBy: "plugin",
-      payload: extractToolPayload(handled),
-      toolResult: handled,
-    },
-    ctx,
-    replyToIsExplicit,
-  );
+  return await finishPluginAction(extractToolPayload(handled), handled);
 }

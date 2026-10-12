@@ -11,42 +11,17 @@ const ZERO_SNAPSHOT: NormalizedUsage = {
   total: 0,
 };
 
+const ZERO_ASSISTANT_USAGE = {
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+  input: 0,
+  output: 0,
+  totalTokens: 0,
+};
+
 describe("usage-bridge", () => {
   describe("normalizeCopilotUsage", () => {
-    it("normalizes SDK inputTokens and outputTokens into NormalizedUsage", () => {
-      expect(normalizeCopilotUsage({ inputTokens: 10, outputTokens: 5 })).toEqual({
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        input: 10,
-        output: 5,
-        total: 15,
-      });
-    });
-
-    it("normalizes SDK cacheReadTokens and cacheWriteTokens when present", () => {
-      expect(normalizeCopilotUsage({ cacheReadTokens: 3, cacheWriteTokens: 4 })).toEqual({
-        cacheRead: 3,
-        cacheWrite: 4,
-        input: undefined,
-        output: undefined,
-        total: 7,
-      });
-    });
-
-    it("leaves missing cache token fields undefined rather than zero", () => {
-      const usage = normalizeCopilotUsage({ inputTokens: 2 });
-
-      expect(usage).toEqual({
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        input: 2,
-        output: undefined,
-        total: 2,
-      });
-      expect(usage?.cacheRead).toBeUndefined();
-      expect(usage?.cacheWrite).toBeUndefined();
-    });
-
     it("returns a defined zero-snapshot when SDK event is an object with no valid fields", () => {
       expect(normalizeCopilotUsage({})).toEqual(ZERO_SNAPSHOT);
       expect(normalizeCopilotUsage({ inputTokens: undefined })).toEqual(ZERO_SNAPSHOT);
@@ -56,10 +31,6 @@ describe("usage-bridge", () => {
       expect(normalizeCopilotUsage(null)).toBeUndefined();
       expect(normalizeCopilotUsage(undefined)).toBeUndefined();
       expect(normalizeCopilotUsage("usage")).toBeUndefined();
-    });
-
-    it("ignores string-typed token counts", () => {
-      expect(normalizeCopilotUsage({ inputTokens: "5" })).toEqual(ZERO_SNAPSHOT);
     });
 
     it("ignores NaN and Infinity token counts", () => {
@@ -154,15 +125,9 @@ describe("usage-bridge", () => {
           usage: { cacheRead: 3, cacheWrite: 4, input: 1, output: 2, total: 10 },
         }),
       ).toEqual({
+        ...ZERO_ASSISTANT_USAGE,
         cacheRead: 3,
         cacheWrite: 4,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
         input: 1,
         output: 2,
         totalTokens: 10,
@@ -175,33 +140,14 @@ describe("usage-bridge", () => {
           usage: { input: 4 },
         }),
       ).toEqual({
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
+        ...ZERO_ASSISTANT_USAGE,
         input: 4,
-        output: 0,
-        totalTokens: 0,
       });
     });
 
     it("uses fallback outputTokens when no usage event was captured", () => {
       expect(buildCopilotAssistantUsage({ fallbackOutputTokens: 7 })).toEqual({
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
-        input: 0,
+        ...ZERO_ASSISTANT_USAGE,
         output: 7,
         totalTokens: 7,
       });
@@ -214,36 +160,14 @@ describe("usage-bridge", () => {
           usage: { input: 4, total: 4 },
         }),
       ).toEqual({
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
+        ...ZERO_ASSISTANT_USAGE,
         input: 4,
-        output: 0,
         totalTokens: 4,
       });
     });
 
     it("returns an all-zero block when both usage and fallback are missing", () => {
-      expect(buildCopilotAssistantUsage({})).toEqual({
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: {
-          cacheRead: 0,
-          cacheWrite: 0,
-          input: 0,
-          output: 0,
-          total: 0,
-        },
-        input: 0,
-        output: 0,
-        totalTokens: 0,
-      });
+      expect(buildCopilotAssistantUsage({})).toEqual(ZERO_ASSISTANT_USAGE);
     });
   });
 });

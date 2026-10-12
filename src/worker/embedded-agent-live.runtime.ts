@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -9,7 +10,14 @@ import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js"
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import {
+  bindAgentAssistantSource,
+  readAgentAssistantSource,
+  type AgentAssistantSourceReceipt,
+} from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -18,14 +26,6 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const MAX_LIVE_EVENT_BYTES = 32 * 1024;
 const MAX_LIVE_PREVIEW_BYTES = 4 * 1024;
-
-function liveEventBytes(event: WorkerLiveEvent): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(event), "utf8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
 
 function truncateLiveText(value: string): string {
   if (
@@ -65,7 +65,7 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
   const textExceedsLimit =
     (event.kind === "assistant" || event.kind === "thinking") &&
     event.payload.text.length > MAX_LIVE_EVENT_BYTES;
-  if (!textExceedsLimit && liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
+  if (!textExceedsLimit && jsonUtf8BytesOrInfinity(event) <= MAX_LIVE_EVENT_BYTES) {
     return event;
   }
   let bounded: WorkerLiveEvent;
@@ -84,39 +84,27 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
     bounded = {
       kind: "thinking",
       payload: {
+        ...event.payload,
         text: truncateLiveText(event.payload.text),
         delta: truncateLiveText(event.payload.delta),
       },
     };
   } else if (event.kind === "tool") {
-    if (event.payload.phase === "start") {
-      bounded = {
-        kind: "tool",
-        payload: { ...event.payload, args: boundLiveValue(event.payload.args) },
-      };
-    } else if (event.payload.phase === "update") {
-      bounded = {
-        kind: "tool",
-        payload: {
-          ...event.payload,
-          partialResult: boundLiveValue(event.payload.partialResult),
-        },
-      };
-    } else {
-      bounded = {
-        kind: "tool",
-        payload: { ...event.payload, result: boundLiveValue(event.payload.result) },
-      };
-    }
-  } else if (event.kind === "lifecycle" && event.payload.phase === "error") {
     bounded = {
-      kind: "lifecycle",
-      payload: { ...event.payload, error: truncateLiveText(event.payload.error) },
+      kind: "tool",
+      payload: {
+        ...event.payload,
+        ...(event.payload.phase === "start"
+          ? { args: boundLiveValue(event.payload.args) }
+          : event.payload.phase === "update"
+            ? { partialResult: boundLiveValue(event.payload.partialResult) }
+            : { result: boundLiveValue(event.payload.result) }),
+      },
     };
   } else {
     throw new Error(`worker live ${event.kind} event exceeds the protocol payload limit`);
   }
-  if (liveEventBytes(bounded) > MAX_LIVE_EVENT_BYTES) {
+  if (jsonUtf8BytesOrInfinity(bounded) > MAX_LIVE_EVENT_BYTES) {
     throw new Error(`worker live ${event.kind} event cannot fit the protocol payload limit`);
   }
   return bounded;
@@ -153,18 +141,12 @@ function readAssistantThinking(message: AgentMessage): string {
     .join("");
 }
 
-type WorkerLiveClient = {
+export type WorkerLiveClient = {
   enqueuePreview: (event: WorkerLiveEvent) => boolean;
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
-type WorkerLiveRuntime = {
-  handleSessionEvent: (event: AgentSessionEvent) => void;
-  enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
-  emitTerminal: () => Promise<void>;
-};
-
-export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
+export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (previewEnabled) {
@@ -203,11 +185,12 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   };
   let streamedText = "";
   let streamedPhase: AssistantPhase | undefined;
-  let assistantMessageIndex = 0;
+  let assistantSource: AgentAssistantSourceReceipt | undefined;
   let streamedThinking = "";
-  const emitAssistantSnapshot = (message: AgentMessage) => {
+  const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
-    if (text === streamedText && phase === streamedPhase) {
+    const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
+    if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;
     }
     // Commentary never contributed to the answer, even if a final repeats its prefix.
@@ -219,17 +202,28 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       payload: {
         text,
         delta: replace ? text : text.slice(previousText.length),
+        ...(mediaUrls?.length ? { mediaUrls } : {}),
         ...(replace ? { replace: true as const } : {}),
         ...(phase ? { phase } : {}),
-        // Provider signatures can arrive only at text_end. Message lifecycle,
-        // not those late ids, owns this cumulative snapshot's stable scope.
-        itemId: `assistant-${assistantMessageIndex}`,
+        itemId: readAgentAssistantSource(message)?.itemId,
       },
     });
     streamedText = text;
     streamedPhase = phase;
   };
   const handleSessionEvent = (event: AgentSessionEvent) => {
+    if (
+      (event.type === "message_start" ||
+        event.type === "message_update" ||
+        event.type === "message_end") &&
+      event.message.role === "assistant"
+    ) {
+      if (event.type === "message_start" || !assistantSource) {
+        assistantSource = { itemId: randomUUID() };
+      }
+      // Persistence still needs occurrence identity after optional previews degrade.
+      bindAgentAssistantSource(event.message, assistantSource);
+    }
     // Disabled previews no longer need snapshots or diagnostics, but agent_end
     // still owns the terminal result deferred until the transcript is durable.
     if (!previewEnabled && event.type !== "agent_end") {
@@ -240,7 +234,6 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
-      assistantMessageIndex += 1;
       streamedText = "";
       streamedPhase = undefined;
       streamedThinking = "";
@@ -256,18 +249,26 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         streamedThinking = readAssistantThinking(event.message);
         enqueueLive({
           kind: "thinking",
-          payload: { text: streamedThinking, delta: event.assistantMessageEvent.delta },
+          payload: {
+            text: streamedThinking,
+            delta: event.assistantMessageEvent.delta,
+            itemId: assistantSource?.itemId,
+          },
         });
       }
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
-      emitAssistantSnapshot(event.message);
+      emitAssistantSnapshot(event.message, true);
       const finalThinking = readAssistantThinking(event.message);
       if (finalThinking !== streamedThinking) {
         enqueueLive({
           kind: "thinking",
-          payload: { text: finalThinking, delta: finalThinking },
+          payload: {
+            text: finalThinking,
+            delta: finalThinking,
+            itemId: assistantSource?.itemId,
+          },
         });
       }
       return;

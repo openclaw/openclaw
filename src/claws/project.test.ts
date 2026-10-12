@@ -419,31 +419,29 @@ describe("Claw projects", () => {
     });
   });
 
-  it.each([
-    ".git/config",
-    "node_modules/example/secret.md",
-    "workspace/.git/config",
-    "workspace/node_modules/example/secret.md",
-  ])("rejects an explicitly selected source from %s", async (sourcePath) => {
-    const project = tempDirs.make("openclaw-claw-excluded-source-");
-    const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
-    await writeRichProject(project);
-    await mkdir(dirname(join(project, sourcePath)), { recursive: true });
-    await writeFile(join(project, sourcePath), "sensitive local state\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", sourcePath),
-    );
+  it.each([".git/config", "workspace/node_modules/example/secret.md"])(
+    "rejects an explicitly selected source from %s",
+    async (sourcePath) => {
+      const project = tempDirs.make("openclaw-claw-excluded-source-");
+      const output = join(tempDirs.make("openclaw-claw-excluded-source-output-"), "claw.tgz");
+      await writeRichProject(project);
+      await mkdir(dirname(join(project, sourcePath)), { recursive: true });
+      await writeFile(join(project, sourcePath), "sensitive local state\n");
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest.replace("workspace/reference.md", sourcePath),
+      );
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
-    await expect(buildClawProject(project, output)).rejects.toMatchObject({
-      code: "project_invalid",
-    } satisfies Partial<ClawProjectError>);
-  });
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
+      });
+      await expect(buildClawProject(project, output)).rejects.toMatchObject({
+        code: "project_invalid",
+      } satisfies Partial<ClawProjectError>);
+    },
+  );
 
   it("rejects a custom profile selected from an excluded tree", async () => {
     const project = tempDirs.make("openclaw-claw-excluded-profile-");

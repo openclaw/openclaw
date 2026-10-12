@@ -1,14 +1,10 @@
-/**
- * Session memory hook handler
- *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with a timestamp slug by default
- */
-
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
@@ -27,6 +23,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
@@ -140,10 +137,7 @@ async function saveSessionMemoryNow(
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
-    const contextWorkspaceDir =
-      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
-        ? context.workspaceDir
-        : undefined;
+    const contextWorkspaceDir = readNonBlankString(context.workspaceDir);
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -170,10 +164,7 @@ async function saveSessionMemoryNow(
         ? context.previousSessionEntry || context.sessionEntry || {}
         : context.sessionEntry || {}
     ) as Record<string, unknown>;
-    const currentSessionId =
-      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
-        ? sessionEntry.sessionId.trim()
-        : undefined;
+    const currentSessionId = normalizeOptionalString(sessionEntry.sessionId);
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
@@ -195,7 +186,6 @@ async function saveSessionMemoryNow(
 
       if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
         slug = await generateSlugViaLLM({
           sessionContent: transcript.content,
@@ -207,13 +197,11 @@ async function saveSessionMemoryNow(
       }
     }
 
-    // If no slug, use timestamp
     if (!slug) {
       slug = localTimestamp.timeSlug;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
     const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
@@ -223,14 +211,12 @@ async function saveSessionMemoryNow(
 
     const timeStr = localTimestamp.time;
 
-    // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const boundaryDetail =
       event.type === "session"
         ? `- **Reason**: ${(context.reason as string) || "unknown"}`
         : `- **Source**: ${(context.commandSource as string) || "unknown"}`;
 
-    // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
@@ -240,7 +226,6 @@ async function saveSessionMemoryNow(
       "",
     ];
 
-    // Include conversation content if available
     if (transcript.status === "available" && transcript.content) {
       entryParts.push("## Conversation Summary", "", transcript.content, "");
     } else if (transcript.status === "unavailable") {
@@ -275,7 +260,6 @@ async function saveSessionMemoryNow(
     });
     log.debug("Memory file written successfully");
 
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
@@ -291,7 +275,7 @@ async function saveSessionMemoryNow(
   }
 }
 
-const saveSessionToMemory: HookHandler = (event) => {
+const saveSessionToMemory: HookHandler = async (event) => {
   // Manual commands retain their shipped hook contract, including /reset soft.
   // Automatic rollover uses a distinct lifecycle event so command hooks do not
   // receive synthetic commands and manual reset cannot double-write memory.
@@ -316,36 +300,41 @@ const saveSessionToMemory: HookHandler = (event) => {
   }
   const agentId = requireSessionMemoryAgentId(event);
   const cfg = context.cfg as OpenClawConfig | undefined;
-  // Gateway and soft-reset hooks already run before mutation; chat resets carry
-  // the snapshot captured by session initialization before closing the window.
-  const transcript =
-    (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
-    (sessionEntry?.sessionId
-      ? captureSessionMemoryTranscript(
-          {
-            agentId,
-            sessionId: sessionEntry.sessionId,
-            sessionKey: event.sessionKey,
-            storePath:
-              typeof context.storePath === "string" && context.storePath.trim()
-                ? context.storePath.trim()
-                : resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-          },
-          cfg,
-        )
-      : ({ status: "available", content: null, originClass: "agent" } as const));
+  const captureComplete = createDeferredCore();
+  const captureAndSave = async () => {
+    // Chat resets carry their pre-mutation excerpt; other hooks capture before returning.
+    const transcript =
+      (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
+      (sessionEntry?.sessionId
+        ? await captureSessionMemoryTranscript(
+            {
+              agentId,
+              sessionId: sessionEntry.sessionId,
+              sessionKey: event.sessionKey,
+              storePath:
+                normalizeOptionalString(context.storePath) ??
+                resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+            },
+            cfg,
+          )
+        : ({ status: "available", content: null, originClass: "agent" } as const));
+    captureComplete.resolve();
+    await saveSessionMemoryNow(event, agentId, transcript);
+  };
+  // Reserve follow-up admission and register its settlement before capture can yield.
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, agentId, transcript)
-    : runWithGatewayIndependentRootWorkContinuation(
-        () => saveSessionMemoryNow(event, agentId, transcript),
-        "hooks:session-memory",
-      );
+    ? captureAndSave()
+    : runWithGatewayIndependentRootWorkContinuation(captureAndSave, "hooks:session-memory");
   pendingSessionMemoryWrites.add(writePromise);
-  void writePromise.finally(() => {
-    pendingSessionMemoryWrites.delete(writePromise);
-  });
-  // Automatic rollover dispatch is already detached from the successor turn.
-  // Keep its gateway admission alive until nested slug/model work finishes.
+  void writePromise.then(
+    () => pendingSessionMemoryWrites.delete(writePromise),
+    (error: unknown) => {
+      pendingSessionMemoryWrites.delete(writePromise);
+      captureComplete.reject(error);
+    },
+  );
+  // Manual reset waits for its excerpt but retains detached filename generation and writing.
+  await captureComplete.promise;
   if (isAutoReset) {
     return writePromise;
   }

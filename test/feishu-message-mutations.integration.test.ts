@@ -76,6 +76,10 @@ const routes = [
   },
 ];
 
+const mutationScopes = routes.filter(({ name }) =>
+  ["text edit", "pin", "reaction addition"].includes(name),
+);
+
 async function withFeishuMutation(
   run: (fixture: {
     cfg: OpenClawConfig;
@@ -267,64 +271,53 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
     });
   });
 
-  it.each(routes)(
-    "stops $name after retirement during renewed token preparation",
-    async (route) => {
-      await withFeishuMutation(async ({ execute, requests, respond, retire, gate }) => {
-        const started = gate();
-        const release = gate();
-        let tokens = 0;
-        respond(async ({ path }) => {
-          if (path === AUTH_PATH) {
-            tokens += 1;
-            if (tokens === 1) {
-              // The real SDK refreshes before the action's next request.
-              return { code: 0, tenant_access_token: "short-lived-fixture-token", expire: 1 };
-            }
-            started.resolve();
-            await release.promise;
+  it.each([
+    ...mutationScopes.map((route) => ({
+      ...route,
+      name: `${route.name} renewed token`,
+      waitAt: AUTH_PATH,
+      renewed: true,
+    })),
+    ...[AUTH_PATH, MESSAGE_PATH].map((waitAt) => ({
+      name: `authorization through ${waitAt}`,
+      params: {},
+      waitAt,
+      renewed: false,
+    })),
+  ])("stops after retirement during $name", async ({ params, waitAt, renewed }) => {
+    await withFeishuMutation(async ({ execute, requests, respond, retire, gate }) => {
+      const started = gate();
+      const release = gate();
+      let tokens = 0;
+      respond(async ({ path }) => {
+        if (path === waitAt) {
+          if (renewed && ++tokens === 1) {
+            // The real SDK refreshes before the action's next request.
+            return { code: 0, tenant_access_token: "short-lived-fixture-token", expire: 1 };
           }
-          return undefined;
-        });
-        const result = execute(route.params).catch((error: unknown) => error);
-        await withTestTimeout(started.promise, 5_000, "Feishu token request");
-        retire();
-        release.resolve();
-        expect(await result).toBeInstanceOf(Error);
-        expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
-          `POST ${AUTH_PATH}`,
-          `GET ${MESSAGE_PATH}`,
-          `POST ${AUTH_PATH}`,
-        ]);
+          started.resolve();
+          await release.promise;
+        }
+        return undefined;
       });
-    },
-  );
-
-  it.each([AUTH_PATH, MESSAGE_PATH])(
-    "stops after retirement while authorizing through %s",
-    async (waitAt) => {
-      await withFeishuMutation(async ({ execute, requests, respond, retire, gate }) => {
-        const started = gate();
-        const release = gate();
-        respond(async ({ path }) => {
-          if (path === waitAt) {
-            started.resolve();
-            await release.promise;
-          }
-        });
-        const result = execute().catch((error: unknown) => error);
-        await withTestTimeout(started.promise, 5_000, "Feishu authorization request");
-        retire();
-        release.resolve();
+      const result = execute(params).catch((error: unknown) => error);
+      await withTestTimeout(started.promise, 5_000, "Feishu authorization request");
+      retire();
+      release.resolve();
+      if (renewed) {
+        expect(await result).toBeInstanceOf(Error);
+      } else {
         expect(await result).toMatchObject({
           message: "message action turn capability is no longer active",
         });
-        expect(requests.map(({ path }) => path)).toEqual(
-          waitAt === AUTH_PATH ? [AUTH_PATH] : [AUTH_PATH, MESSAGE_PATH],
-        );
-      });
-    },
-  );
+      }
+      expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        `POST ${AUTH_PATH}`,
+        ...(renewed || waitAt === MESSAGE_PATH ? [`GET ${MESSAGE_PATH}`] : []),
+        ...(renewed ? [`POST ${AUTH_PATH}`] : []),
+      ]);
+    });
+  });
 
   it("checks currentness between reaction pages and preserves the active caller's own reactions", async () => {
     for (const retired of [false, true]) {
@@ -368,95 +361,80 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
     }
   });
 
-  it("stops clearing reactions after one accepted deletion when its caller retires", async () => {
-    await withFeishuMutation(async ({ cfg, execute, requests, respond, retire }) => {
-      respond(async ({ method, path }) => {
-        if (method === "GET" && path === REACTION_PATH) {
-          return {
-            code: 0,
-            data: {
-              items: ["first", "second"].map((reaction_id) => ({
-                reaction_id,
-                operator: { operator_type: "app", operator_id: cfg.channels!.feishu!.appId },
-              })),
-            },
-          };
+  it.each(["retirement", "provider failure"])(
+    "preserves %s after an accepted reaction deletion",
+    async (failure) => {
+      await withFeishuMutation(async ({ cfg, execute, requests, respond, retire }) => {
+        respond(async ({ method, path }) => {
+          if (method === "GET" && path === REACTION_PATH) {
+            return {
+              code: 0,
+              data: {
+                items: ["first", "second"].map((reaction_id) => ({
+                  reaction_id,
+                  operator: { operator_type: "app", operator_id: cfg.channels!.feishu!.appId },
+                })),
+              },
+            };
+          }
+          if (method === "DELETE" && failure === "retirement") {
+            retire();
+          }
+          if (failure === "provider failure" && path === `${REACTION_PATH}/second`) {
+            return { code: 123, msg: "Fixture rejected second removal" };
+          }
+          return undefined;
+        });
+        const result = execute({ action: "react", clearAll: true });
+        if (failure === "retirement") {
+          await expect(result).rejects.toThrow();
+        } else {
+          await expect(result).rejects.toThrow("Fixture rejected second removal");
         }
-        if (method === "DELETE") {
-          retire();
-        }
-        return undefined;
+        expect(
+          requests.filter(({ method }) => method === "DELETE").map(({ path }) => path),
+        ).toEqual([
+          `${REACTION_PATH}/first`,
+          ...(failure === "provider failure" ? [`${REACTION_PATH}/second`] : []),
+        ]);
       });
-      await expect(execute({ action: "react", clearAll: true })).rejects.toThrow();
-      expect(requests.filter(({ method }) => method === "DELETE").map(({ path }) => path)).toEqual([
-        `${REACTION_PATH}/first`,
-      ]);
-    });
-  });
+    },
+  );
 
-  it("settles an accepted edit in the adapter while core rejects its closed caller", async () => {
-    await withFeishuMutation(async ({ execute, requests, respond, retire }) => {
-      const handler = vi.spyOn(feishuPlugin.actions!, "handleAction");
-      respond(async ({ method }) => {
-        if (method === "PUT") {
-          retire();
+  it.each(["accepted", "redirected"])(
+    "preserves %s edit settlement after caller retirement",
+    async (outcome) => {
+      await withFeishuMutation(async ({ execute, requests, respond, retire }) => {
+        const handler = vi.spyOn(feishuPlugin.actions!, "handleAction");
+        respond(async ({ method, path }, response) => {
+          if (method === "PUT" && path === MESSAGE_PATH) {
+            retire();
+            if (outcome === "redirected") {
+              response.writeHead(307, { location: `${MESSAGE_PATH}/redirected` }).end();
+            }
+          }
+        });
+        const result = execute();
+        if (outcome === "accepted") {
+          await expect(result).rejects.toThrow(
+            "message action turn capability is no longer active",
+          );
+          await expect(handler.mock.results[0]?.value).resolves.toMatchObject({
+            details: { ok: true, messageId: MESSAGE_ID, contentType: "post" },
+          });
+        } else {
+          const error = await result.catch((cause: unknown) => cause);
+          expect(error).toBeInstanceOf(Error);
+          expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
         }
+        expect(requests.filter(({ method }) => method === "PUT").map(({ path }) => path)).toEqual([
+          MESSAGE_PATH,
+        ]);
       });
-      await expect(execute()).rejects.toThrow("message action turn capability is no longer active");
-      await expect(handler.mock.results[0]?.value).resolves.toMatchObject({
-        details: { ok: true, messageId: MESSAGE_ID, contentType: "post" },
-      });
-      expect(requests.filter(({ method }) => method === "PUT")).toHaveLength(1);
-    });
-  });
+    },
+  );
 
-  it("preserves dispatch uncertainty when retirement blocks a mutation redirect", async () => {
-    await withFeishuMutation(async ({ execute, requests, respond, retire }) => {
-      respond(async ({ method, path }, response) => {
-        if (method === "PUT" && path === MESSAGE_PATH) {
-          retire();
-          response.writeHead(307, { location: `${MESSAGE_PATH}/redirected` }).end();
-        }
-      });
-      const error = await execute().catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect(requests.filter(({ method }) => method === "PUT").map(({ path }) => path)).toEqual([
-        MESSAGE_PATH,
-      ]);
-    });
-  });
-
-  it("preserves a provider failure after an earlier reaction was removed", async () => {
-    await withFeishuMutation(async ({ cfg, execute, requests, respond }) => {
-      respond(async ({ method, path }) => {
-        if (method === "GET" && path === REACTION_PATH) {
-          return {
-            code: 0,
-            data: {
-              items: ["first", "second"].map((reaction_id) => ({
-                reaction_id,
-                operator: { operator_type: "app", operator_id: cfg.channels!.feishu!.appId },
-              })),
-            },
-          };
-        }
-        if (path === `${REACTION_PATH}/second`) {
-          return { code: 123, msg: "Fixture rejected second removal" };
-        }
-        return undefined;
-      });
-      await expect(execute({ action: "react", clearAll: true })).rejects.toThrow(
-        "Fixture rejected second removal",
-      );
-      expect(requests.filter(({ method }) => method === "DELETE").map(({ path }) => path)).toEqual([
-        `${REACTION_PATH}/first`,
-        `${REACTION_PATH}/second`,
-      ]);
-    });
-  });
-
-  it.each(routes.filter(({ name }) => ["text edit", "pin", "reaction addition"].includes(name)))(
+  it.each(mutationScopes)(
     "keeps provider errors with incidental IDs as failures for $name",
     async (route) => {
       await withFeishuMutation(async ({ execute, respond }) => {

@@ -1,7 +1,7 @@
 import type { EventEmitter } from "node:events";
 import type { WorkerOptions } from "node:worker_threads";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 
 const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
@@ -49,15 +49,6 @@ function isSystemCaWarmupMessage(value: unknown): value is SystemCaWarmupMessage
     : message.ok === false && typeof message.error === "string";
 }
 
-function isWorkerPermissionDenied(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "ERR_ACCESS_DENIED"
-  );
-}
-
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
 export async function warmMacOSSystemCaOffMainThread(
   options: SystemCaWarmupOptions = {},
@@ -78,7 +69,7 @@ export async function warmMacOSSystemCaOffMainThread(
     });
   } catch (error) {
     // CA prewarming is an optimization. Node can still load trust settings lazily.
-    const reason = isWorkerPermissionDenied(error)
+    const reason = hasErrnoCode(error, "ERR_ACCESS_DENIED")
       ? "Node denied worker-thread permission"
       : `worker creation failed: ${formatErrorMessage(error)}`;
     options.log?.warn(`macOS CA warmup skipped because ${reason}; trust settings will load lazily`);

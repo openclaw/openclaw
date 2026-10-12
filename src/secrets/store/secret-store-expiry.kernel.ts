@@ -11,7 +11,7 @@ import {
   GITHUB_DEVICE_STORE_MAX_AGE_MS,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
-import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 
 type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -35,7 +35,7 @@ export function purgeExpiredSecretStoreEntriesInDatabase(
 ): number {
   const state = openOpenClawStateDatabase(databaseOptions);
   const { threshold, handoffThreshold, deviceThreshold } = cutoffs;
-  try {
+  return withMissingSecretStoreFallback(() => {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -86,10 +86,5 @@ export function purgeExpiredSecretStoreEntriesInDatabase(
       { ...databaseOptions, database: state },
       { operationLabel: "secrets.store.purge" },
     );
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return 0;
-    }
-    throw error;
-  }
+  }, 0);
 }

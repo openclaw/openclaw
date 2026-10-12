@@ -44,6 +44,7 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
           { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
           context.signal,
           context.deadlineMonotonicMs,
+          context.isAdmissible,
         );
         context.signal.throwIfAborted();
         const answers: Record<string, DecisionBatchResult["answers"][string]> = {};

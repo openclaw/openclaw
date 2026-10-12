@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
-import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
+import {
+  loadCostUsageSummary,
+  loadCostUsageSummaryFromCache,
+  loadSessionLogs,
+} from "./session-cost-usage.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -100,10 +104,9 @@ if (!isMainThread) {
           startMs: Date.UTC(2026, 6, 6),
           endMs: Date.UTC(2026, 6, 7),
         };
-        await loadCostUsageSummaryFromCache({
+        await loadCostUsageSummary({
           ...range,
           agentId: "main",
-          refreshMode: "sync-when-empty",
         });
         const rollupsBefore = readSessionCostUsageRollupRows();
 

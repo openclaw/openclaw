@@ -60,29 +60,25 @@ export function resolveConfiguredModelEntries(
     const canonicalRef = params.canonicalizeRef?.(ref) ?? ref;
     const key = modelKey(canonicalRef.provider, canonicalRef.model);
     const originalKey = modelKey(ref.provider, ref.model);
-    const existing = entriesByKey.get(key);
-    const aliases = [
-      ...(existing?.aliases ?? []),
-      ...(aliasIndex.byKey.get(key) ?? []),
-      ...(originalKey === key ? [] : (aliasIndex.byKey.get(originalKey) ?? [])),
-    ];
-    const aliasDisabled =
-      existing?.aliasDisabled === true ||
-      aliasIndex.disabledKeys?.has(key) === true ||
-      aliasIndex.disabledKeys?.has(originalKey) === true;
-    if (existing) {
-      existing.tags.add(tag);
-      existing.aliases = [...new Set(aliases)];
-      existing.aliasDisabled = aliasDisabled;
-      return existing;
-    }
-    const entry: ConfiguredModelEntry = {
+    const entry: ConfiguredModelEntry = entriesByKey.get(key) ?? {
       key,
       ref: canonicalRef,
-      tags: new Set([tag]),
-      aliases: [...new Set(aliases)],
-      aliasDisabled,
+      tags: new Set<string>(),
+      aliases: [],
+      aliasDisabled: false,
     };
+    entry.tags.add(tag);
+    entry.aliases = [
+      ...new Set([
+        ...entry.aliases,
+        ...(aliasIndex.byKey.get(key) ?? []),
+        ...(originalKey === key ? [] : (aliasIndex.byKey.get(originalKey) ?? [])),
+      ]),
+    ];
+    entry.aliasDisabled =
+      entry.aliasDisabled ||
+      aliasIndex.disabledKeys?.has(key) === true ||
+      aliasIndex.disabledKeys?.has(originalKey) === true;
     entriesByKey.set(key, entry);
     return entry;
   };

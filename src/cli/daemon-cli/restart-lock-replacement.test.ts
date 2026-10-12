@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 
 const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async (_delayMs: number) => {}));
@@ -43,7 +44,6 @@ describe("waitForGatewayLockReplacement", () => {
       .mockResolvedValueOnce(previousLockIdentity)
       .mockResolvedValue(replacementLockIdentity);
 
-    const { waitForGatewayLockReplacement } = await import("./restart-lock-replacement.js");
     await expect(
       waitForGatewayLockReplacement({
         previousLockIdentity,
@@ -65,7 +65,6 @@ describe("waitForGatewayLockReplacement", () => {
       .mockResolvedValueOnce(previousLockIdentity)
       .mockResolvedValue(undefined);
 
-    const { waitForGatewayLockReplacement } = await import("./restart-lock-replacement.js");
     await expect(
       waitForGatewayLockReplacement({
         previousLockIdentity,
@@ -90,7 +89,6 @@ describe("waitForGatewayLockReplacement", () => {
       .mockResolvedValueOnce(previousLockIdentity)
       .mockResolvedValue(replacementLockIdentity);
 
-    const { waitForGatewayLockReplacement } = await import("./restart-lock-replacement.js");
     await expect(
       waitForGatewayLockReplacement({
         previousLockIdentity,

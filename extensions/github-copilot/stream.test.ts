@@ -312,37 +312,41 @@ describe("wrapCopilotAnthropicStream", () => {
         },
       );
 
-      expect(returnedPayload).toEqual({
-        messages: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "text",
-                text: "replacement system prompt",
-                cache_control: { type: "ephemeral" },
-              },
-            ],
-          },
-          {
-            role: "assistant",
-            content: ["functions_read_0", "a_b_2", "a_b_3", "a_b", "a_b_4"].map((id) => ({
-              type: "tool_use",
-              id,
-              name: "read",
-              input: {},
-            })),
-          },
-          {
-            role: "user",
-            content: ["functions_read_0", "a_b_2", "a_b_3", "a_b", "a_b_4"].map((tool_use_id) => ({
-              type: "tool_result",
-              tool_use_id,
-              content: "done",
-            })),
-          },
-        ],
-      });
+      expect(JSON.stringify(returnedPayload)).toBe(
+        JSON.stringify({
+          messages: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "text",
+                  text: "replacement system prompt",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+            },
+            {
+              role: "assistant",
+              content: ["functions_read_0", "a_b_2", "a_b_3", "a_b", "a_b_4"].map((id) => ({
+                type: "tool_use",
+                id,
+                name: "read",
+                input: {},
+              })),
+            },
+            {
+              role: "user",
+              content: ["functions_read_0", "a_b_2", "a_b_3", "a_b", "a_b_4"].map(
+                (tool_use_id) => ({
+                  type: "tool_result",
+                  tool_use_id,
+                  content: "done",
+                }),
+              ),
+            },
+          ],
+        }),
+      );
     },
   );
 
@@ -585,10 +589,8 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
   });
 
-  it.each([
-    { provider: "anthropic", id: "claude-sonnet-4-6", toolId: "toolu_native_123" },
-    { provider: "kimi", id: "k2p5", toolId: "functions.read:0" },
-  ])("does not patch unrelated $provider Anthropic streams", (model) => {
+  it("does not patch an unrelated provider's Anthropic stream", () => {
+    const model = { provider: "kimi", id: "k2p5", toolId: "functions.read:0" };
     const payload = {
       messages: [
         { role: "assistant", content: [{ type: "tool_use", id: model.toolId }] },
@@ -733,7 +735,9 @@ describe("wrapCopilotAnthropicStream", () => {
         const replacement = await hookResult;
         expect(replacement !== undefined).toBe(replace);
         const returnedPayload = (replacement ?? originalPayload) as ResponsesTestPayload;
-        expect(returnedPayload.input[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+        expect(JSON.stringify(returnedPayload)).toBe(
+          '{"input":[{"id":"msg_fa6fceaad75c6a9d","type":"message"}]}',
+        );
       }
     }
   });

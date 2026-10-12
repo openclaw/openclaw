@@ -1,24 +1,37 @@
 /* @vitest-environment jsdom */
 
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import type { BoardGetParams, BoardWidget } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  acquireBoardProviderForSession,
-  type BoardProvider,
-  type BoardProviderLease,
-} from "../lib/board/provider.ts";
+import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "./control-ui-dashboard.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-dashboard.tsx";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;
 };
 
 const mounted: DashboardElement[] = [];
+
+function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
+  return {
+    name: "status",
+    tabId: "main",
+    title: "Status",
+    contentKind: "html",
+    sizeW: 12,
+    sizeH: 2,
+    position: 0,
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
 
 function createClient(
   widgets: unknown[] = [],
@@ -60,17 +73,17 @@ async function mountDashboard(
   element.canGrant = capabilities.canGrant ?? false;
   container.append(element);
   mounted.push(element);
-  // The provider is acquired in updated(), after the first DOM render.
-  // Await the real lifecycle so a loaded runner cannot observe the toggle early.
+  // Settle the custom-element property bridge before observing rendered controls.
   await element.updateComplete;
   expect(element.querySelector(".plugin-session-dashboard__toggle")).not.toBeNull();
   return element;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const element of mounted.splice(0)) {
     element.remove();
   }
+  await Promise.resolve();
 });
 
 describe("Plugin session dashboard", () => {
@@ -128,18 +141,13 @@ describe("Plugin session dashboard", () => {
       onTestFinished(() => provider.remove());
       document.body.append(provider);
       const { client, request } = createClient([
-        {
+        widget({
           name: "owner",
-          tabId: "main",
           title: "Conversation owner",
           contentKind: "plugin",
           pluginKind: "identity:context",
           sizeW: 6,
-          sizeH: 2,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-        },
+        }),
       ]);
       const session = { sessionKey, agentId: "writer" };
       const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
@@ -183,27 +191,10 @@ describe("Plugin session dashboard", () => {
       sessionKey,
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [
-        {
-          name: "status",
-          tabId: "main",
-          title: "Status",
-          contentKind: "html" as const,
-          sizeW: 12,
-          sizeH: 2,
-          position: 0,
-          grantState: "none" as const,
-          revision: 1,
-        },
-      ],
+      widgets: [widget()],
     };
-    let resolveSnapshot: ((value: typeof snapshot) => void) | undefined;
-    const request = vi.fn(
-      () =>
-        new Promise<typeof snapshot>((resolve) => {
-          resolveSnapshot = resolve;
-        }),
-    );
+    const pending = createDeferred<typeof snapshot>();
+    const request = vi.fn(() => pending.promise);
     const client = {
       request,
       addEventListener: vi.fn(() => () => {}),
@@ -216,7 +207,7 @@ describe("Plugin session dashboard", () => {
     ).toBe("false");
     expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).toBeNull();
 
-    resolveSnapshot?.(snapshot);
+    pending.resolve(snapshot);
 
     await vi.waitFor(() =>
       expect(
@@ -228,17 +219,11 @@ describe("Plugin session dashboard", () => {
 
   it("updates mounted dashboard controls immediately when gateway permissions change", async () => {
     const { client, request } = createClient([
-      {
+      widget({
         name: "pending-status",
-        tabId: "main",
         title: "Pending status",
-        contentKind: "html",
-        sizeW: 12,
-        sizeH: 2,
-        position: 0,
         grantState: "pending",
-        revision: 1,
-      },
+      }),
     ]);
     const element = await mountDashboard(
       { sessionKey: "agent:main:workboard-live-scopes" },
@@ -283,15 +268,13 @@ describe("Plugin session dashboard", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it.each(
-    (["chat-first", "dashboard-first"] as const).flatMap((order) => [
-      { order, session: { sessionKey: `agent:main:workboard-shared-${order}` } },
-      { order, session: { sessionKey: "global", agentId: "work" } },
-    ]),
-  )(
+  it.each([
+    { order: "chat-first", session: { sessionKey: "agent:main:workboard-shared" } },
+    { order: "dashboard-first", session: { sessionKey: "global", agentId: "work" } },
+  ])(
     "shares $session.sessionKey gateway state without leaking dashboard capabilities in $order order",
     async ({ order, session }) => {
-      const { client, request, removeListener } = createClient();
+      const { client, request, removeListener } = createClient([widget()]);
       let chat: BoardProviderLease | undefined;
       let dashboard: DashboardElement | undefined;
 
@@ -312,28 +295,25 @@ describe("Plugin session dashboard", () => {
 
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
         expect(request).toHaveBeenCalledWith("board.get", session);
-        const dashboardProvider = Reflect.get(dashboard, "provider") as BoardProvider;
-
-        expect(chat.provider).not.toBe(dashboardProvider);
-        expect(chat.provider.snapshot$).toBe(dashboardProvider.snapshot$);
+        await vi.waitFor(() =>
+          expect(dashboard?.querySelector("openclaw-board-view")).not.toBeNull(),
+        );
+        const board = dashboard.querySelector("openclaw-board-view")!;
         expect(chat.provider).toMatchObject({
           canPinWidgets: true,
           canPinMcpApps: true,
           canMutate: true,
           canGrant: true,
         });
-        expect(dashboardProvider).toMatchObject({
-          canPinWidgets: false,
-          canPinMcpApps: false,
-          canMutate: true,
-          canGrant: false,
-        });
+        expect(board.canMutate).toBe(true);
+        expect(board.canGrant).toBe(false);
 
         dashboard.canMutate = false;
         await dashboard.updateComplete;
+        await board.updateComplete;
 
-        expect(Reflect.get(dashboard, "provider")).toBe(dashboardProvider);
-        expect(dashboardProvider.canMutate).toBe(false);
+        expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
+        expect(board.canMutate).toBe(false);
         expect(chat.provider.canMutate).toBe(true);
         expect(chat.provider.canPinWidgets).toBe(true);
         expect(chat.provider.canPinMcpApps).toBe(true);
@@ -341,6 +321,7 @@ describe("Plugin session dashboard", () => {
         expect(request).toHaveBeenCalledOnce();
 
         dashboard.remove();
+        await dashboard.updateComplete;
         expect(removeListener).not.toHaveBeenCalled();
         chat.release();
         expect(removeListener).toHaveBeenCalledOnce();
@@ -353,19 +334,10 @@ describe("Plugin session dashboard", () => {
 
   it("pauses the board while the dashboard is collapsed", async () => {
     const { client } = createClient([
-      {
-        name: "status",
-        tabId: "main",
-        title: "Status",
-        contentKind: "html",
-        sizeW: 12,
-        sizeH: 2,
-        position: 0,
-        grantState: "none",
-        revision: 1,
+      widget({
         viewTicket: "ticket",
         viewTicketTtlMs: 1_200_000,
-      },
+      }),
     ]);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-collapse" }, client);
     await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
@@ -383,41 +355,19 @@ describe("Plugin session dashboard", () => {
     expect(board.active).toBe(true);
   });
 
-  it("keeps an empty dashboard compact until the operator expands its hint", async () => {
-    const { client, request } = createClient();
-    const element = await mountDashboard({ sessionKey: "agent:main:workboard-empty" }, client);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
-    await vi.waitFor(() =>
-      expect(element.textContent).toContain("This session has no dashboard widgets yet."),
-    );
-    expect(
-      element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-    ).toBe("false");
-
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
-    await element.updateComplete;
-    expect(element.querySelector(".plugin-session-dashboard__body")?.textContent).toContain(
-      "This session has no dashboard widgets yet.",
-    );
-  });
-
   it("reacts when the embedded board selects another tab", async () => {
     const tabs = [
       { tabId: "main", title: "Main", position: 0, chatDock: "right" },
       { tabId: "research", title: "Research", position: 1, chatDock: "right" },
     ];
-    const widgets = tabs.map((tab, position) => ({
-      name: `${tab.tabId}-status`,
-      tabId: tab.tabId,
-      title: `${tab.title} status`,
-      contentKind: "html",
-      sizeW: 12,
-      sizeH: 2,
-      position,
-      grantState: "none",
-      revision: 1,
-    }));
+    const widgets = tabs.map((tab, position) =>
+      widget({
+        name: `${tab.tabId}-status`,
+        tabId: tab.tabId,
+        title: `${tab.title} status`,
+        position,
+      }),
+    );
     const { client } = createClient(widgets, tabs);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-tabs" }, client);
     await vi.waitFor(() => expect(element.querySelector("wa-tab-group")).not.toBeNull());

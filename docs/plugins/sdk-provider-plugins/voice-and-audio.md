@@ -292,6 +292,11 @@ Register each capability inside `register(api)` alongside your existing
     modules retain their input queues, readiness policy, authentication, and
     reconnect behavior; module caching stays with the lazy-runtime helpers.
 
+    That private-local surface also exports the host's internal browser-session
+    request, capability, and provider API types. Official plugins should import
+    those types instead of redeclaring the process-private hook contract. These
+    type-only imports do not load the host's session or provider registry runtime.
+
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
     internal forced-consult and cancellation results, and rejects direct

@@ -30,27 +30,23 @@ export function getArgumentChurnNoProgressStreak(
   }
 
   const allOutcomes = Array.from(outcomes.values());
-  const count = allOutcomes.reduce((sum, outcome) => sum + outcome.count, 0);
-  const stableOutcomes = allOutcomes.filter(
-    (outcome) => outcome.count >= MIN_STABLE_CALLS_PER_VARIANT,
-  );
-  const hasSharedStableOutcome =
-    new Set(stableOutcomes.map((outcome) => outcome.resultHash)).size === 1;
-  const currentOutcome = outcomes.get(currentArgsHash);
-  const hasOnlyStableVariants =
-    stableOutcomes.reduce((sum, outcome) => sum + outcome.count, 0) === count;
-
   // This classifier is warning-only. Keep it narrow: every call in the tail must
   // belong to a repeated stable variant, and the proposed call must continue one
   // of those variants. A novel argument is a possible escape from the loop and
   // must reset liveness evidence rather than inherit it.
   const hasStableChurn =
-    stableOutcomes.length > 1 &&
-    hasOnlyStableVariants &&
-    hasSharedStableOutcome &&
-    (currentOutcome?.count ?? 0) >= MIN_STABLE_CALLS_PER_VARIANT;
+    allOutcomes.length > 1 &&
+    outcomes.has(currentArgsHash) &&
+    allOutcomes.every(
+      (outcome) =>
+        outcome.count >= MIN_STABLE_CALLS_PER_VARIANT &&
+        outcome.resultHash === allOutcomes[0]?.resultHash,
+    );
   return hasStableChurn
-    ? { count, variantCount: stableOutcomes.length }
+    ? {
+        count: allOutcomes.reduce((sum, outcome) => sum + outcome.count, 0),
+        variantCount: allOutcomes.length,
+      }
     : { count: 0, variantCount: 0 };
 }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -41,12 +41,13 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-silent-failure-" },
       async (state) => {
-        resetTaskRegistryForTests();
         const sendCronFailureAlert = vi.fn(
           async (_params: SendCronFailureAlertParams) => undefined,
         );
         const storePath = state.path("cron", "jobs.json");
         const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          nowMs: () => Date.now(),
           storePath,
           cronEnabled: true,
           cronConfig: {
@@ -96,7 +97,6 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           );
         } finally {
           cron.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

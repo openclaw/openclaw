@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelMessagingAdapter } from "openclaw/plugin-sdk/core";
 import { resolveAccountEntry, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { hasImplicitDefaultSlackAccount } from "./accounts.js";
 import {
@@ -13,7 +14,17 @@ import {
 } from "./monitor/workspace-routing.js";
 import { parseSlackTarget } from "./targets.js";
 
-export function inspectSlackConversationRouteOwner(params: {
+type BindingRouteInput = Parameters<typeof resolveSlackConversationBindingRoute>[0];
+type RouteOwner = ReturnType<NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>>;
+type PreparedRouteOwner =
+  | { kind: "terminal"; owner: null | { kind: "unavailable" } }
+  | {
+      kind: "prepared";
+      route: BindingRouteInput;
+      resolve(inspections?: BindingRouteInput["inspections"]): RouteOwner;
+    };
+
+function inspectSlackConversationRouteOwner(params: {
   cfg: OpenClawConfig;
   accountId: string;
   conversation: {
@@ -24,6 +35,13 @@ export function inspectSlackConversationRouteOwner(params: {
     context?: { teamId?: string };
   };
 }) {
+  const prepared = prepareSlackConversationRouteOwner(params);
+  return prepared.kind === "prepared" ? prepared.resolve() : prepared.owner;
+}
+
+function prepareSlackConversationRouteOwner(
+  params: Parameters<typeof inspectSlackConversationRouteOwner>[0],
+): PreparedRouteOwner {
   const accountId = normalizeAccountId(params.accountId);
   const accountConfig = resolveAccountEntry(params.cfg.channels?.slack?.accounts, accountId);
   if (
@@ -32,7 +50,7 @@ export function inspectSlackConversationRouteOwner(params: {
     (!accountConfig &&
       (accountId !== DEFAULT_ACCOUNT_ID || !hasImplicitDefaultSlackAccount(params.cfg)))
   ) {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   const installationKind = getSlackInstallationKind(accountId);
   const direct = params.conversation.kind === "direct";
@@ -40,16 +58,16 @@ export function inspectSlackConversationRouteOwner(params: {
     defaultKind: direct ? "user" : "channel",
   });
   if (!target || target.kind !== (direct ? "user" : "channel")) {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   // Qualified targets remain durable Enterprise evidence after monitor teardown. Only an
   // unqualified target is ambiguous while installation identity is temporarily degraded.
   const targetIsEnterprise = Boolean(target.teamId);
   if (!targetIsEnterprise && (installationKind === "degraded" || !installationKind)) {
-    return { kind: "unavailable" as const };
+    return { kind: "terminal", owner: { kind: "unavailable" } };
   }
   if (targetIsEnterprise && installationKind === "workspace") {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   const contextTeamId = params.conversation.context?.teamId?.trim();
   if (
@@ -57,7 +75,7 @@ export function inspectSlackConversationRouteOwner(params: {
     target.teamId &&
     contextTeamId.toLowerCase() !== target.teamId.toLowerCase()
   ) {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   const teamId = contextTeamId ?? target.teamId;
   if (
@@ -65,55 +83,132 @@ export function inspectSlackConversationRouteOwner(params: {
     params.conversation.nativeChannelId &&
     params.conversation.nativeChannelId.toLowerCase() !== target.id.toLowerCase()
   ) {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   const enterpriseRoute = installationKind === "enterprise" || targetIsEnterprise;
   if (enterpriseRoute && !teamId) {
-    return null;
+    return { kind: "terminal", owner: null };
   }
   const enterpriseScope = enterpriseRoute && teamId ? { teamId } : undefined;
-  const route = resolveAgentRoute({
-    cfg: normalizeSlackRouteBindingConfig(params.cfg),
-    channel: "slack",
-    accountId,
-    teamId,
-    peer: {
-      kind: params.conversation.kind,
-      id: qualifySlackRoutePeerId({
-        id: target.id,
-        kind: direct ? "user" : "channel",
-        eventScope: enterpriseScope,
-      }),
-    },
-  });
+  const resolveRoute = ({
+    boundAgentId,
+    bindingOwnerAvailable,
+  }: {
+    boundAgentId?: string;
+    bindingOwnerAvailable: boolean;
+  }) =>
+    resolveAgentRoute({
+      cfg:
+        boundAgentId || !bindingOwnerAvailable
+          ? { session: params.cfg.session }
+          : normalizeSlackRouteBindingConfig(params.cfg),
+      defaultAgentId: boundAgentId,
+      channel: "slack",
+      accountId,
+      teamId,
+      peer: {
+        kind: params.conversation.kind,
+        id: qualifySlackRoutePeerId({
+          id: target.id,
+          kind: direct ? "user" : "channel",
+          eventScope: enterpriseScope,
+        }),
+      },
+    });
   const baseConversationId = qualifySlackConversationId(
     direct ? `user:${target.id}` : target.id,
     enterpriseScope,
   );
-  const bindingRoute = resolveSlackConversationBindingRoute({
+  const route = {
     cfg: params.cfg,
-    route,
+    resolveRoute,
     accountId,
     baseConversationId,
     runtimeBindingThreadId: params.conversation.threadId,
     bindingsEnabled: !enterpriseRoute,
     touchBinding: false,
-  });
-  if (!bindingRoute.runtimeRoute.bindingOwnerAvailable) {
-    return { kind: "unavailable" as const };
-  }
-  if (bindingRoute.runtimeRoute.pluginId) {
-    return {
-      kind: "plugin" as const,
-      pluginId: bindingRoute.runtimeRoute.pluginId,
-      fallbackAgentId: route.agentId,
-    };
-  }
+  };
   return {
-    kind: "agent" as const,
-    agentId:
-      bindingRoute.runtimeRoute.boundAgentId ??
-      bindingRoute.configuredRoute?.boundAgentId ??
-      route.agentId,
+    kind: "prepared",
+    route,
+    resolve(
+      inspections?: NonNullable<
+        Parameters<typeof resolveSlackConversationBindingRoute>[0]["inspections"]
+      >,
+    ) {
+      const bindingRoute = resolveSlackConversationBindingRoute({ ...route, inspections });
+      if (!bindingRoute.runtimeRoute.bindingOwnerAvailable) {
+        return { kind: "unavailable" as const };
+      }
+      if (bindingRoute.runtimeRoute.pluginId) {
+        return {
+          kind: "plugin" as const,
+          pluginId: bindingRoute.runtimeRoute.pluginId,
+          fallbackAgentId: bindingRoute.route.agentId,
+        };
+      }
+      return {
+        kind: "agent" as const,
+        agentId:
+          bindingRoute.runtimeRoute.boundAgentId ??
+          bindingRoute.configuredRoute?.boundAgentId ??
+          bindingRoute.route.agentId,
+      };
+    },
   };
 }
+
+function prepareSlackConversationRouteOwners(
+  inputs: readonly Parameters<typeof inspectSlackConversationRouteOwner>[0][],
+  inspectBindings: Parameters<
+    NonNullable<ChannelMessagingAdapter["prepareConversationRouteOwners"]>
+  >[1],
+) {
+  const prepared = inputs.map(prepareSlackConversationRouteOwner);
+  const refs = prepared.flatMap((item) =>
+    item.kind === "prepared" && item.route.bindingsEnabled
+      ? [
+          {
+            channel: "slack",
+            accountId: item.route.accountId,
+            conversationId: item.route.baseConversationId,
+          },
+          ...(item.route.runtimeBindingThreadId
+            ? [
+                {
+                  channel: "slack",
+                  accountId: item.route.accountId,
+                  conversationId: item.route.runtimeBindingThreadId,
+                  parentConversationId: item.route.baseConversationId,
+                },
+              ]
+            : []),
+        ]
+      : [],
+  );
+  const inspections = inspectBindings(refs);
+  let index = 0;
+  const nextInspection = () => {
+    const inspection = inspections[index++];
+    if (!inspection) {
+      throw new Error("Slack binding owner returned an incomplete selection");
+    }
+    return inspection;
+  };
+  return prepared.map((item) => {
+    if (item.kind === "terminal") {
+      return () => item.owner;
+    }
+    const base = item.route.bindingsEnabled
+      ? nextInspection()
+      : { status: "available" as const, binding: null };
+    const thread =
+      item.route.bindingsEnabled && item.route.runtimeBindingThreadId ? nextInspection() : base;
+    return () => item.resolve({ base, thread });
+  });
+}
+
+export const slackConversationRouteOwners = {
+  resolveConversationRouteOwner: inspectSlackConversationRouteOwner,
+  prepareConversationRouteOwners: prepareSlackConversationRouteOwners,
+};

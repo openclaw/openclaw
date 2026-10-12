@@ -1,6 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
@@ -9,6 +12,7 @@ import {
   resolveSurvivingDatabaseFilePaths,
 } from "../agents/agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
+import type { AgentDeletionOperation } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import {
@@ -32,22 +36,15 @@ import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import type { CronJobRow } from "../cron/store/schema.js";
 import { isSystemMonitorDeclaration } from "../cron/system-owned-declaration.js";
-import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
-import {
-  compileSqliteQueryBindings,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
-import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
@@ -92,6 +89,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,
@@ -220,27 +218,16 @@ export async function workspaceContainsUntrackedEntries(
       parent = next;
     }
   }
-  const walk = async (absoluteDir: string, relativeDir = ""): Promise<boolean> => {
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const relativeEntry = path.join(relativeDir, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        if (!trackedDirectories.has(path.normalize(relativeEntry))) {
-          return true;
-        }
-        if (await walk(path.join(absoluteDir, entry.name), relativeEntry)) {
-          return true;
-        }
-        continue;
-      }
-      if (!tracked.has(path.normalize(relativeEntry))) {
+  try {
+    await fs.stat(workspaceRoot);
+    const workspace = await fsSafeRoot(workspaceRoot);
+    for await (const entry of workspace.walk("", { symlinkPolicy: "include" })) {
+      const expected = entry.kind === "directory" ? trackedDirectories : tracked;
+      if (!expected.has(path.normalize(entry.relativePath))) {
         return true;
       }
     }
     return false;
-  };
-  try {
-    return await walk(workspaceRoot);
   } catch (error) {
     const filesystemError = error as NodeJS.ErrnoException;
     // A missing child leaves the remaining workspace entries unexamined.
@@ -257,17 +244,19 @@ export async function cleanupClawAgentFilesystem(params: {
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
   stateDatabase?: OpenClawStateDatabaseOptions;
-  assertCurrent: () => void;
+  deletion: AgentDeletionOperation;
 }): Promise<string[]> {
   const errors: string[] = [];
+  const { deletion } = params;
   const trashPath: ClawTrashPath = (pathname, runtime) => {
-    params.assertCurrent();
-    return params.trashPath
-      ? params.trashPath(pathname, runtime)
-      : moveToTrash(pathname, runtime, params.assertCurrent);
+    if (params.trashPath) {
+      deletion.assertCurrentFinal();
+      return params.trashPath(pathname, runtime, deletion.assertCurrentFinal);
+    }
+    return moveToTrash(pathname, runtime, deletion.assertCurrentFinal);
   };
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
-    readAgentDeleteDatabaseRegistry(params.stateDatabase),
+    await readAgentDeleteDatabaseRegistry(params.stateDatabase),
     params.agentId,
     params.stateDatabase?.env,
   );
@@ -290,13 +279,13 @@ export async function cleanupClawAgentFilesystem(params: {
     if (workspaceRemoved) {
       try {
         const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, {
-          assertCurrent: params.assertCurrent,
+          assertCurrent: deletion.assertCurrentFinal,
         });
         for (const warning of legacyCleanup.warnings) {
           params.runtime.log(warning);
         }
-        params.assertCurrent();
-        await deleteWorkspaceState(statePlan, { assertCurrent: params.assertCurrent });
+        await deletion.assertCurrentAsync();
+        await deleteWorkspaceState(statePlan, { ...params.stateDatabase, deletion });
       } catch (error) {
         errors.push(coerceErrorMessage(error));
       }
@@ -373,7 +362,7 @@ async function inspectDigestOwnedWorkspaceFile(
       return { state: "missing" };
     }
     const content = await workspace.readBytes(record.path, { maxBytes });
-    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const digest = digestClawBytes(content);
     return {
       state: digest === record.contentDigest ? "unchanged" : "modified",
     };
@@ -453,7 +442,7 @@ export async function inspectClawBootstrap(
 
 export async function removeClawWorkspaceFile(
   record: ClawRemovableWorkspaceFile,
-  assertCurrent: () => void,
+  deletion: Pick<AgentDeletionOperation, "assertCurrentFinal">,
   maxBytes = 1024 * 1024,
 ): Promise<RemovedWorkspaceFile> {
   if (record.state === "missing") {
@@ -471,16 +460,28 @@ export async function removeClawWorkspaceFile(
     if (!(await workspace.exists(record.path))) {
       return { path: record.path, action: "missing" };
     }
+    const moveFile = (source: string, target: string, restoring = false) =>
+      workspace.move(source, target, {
+        overwrite: false,
+        assertBeforeMutation: () => {
+          if (!restoring) {
+            deletion.assertCurrentFinal();
+          }
+          // Keep file admission separate from authority: restoration survives ownership loss.
+          if (statRegularFileSync(path.join(workspace.rootReal, source)).missing) {
+            throw new Error("Claw workspace file no longer exists");
+          }
+        },
+      });
     const stagedPath = `${record.path}.openclaw-claw-remove-${randomUUID()}`;
-    assertCurrent();
-    await workspace.move(record.path, stagedPath, { overwrite: false });
+    await moveFile(record.path, stagedPath);
     let outcome: Result<void, unknown>;
     try {
       const content = await workspace.readBytes(stagedPath, { maxBytes });
-      assertCurrent();
-      const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+      deletion.assertCurrentFinal();
+      const digest = digestClawBytes(content);
       if (digest === record.contentDigest) {
-        await workspace.remove(stagedPath);
+        await workspace.remove(stagedPath, { assertBeforeMutation: deletion.assertCurrentFinal });
         return { path: record.path, action: "deleted" };
       }
       outcome = ok(undefined);
@@ -489,7 +490,7 @@ export async function removeClawWorkspaceFile(
     }
     // Undo this attempt's staging even after ownership loss; never replace new content.
     try {
-      await workspace.move(stagedPath, record.path, { overwrite: false });
+      await moveFile(stagedPath, record.path, true);
     } catch (error) {
       throw new AggregateError(
         [...(outcome.ok ? [] : [outcome.error]), error],
@@ -510,56 +511,17 @@ export async function removeClawWorkspaceFile(
   }
 }
 
-export function releaseClawRemoveRows(
-  agentId: string,
+export async function releaseClawRemoveRows(
+  deletion: Pick<AgentDeletionOperation, "entry" | "releaseClawRows">,
   files: RemovedWorkspaceFile[],
   cleanupErrors: string[],
-  assertCurrent: (database: OpenClawStateDatabase) => void,
-  completeDeletion: (database: OpenClawStateDatabase) => void,
   options: OpenClawStateDatabaseOptions,
-): boolean {
+): Promise<boolean> {
   const complete = cleanupErrors.length === 0;
   try {
-    runOpenClawStateWriteTransaction((database) => {
-      assertCurrent(database);
-      if (complete) {
-        // Discovery and owned rows must retire under the same current-operation transaction.
-        unregisterOpenClawAgentDatabases({ agentId, env: options.env, database });
-      }
-      const { db } = database;
-      const query = getNodeSqliteKysely<ClawRemovalDatabase>(db);
-      if (tableExists(db, "claw_workspace_files")) {
-        for (const file of files.filter((candidate) => candidate.action !== "error")) {
-          executeSqliteQuerySync(
-            db,
-            query
-              .deleteFrom("claw_workspace_files")
-              .where("agent_id", "=", agentId)
-              .where("target_path", "=", file.path),
-          );
-        }
-      }
-      // Partial removals keep both the journal fence and install retry owner intact.
-      if (!complete) {
-        return;
-      }
-      if (tableExists(db, "claw_package_refs")) {
-        executeSqliteQuerySync(
-          db,
-          query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
-        );
-      }
-      if (tableExists(db, "claw_installs")) {
-        executeSqliteQuerySync(
-          db,
-          query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
-        );
-      }
-      // Complete removals release the fence and retry owner in the same transaction.
-      completeDeletion(database);
-    }, options);
+    await deletion.releaseClawRows({ files, complete });
     if (complete) {
-      deleteCachedClawInstallSchemaVersion(agentId, options);
+      deleteCachedClawInstallSchemaVersion(deletion.entry.agentId, options);
     }
   } catch (error) {
     if (complete) {

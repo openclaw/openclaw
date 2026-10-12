@@ -24,7 +24,11 @@ suite.define(() => {
       { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         let config: unknown = {
-          agents: { defaults: {}, entries: { main: { default: true }, scout: {} } },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, scout: {} },
+          },
         };
         let revision = 0;
         const snapshot = () => ({
@@ -110,7 +114,7 @@ suite.define(() => {
           expect(config).toMatchObject({
             agents: {
               defaults: { decisionModel: "typesafe/jev-latest" },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
           });
           if (expected === undefined) {

@@ -8,7 +8,6 @@ import type {
 } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-  settingsNavigationLabelForRoute,
   subtitleForRoute,
   visibleSettingsNavigationGroups,
 } from "../app-navigation.ts";
@@ -19,28 +18,33 @@ import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
+import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 
 registerCommandPaletteEnglish();
 
 registerAppsEnglish();
 
-type CommandPaletteCatalogCategory =
-  | "agents"
-  | "apps"
-  | "automations"
-  | "models"
-  | "plugins"
-  | "settings"
-  | "skills";
-
-type CommandPaletteCatalogItem = {
+export type CommandPaletteItem = {
   id: string;
   label: string;
   icon: IconName;
-  category: CommandPaletteCatalogCategory;
-  routeId: RouteId;
+  category:
+    | "agents"
+    | "apps"
+    | "automations"
+    | "models"
+    | "plugins"
+    | "settings"
+    | "skills"
+    | "search"
+    | "navigation"
+    | "chats"
+    | "messages";
+  action: string;
+  session?: GatewaySessionRow;
   search?: string;
   hash?: string;
   agentId?: string;
@@ -53,39 +57,23 @@ type CommandPaletteCatalogItem = {
   primaryModel?: string;
 };
 
-export type CommandPaletteItem = Omit<CommandPaletteCatalogItem, "routeId" | "category"> & {
-  category: "search" | "navigation" | "chats" | "messages" | CommandPaletteCatalogCategory;
-  action: string;
-  session?: GatewaySessionRow;
-};
+const CATEGORY_LABEL_KEYS = new Map([
+  ["search", "palette.categories.search"],
+  ["navigation", "palette.categories.navigation"],
+  ["skills", "palette.categories.skills"],
+  ["agents", "palette.items.agents"],
+  ["apps", "palette.items.apps"],
+  ["automations", "palette.items.scheduled"],
+  ["models", "routeTitles.modelProviders"],
+  ["plugins", "palette.items.plugins"],
+  ["settings", "palette.items.settings"],
+  ["chats", "sessionsView.title"],
+  ["messages", "palette.categories.messages"],
+]);
 
 export function commandPaletteCategoryLabel(category: string): string {
-  switch (category) {
-    case "search":
-      return t("palette.categories.search");
-    case "navigation":
-      return t("palette.categories.navigation");
-    case "skills":
-      return t("palette.categories.skills");
-    case "agents":
-      return t("palette.items.agents");
-    case "apps":
-      return t("palette.items.apps");
-    case "automations":
-      return t("palette.items.scheduled");
-    case "models":
-      return t("routeTitles.modelProviders");
-    case "plugins":
-      return t("palette.items.plugins");
-    case "settings":
-      return t("palette.items.settings");
-    case "chats":
-      return t("sessionsView.title");
-    case "messages":
-      return t("palette.categories.messages");
-    default:
-      return category;
-  }
+  const key = CATEGORY_LABEL_KEYS.get(category);
+  return key ? t(key) : category;
 }
 
 const CATALOG_SEARCH_LIMIT = 10;
@@ -130,28 +118,24 @@ function getCommandPaletteBaseItems(
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
-    ...(desktopAvailable
-      ? [
-          {
-            id: "panel-desktop",
-            label: t("palette.items.desktop"),
-            icon: "monitor" as const,
-            category: "navigation" as const,
-            action: "panel:desktop",
-          },
-        ]
-      : []),
-    ...(custodianAvailable
-      ? [
-          {
-            id: "panel-custodian",
-            label: t("nav.askOpenClaw"),
-            icon: "lobster" as const,
-            category: "navigation" as const,
-            action: "panel:custodian",
-          },
-        ]
-      : []),
+    ...(
+      [
+        [desktopAvailable, "desktop", "palette.items.desktop", "monitor"],
+        [custodianAvailable, "custodian", "nav.askOpenClaw", "lobster"],
+      ] as const
+    ).flatMap(([available, panel, labelKey, icon]) =>
+      available
+        ? [
+            {
+              id: `panel-${panel}`,
+              label: panel === "custodian" ? askBrandLabel() : t(labelKey),
+              icon,
+              category: "navigation" as const,
+              action: `panel:${panel}`,
+            },
+          ]
+        : [],
+    ),
   ];
 }
 
@@ -200,27 +184,6 @@ export function filterCommandPaletteItems(params: {
   return [...params.sessionItems, ...baseMatches, ...catalogMatches];
 }
 
-export function toCommandPaletteItems(
-  items: readonly CommandPaletteCatalogItem[],
-): CommandPaletteItem[] {
-  return items.map((item) => ({
-    id: item.id,
-    label: item.label,
-    icon: item.icon,
-    category: item.category,
-    action: `nav:${item.routeId}`,
-    search: item.search,
-    hash: item.hash,
-    agentId: item.agentId,
-    pluginId: item.pluginId,
-    catalogId: item.catalogId,
-    hasPluginIcon: item.hasPluginIcon,
-    description: item.description,
-    searchText: item.searchText,
-    primaryModel: item.primaryModel,
-  }));
-}
-
 const APP_CARDS = [
   "ios",
   "android",
@@ -236,7 +199,7 @@ const APP_CARDS = [
 export function getStaticCommandPaletteCatalogItems(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
-): CommandPaletteCatalogItem[] {
+): CommandPaletteItem[] {
   const settings = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings)
     .flatMap((group) => group.routes)
     .concat(SETTINGS_SEARCHABLE_SUBPAGE_ROUTES)
@@ -245,7 +208,7 @@ export function getStaticCommandPaletteCatalogItems(
       label: settingsNavigationLabelForRoute(routeId),
       icon: "settings" as const,
       category: "settings" as const,
-      routeId,
+      action: `nav:${routeId}`,
       description: subtitleForRoute(routeId),
       searchText: routeId,
     }));
@@ -254,7 +217,7 @@ export function getStaticCommandPaletteCatalogItems(
     label: t(`appsPage.cards.${card}.title`),
     icon: "layoutGrid" as const,
     category: "apps" as const,
-    routeId: "apps" as const,
+    action: "nav:apps",
     description: t(`appsPage.cards.${card}.desc`),
     searchText: card,
   }));
@@ -268,7 +231,7 @@ export function getStaticCommandPaletteCatalogItems(
             label: t(capture.labelKey),
             icon: "settings" as const,
             category: "settings" as const,
-            routeId: capture.routeId,
+            action: `nav:${capture.routeId}`,
             search: capture.search,
             hash: capture.hash,
             searchText: capture.aliases,
@@ -284,7 +247,7 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<CommandPaletteCatalogItem[]> {
+}): Promise<CommandPaletteItem[]> {
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -305,7 +268,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       label: agent.identity?.name ?? agent.name ?? agent.id,
       icon: "bot" as const,
       category: "agents" as const,
-      routeId: "agents" as const,
+      action: "nav:agents",
       agentId: agent.id,
       description: agent.id,
       searchText: [agent.id, agent.workspace, agent.identity?.theme].filter(Boolean).join(" "),
@@ -316,7 +279,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       label: job.displayName ?? job.name,
       icon: "calendarClock" as const,
       category: "automations" as const,
-      routeId: "cron" as const,
+      action: "nav:cron",
       searchText: [job.id, job.declarationKey, job.name, job.agentId].filter(Boolean).join(" "),
     })),
     ...(skills?.skills ?? []).map((skill) => ({
@@ -324,7 +287,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       label: skill.name,
       icon: "zap" as const,
       category: "skills" as const,
-      routeId: "skills" as const,
+      action: "nav:skills",
       description: skill.description,
       searchText: [skill.skillKey, skill.source].filter(Boolean).join(" "),
     })),
@@ -333,7 +296,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       label: plugin.name,
       icon: "plug" as const,
       category: "plugins" as const,
-      routeId: plugin.installed ? ("plugin-settings" as const) : ("plugins" as const),
+      action: plugin.installed ? "nav:plugin-settings" : "nav:plugins",
       pluginId: plugin.id,
       catalogId: plugin.installed ? undefined : plugin.catalogId,
       hasPluginIcon: plugin.hasIcon,
@@ -347,14 +310,14 @@ export async function loadCommandPaletteCatalogItems(params: {
 
 export function getCommandPaletteModelItems(
   catalog: Pick<ModelCatalogResult, "models">,
-): CommandPaletteCatalogItem[] {
+): CommandPaletteItem[] {
   return catalog.models.map((model) => ({
     // Both IDs can contain separators; selection needs a lossless pair.
     id: `model-${JSON.stringify([model.provider, model.id])}`,
     label: model.name || model.id,
     icon: "brain" as const,
     category: "models" as const,
-    routeId: "model-providers" as const,
+    action: "nav:model-providers",
     description: model.provider,
     searchText: [model.id, model.provider, model.alias, model.tags?.join(" ")]
       .filter(Boolean)

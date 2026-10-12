@@ -19,9 +19,9 @@ import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 const boundary = vi.hoisted(() => ({ inspect: vi.fn(), report: vi.fn() }));
-vi.mock("../../infra/update-freebsd-pkg-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-freebsd-pkg-ownership.js")>()),
-  createFreeBsdPkgOwnershipInspection: () => ({
+vi.mock("../../infra/update-system-package-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-system-package-ownership.js")>()),
+  createSystemPackageOwnershipInspection: () => ({
     assertUnowned: boundary.inspect,
     assertEntryUnowned: vi.fn(),
   }),

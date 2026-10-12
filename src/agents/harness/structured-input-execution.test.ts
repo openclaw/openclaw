@@ -184,6 +184,28 @@ describe("structured input execution", () => {
     );
   });
 
+  it("decodes a displayed choice label with surrounding whitespace", async () => {
+    const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: [" Alpha "] }));
+    const input = compileForm({
+      mode: {
+        type: "string",
+        oneOf: [
+          { const: "a", title: " Alpha " },
+          { const: "b", title: "Beta" },
+        ],
+      },
+    });
+
+    await expect(runStructuredInput({ input, ...executionParams(gateway.call) })).resolves.toEqual({
+      status: "answered",
+      answers: { mode: [" Alpha "] },
+      content: { mode: "a" },
+    });
+    expect(gateway.requested[0]?.questions).toMatchObject([
+      { options: [{ label: " Alpha " }, { label: "Beta" }] },
+    ]);
+  });
+
   it.each(["populated", "empty"] as const)(
     "fences a %s form answer when the owning turn becomes inactive before commit",
     async (formKind) => {

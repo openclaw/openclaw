@@ -610,13 +610,15 @@ class TalkModeManagerTest {
         createManager(
           scope = backgroundScope,
           realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
-          realtimeMarkAcknowledger = { sessionId, markName ->
-            acknowledgements += sessionId to markName
-          },
         )
-      installRealtimeSession(manager, "relay-1")
+      installRealtimeSession(manager, "relay-1") { method, paramsJson ->
+        assertEquals("talk.session.acknowledgeMark", method)
+        val params = Json.parseToJsonElement(checkNotNull(paramsJson)).jsonObject
+        acknowledgements += params.getValue("sessionId").jsonPrimitive.content to params.getValue("markName").jsonPrimitive.content
+      }
 
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      assertTrue(acknowledgements.isEmpty())
       runCurrent()
 
       assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
@@ -903,54 +905,6 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun invalidatedConfigResponseCannotPopulateNextUseCache() = verifyConfigResponseOwnership(loadNewerBeforeRelease = false)
-
-  @Test
-  fun explicitRefreshRetiresOlderConfigBeforeWaitingForItsResponse() = verifyConfigResponseOwnership(loadNewerBeforeRelease = true)
-
-  @Test
-  fun configConsumerWaitsForTheNewerRefreshBeforeUsingItsSettings() =
-    runBlocking {
-      installSpeechRecognitionService()
-      val holdReads = AtomicBoolean(false)
-      val held = ConcurrentLinkedQueue<Pair<String, WebSocket>>()
-      withStartedTalk(
-        responseForRequest = { request, _ ->
-          nativeTalkConfig("de-DE").takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
-        },
-        interceptRequest = { request, socket ->
-          val hold = request.getValue("method").jsonPrimitive.content == "talk.config" && holdReads.get()
-          if (hold) held.add(request.getValue("id").jsonPrimitive.content to socket)
-          hold
-        },
-      ) { proof ->
-        holdReads.set(true)
-        proof.manager.handleGatewayEvent("config.changed", "{}")
-        val language = proof.scope.async { proof.manager.resolveRealtimeLanguageHint("fr") }
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        val (oldId, socket) = held.remove()
-        val refresh = proof.scope.async { proof.manager.refreshConfig() }
-        proof.scheduler.runCurrent()
-        socket.send("""{"type":"res","id":"$oldId","ok":true,"payload":${nativeTalkConfig("de-DE")}}""")
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        assertEquals(1, held.size)
-        // The same-socket health reply is ordered after the old config response;
-        // drain its continuation before checking that the consumer still waits.
-        val barrier = proof.scope.async { proof.session.request("health", "{}") }
-        awaitTalkWork(proof) { barrier.isCompleted }
-        barrier.await()
-        proof.scheduler.runCurrent()
-        assertFalse("A superseded config read must not release its consumer with old settings", language.isCompleted)
-
-        val (newId, newSocket) = held.remove()
-        newSocket.send("""{"type":"res","id":"$newId","ok":true,"payload":${nativeTalkConfig("en-US")}}""")
-        awaitTalkWork(proof) { language.isCompleted && refresh.isCompleted }
-        assertEquals("en", language.await())
-        refresh.await()
-      }
-    }
-
-  @Test
   fun failedCurrentConfigReadReturnsOnceAndCanRetryOnNextUse() =
     runBlocking {
       installSpeechRecognitionService()
@@ -979,43 +933,6 @@ class TalkModeManagerTest {
           assertEquals("fr", language.await())
           assertEquals(index + 1L, failures.get())
         }
-      }
-    }
-
-  private fun verifyConfigResponseOwnership(loadNewerBeforeRelease: Boolean) =
-    runBlocking {
-      installSpeechRecognitionService()
-      val config = AtomicReference(nativeTalkConfig("de-DE"))
-      val holdNext = AtomicBoolean(false)
-      val held = ConcurrentLinkedQueue<Pair<String, WebSocket>>()
-      withStartedTalk(
-        responseForRequest = { request, _ ->
-          config.get().takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
-        },
-        interceptRequest = { request, socket ->
-          val hold = request.getValue("method").jsonPrimitive.content == "talk.config" && holdNext.compareAndSet(true, false)
-          if (hold) held.add(request.getValue("id").jsonPrimitive.content to socket)
-          hold
-        },
-      ) { proof ->
-        holdNext.set(true)
-        val oldRefresh = proof.scope.async { proof.manager.refreshConfig() }
-        awaitTalkWork(proof) { held.isNotEmpty() }
-        assertEquals(1, held.size)
-        config.set(nativeTalkConfig("en-US"))
-        proof.manager.handleGatewayEvent("config.changed", "{}")
-        val refresh = if (loadNewerBeforeRelease) proof.scope.async { proof.manager.refreshConfig() } else null
-        proof.scheduler.runCurrent()
-        val (id, socket) = held.remove()
-        socket.send("""{"type":"res","id":"$id","ok":true,"payload":${nativeTalkConfig("de-DE")}}""")
-        awaitTalkWork(proof) { oldRefresh.isCompleted && refresh?.isCompleted != false }
-        oldRefresh.await()
-        refresh?.await()
-        val language = proof.scope.async { proof.manager.resolveRealtimeLanguageHint("fr") }
-        awaitTalkWork(proof) { language.isCompleted }
-
-        assertEquals("The invalidated response must not become the current configuration", "en", language.await())
-        assertTrue(proof.manager.isListening.value)
       }
     }
 
@@ -3125,7 +3042,7 @@ class TalkModeManagerTest {
   private fun completeRemoteSynthesis(synthesizer: FakeTalkSpeechSynthesizer) {
     synthesizer.result.complete(
       TalkSpeakResult.Success(
-        TalkSpeakAudio(byteArrayOf(1, 2, 3), "test", "mp3_44100_128", true, "audio/mpeg", ".mp3"),
+        TalkSpeakAudio(byteArrayOf(1, 2, 3), "mp3_44100_128", "audio/mpeg", ".mp3"),
       ),
     )
   }
@@ -3640,7 +3557,7 @@ class TalkModeManagerTest {
     }
 
   private fun createManager(
-    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
+    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(requestDetailed = { _, _, _ -> error("session missing") }),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
@@ -3649,7 +3566,6 @@ class TalkModeManagerTest {
     onStoppedByRelay: (isCurrent: () -> Boolean) -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val session =
@@ -3673,7 +3589,6 @@ class TalkModeManagerTest {
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
-      realtimeMarkAcknowledger = realtimeMarkAcknowledger,
     ).also { setPrivateField(it, "relayStopNotification", onStoppedByRelay) }
   }
 
@@ -3717,6 +3632,7 @@ class TalkModeManagerTest {
   private fun installRealtimeSession(
     manager: TalkModeManager,
     id: String?,
+    onRequest: (String, String?) -> Unit = { _, _ -> },
   ) {
     setPrivateField(manager, "realtimeSessionId", id)
     val owner =
@@ -3724,8 +3640,8 @@ class TalkModeManagerTest {
         null
       } else {
         val lease =
-          GatewaySession.RequestLease("synthetic-gateway") { _, _, _, enqueue ->
-            enqueue {}
+          GatewaySession.RequestLease("synthetic-gateway") { method, paramsJson, _, enqueue ->
+            enqueue { onRequest(method, paramsJson) }
             "{}"
           }
         val method = TalkModeManager::class.java.getDeclaredMethod("createRealtimePlayoutSession", String::class.java, GatewaySession.RequestLease::class.java)

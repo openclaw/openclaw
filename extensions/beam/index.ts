@@ -11,6 +11,7 @@ export default definePluginEntry({
   register(api) {
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
+    api.registerService(store.catalogService);
     api.registerHttpRoute({
       path: "/api/v1/beam/sessions",
       auth: "gateway",

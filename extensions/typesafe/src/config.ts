@@ -33,16 +33,16 @@ export function localBaseUrl(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  try {
-    if (typeof value !== "string" || value !== value.trim() || !localBaseUrlPattern.test(value)) {
-      throw new Error();
-    }
-    return new URL(value).origin;
-  } catch {
+  const parsed =
+    typeof value === "string" && value === value.trim() && localBaseUrlPattern.test(value)
+      ? URL.parse(value)
+      : null;
+  if (!parsed) {
     throw new Error(
       "Invalid TypeSafe baseUrl; use an http(s) loopback origin without a path, credentials, query, or fragment.",
     );
   }
+  return parsed.origin;
 }
 
 /** Validate runtime settings and recognize materialized credentials without resolving inputs. */

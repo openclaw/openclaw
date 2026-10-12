@@ -44,11 +44,7 @@ export class TextareaTokenAnchor {
   private frame: number | null = null;
   private stylesDirty = true;
   private lineHeight = 0;
-  private readonly onOutOfView: () => void;
-
-  constructor(onOutOfView: () => void) {
-    this.onOutOfView = onOutOfView;
-  }
+  constructor(private readonly onOutOfView: () => void) {}
 
   /** Call after rendering the popup, then when the token or textarea value changes. */
   update(popup: WaPopup, textarea: HTMLTextAreaElement, tokenStart: number): void {

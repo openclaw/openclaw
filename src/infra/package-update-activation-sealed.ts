@@ -1,0 +1,126 @@
+import "./sealed-runtime-bootstrap.js";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "./errors.js";
+import {
+  openPackageActivationJournal,
+  openPackageActivationSettlementJournal,
+  assertPackageActivationOperation,
+  isPackageActivationComplete,
+  packageActivationIdentity,
+  resolvePackageActivationHelper,
+  resolvePackageActivationJournalPath,
+} from "./package-update-activation-journal.js";
+import { selectPackageActivationNativeRoots } from "./package-update-activation-native-loader.js";
+import { assertPackageActivationRecoveryRuntime } from "./package-update-activation-sqlite.js";
+import {
+  readPackageActivationStatus,
+  runPackageActivationRecovery,
+  settlePendingPackageActivation,
+  settleRemountedPackageActivation,
+} from "./package-update-activation.js";
+
+async function main() {
+  const helper = fileURLToPath(import.meta.url);
+  await assertPackageActivationRecoveryRuntime(helper);
+  const anchor = process.argv[3];
+  const operationId = process.argv[5];
+  const action = process.argv[6];
+  if (
+    process.argv.length !== 7 ||
+    process.argv[2] !== "--anchor" ||
+    process.argv[4] !== "--operation" ||
+    !anchor ||
+    !operationId ||
+    (action !== "status" && action !== "repair" && action !== "retire")
+  ) {
+    throw new Error(
+      "Usage: <node|bun> recovery.mjs --anchor absolute-path --operation operation-id status|repair|retire",
+    );
+  }
+  if (path.resolve(anchor) !== anchor) {
+    throw new Error("Package recovery anchor must be an absolute canonical path.");
+  }
+  const journal =
+    action === "repair"
+      ? openPackageActivationSettlementJournal(anchor)
+      : openPackageActivationJournal(anchor);
+  const record = action === "status" ? journal.read() : (await journal.readForRecovery()).record;
+  assertPackageActivationOperation(record, operationId);
+  const complete = isPackageActivationComplete(anchor, record);
+  const stagedHelper = record.descriptor.preparation.find(
+    (entry) => entry.name === "helper",
+  )?.source;
+  if (
+    !complete &&
+    ((helper !== resolvePackageActivationHelper(anchor) && helper !== stagedHelper) ||
+      packageActivationIdentity(helper, false) !== record.descriptor.helperIdentity ||
+      createHash("sha256").update(fs.readFileSync(helper)).digest("hex") !==
+        record.descriptor.helperDigest)
+  ) {
+    if (action !== "repair") {
+      throw new Error(
+        "Invoked helper is not the recorded package recovery object. Preserve the journal and use the original helper for unfinished recovery.",
+      );
+    }
+    selectPackageActivationNativeRoots([
+      record.descriptor.authority.installKey,
+      path.join(anchor, "previous"),
+    ]);
+    const settled = await settleRemountedPackageActivation(anchor, operationId);
+    if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+      throw new Error(
+        `${settled?.warning ?? "Settlement remains active."} Preserve the journal and retry this recovery command before updating with the older CLI.`,
+      );
+    }
+    console.error(
+      `Verified package publication preserved at ${settled?.retained}. No package was republished and no service was restarted.${settled?.warning ? ` ${settled.warning}` : ""}`,
+    );
+    console.log(
+      JSON.stringify({
+        phase: "complete",
+        operationId,
+        installKey: record.descriptor.authority.installKey,
+      }),
+    );
+    return;
+  }
+  // Publication moves the live package to "previous" before the candidate replaces it.
+  selectPackageActivationNativeRoots([
+    record.descriptor.authority.installKey,
+    path.join(anchor, "previous"),
+    path.join(anchor, "candidate"),
+  ]);
+  if (action === "repair" && !complete) {
+    console.error(
+      "Repair may republish the recorded candidate into a missing installation. Keep other package managers stopped. This does not restart or verify the Gateway.",
+    );
+  }
+  const result =
+    action === "status" || complete
+      ? await readPackageActivationStatus(anchor, operationId)
+      : await runPackageActivationRecovery(anchor, action, operationId);
+  if (complete && action !== "status") {
+    const settled = await settlePendingPackageActivation(
+      record.descriptor.authority.installKey,
+      undefined,
+      record,
+    );
+    if (fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+      throw new Error(
+        `${settled?.warning ?? "Completed receipt remains active."} Preserve the journal and retry this recovery command before updating with the older CLI.`,
+      );
+    }
+    console.error(
+      `Completed package receipt preserved at ${settled?.retained}.${settled?.warning ? ` ${settled.warning}` : ""}`,
+    );
+  }
+  console.log(JSON.stringify(result));
+}
+
+await main().catch((error: unknown) => {
+  console.error(`Package publication recovery refused: ${formatErrorMessage(error)}`);
+  process.exitCode = 1;
+});

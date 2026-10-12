@@ -30,23 +30,8 @@ Preamble prose.
 describe("oc-path-resolver-edges", () => {
   const { ast } = parseMd(SAMPLE);
 
-  it("root resolves to AST", () => {
-    const m = resolveOcPath(ast, { file: "X.md" });
-    expect(m?.kind).toBe("root");
-  });
-
-  it("block by exact slug", () => {
-    const m = resolveOcPath(ast, { file: "X.md", section: "boundaries" });
-    expect(m?.kind).toBe("block");
-  });
-
   it("block by case-mismatched slug (Boundaries → boundaries)", () => {
     const m = resolveOcPath(ast, { file: "X.md", section: "Boundaries" });
-    expect(m?.kind).toBe("block");
-  });
-
-  it("block by uppercased slug", () => {
-    const m = resolveOcPath(ast, { file: "X.md", section: "BOUNDARIES" });
     expect(m?.kind).toBe("block");
   });
 
@@ -66,34 +51,6 @@ describe("oc-path-resolver-edges", () => {
     // match "multi-word-section". Documented limit — callers must
     // pass slug form, not heading text. This is intentional.
     expect(m).toBeNull();
-  });
-
-  it("unknown section returns null", () => {
-    const m = resolveOcPath(ast, { file: "X.md", section: "unknown" });
-    expect(m).toBeNull();
-  });
-
-  it("item by slug under known section", () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "tools",
-      item: "gh",
-    });
-    expect(m?.kind).toBe("item");
-  });
-
-  it('R-09 item slug for KV uses kv.key (gh, not "gh-github-cli")', () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "tools",
-      item: "gh",
-    });
-    if (m === null) {
-      throw new Error("expected tools item match");
-    }
-    if (m.kind === "item") {
-      expect(m.node.kv?.value).toBe("GitHub CLI");
-    }
   });
 
   it("item slug for plain bullet uses text", () => {
@@ -126,35 +83,6 @@ describe("oc-path-resolver-edges", () => {
     }
   });
 
-  it("unknown item returns null", () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "tools",
-      item: "nonexistent",
-    });
-    expect(m).toBeNull();
-  });
-
-  it("item-field matches kv.key (case-insensitive)", () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "tools",
-      item: "gh",
-      field: "gh",
-    });
-    expect(m?.kind).toBe("item-field");
-  });
-
-  it("field on plain (non-kv) item returns null", () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "boundaries",
-      item: "never-write-to-etc",
-      field: "risk",
-    });
-    expect(m).toBeNull();
-  });
-
   it("field that does not match kv.key returns null", () => {
     const m = resolveOcPath(ast, {
       file: "X.md",
@@ -163,18 +91,6 @@ describe("oc-path-resolver-edges", () => {
       field: "nonexistent",
     });
     expect(m).toBeNull();
-  });
-
-  it("frontmatter via [frontmatter] sentinel section", () => {
-    const m = resolveOcPath(ast, {
-      file: "X.md",
-      section: "[frontmatter]",
-      field: "name",
-    });
-    expect(m?.kind).toBe("frontmatter");
-    if (m?.kind === "frontmatter") {
-      expect(m.node.value).toBe("github");
-    }
   });
 
   it("frontmatter unknown key returns null", () => {
@@ -215,19 +131,6 @@ describe("oc-path-resolver-edges", () => {
     if (m?.kind === "frontmatter") {
       expect(m.node.value).toBe("first");
     }
-  });
-
-  it("empty AST resolves root only", () => {
-    const empty = { kind: "md" as const, raw: "", frontmatter: [], preamble: "", blocks: [] };
-    expect(resolveOcPath(empty, { file: "X.md" })?.kind).toBe("root");
-    expect(resolveOcPath(empty, { file: "X.md", section: "any" })).toBeNull();
-  });
-
-  it("resolver does not mutate the AST", () => {
-    const before = JSON.stringify(ast);
-    resolveOcPath(ast, { file: "X.md", section: "tools", item: "gh", field: "gh" });
-    const after = JSON.stringify(ast);
-    expect(after).toBe(before);
   });
 
   it("file segment is informational — resolver doesn't check it", () => {

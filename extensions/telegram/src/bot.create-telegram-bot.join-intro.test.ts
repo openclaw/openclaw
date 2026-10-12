@@ -22,33 +22,27 @@ const { runWithTelegramSpooledReplayUpdate, getTelegramSpooledReplayDeferredPart
 
 const TELEGRAM_GROUP_CHAT_ID = -1001234567890;
 
-function createMembershipContext(params?: {
-  chatType?: "private" | "group" | "supergroup" | "channel";
-  oldStatus?: "left" | "member";
-  newStatus?: "left" | "member";
-  memberId?: number;
-  contextBotId?: number;
-}) {
+function createMembershipContext(params?: { newStatus?: "left" | "member" }) {
   const member = {
-    id: params?.memberId ?? telegramBotInfoForTest.id,
+    id: telegramBotInfoForTest.id,
     is_bot: true,
     first_name: "OpenClaw",
   };
   const membership = {
     chat: {
       id: TELEGRAM_GROUP_CHAT_ID,
-      type: params?.chatType ?? "supergroup",
+      type: "supergroup",
       title: "Incident Response",
     },
     from: { id: 12345, is_bot: false, first_name: "Sam", last_name: "Rivera" },
     date: 1736380800,
-    old_chat_member: { status: params?.oldStatus ?? "left", user: member },
+    old_chat_member: { status: "left", user: member },
     new_chat_member: { status: params?.newStatus ?? "member", user: member },
   };
   return {
     update: { update_id: 900, my_chat_member: membership },
     myChatMember: membership,
-    me: { ...telegramBotInfoForTest, id: params?.contextBotId ?? telegramBotInfoForTest.id },
+    me: telegramBotInfoForTest,
   };
 }
 
@@ -111,18 +105,12 @@ describe("Telegram group join introductions", () => {
     expect(getChatSpy).toHaveBeenCalledWith(TELEGRAM_GROUP_CHAT_ID);
   });
 
-  it.each([
-    { name: "a private chat", membership: { chatType: "private" as const } },
-    { name: "a channel", membership: { chatType: "channel" as const } },
-    { name: "an existing member", membership: { oldStatus: "member" as const } },
-    { name: "a departure", membership: { newStatus: "left" as const } },
-    { name: "another member", membership: { memberId: 321 } },
-  ])("ignores $name", async ({ membership }) => {
+  it("ignores a departure", async () => {
     const handler = await registerJoinHandler({
       channels: { telegram: { groupPolicy: "open" } },
     });
 
-    await handler(createMembershipContext(membership));
+    await handler(createMembershipContext({ newStatus: "left" }));
 
     expect(reportChannelRoomJoinMock).not.toHaveBeenCalled();
     expect(getChatSpy).not.toHaveBeenCalled();

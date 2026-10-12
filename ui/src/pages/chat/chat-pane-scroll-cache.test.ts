@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { stubAnimationFrames } from "./chat-view.test-helpers.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
@@ -17,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(resetTranscriptTestDom);
 
-function mountSession(paneId: string, sessionKey: string) {
+async function mountSession(paneId: string, sessionKey: string) {
   const { pane, state } = createRefreshChatPane();
   pane.paneId = paneId;
   pane.presentationId = JSON.stringify([paneId, sessionKey]);
@@ -38,6 +39,8 @@ function mountSession(paneId: string, sessionKey: string) {
     scrollHeight: { configurable: true, value: 3_000 },
   });
   props.transcript.hostUpdated();
+  await Promise.resolve();
+  flush();
   return {
     thread,
     dispose: () => {
@@ -48,31 +51,34 @@ function mountSession(paneId: string, sessionKey: string) {
   };
 }
 
-it("restores each physical pane's reader after visiting nine retained sessions", () => {
+it("restores each physical pane's reader after visiting nine retained sessions", async () => {
   const firstSession = "agent:main:scroll-cache-0";
   const positions = [
     { paneId: "scroll-main", offset: 420 },
     { paneId: "scroll-detail", offset: 840 },
   ];
   for (const { paneId, offset } of positions) {
-    const { thread, dispose } = mountSession(paneId, firstSession);
+    const { thread, dispose } = await mountSession(paneId, firstSession);
     thread.scrollTop = offset;
     thread.dispatchEvent(new Event("scroll"));
     dispose();
   }
   for (const { paneId, offset } of positions) {
-    const { thread, dispose } = mountSession(paneId, firstSession);
+    const { thread, dispose } = await mountSession(paneId, firstSession);
     expect(thread.scrollTop).toBe(offset);
     dispose();
   }
   for (let index = 1; index < 9; index++) {
-    const { thread, dispose } = mountSession("scroll-main", `agent:main:scroll-cache-${index}`);
+    const { thread, dispose } = await mountSession(
+      "scroll-main",
+      `agent:main:scroll-cache-${index}`,
+    );
     thread.scrollTop = 200;
     thread.dispatchEvent(new Event("scroll"));
     dispose();
   }
   for (const { paneId, offset } of positions) {
-    const { thread, dispose } = mountSession(paneId, firstSession);
+    const { thread, dispose } = await mountSession(paneId, firstSession);
     expect.soft(thread.scrollTop).toBe(offset);
     dispose();
   }

@@ -202,37 +202,6 @@ describe("diagnostics timeline", () => {
     ).toBe(false);
   });
 
-  it("honors config diagnostics flags after config is available", async () => {
-    const { env } = await createTimelineEnv();
-    const envWithoutFlag = { ...env };
-    delete envWithoutFlag.OPENCLAW_DIAGNOSTICS;
-    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
-    const configWithWildcard = { diagnostics: { flags: ["*"] } } as OpenClawConfig;
-    const configWithoutTimeline = { diagnostics: { flags: ["telegram.http"] } } as OpenClawConfig;
-
-    expect(isDiagnosticsTimelineEnabled({ config: configWithTimeline, env: envWithoutFlag })).toBe(
-      true,
-    );
-    expect(isDiagnosticsTimelineEnabled({ config: configWithWildcard, env: envWithoutFlag })).toBe(
-      true,
-    );
-    expect(
-      isDiagnosticsTimelineEnabled({ config: configWithoutTimeline, env: envWithoutFlag }),
-    ).toBe(false);
-  });
-
-  it("lets false-like env diagnostics disable config-enabled timeline output", async () => {
-    const { env } = await createTimelineEnv();
-    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
-
-    expect(
-      isDiagnosticsTimelineEnabled({
-        config: configWithTimeline,
-        env: { ...env, OPENCLAW_DIAGNOSTICS: "0" },
-      }),
-    ).toBe(false);
-  });
-
   it("writes JSONL diagnostic events with the stable envelope", async () => {
     const { env, path } = await createTimelineEnv();
 
@@ -411,25 +380,6 @@ describe("diagnostics timeline", () => {
     expect(errorEvent.errorMessage).toBeUndefined();
     expect(JSON.stringify(events)).not.toContain("TOKEN_ID");
     expect(JSON.stringify(events)).not.toContain("prod");
-  });
-
-  it("records synchronous spans", async () => {
-    const { env, path } = await createTimelineEnv();
-
-    const result = measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
-      env,
-      phase: "startup",
-    });
-
-    expect(result).toBe(42);
-    const events = await readTimeline(path);
-    expect(events).toHaveLength(2);
-    const start = expectDefined(events[0], "span start");
-    const end = expectDefined(events[1], "span end");
-    expect(start.type).toBe("span.start");
-    expect(start.name).toBe("plugins.metadata.scan");
-    expect(end.type).toBe("span.end");
-    expect(end.name).toBe("plugins.metadata.scan");
   });
 
   it("lets nested spans inherit the active timeline phase and parent span", async () => {

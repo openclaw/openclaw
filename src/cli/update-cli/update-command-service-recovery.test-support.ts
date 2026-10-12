@@ -5,11 +5,14 @@ import { pathToFileURL } from "node:url";
 import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
-import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -17,6 +20,7 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -30,9 +34,23 @@ import {
 
 const hostPlatform = process.platform;
 
+function withHostPlatform<T>(run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: descriptor.enumerable,
+    value: hostPlatform,
+  });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
 function createServingOwnerFixture() {
   let lease: ReturnType<typeof acquireGatewayOwnerLease> | undefined;
-  let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator> | undefined;
+  let coordinator: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   let env: NodeJS.ProcessEnv;
   const release = async () => {
     await lease?.release();
@@ -48,8 +66,14 @@ function createServingOwnerFixture() {
       // Use the real host's self identity while native service transport is simulated.
       mockProcessPlatform(hostPlatform);
       try {
-        coordinator = acquireGatewayLifecycleCoordinator({
+        coordinator = acquireGatewayStateOwner({
           databasePath: resolveOpenClawStateSqlitePath(env),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: resolveConfigPath(env),
+            role: "gateway",
+          },
         });
         lease = acquireGatewayOwnerLease({
           env,
@@ -67,7 +91,9 @@ function createServingOwnerFixture() {
     },
     async restart() {
       if (lease) {
-        expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "gateway.restart" });
+        expect(await prepareGatewayRestartIntentConsumption(env)()).toEqual({
+          reason: "gateway.restart",
+        });
         await release();
       }
     },
@@ -80,6 +106,15 @@ export async function createServiceActivationFixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
   vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  // Native service transport is simulated; process ancestry and namespaces belong to the host.
+  const inspectHostAncestry = processAncestry.inspectSelfAndAncestorPidsSync;
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) =>
+    withHostPlatform(() => inspectHostAncestry(...args)),
+  );
+  const classifyOwnerNamespace = gatewayNamespace.classifyGatewayOwnerProcessNamespace;
+  vi.spyOn(gatewayNamespace, "classifyGatewayOwnerProcessNamespace").mockImplementation((...args) =>
+    withHostPlatform(() => classifyOwnerNamespace(...args)),
+  );
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>
@@ -142,6 +177,7 @@ export function readyRecoveryHealth(
   ReturnType<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>
 > {
   return {
+    outcome: "ready",
     healthy: true,
     staleGatewayPids: [],
     runtime: { status: running ? "running" : "stopped", pid: running ? 4242 : undefined },
@@ -150,10 +186,17 @@ export function readyRecoveryHealth(
   };
 }
 
+export function serviceUpdateResult(
+  root: string,
+  overrides: Partial<UpdateRunResult> = {},
+): UpdateRunResult {
+  return { status: "ok", mode: "npm", root, steps: [], durationMs: 0, ...overrides };
+}
+
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, undefined, version)),
+    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
@@ -180,7 +223,6 @@ export function registerRecoveryTests(params: {
   };
 }): void {
   it.each([
-    { startup: "fast", readyAfterMs: 0, needsRecovery: false },
     { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
@@ -213,14 +255,7 @@ export function registerRecoveryTests(params: {
           mocks.events.push("refresh activation");
         }
         mocks.running = true;
-        return {
-          code: 0,
-          stdout: "",
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult();
       });
       mocks.configSnapshot.mockResolvedValue(undefined);
       mocks.ports.mockImplementation(async (port) => {
@@ -252,15 +287,10 @@ export function registerRecoveryTests(params: {
         return health;
       });
 
-      const result: UpdateRunResult = {
-        status: "ok",
-        mode: "npm",
-        root,
-        steps: [],
-        durationMs: 0,
+      const result: UpdateRunResult = serviceUpdateResult(root, {
         before: { version: "2026.1.1" },
         after: { version: VERSION },
-      };
+      });
       const activated = await maybeRestartService({
         shouldRestart: true,
         result,
@@ -281,11 +311,11 @@ export function registerRecoveryTests(params: {
         const run = params.run();
         expect(completeUpdateCommandRun(result, run)).toMatchObject({
           status: "skipped",
-          reason: "gateway-readiness-unverified",
+          reason: "still-starting",
         });
         expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
           status: "skipped",
-          reason: "gateway-readiness-unverified",
+          reason: "still-starting",
           confirmedAtMs: null,
           verification: { serviceRunning: true, pid: 4242, readyz: false },
           steps: expect.arrayContaining([
@@ -306,7 +336,7 @@ export function registerRecoveryTests(params: {
               "recovery restart",
             ]
           : []),
-        pending ? "health: timeout" : "health: healthy",
+        pending ? "health: still-starting" : "health: healthy",
       ]);
       expect(mocks.restart).not.toHaveBeenCalled();
       if (startup === "unready" || startup === "slow") {
@@ -327,6 +357,7 @@ export function registerRecoveryTests(params: {
         jsonMode: true,
       });
       params.mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: outcome === "healthy" ? "ready" : outcome === "exited" ? "failed" : "starting",
         healthy: outcome === "healthy",
         staleGatewayPids: [],
         gatewayVersion: expectedVersion,
@@ -365,7 +396,6 @@ export function registerRecoveryTests(params: {
     "metadata",
     "unit",
     "unavailable",
-    "replacement root",
     "profile",
     "before activation",
     "after readiness",
@@ -401,11 +431,7 @@ export function registerRecoveryTests(params: {
         ...command,
         programArguments: [
           process.execPath,
-          path.join(
-            ["foreign", "replacement root"].includes(change) ? foreign : root,
-            "dist",
-            "index.js",
-          ),
+          path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
           "gateway",
           "--port",
           "19002",

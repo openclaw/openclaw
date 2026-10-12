@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -8,18 +10,23 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
+import type { SpawnResult } from "../../process/exec.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
+  NODE_WORKER_STATUS_WAIT_MAX_MS,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
+  nodeWorkerTurnMatchesIdentity,
 } from "../../worker/node-supervisor-protocol.js";
 import {
   parseWorkerAdmissionDeadlineResult,
@@ -35,6 +42,19 @@ import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
+export function nodeWorkerSpawnResultFromReceipt(
+  receipt: TerminalNodeWorkerSupervisorReceipt,
+): SpawnResult {
+  return {
+    stdout: receipt.state === "completed" ? receipt.resultJson : "",
+    stderr: receipt.state === "completed" ? "" : receipt.errorText,
+    code: receipt.state === "completed" ? 0 : 1,
+    signal: null,
+    killed: receipt.state === "cancelled" || receipt.state === "interrupted",
+    termination: "exit",
+  };
+}
+
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const MAX_RETRY_DELAY_MS = 2_000;
@@ -45,7 +65,7 @@ const DEFAULT_AVAILABILITY_TIMEOUT_MS = 10_000;
 const MAX_ADMISSION_ATTEMPTS = 5;
 const ADMISSION_REARM_BACKOFF = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 };
 
-const RETRYABLE_TRANSPORT_CODES = new Set([
+export const RETRYABLE_NODE_WORKER_TRANSPORT_CODES: ReadonlySet<string> = new Set([
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -98,12 +118,7 @@ class NodeWorkerLaunchTransportError extends Error {
 function isTerminalReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): receipt is TerminalNodeWorkerSupervisorReceipt {
-  return (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  );
+  return receipt.state !== "pending" && receipt.state !== "running";
 }
 
 function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInput {
@@ -134,10 +149,15 @@ function rearmNodeWorkerLaunchInput(
 }
 
 export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  const measured = input.descriptor.admission.handshake.protocolFeatures.includes(
+    NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+  )
+    ? { ...input, idleRetention: true as const }
+    : input;
   // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
   // the original plan; the registry bounds timeouts and always generates UUID request IDs.
   return Math.max(
-    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+    ...[measured, rearmNodeWorkerLaunchInput(measured, 1)].flatMap((attempt) => [
       Buffer.byteLength(
         serializeNodeEvent(
           "node.invoke.request",
@@ -152,15 +172,12 @@ export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLa
         ),
         "utf8",
       ),
-      measureWorkerProcessTurnBytes(attempt.descriptor),
+      measureWorkerProcessTurnBytes(attempt.descriptor, attempt.idleRetention),
     ]),
   );
 }
 
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
-  if (input.launchId !== input.descriptor.assignment.turnId) {
-    throw new Error("node worker launch ID must match the durable turn ID");
-  }
   return {
     launchId: input.launchId,
     planHash: nodeWorkerPlanHash(input),
@@ -172,19 +189,14 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
   };
 }
 
-function receiptMatchesIdentity(
+function validateReceipt(
   receipt: NodeWorkerSupervisorReceipt,
   expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
+): NodeWorkerSupervisorReceipt {
+  if (!nodeWorkerTurnMatchesIdentity(receipt, expected)) {
+    throw new Error("node worker supervisor receipt identity mismatch");
+  }
+  return receipt;
 }
 
 function parseInvokeReceipt(
@@ -293,11 +305,13 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
-    payload: unknown;
+    payload: NodeWorkerLaunchInput | NodeWorkerSupervisorIdentity | { launchId: string };
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
-  }): Promise<NodeWorkerSupervisorReceipt | null> => {
+    idleRetention?: true;
+    prepareLaunch?: (node: NodeWorkerSupervisorNodeProof) => void;
+  }): Promise<{ receipt: NodeWorkerSupervisorReceipt | null; statusWait: boolean }> => {
     if (!params.isAuthorized()) {
       throw new NodeWorkerLaunchTransportError(
         "APPROVAL_AUTHORITY_CLOSED",
@@ -337,24 +351,36 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
-        throw new Error(
-          formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);
+      }
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
         );
       }
       // A retained environment already owns its slot. The node arbitrates new physical
       // launches atomically; its advertised free-slot count cannot reject turn reuse.
+      const statusWait = node.workerHost.statusWait === NODE_WORKER_STATUS_WAIT_VERSION;
       const operation = transport.invoke({
         node,
         command: params.command,
-        params: params.payload,
+        params:
+          params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND && statusWait
+            ? {
+                ...params.payload,
+                // Leave time for receipt delivery and transport authority revalidation.
+                waitMs: Math.min(
+                  NODE_WORKER_STATUS_WAIT_MAX_MS,
+                  Math.max(1, Math.floor(rpcBudgetMs * 0.75)),
+                ),
+              }
+            : params.payload,
         timeoutMs: rpcBudgetMs,
         signal,
         idempotencyKey:
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-          typeof params.payload === "object" &&
-          params.payload !== null &&
-          "launchId" in params.payload &&
-          typeof params.payload.launchId === "string"
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
             ? params.payload.launchId
             : undefined,
         isDispatchAuthorized: params.isAuthorized,
@@ -374,7 +400,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           ),
         );
       }
-      return parseInvokeReceipt(result.payloadJSON);
+      return { receipt: parseInvokeReceipt(result.payloadJSON), statusWait };
     } catch (error) {
       if (rpcController?.signal.aborted && !params.deadline.signal.aborted) {
         throw new NodeWorkerLaunchTransportError("TIMEOUT", "node worker RPC timed out");
@@ -385,27 +411,14 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     }
   };
 
-  const validateReceipt = (
-    receipt: NodeWorkerSupervisorReceipt,
-    expected: NodeWorkerSupervisorIdentity,
-  ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
-      throw new Error("node worker supervisor receipt identity mismatch");
-    }
-    return receipt;
-  };
-
-  const waitBeforeRetry = async (params: {
-    delayMs: number;
-    deadline: OperationDeadline;
-  }): Promise<number> => {
-    const remainingMs = params.deadline.remainingMs();
-    params.deadline.signal.throwIfAborted();
+  const waitBeforeRetry = async (delayMs: number, deadline: OperationDeadline): Promise<number> => {
+    const remainingMs = deadline.remainingMs();
+    deadline.signal.throwIfAborted();
     await raceNodeWorkerOperation(
-      sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
-      params.deadline.signal,
+      sleep(Math.min(delayMs, remainingMs), deadline.signal),
+      deadline.signal,
     );
-    return Math.min(params.delayMs * 2, MAX_RETRY_DELAY_MS);
+    return Math.min(delayMs * 2, MAX_RETRY_DELAY_MS);
   };
 
   const cancelUntilTerminal = async (params: {
@@ -424,7 +437,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           throw new Error("node worker cancellation authority closed before terminal settlement");
         }
         try {
-          const receipt = await invoke({
+          const { receipt } = await invoke({
             deviceId: params.request.deviceId,
             command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
             payload: params.expected,
@@ -444,12 +457,12 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }
         }
-        delayMs = await waitBeforeRetry({ delayMs, deadline });
+        delayMs = await waitBeforeRetry(delayMs, deadline);
       }
     } finally {
       deadline.dispose();
@@ -462,6 +475,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const launch = async (
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
+    const restartSignal = getGatewayRestartDrainSignal();
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
     const stableRequest = { ...request, input };
@@ -504,13 +518,41 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (!stableRequest.isDispatchAuthorized()) {
           throw new Error("node worker launch authority closed");
         }
+        const launchMayAlreadyExist = mayHaveLaunched;
         try {
-          const receipt = await invoke({
+          const { receipt, statusWait } = await invoke({
             deviceId: stableRequest.deviceId,
             command: pollStatus
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
+            ...(!pollStatus && input.idleRetention ? { idleRetention: true as const } : {}),
+            ...(!pollStatus && !mayHaveLaunched
+              ? {
+                  prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
+                    if (
+                      input.descriptor.assignment.inference === "runtime-local" &&
+                      node.workerHost.nativeInference !== 1
+                    ) {
+                      throw createNodeRunnerInventoryIssueError(
+                        node.nodeId,
+                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+                      );
+                    }
+                    if (
+                      node.workerHost.idleRetention === true &&
+                      input.descriptor.admission.handshake.protocolFeatures.includes(
+                        NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+                      )
+                    ) {
+                      input.idleRetention = true;
+                    } else {
+                      delete input.idleRetention;
+                    }
+                    expected = expectedIdentity(input);
+                  },
+                }
+              : {}),
             isAuthorized: () => {
               if (!dispatchReady) {
                 // Publish expiry through the signal; a guard throw can orphan the invoke promise.
@@ -554,10 +596,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                 // The node journal holds this attempt's reason and proves its child
                 // is gone. Re-arm only after backoff and current authority revalidation.
                 mayHaveLaunched = false;
-                await waitBeforeRetry({
-                  delayMs: rearmDelayMs,
-                  deadline,
-                });
+                await waitBeforeRetry(rearmDelayMs, deadline);
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
                 input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
@@ -570,8 +609,25 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             }
             pollStatus = true;
             delayMs = pollIntervalMs;
+            // Older node hosts retain timed polling; negotiated waits wake on durable settlement.
+            if (statusWait) {
+              continue;
+            }
           }
         } catch (error) {
+          // Supervisors answer INVALID_REQUEST before retaining any admission, turn, or child
+          // for a launch ID they have not seen. Launch IDs are minted per turn plan, so only an
+          // earlier dispatch in this call could have registered it; cancelling would otherwise
+          // poll a null receipt until its deadline.
+          if (
+            !pollStatus &&
+            !launchMayAlreadyExist &&
+            error instanceof NodeWorkerLaunchTransportError &&
+            error.code === "INVALID_REQUEST"
+          ) {
+            mayHaveLaunched = false;
+            throw error;
+          }
           if (
             deadline.signal.aborted ||
             (!dispatchReady && availabilityDeadline.signal.aborted) ||
@@ -581,18 +637,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           }
           if (
             !(error instanceof NodeWorkerLaunchTransportError) ||
-            !RETRYABLE_TRANSPORT_CODES.has(error.code)
+            !RETRYABLE_NODE_WORKER_TRANSPORT_CODES.has(error.code)
           ) {
             throw error;
           }
           pollStatus = false;
         }
-        delayMs = await waitBeforeRetry({
-          delayMs,
-          deadline: dispatchReady ? deadline : availabilityDeadline,
-        });
+        delayMs = await waitBeforeRetry(delayMs, dispatchReady ? deadline : availabilityDeadline);
       }
     } catch (error) {
+      if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {
+        // The launcher retains the durable claim; startup must stop this worker before reuse.
+        throw deadline.signal.reason;
+      }
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
         throw new WorkerRunnerUnavailableError();
       }

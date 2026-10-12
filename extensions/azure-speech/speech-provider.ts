@@ -1,12 +1,7 @@
-/**
- * Azure Speech provider descriptor. It reads config/env defaults, parses speech
- * directives, lists voices, and calls the Azure TTS runtime helper.
- */
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -14,6 +9,7 @@ import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider
 import {
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -29,60 +25,22 @@ import {
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
 
-type AzureSpeechProviderConfig = {
-  apiKey?: string;
-  region?: string;
-  endpoint?: string;
-  baseUrl?: string;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  voiceNoteOutputFormat: string;
-  timeoutMs?: number;
-};
-
-type AzureSpeechProviderOverrides = {
-  voice?: string;
-  lang?: string;
-  outputFormat?: string;
-};
-
-function readAzureSpeechEnvApiKey(): string | undefined {
-  return (
-    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
-    trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
-    trimToUndefined(process.env.SPEECH_KEY)
-  );
-}
-
 function readAzureSpeechEnvRegion(): string | undefined {
   return (
     trimToUndefined(process.env.AZURE_SPEECH_REGION) ?? trimToUndefined(process.env.SPEECH_REGION)
   );
 }
 
-function readAzureSpeechEnvEndpoint(): string | undefined {
-  return trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
-}
-
-function resolveAzureSpeechConfigRecord(
-  rawConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  return (
+  const raw =
     asOptionalRecord(providers?.["azure-speech"]) ??
     asOptionalRecord(providers?.azure) ??
     asOptionalRecord(rawConfig["azure-speech"]) ??
-    asOptionalRecord(rawConfig.azure)
-  );
-}
-
-function normalizeAzureSpeechProviderConfig(
-  rawConfig: Record<string, unknown>,
-): AzureSpeechProviderConfig {
-  const raw = resolveAzureSpeechConfigRecord(rawConfig);
+    asOptionalRecord(rawConfig.azure);
   const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
-  const endpoint = trimToUndefined(raw?.endpoint) ?? readAzureSpeechEnvEndpoint();
+  const endpoint =
+    trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
@@ -105,7 +63,7 @@ function normalizeAzureSpeechProviderConfig(
   };
 }
 
-function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeechProviderConfig {
+function readAzureSpeechProviderConfig(config: SpeechProviderConfig) {
   const defaults = normalizeAzureSpeechProviderConfig({});
   const region = trimToUndefined(config.region) ?? defaults.region;
   const endpoint = trimToUndefined(config.endpoint) ?? defaults.endpoint;
@@ -128,59 +86,43 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
   };
 }
 
-function readAzureSpeechOverrides(
-  overrides: SpeechProviderOverrides | undefined,
-): AzureSpeechProviderOverrides {
-  if (!overrides) {
-    return {};
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
+  const key = [
+    "voice",
+    "voiceid",
+    "voice_id",
+    "azure_voice",
+    "azurevoice",
+    "azure_speech_voice",
+  ].includes(ctx.key)
+    ? "voice"
+    : [
+          "lang",
+          "language",
+          "language_code",
+          "languagecode",
+          "azure_lang",
+          "azure_language",
+        ].includes(ctx.key)
+      ? "lang"
+      : ["output_format", "outputformat", "azure_format", "azure_output_format"].includes(ctx.key)
+        ? "outputFormat"
+        : undefined;
+  if (!key) {
+    return { handled: false };
   }
-  return {
-    voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
-    lang: trimToUndefined(overrides.lang ?? overrides.languageCode),
-    outputFormat: trimToUndefined(overrides.outputFormat),
-  };
-}
-
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voiceid":
-    case "voice_id":
-    case "azure_voice":
-    case "azurevoice":
-    case "azure_speech_voice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, voice: ctx.value } };
-    case "lang":
-    case "language":
-    case "language_code":
-    case "languagecode":
-    case "azure_lang":
-    case "azure_language":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, lang: ctx.value } };
-    case "output_format":
-    case "outputformat":
-    case "azure_format":
-    case "azure_output_format":
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, outputFormat: ctx.value } };
-    default:
-      return { handled: false };
-  }
+  return (key === "voice" ? ctx.policy.allowVoice : ctx.policy.allowVoiceSettings)
+    ? { handled: true, overrides: { ...ctx.currentOverrides, [key]: ctx.value } }
+    : { handled: true };
 }
 
 function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
-  return resolveSpeechProviderApiKey(...candidates, readAzureSpeechEnvApiKey());
+  return resolveSpeechProviderApiKey(
+    ...candidates,
+    trimToUndefined(process.env.AZURE_SPEECH_KEY) ??
+      trimToUndefined(process.env.AZURE_SPEECH_API_KEY) ??
+      trimToUndefined(process.env.SPEECH_KEY),
+  );
 }
 
 async function resolveAzureSpeechTtsRequest(
@@ -188,7 +130,10 @@ async function resolveAzureSpeechTtsRequest(
   outputFormatOverride?: string,
 ) {
   const config = readAzureSpeechProviderConfig(req.providerConfig);
-  const overrides = readAzureSpeechOverrides(req.providerOverrides);
+  const overrides = req.providerOverrides;
+  const voice = trimToUndefined(overrides?.voice ?? overrides?.voiceId);
+  const lang = trimToUndefined(overrides?.lang ?? overrides?.languageCode);
+  const outputFormat = trimToUndefined(overrides?.outputFormat);
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("Azure Speech API key missing");
@@ -201,18 +146,17 @@ async function resolveAzureSpeechTtsRequest(
     baseUrl: config.baseUrl,
     endpoint: config.endpoint,
     region: config.region,
-    voice: overrides.voice ?? config.voice,
-    lang: overrides.lang ?? config.lang,
+    voice: voice ?? config.voice,
+    lang: lang ?? config.lang,
     outputFormat:
       outputFormatOverride ??
-      overrides.outputFormat ??
+      outputFormat ??
       (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat),
     timeoutMs: config.timeoutMs ?? req.timeoutMs,
     maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
   };
 }
 
-/** Build the Azure Speech provider descriptor for the speech-core runtime. */
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "azure-speech",
@@ -239,39 +183,28 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       });
       return {
         ...base,
-        ...(apiKey === undefined ? {} : { apiKey }),
-        ...(region === undefined ? {} : { region }),
-        ...(endpoint === undefined ? {} : { endpoint }),
-        ...(baseUrl === undefined ? {} : { baseUrl }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
+        ...filterStringRecord({
+          apiKey,
+          region,
+          endpoint,
+          baseUrl,
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+        }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.languageCode) == null
-        ? {}
-        : { lang: trimToUndefined(params.languageCode) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        lang: trimToUndefined(params.languageCode),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveApiKey(requestValue, configValue);
+      const apiKey = resolveApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }

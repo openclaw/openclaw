@@ -1,10 +1,14 @@
-import type { Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
+import * as processRuntimeSdk from "openclaw/plugin-sdk/process-runtime";
 import {
-  createCpuTrackedWorker,
   resolveRuntimeWorkerUrl,
   resolveRuntimeWorkerArgv,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { DiscordAudioEvent, DiscordAudioWorkerOptions } from "./audio-worker-protocol.js";
+
+// Remove the native constructor path when the supported host floor includes worker accounting.
+const workerSdk: Partial<Pick<typeof processRuntimeSdk, "createCpuTrackedWorker">> =
+  processRuntimeSdk;
 
 export type DiscordAudioWorkerThread = Pick<Worker, "postMessage" | "terminate"> & {
   on(event: "message", listener: (event: DiscordAudioEvent) => void): void;
@@ -22,8 +26,11 @@ export function createDiscordAudioWorkerThread(
     distWorkerPath: "extensions/discord/src/voice/audio-worker.runtime.js",
     package: { name: "@openclaw/discord", distWorkerPath: "src/voice/audio-worker.runtime.js" },
   });
-  return createCpuTrackedWorker(url, {
+  const workerOptions = {
     workerData: options,
     execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
-  });
+  };
+  return workerSdk.createCpuTrackedWorker
+    ? workerSdk.createCpuTrackedWorker(url, workerOptions)
+    : new Worker(url, workerOptions);
 }

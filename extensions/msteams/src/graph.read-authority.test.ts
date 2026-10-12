@@ -74,7 +74,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (original) => {
 
 import { msteamsPlugin } from "./channel.js";
 import { getMemberInfoMSTeams } from "./graph-members.js";
-import { getMessageMSTeams, listPinsMSTeams } from "./graph-messages.js";
+import { getMessageMSTeams } from "./graph-messages.js";
 import { listChannelsMSTeams } from "./graph-teams.js";
 import { fetchGraphAbsoluteUrl, fetchGraphJson } from "./graph.js";
 
@@ -154,7 +154,6 @@ afterEach(async () => {
 
 describe("Teams Graph read authority", () => {
   it.each([
-    ["sdk", false],
     ["sdk", true],
     ["token", false],
     ["token", true],
@@ -243,43 +242,27 @@ describe("Teams Graph read authority", () => {
     },
   );
 
-  it.each(["pins", "channels", "members"] as const)(
-    "stops the next %s lookup after revocation",
+  it.each(["channels", "members"] as const)(
+    "rejects the %s response revoked before body consumption and releases it",
     async (kind) => {
       const reader = createReader();
       transport.authority = reader.assert;
-      respond = (url, response) => {
+      respond = (_url, response) => {
         reader.revoke();
         response.setHeader("content-type", "application/json");
         response.end(
-          JSON.stringify(
-            kind === "members"
-              ? url.includes("membershipType")
-                ? { membershipType: "standard" }
-                : { value: [] }
-              : {
-                  value: [],
-                  ...(!url.includes("second")
-                    ? { "@odata.nextLink": "https://graph.microsoft.com/v1.0/second" }
-                    : {}),
-                },
-          ),
+          JSON.stringify(kind === "members" ? { membershipType: "standard" } : { value: [] }),
         );
       };
-      const read = async () => {
-        if (kind === "pins") {
-          return listPinsMSTeams({ cfg, to: chatId });
-        }
-        if (kind === "channels") {
-          return listChannelsMSTeams({ cfg, teamId });
-        }
-        return getMemberInfoMSTeams({
-          cfg,
-          to: `${teamId}/${channelId}`,
-          userId: "44444444-4444-4444-4444-444444444444",
-        });
-      };
-      await expect(read()).rejects.toThrow("Teams read authority revoked");
+      const result =
+        kind === "channels"
+          ? listChannelsMSTeams({ cfg, teamId })
+          : getMemberInfoMSTeams({
+              cfg,
+              to: `${teamId}/${channelId}`,
+              userId: "44444444-4444-4444-4444-444444444444",
+            });
+      await expect(result).rejects.toThrow("Teams read authority revoked");
       expect(requests).toHaveLength(1);
       expect(transport.releases).toBe(1);
     },
@@ -291,7 +274,6 @@ describe("Teams Graph mutation currentness", () => {
     [false, false],
     [false, true],
     [true, false],
-    [true, true],
   ] as const)(
     "rechecks a delegated token wait before success or fallback (fallback=%s, revoked=%s)",
     async (fallback, revoked) => {

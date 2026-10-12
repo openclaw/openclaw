@@ -53,6 +53,7 @@ type ClassifiedMockRequest = {
   model: unknown;
   continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
+  stallGuidance: boolean;
   outcome: unknown;
   errorCode: unknown;
 };
@@ -63,6 +64,7 @@ const QUEUED_PROMPT =
   "Repeated request queued reply Gateway QA check. Reply with the fixture marker.";
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
+const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
 // The opt-in product proof owns the full 360-second production-floor assertion.
 // This always-on state-machine proof uses the same heartbeat path with QA timings.
 const QA_RECOVERY_BOUND_MS = 30_000;
@@ -254,6 +256,8 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
                 ? "recovery"
                 : "other"
             : "missing",
+        stallGuidance:
+          typeof allInputText === "string" && allInputText.includes(STALL_GUIDANCE_NEEDLE),
         outcome,
         errorCode,
       })),
@@ -300,9 +304,9 @@ async function readFailureEvidence(params: {
   return JSON.stringify({ stability, requests, gatewayLogs });
 }
 
-describe("Gateway repeated-request provider timeout", () => {
+describe("Gateway repeated-request recovery", () => {
   it(
-    "continues after a provider timeout and settles failure before draining one queued followup",
+    "recovers semantic stagnation and settles the active run before draining one queued followup",
     { timeout: 330_000 },
     async () => {
       gatewayOwner = createQaLiveLaneGateway();
@@ -352,7 +356,7 @@ describe("Gateway repeated-request provider timeout", () => {
       expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
         String(QA_RECOVERY_BOUND_MS),
       );
-      expect(gateway.runtimeEnv.OPENCLAW_QA_PARENT_PID).toBeTruthy();
+      expect(gateway.runtimeEnv.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
 
       const baseline = await readStability(gateway);
       const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
@@ -391,14 +395,14 @@ describe("Gateway repeated-request provider timeout", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
-      // The provider deadline starts before model-call observation, so its diagnostic
-      // duration can be shorter than timeoutSeconds. The failure kind owns timeout evidence.
+      // Repeated-request recovery owns semantic stagnation independently of the
+      // current provider request's deadline. Observe its settlement before queue drain.
       const events = await waitForStability(
         gateway,
         baselineSeq,
         (records) =>
           records.some(
-            (event) => event.type === "model.call.error" && event.failureKind === "timeout",
+            (event) => event.type === "session.recovery.completed" && event.outcome === "aborted",
           ),
         250_000,
       );
@@ -410,15 +414,18 @@ describe("Gateway repeated-request provider timeout", () => {
       );
       const completed = events.filter((event) => event.type === "session.recovery.completed");
 
-      // The heartbeat can report the same stall again while the provider owns its
-      // request deadline. Every report must still respect the no-progress bound.
+      // Heartbeats may observe a stall more than once; recovery still owns one abort.
       expect(stalled.length).toBeGreaterThan(0);
       for (const event of stalled) {
         expect(event.ageMs).toEqual(expect.any(Number));
         expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
       }
-      expect(requested).toEqual([]);
-      expect(completed).toEqual([]);
+      expect(requested).toEqual([
+        expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
+      ]);
+      expect(completed).toEqual([
+        expect.objectContaining({ action: "abort_embedded_run", outcome: "aborted" }),
+      ]);
       expect(
         events.filter((event) => event.type === "model.call.started").length,
       ).toBeGreaterThanOrEqual(5);
@@ -444,11 +451,22 @@ describe("Gateway repeated-request provider timeout", () => {
         },
       );
       expect(historyContainsQueuedReply(history)).toBe(true);
-      const queuedTerminal = (await gateway.call(
-        "agent.wait",
-        { runId: queued.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayChatRun;
+      // agent.wait returns pending immediately while the queue owns this run,
+      // even after its reply is visible. Observe settlement within the same budget.
+      const queuedDeadline = Date.now() + 30_000;
+      let queuedTerminal: GatewayChatRun;
+      do {
+        const remainingMs = Math.max(1, queuedDeadline - Date.now());
+        queuedTerminal = (await gateway.call(
+          "agent.wait",
+          { runId: queued.runId, timeoutMs: remainingMs },
+          { timeoutMs: remainingMs },
+        )) as GatewayChatRun;
+        if (queuedTerminal.status !== "pending") {
+          break;
+        }
+        await sleep(Math.max(0, Math.min(100, queuedDeadline - Date.now())));
+      } while (Date.now() < queuedDeadline);
       expect(queuedTerminal.status).toBe("ok");
       const mockBaseUrl = harness?.mock?.baseUrl;
       if (!mockBaseUrl) {
@@ -456,29 +474,39 @@ describe("Gateway repeated-request provider timeout", () => {
       }
       const requests = await readClassifiedMockRequests(mockBaseUrl);
       const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
-      expect(recoveryRequests.length).toBeGreaterThanOrEqual(5);
-      expect(recoveryRequests[0]?.model).toBe("gpt-5.6-luna");
-      expect(recoveryRequests[1]?.model).toBe(recoveryRequests[0]?.model);
-      expect(recoveryRequests).toEqual(
-        expect.arrayContaining([
+      // Invisible replay-safe errors exhaust the primary model's retry budget;
+      // the diagnostic owner then aborts the stalled fallback request.
+      // The mock records its planned response before the delay; lifecycle checks
+      // above prove the actual abort and completion.
+      expect(recoveryRequests).toEqual([
+        ...Array.from({ length: 4 }, () =>
           expect.objectContaining({
-            continuation: true,
+            model: "gpt-5.6-luna",
+            continuation: false,
             outcome: "error",
             errorCode: "response_failed_no_details",
           }),
-        ]),
-      );
+        ),
+        expect.objectContaining({
+          model: "gpt-5.6-luna-alt",
+          continuation: false,
+          outcome: "error",
+          errorCode: "response_failed_no_details",
+        }),
+      ]);
+      // The stalled turn never replied, so the queued request answers with the
+      // interruption guidance instead of a retry notice or an extra recovery turn.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success" }),
+        expect.objectContaining({ outcome: "success", stallGuidance: true }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
       expect(
         finalEvents.filter((event) => event.type === "session.recovery.requested"),
-      ).toHaveLength(0);
+      ).toHaveLength(1);
       expect(
         finalEvents.filter((event) => event.type === "session.recovery.completed"),
-      ).toHaveLength(0);
+      ).toHaveLength(1);
     },
   );
 });

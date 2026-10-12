@@ -9,6 +9,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:thinking-status";
@@ -117,6 +118,7 @@ suite.define(() => {
       );
       const beforeRow = before.sessions.find((row) => row.key === key);
       expect(beforeRow).toMatchObject({
+        sessionId: expect.any(String),
         modelProvider: "thinking-fixture",
         model: "with-effort",
         thinkingLevel: "off",
@@ -149,6 +151,7 @@ suite.define(() => {
             socket.on("framereceived", ({ payload }) => recordFrame("received", payload));
           });
           await page.goto(url.href);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
           await composer.waitFor({ state: "visible" });
@@ -220,7 +223,13 @@ suite.define(() => {
             requests
               .filter((frame) => frame.method === "sessions.patch")
               .map((frame) => frame.params),
-          ).toEqual([{ key, model: "thinking-fixture/no-effort" }]);
+          ).toEqual([
+            {
+              key,
+              expectedSessionId: beforeRow?.sessionId,
+              model: "thinking-fixture/no-effort",
+            },
+          ]);
           const changes = frames
             .filter(
               ({ frame }) =>
@@ -316,6 +325,7 @@ suite.define(() => {
               });
             });
             await page.goto(url.href);
+            await enterControlUiSession(page);
             await waitForControlUiGatewayReady(page);
             const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
             await composer.waitFor({ state: "visible" });

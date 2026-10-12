@@ -27,7 +27,7 @@ describe("OpenAI model construction imports", () => {
     ).toEqual([]);
   });
 
-  it.each(["extensions/openai/shared.ts", "extensions/openai/prompt-overlay.ts"])(
+  it.each(["extensions/openai/shared.ts", "src/plugin-sdk/provider-model-metadata.ts"])(
     "%s keeps descriptor construction outside host normalization and discovery",
     async (entry) => {
       expect(

@@ -30,7 +30,7 @@ export function readWorkspaceSkillStatusFacts(params: {
       const source = resolveSkillSource(entry.skill);
       const bundled = source === "openclaw-bundled" || source === "openclaw-custodian";
       const managed = source === "openclaw-managed";
-      const skillKey = resolveSkillKey(entry.skill, entry);
+      const skillKey = resolveSkillKey(entry);
       const clawhub =
         params.workspaceDir && !bundled
           ? resolveClawHubSkillStatusLinkSync({

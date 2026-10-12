@@ -85,15 +85,14 @@ describe("resolveCodexCatalogCreateSession", () => {
           model: { primary: "openai/gpt-6-astra" },
           models: { "openai/gpt-6-astra": {} },
         },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "research",
+        entries: {
+          main: {},
+          research: {
             model: { primary: "openai/gpt-5.6-luna" },
             models: { "openai/gpt-5.6-luna": {} },
             modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 

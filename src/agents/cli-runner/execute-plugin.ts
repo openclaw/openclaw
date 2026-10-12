@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -89,6 +91,9 @@ function createPluginToolPermissionHandler(params: {
 
     // Provider schemas are not policy schemas: match canonical names and file operands.
     const canonicalToolName = normalizeCliToolName(toolName);
+    if (params.context.hostOwnedTools?.includes(canonicalToolName)) {
+      return denyTool(`Use OpenClaw ${canonicalToolName}; its native equivalent is unavailable.`);
+    }
     const nativeFileTool =
       ["read", "write", "edit"].includes(canonicalToolName) &&
       Object.hasOwn(request.toolInput, "file_path");
@@ -367,24 +372,14 @@ function waitForIteratorValue<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
 ): Promise<IteratorResult<T>> {
-  if (signal.aborted) {
-    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-  }
-  return new Promise((resolve, reject) => {
-    const rejectAborted = () =>
-      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-    signal.addEventListener("abort", rejectAborted, { once: true });
-    void iterator.next().then(
-      (value) => {
-        signal.removeEventListener("abort", rejectAborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", rejectAborted);
-        reject(toErrorObject(error, "CLI plugin execution stream failed."));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      iterator.next().catch((error: unknown) => {
+        throw toErrorObject(error, "CLI plugin execution stream failed.");
+      }),
+    signal,
+    () => toErrorObject(signal.reason, "CLI plugin execution was aborted."),
+  );
 }
 
 async function closePluginIterator(
@@ -393,23 +388,18 @@ async function closePluginIterator(
   if (!iterator?.return) {
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       iterator.return(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("CLI plugin runtime did not close after its run ended.")),
-          PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
-        );
-        timeout.unref();
-      }),
-    ]);
+      PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
+      () => {
+        throw new Error("CLI plugin runtime did not close after its run ended.");
+      },
+      { ref: false },
+    );
   } catch (error) {
     recordAgentCleanupFailure();
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -431,6 +421,8 @@ export async function executePluginOwnedProcess(params: {
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
+  compactionActive?: () => boolean;
+  onCompactionActiveChange?: (listener: () => void) => () => void;
   getActiveLoopbackAskUserDeadline?: () => number | undefined;
   onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
@@ -484,8 +476,16 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
-  const reportOutstandingWork = () =>
-    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const reportOutstandingWork = () => {
+    // Parsed tools are deliberately absent here: diagnostics tracks them itself via
+    // tool.execution.started, which makes activeWorkKind "tool_call" and takes the
+    // blocked-tool branch before the backend deadline is ever consulted. Counting
+    // them again would double-report the same work.
+    const toolWork = outstanding.approvals > 0 || outstanding.background > 0;
+    // Compaction joins the same report tool work already made, so diagnostics recovery
+    // holds a silent compaction open exactly as long as it holds a blocked tool call.
+    params.onOutstandingWorkChange?.(toolWork || (params.compactionActive?.() ?? false));
+  };
   const updatePendingApproval = (delta: number) => {
     outstanding.approvals = Math.max(0, outstanding.approvals + delta);
     reportOutstandingWork();
@@ -502,6 +502,7 @@ export async function executePluginOwnedProcess(params: {
       getActiveAskUserDeadline: params.getActiveLoopbackAskUserDeadline,
       activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
       backgroundTaskCount: () => outstanding.background,
+      compactionActive: () => params.compactionActive?.() ?? false,
       hasObservedActivity: () => outstanding.observed,
       hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
       onNoOutputTimeout: (error) => {
@@ -518,6 +519,9 @@ export async function executePluginOwnedProcess(params: {
   );
   const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
     watchdog.reset(),
+  );
+  const stopCompactionWorkListener = params.onCompactionActiveChange?.(() =>
+    reportOutstandingWork(),
   );
 
   const detachReplyBackend = attachCliReplyBackend(run, () => {
@@ -577,12 +581,15 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
-      requestToolPermission: createPluginToolPermissionHandler({
-        context: params.context,
-        abortSignal: signal,
-        onPendingApproval: updatePendingApproval,
-        env: params.env,
-      }),
+      // Warm transports retain their first turn's async context across plugin refreshes.
+      requestToolPermission: AsyncLocalStorage.bind(
+        createPluginToolPermissionHandler({
+          context: params.context,
+          abortSignal: signal,
+          onPendingApproval: updatePendingApproval,
+          env: params.env,
+        }),
+      ),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,
@@ -661,6 +668,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     watchdog.dispose();
     stopAskUserDeadlineListener?.();
+    stopCompactionWorkListener?.();
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.

@@ -16,7 +16,7 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value;
 }
 
-export function requireArray(value: unknown, label: string): unknown[] {
+function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), `${label} should be an array`).toBe(true);
   if (!Array.isArray(value)) {
     throw new Error(`${label} should be an array`);
@@ -72,6 +72,7 @@ export function expectChangedBroadcast(
   expect(options).toEqual({
     agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
     dropIfSlow: true,
+    prepareSessionProjection: expect.any(Function),
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });
   const payloadRecord = requireRecord(payload, "broadcast payload");

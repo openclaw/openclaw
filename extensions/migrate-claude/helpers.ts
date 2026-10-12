@@ -1,4 +1,3 @@
-// Migrate Claude helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,14 +52,6 @@ export async function readJsonObject(
   } catch {
     return {};
   }
-}
-
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
 }
 
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {

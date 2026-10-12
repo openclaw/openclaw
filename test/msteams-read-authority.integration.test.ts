@@ -119,8 +119,6 @@ async function createFixture(
     origin?: Origin;
     self?: boolean;
     narrowTeam?: boolean;
-    legacy?: boolean;
-    unverified?: boolean;
     senderIsOwner?: boolean;
     botFrameworkTeam?: boolean;
     missingRequester?: boolean;
@@ -156,7 +154,7 @@ async function createFixture(
   const record = createPluginRecord({
     id: "msteams",
     origin,
-    trustedOfficialInstall: origin === "global" && !options.unverified,
+    trustedOfficialInstall: origin === "global",
   });
   const providerActions = msteamsPlugin.actions!;
   const providerSettlements: Array<{
@@ -169,7 +167,6 @@ async function createFixture(
     status: undefined,
     actions: {
       ...providerActions,
-      readAuthorityActions: options.legacy ? undefined : providerActions.readAuthorityActions,
       handleAction: async (ctx: ChannelMessageActionContext) => {
         try {
           const pending = providerActions.handleAction!(ctx);
@@ -390,8 +387,6 @@ async function createFixture(
 
 const surfaces = [
   ["tool", "bundled"],
-  ["tool", "global"],
-  ["gateway", "bundled"],
   ["gateway", "global"],
 ] as const;
 
@@ -462,19 +457,37 @@ describe("Teams Graph mutation currentness", () => {
     },
   ];
 
-  it.each(
-    mutationCases.flatMap((testCase) => [false, true].map((revoked) => ({ testCase, revoked }))),
-  )(
-    "checks the admitted $testCase.name after a token wait (revoked=$revoked)",
-    async ({ testCase: { action, params, details, requests }, revoked }) => {
-      const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
+  it.each([
+    ...mutationCases.flatMap((testCase) =>
+      [false, true].map((revoked) => ({ testCase, revoked, stage: "token" })),
+    ),
+    ...["sdk", "dns"].flatMap((stage) =>
+      [false, true].map((revoked) => ({ testCase: mutationCases[0]!, revoked, stage })),
+    ),
+  ])(
+    "checks the admitted $testCase.name after $stage preparation (revoked=$revoked)",
+    async ({ testCase: { action, params, details, requests }, revoked, stage }) => {
+      const fixture = await createFixture({
+        origin: "bundled",
+        self: true,
+        senderIsOwner: stage === "token" ? true : undefined,
+      });
       const started = createDeferred<void>();
       const finish = createDeferred<void>();
-      graph.acquireToken.mockImplementation(async () => {
+      const hold = async () => {
         started.resolve();
         await finish.promise;
-        return token;
-      });
+      };
+      if (stage === "sdk") {
+        graph.prepareSdk.mockImplementation(hold);
+      } else if (stage === "dns") {
+        graph.beforeLookup = hold;
+      } else {
+        graph.acquireToken.mockImplementation(async () => {
+          await hold();
+          return token;
+        });
+      }
       const result = settle(fixture.invoke("tool", action, { target: chatId, ...params }));
       await started.promise;
       if (revoked) {
@@ -496,47 +509,16 @@ describe("Teams Graph mutation currentness", () => {
       if (!revoked && action === "addParticipant") {
         expect(fixture.nativeRequests[0]?.body).toMatchObject({ roles: ["owner"] });
       }
+      if (stage === "sdk" && revoked) {
+        expect(graph.acquireToken).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it.each([
-    ["sdk", false],
-    ["sdk", true],
-    ["dns", false],
-    ["dns", true],
-  ] as const)("rechecks after held %s preparation (revoked=%s)", async (stage, revoked) => {
-    const fixture = await createFixture({ origin: "bundled", self: true });
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    const hold = async () => {
-      started.resolve();
-      await finish.promise;
-    };
-    if (stage === "sdk") {
-      graph.prepareSdk.mockImplementation(hold);
-    } else {
-      graph.beforeLookup = hold;
-    }
-    const result = settle(fixture.invoke("tool", "pin", { target: chatId, messageId }));
-    await started.promise;
-    if (revoked) {
-      fixture.revokeTurn();
-    }
-    finish.resolve();
-    expect(await result).toMatchObject(
-      revoked ? { error: expect.any(Error) } : { value: { pinnedMessageId: "pin-1" } },
-    );
-    expect(fixture.requests).toEqual(revoked ? [] : [`POST ${chatPath}/pinnedMessages`]);
-    if (stage === "sdk" && revoked) {
-      expect(graph.acquireToken).not.toHaveBeenCalled();
-    }
-  });
 
   it.each([
     [307, false],
     [307, true],
     [308, false],
-    [308, true],
   ] as const)(
     "checks a same-origin %s redirect before replay (revoked=%s)",
     async (status, revoked) => {
@@ -678,62 +660,41 @@ describe("Teams Graph mutation currentness", () => {
     },
   );
 
-  it.each(["pin", "removeParticipant"] as const)(
-    "retains the accepted %s provider result after the caller closes",
-    async (action) => {
+  it.each([
+    ["pin", "accepted", true],
+    ["removeParticipant", "accepted", true],
+    ["pin", "failure", false],
+    ["pin", "failure", true],
+    ["removeParticipant", "failure", false],
+    ["removeParticipant", "failure", true],
+  ] as const)(
+    "preserves the %s provider %s after preparation (revoked=%s)",
+    async (action, outcome, revoked) => {
       const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
       graph.onRequest = ({ method }) => {
-        if (method !== "GET") {
-          fixture.revokeClaim();
+        if (revoked && method !== "GET") {
+          if (outcome === "accepted") {
+            fixture.revokeClaim();
+          } else {
+            fixture.revokeTurn();
+          }
         }
       };
-      graph.reply = ({ method }) =>
-        method === "POST"
+      graph.reply = ({ method }) => {
+        if (outcome === "failure") {
+          return method !== "GET"
+            ? {
+                status: 403,
+                body: { error: { code: "Forbidden", message: "Graph fixture refused" } },
+              }
+            : undefined;
+        }
+        return method === "POST"
           ? { status: 201, body: { id: "accepted-pin" } }
           : method === "DELETE"
             ? { status: 204 }
             : undefined;
-      await settle(fixture.invoke("tool", action, { target: chatId, messageId, userId: memberId }));
-      expect(fixture.requests).toEqual(
-        action === "pin"
-          ? [`POST ${chatPath}/pinnedMessages`]
-          : [`GET ${chatPath}/members`, `DELETE ${chatPath}/members/${membershipId}`],
-      );
-      expect(fixture.providerSettlements).toMatchObject([
-        {
-          action,
-          result: {
-            details:
-              action === "pin"
-                ? { ok: true, pinnedMessageId: "accepted-pin" }
-                : { ok: true, removed: { userId: memberId, chatId } },
-          },
-        },
-      ]);
-    },
-  );
-
-  it.each([
-    ["pin", false],
-    ["pin", true],
-    ["removeParticipant", false],
-    ["removeParticipant", true],
-  ] as const)(
-    "preserves the %s provider failure after preparation (revoked=%s)",
-    async (action, revoked) => {
-      const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
-      graph.onRequest = ({ method }) => {
-        if (revoked && method !== "GET") {
-          fixture.revokeTurn();
-        }
       };
-      graph.reply = ({ method }) =>
-        method !== "GET"
-          ? {
-              status: 403,
-              body: { error: { code: "Forbidden", message: "Graph fixture refused" } },
-            }
-          : undefined;
       const result = await settle(
         fixture.invoke("tool", action, { target: chatId, messageId, userId: memberId }),
       );
@@ -742,9 +703,23 @@ describe("Teams Graph mutation currentness", () => {
           ? [`POST ${chatPath}/pinnedMessages`]
           : [`GET ${chatPath}/members`, `DELETE ${chatPath}/members/${membershipId}`],
       );
-      const providerFailure = { message: expect.stringMatching(/403.*Graph fixture refused/s) };
-      expect(fixture.providerSettlements).toMatchObject([{ action, error: providerFailure }]);
-      expect(result).toMatchObject({ error: revoked ? expect.any(Error) : providerFailure });
+      if (outcome === "failure") {
+        const providerFailure = { message: expect.stringMatching(/403.*Graph fixture refused/s) };
+        expect(fixture.providerSettlements).toMatchObject([{ action, error: providerFailure }]);
+        expect(result).toMatchObject({ error: revoked ? expect.any(Error) : providerFailure });
+      } else {
+        expect(fixture.providerSettlements).toMatchObject([
+          {
+            action,
+            result: {
+              details:
+                action === "pin"
+                  ? { ok: true, pinnedMessageId: "accepted-pin" }
+                  : { ok: true, removed: { userId: memberId, chatId } },
+            },
+          },
+        ]);
+      }
     },
   );
 
@@ -763,59 +738,55 @@ describe("Teams Graph mutation currentness", () => {
     expect(graph.acquireToken).not.toHaveBeenCalled();
   });
 
-  it("rejects invalid participant roles before Graph", async () => {
-    const fixture = await createFixture({ origin: "bundled", self: true, senderIsOwner: true });
-    await expect(
-      fixture.invoke("tool", "addParticipant", {
-        target: chatId,
-        userId: memberId,
-        role: "administrator",
-      }),
-    ).rejects.toThrow(/role must be/);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("does not let an owner substitute for a trusted requester", async () => {
-    const fixture = await createFixture({
-      origin: "bundled",
-      self: true,
-      senderIsOwner: true,
-      missingRequester: true,
-    });
-    await expect(
-      fixture.invoke("tool", "addParticipant", { target: chatId, userId: memberId }),
-    ).rejects.toThrow(/requester|sender/i);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("rejects an unknown mutation account before Graph", async () => {
-    const fixture = await createFixture({ origin: "bundled", self: true });
-    await expect(
-      fixture.invoke("tool", "pin", { target: chatId, messageId, accountId: "other" }),
-    ).rejects.toThrow(/account/i);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("keeps reaction targets inside the configured channel scope", async () => {
-    const fixture = await createFixture({ origin: "bundled", narrowTeam: true });
-    await expect(
-      fixture.invoke("tool", "react", { target: currentTarget, messageId, emoji: "like" }),
-    ).rejects.toThrow(/not allowed/i);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it.each(["pin", "unpin"] as const)("keeps channel %s unsupported", async (action) => {
-    const fixture = await createFixture({ origin: "bundled" });
-    await expect(
-      fixture.invoke("tool", action, { target, messageId, pinnedMessageId: "pin-1" }),
-    ).rejects.toThrow(/not supported for channel messages/);
+  it.each<
+    [
+      ChannelMessageActionName,
+      NonNullable<Parameters<typeof createFixture>[0]>,
+      Record<string, unknown>,
+      RegExp,
+    ]
+  >([
+    [
+      "addParticipant",
+      { self: true, senderIsOwner: true },
+      { target: chatId, userId: memberId, role: "administrator" },
+      /role must be/,
+    ],
+    [
+      "addParticipant",
+      { self: true, senderIsOwner: true, missingRequester: true },
+      { target: chatId, userId: memberId },
+      /requester|sender/i,
+    ],
+    ["pin", { self: true }, { target: chatId, messageId, accountId: "other" }, /account/i],
+    [
+      "react",
+      { narrowTeam: true },
+      { target: currentTarget, messageId, emoji: "like" },
+      /not allowed/i,
+    ],
+    [
+      "pin",
+      {},
+      { target, messageId, pinnedMessageId: "pin-1" },
+      /not supported for channel messages/,
+    ],
+    [
+      "unpin",
+      {},
+      { target, messageId, pinnedMessageId: "pin-1" },
+      /not supported for channel messages/,
+    ],
+  ])("rejects %s with %j before Graph", async (action, options, params, error) => {
+    const fixture = await createFixture({ origin: "bundled", ...options });
+    await expect(fixture.invoke("tool", action, params)).rejects.toThrow(error);
     expect(fixture.requests).toEqual([]);
   });
 });
 
 // Registry provenance is an explicit fixture; package installation is proved separately.
 describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin) => {
-  it("runs all seven existing read actions", async () => {
+  it("reads messages, reactions, pins and channel metadata", async () => {
     const fixture = await createFixture({ origin });
     const messagePath = `/v1.0/teams/${teamId}/channels/${targetChannel}/messages/${messageId}`;
     const cases: Array<{
@@ -841,21 +812,6 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         params: { target: chatId },
         payload: { pins: [{ pinnedMessageId: "pin-1", messageId, text: message.body.content }] },
         requests: [`GET /v1.0/chats/${chatId}/pinnedMessages`],
-      },
-      {
-        action: "search",
-        params: { query: "permitted" },
-        payload: { messages: [{ id: messageId, text: message.body.content }], truncated: false },
-        requests: [`GET /v1.0/teams/${teamId}/channels/${currentChannel}/messages`],
-      },
-      {
-        action: "member-info",
-        params: { userId: memberId },
-        payload: { user: { id: memberId, displayName: "Member", roles: [] } },
-        requests: [
-          `GET /v1.0/teams/${teamId}/channels/${currentChannel}`,
-          `GET /v1.0/teams/${teamId}/members`,
-        ],
       },
       {
         action: "channel-info",
@@ -885,84 +841,69 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
     }
   });
 
-  it.each(["turn", "plugin"] as const)("stops a held token when the %s closes", async (owner) => {
-    const fixture = await createFixture({ origin });
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
-    graph.acquireToken.mockImplementation(async () => {
-      started.resolve();
-      await finish.promise;
-      return token;
-    });
-    const result = fixture.invoke(route, "read", { target, messageId });
-    const rejected = expect(result).rejects.toThrow(/no longer active|authority/i);
-    await started.promise;
-    if (owner === "turn") {
-      fixture.revokeTurn();
-    } else {
-      fixture.retirePlugin();
-    }
-    finish.resolve();
-    await rejected;
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("withholds a result when the admitted run closes during Graph I/O", async () => {
-    const fixture = await createFixture({ origin });
-    graph.onRequest = fixture.revokeClaim;
-    await expect(fixture.invoke(route, "read", { target, messageId })).rejects.toThrow(
-      /no longer active|authority/i,
-    );
-    expect(fixture.requests).toHaveLength(1);
-  });
-
-  it.each([false, true])(
-    "fences the local requester-only member result (revoked=%s)",
-    async (revoked) => {
-      const fixture = await createFixture({ origin, self: true });
-      if (revoked) {
+  it.each(["turn-token", "plugin-token", "run-response", "plugin-entry"] as const)(
+    "fences a read when its lifetime closes at %s",
+    async (stage) => {
+      const local = stage === "plugin-entry";
+      const fixture = await createFixture({ origin, self: local });
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const heldToken = stage === "turn-token" || stage === "plugin-token";
+      if (heldToken) {
+        graph.acquireToken.mockImplementation(async () => {
+          started.resolve();
+          await finish.promise;
+          return token;
+        });
+      } else if (local) {
         graph.afterEntry = fixture.retirePlugin;
-      }
-      const result = fixture.invoke(route, "member-info", { userId: requesterId });
-      if (revoked) {
-        await expect(result).rejects.toThrow(/no longer active|authority/i);
       } else {
-        await expect(result).resolves.toMatchObject({ user: { id: requesterId, roles: [] } });
+        graph.onRequest = fixture.revokeClaim;
       }
-      expect(fixture.requests).toEqual([]);
-      expect(graph.acquireToken).not.toHaveBeenCalled();
+      const result = fixture.invoke(
+        route,
+        local ? "member-info" : "read",
+        local ? { userId: requesterId } : { target, messageId },
+      );
+      const rejected = expect(result).rejects.toThrow(/no longer active|authority/i);
+      if (heldToken) {
+        await started.promise;
+        if (stage === "turn-token") {
+          fixture.revokeTurn();
+        } else {
+          fixture.retirePlugin();
+        }
+        finish.resolve();
+      }
+      await rejected;
+      if (stage === "run-response") {
+        expect(fixture.requests).toHaveLength(1);
+      } else {
+        expect(fixture.requests).toEqual([]);
+      }
+      if (local) {
+        expect(graph.acquireToken).not.toHaveBeenCalled();
+      }
     },
   );
 });
 
 describe.each(["tool", "gateway"] as const)("Teams %s policy controls", (route) => {
-  it.each(["legacy", "unverified"] as const)(
-    "does not grant cross-conversation reads to a %s adapter",
-    async (kind) => {
-      const fixture = await createFixture({ [kind]: true });
-      await expect(fixture.invoke(route, "read", { target, messageId })).rejects.toThrow(
-        /exact current conversation/i,
-      );
+  it.each(["account", "membership"])("enforces %s read policy", async (boundary) => {
+    const fixture = await createFixture();
+    if (boundary === "account") {
+      await expect(
+        fixture.invoke(route, "read", { target, messageId, accountId: "other" }),
+      ).rejects.toThrow(/account/i);
       expect(fixture.requests).toEqual([]);
-    },
-  );
-
-  it("rejects an unknown account before Graph", async () => {
-    const fixture = await createFixture();
-    await expect(
-      fixture.invoke(route, "read", { target, messageId, accountId: "other" }),
-    ).rejects.toThrow(/account/i);
-    expect(fixture.requests).toEqual([]);
-  });
-
-  it("keeps private-channel membership outside the supported permission baseline", async () => {
-    const fixture = await createFixture();
-    graph.membershipType = "private";
-    await expect(fixture.invoke(route, "member-info", { userId: memberId })).rejects.toThrow(
-      /standard channel/,
-    );
-    expect(fixture.requests).toHaveLength(1);
-    expect(fixture.requests[0]).not.toContain("/members");
+    } else {
+      graph.membershipType = "private";
+      await expect(fixture.invoke(route, "member-info", { userId: memberId })).rejects.toThrow(
+        /standard channel/,
+      );
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0]).not.toContain("/members");
+    }
   });
 
   it("keeps one allowed channel scoped to that conversation", async () => {

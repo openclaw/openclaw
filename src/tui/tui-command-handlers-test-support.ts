@@ -99,6 +99,7 @@ export function createTuiCommandHandlersHarness(params?: {
   applySessionMutationResult?: ReturnType<typeof vi.fn>;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
+  historyLoaded?: boolean;
   activeChatRunId?: string | null;
   pendingSubmit?: TuiPendingSubmit | null;
   activityStatus?: string;
@@ -192,6 +193,7 @@ export function createTuiCommandHandlersHarness(params?: {
     pendingSubmit: params?.pendingSubmit ?? null,
     activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
+    historyLoaded: params?.historyLoaded ?? true,
     sessionInfo: params?.sessionInfo ?? {},
   };
 

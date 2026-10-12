@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { BUNDLE_HASH, MANIFEST_REF } from "./placement-dispatch-test-fixtures.js";
 import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -38,7 +39,7 @@ async function seedActiveNode(
     to: "attached",
     patch: support.attachedPatch(environmentId, sessionId),
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
     agentId: "main",
@@ -57,7 +58,7 @@ async function seedActiveNode(
     { to: "active", patch: { activeOwnerEpoch: environment.ownerEpoch } },
   ] as const;
   for (const transition of transitions) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId,
       from: placement.state,
       expectedGeneration: placement.generation,
@@ -93,11 +94,15 @@ describe("worker placement startup concurrency", () => {
         worker.inspected.resolve();
         return { status: "active" as const };
       });
+      const projectionReads = vi.spyOn(placements, "readProjection");
       const environments = support.createService(
         support.createProvider({ inspect, supportedExecutionModes: ["worker-turn"] }),
       );
       const adopt = vi.spyOn(placements, "adoptActive");
-      const recovery = createRecoveryService(placements, environments);
+      const recovery = coordinateWorkerPlacementDispatch(
+        createRecoveryService(placements, environments),
+        (_request, run) => run(),
+      );
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,
@@ -118,17 +123,18 @@ describe("worker placement startup concurrency", () => {
       try {
         await Promise.all(workers.slice(0, 8).map((worker) => worker.entered.promise));
         expect(inspect).toHaveBeenCalledTimes(8);
+        expect(projectionReads.mock.calls.filter(([ids]) => ids.length > 1)).toEqual([]);
         expect(outcome).toBe("pending");
         expect(adopt).not.toHaveBeenCalled();
 
         if (conflictingOwner) {
-          const duplicate = placements.startDispatch({
+          const duplicate = await placements.startDispatch({
             sessionId: "session-duplicate",
             sessionKey: "agent:main:session-duplicate",
             agentId: "main",
             executionMode: "worker-turn",
           });
-          placements.transition({
+          await placements.transition({
             sessionId: duplicate.sessionId,
             from: "requested",
             to: "provisioning",
@@ -150,9 +156,10 @@ describe("worker placement startup concurrency", () => {
         if (conflictingOwner) {
           await starting;
           expect(outcome).toBe("failed");
-          expect(failure).toEqual(
-            new Error("Worker environment worker-8 has multiple placement owners"),
-          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure).toMatchObject({
+            message: "Worker environment worker-8 has multiple placement owners",
+          });
           expect(adopt).not.toHaveBeenCalled();
           return;
         }

@@ -67,6 +67,34 @@ describe("selectWorkingClawSurprise", () => {
 });
 
 describe("renderChatWorkingIndicator", () => {
+  it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
+    const container = document.createElement("div");
+    const part = { kind: "reading-indicator" as const, key: "brand-test", startedAt: 1 };
+    render(
+      renderChatWorkingIndicator(part, { mascot: "claw", workingIndicator: "dots" }),
+      container,
+    );
+    expect(container.querySelectorAll(".chat-reading-indicator--neutral > span")).toHaveLength(3);
+    render(
+      renderChatWorkingIndicator(part, { mascot: "none", workingIndicator: "claw" }),
+      container,
+    );
+    expect(container.querySelector(".chat-reading-indicator svg")).not.toBeNull();
+    render(renderChatWorkingIndicator(part, { workingIndicator: "brand" }), container);
+    expect(container.querySelector(".chat-reading-indicator--brand")).not.toBeNull();
+    render(
+      renderChatWorkingIndicator(part, { workingIndicator: "none", workingPhrases: [] }),
+      container,
+    );
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(
+      container
+        .querySelector(".chat-working-indicator__status > span")
+        ?.classList.contains("sr-only"),
+    ).toBe(false);
+    expect(container.textContent).toContain("Working");
+  });
+
   it("renders neutral dots without claw surprises and forwards authored phrases", () => {
     const container = document.createElement("div");
     const workingPhrases = ["Building"];

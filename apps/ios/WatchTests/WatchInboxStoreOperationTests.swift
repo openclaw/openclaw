@@ -9,6 +9,20 @@ import XCTest
 
 @MainActor
 struct WatchInboxStoreOperationTests {
+    @Test func `approval refresh tokens retain exact request and gateway identities`() throws {
+        let composed = "caf\u{00E9}"
+        let decomposed = "cafe\u{0301}"
+        let token = try #require(WatchExecApprovalSnapshotRequestToken(requestId: composed, gatewayStableID: composed))
+        #expect(token == WatchExecApprovalSnapshotRequestToken(requestId: composed, gatewayStableID: composed))
+        #expect(token != WatchExecApprovalSnapshotRequestToken(requestId: decomposed, gatewayStableID: composed))
+        #expect(token != WatchExecApprovalSnapshotRequestToken(requestId: composed, gatewayStableID: decomposed))
+        #expect(token.matchesGatewayStableID(composed))
+        #expect(!token.matchesGatewayStableID(decomposed))
+        #expect(!token.matchesGatewayStableID(nil))
+        #expect(WatchExecApprovalSnapshotRequestToken(requestId: "", gatewayStableID: composed) == nil)
+        #expect(WatchExecApprovalSnapshotRequestToken(requestId: composed, gatewayStableID: nil) == nil)
+    }
+
     @Test func `reply completion cannot overwrite a replacement prompt`() throws {
         try Self.withStore { store, defaults in
             let originalAction = WatchPromptAction(id: "original-action", label: "Approve original")
@@ -327,7 +341,7 @@ struct WatchInboxStoreOperationTests {
             store.voiceTurnState.begin(
                 commandId: attempt.uuidString,
                 nowMs: WatchVoiceTurnState.nowMs() - WatchVoiceTurnState.timeoutMs - 1)
-            store.persistVoiceTurnState()
+            store.persistState()
 
             let observed: WatchInboxStore
             switch observation {
@@ -1086,7 +1100,6 @@ struct WatchInboxStoreOperationTests {
     {
         WatchReplySendResult(
             delivery: delivery,
-            transport: "sendMessage",
             errorMessage: errorMessage,
             requiresCanonicalReadback: false)
     }

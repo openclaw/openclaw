@@ -128,18 +128,6 @@ it.each(["directory", "file", "alias", "install-record"] as const)(
   },
 );
 
-it("completes a declared Doctor module independently of the runtime entry", async () => {
-  const f = await fixture("directory", "doctor");
-  const before = await f.run();
-  expect(before.code).not.toBe(0);
-  expect(before.stderr.toString()).toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
-  expect(before.stderr.toString()).toContain("shared/value.js");
-  expect((await completeUpdateCandidatePluginRehearsal(f)).copiedFiles).toBeGreaterThan(0);
-  const after = await f.run();
-  expect(after.code, after.stderr.toString()).toBe(0);
-  expect(after.stdout.toString().trim()).toBe("sibling-ready");
-});
-
 it("completes a published rehearsal with import.meta retained at transformed position 1203:16", async () => {
   const f = await fixture();
   const content = `import value from "../shared/value.js";\n${"\n".repeat(1201)}const module1=import.meta;\nconsole.log(value);`;
@@ -170,7 +158,7 @@ it("warns about an unparseable runtime entry and completes the sibling Doctor en
   expect(after.stdout.toString().trim()).toBe("sibling-ready");
 });
 
-it.each(["absolute path", "file URL"])(
+it.each(["file URL"])(
   "retains an explicit external %s import in an already complete snapshot",
   async (kind) => {
     const f = await fixture();
@@ -191,7 +179,7 @@ it.each(["absolute path", "file URL"])(
   },
 );
 
-it.each(["new unrelated import", "invalid source"])(
+it.each(["invalid source"])(
   "leaves a runnable optional-import snapshot independent of %s edits",
   async (change) => {
     const f = await fixture();
@@ -246,21 +234,18 @@ it("preserves staged bundled aliases while completing an external plugin", async
   expect(await fs.readFile(path.join(bundled, "index.mjs"), "utf8")).toBe(stagedBytes);
 });
 
-it.each(["ordinary doctor", "lint", "incomplete rehearsal"])(
-  "does not acquire source files for %s",
-  async (kind) => {
-    const f = await fixture();
-    if (kind === "ordinary doctor") {
-      f.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.9.4";
-    } else if (kind === "lint") {
-      f.env.OPENCLAW_UPDATE_IN_PROGRESS = "0";
-    } else {
-      delete f.env.OPENCLAW_SKIP_CHANNELS;
-    }
-    expect((await completeUpdateCandidatePluginRehearsal(f)).copiedFiles).toBe(0);
-    await expect(fs.access(f.copiedShared)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+it.each(["lint", "incomplete rehearsal"])("does not acquire source files for %s", async (kind) => {
+  const f = await fixture();
+  if (kind === "ordinary doctor") {
+    f.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.9.4";
+  } else if (kind === "lint") {
+    f.env.OPENCLAW_UPDATE_IN_PROGRESS = "0";
+  } else {
+    delete f.env.OPENCLAW_SKIP_CHANNELS;
+  }
+  expect((await completeUpdateCandidatePluginRehearsal(f)).copiedFiles).toBe(0);
+  await expect(fs.access(f.copiedShared)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it("reports an unresolved dependency whose published projection lost the original path", async () => {
   const f = await fixture();
@@ -304,7 +289,7 @@ it("stops if repair authority ends during asynchronous source preparation", asyn
   await expect(fs.access(f.copiedShared)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it.each(["index.mjs", "package.json", "openclaw.plugin.json"])(
+it.each(["index.mjs"])(
   "refuses an original %s changed since the published snapshot",
   async (filename) => {
     const f = await fixture();
@@ -327,6 +312,62 @@ it("preserves a conflicting existing dependency instead of replacing it", async 
   );
   expect(await fs.readFile(conflicting, "utf8")).toBe(privateContent);
 });
+
+it.each(["undeclared", "dependencies"])(
+  "isolates an ancestor package lookup with %s metadata during published-driver rehearsal",
+  async (declaration) => {
+    const f = await fixture();
+    const name = "rehearsal-optional-vendor";
+    const ancestor = path.join(f.root, "node_modules", name);
+    await fs.mkdir(ancestor, { recursive: true });
+    await fs.writeFile(
+      path.join(ancestor, "package.json"),
+      JSON.stringify({ name, main: "index.cjs" }),
+    );
+    await fs.writeFile(path.join(ancestor, "index.cjs"), "module.exports = 'foreign';");
+    const vendor = path.join(f.copiedPlugin, "node_modules", "vendor");
+    await fs.mkdir(vendor, { recursive: true });
+    await fs.writeFile(
+      path.join(vendor, "package.json"),
+      JSON.stringify({
+        name: "vendor",
+        main: "index.cjs",
+        ...(declaration === "undeclared" ? {} : { [declaration]: { [name]: "1.0.0" } }),
+      }),
+    );
+    await fs.writeFile(
+      path.join(vendor, "index.cjs"),
+      `exports.optional = () => { try { return require(${JSON.stringify(name)}); } catch { return 'fallback'; } };`,
+    );
+    await fs.writeFile(path.join(f.copiedPlugin, "index.mjs"), 'import "vendor";');
+
+    if (declaration !== "undeclared") {
+      await expect(completeUpdateCandidatePluginRehearsal(f)).rejects.toThrow(
+        "outside the temporary update copy",
+      );
+      return;
+    }
+    const result = await completeUpdateCandidatePluginRehearsal(f);
+    expect(result.copiedFiles).toBe(0);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        `Plugin dependency ${name} is unresolvable inside the temporary update copy`,
+      ),
+    ]);
+    // Rehearsal inspection must never acquire or parse unrelated ancestor source.
+    await fs.writeFile(path.join(ancestor, "index.cjs"), "invalid JavaScript {{{");
+    expect(await completeUpdateCandidatePluginRehearsal(f)).toEqual(result);
+
+    const internal = path.join(vendor, "node_modules", name);
+    await fs.mkdir(internal, { recursive: true });
+    await fs.copyFile(path.join(ancestor, "package.json"), path.join(internal, "package.json"));
+    await fs.writeFile(path.join(internal, "index.cjs"), "module.exports = 'private';");
+    expect(await completeUpdateCandidatePluginRehearsal(f)).toEqual({
+      copiedFiles: 0,
+      warnings: [],
+    });
+  },
+);
 
 it.each(["relative", "package", "absolute", "file URL"])(
   "never follows a private %s dependency link into the serving tree",

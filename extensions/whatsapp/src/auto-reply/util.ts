@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function elide(text?: string, limit = 400) {
@@ -13,7 +16,7 @@ export function elide(text?: string, limit = 400) {
 }
 
 export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
-  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+  if (isRecord(error)) {
     try {
       Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
       return error;
@@ -44,13 +47,7 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
         return Object.prototype.toString.call(value);
       }
     }
-    if (typeof value === "number") {
-      return String(value);
-    }
-    if (typeof value === "boolean") {
-      return String(value);
-    }
-    if (typeof value === "bigint") {
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
       return String(value);
     }
     if (typeof value === "symbol") {
@@ -61,9 +58,7 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
     }
     return Object.prototype.toString.call(value);
   };
-  const raw =
-    reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : formatReason(reason);
-  const haystack = normalizeLowercaseStringOrEmpty(raw);
+  const haystack = normalizeLowercaseStringOrEmpty(formatReason(reason));
   const hasAuthError =
     haystack.includes("unsupported state or unable to authenticate data") ||
     haystack.includes("bad mac");

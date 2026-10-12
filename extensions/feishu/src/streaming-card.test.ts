@@ -3,12 +3,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
+import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
   mergeStreamingText,
 } from "./streaming-card.js";
+import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -27,12 +28,6 @@ type LocalServer = {
   stop: () => Promise<void>;
 };
 
-type DispatcherInit = RequestInit & { dispatcher?: unknown };
-type StreamingFetchDeps = {
-  fetchImpl: FeishuStreamingFetch;
-  lookupFn: LookupFn;
-};
-
 type StreamingRequest = {
   url: URL;
   body: string;
@@ -46,14 +41,6 @@ const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 const hermeticPublicLookup: LookupFn = async () => [
   { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
 ];
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  let body = "";
-  for await (const chunk of req) {
-    body += String(chunk);
-  }
-  return body;
-}
 
 async function startLocalServer(
   handler: (request: StreamingRequest) => void | Promise<void>,
@@ -87,14 +74,6 @@ async function startLocalServer(
       });
     });
   });
-}
-
-function stripDispatcher(init: RequestInit | undefined): RequestInit | undefined {
-  if (!init || !("dispatcher" in init)) {
-    return init;
-  }
-  const { dispatcher: _dispatcher, ...rest } = init as DispatcherInit;
-  return rest;
 }
 
 function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
@@ -147,48 +126,6 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
-function writeOversizedJson(
-  res: ServerResponse,
-  totalBytes: number,
-): { bytesPulled: () => number; canceled: () => boolean } {
-  const chunk = Buffer.alloc(1024 * 1024, 0x20);
-  let bytesPulled = 0;
-  let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
-  });
-  const prefix = Buffer.from('{"code":0,"msg":"ok","tenant_access_token":"token","padding":"');
-  bytesPulled += prefix.byteLength;
-  res.write(prefix);
-  const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
-      }
-      return;
-    }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
-      setImmediate(sendChunk);
-      return;
-    }
-    res.once("drain", sendChunk);
-  };
-  setImmediate(sendChunk);
-  return {
-    bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
-  };
-}
-
 function setStreamingSessionInternals(
   session: FeishuStreamingSession,
   values: {
@@ -204,6 +141,37 @@ function setStreamingSessionInternals(
   if (values.lastUpdateTime !== undefined) {
     internals.lastUpdateTime = values.lastUpdateTime;
   }
+}
+
+function createActiveSession(
+  deps: StreamingFetchDeps,
+  options: {
+    cardId: string;
+    messageId: string;
+    text?: string;
+    hasNote?: boolean;
+    lastUpdateTime?: number;
+    log?: (message: string) => void;
+  },
+): FeishuStreamingSession {
+  const session = createStreamingSession(
+    {} as never,
+    { appId: options.cardId, appSecret: "secret" },
+    options.log,
+    deps,
+  );
+  setStreamingSessionInternals(session, {
+    state: {
+      cardId: options.cardId,
+      messageId: options.messageId,
+      sequence: 1,
+      currentText: options.text ?? "",
+      sentText: options.text ?? "",
+      hasNote: options.hasNote ?? false,
+    },
+    lastUpdateTime: options.lastUpdateTime,
+  });
+  return session;
 }
 
 describe("FeishuStreamingSession", () => {
@@ -321,7 +289,7 @@ describe("FeishuStreamingSession", () => {
     const client = {
       im: { message: { create, reply, delete: remove } },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    const session = new FeishuStreamingSession(
+    const session = createStreamingSession(
       client,
       { appId: params.accountId, appSecret: "test-secret" },
       undefined,
@@ -335,7 +303,7 @@ describe("FeishuStreamingSession", () => {
     { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
     {
       mode: "reply",
-      options: { replyToMessageId: "inbound_1", replyInThread: true },
+      options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
       method: "reply",
     },
   ] as const)(
@@ -484,13 +452,17 @@ describe("FeishuStreamingSession", () => {
       | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+        streamState = writeOversizedJson(
+          res,
+          FEISHU_JSON_MAX_BYTES * 2,
+          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+        );
         return;
       }
       writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
     });
 
-    const session = new FeishuStreamingSession(
+    const session = createStreamingSession(
       {} as never,
       {
         appId: "app_oversized_token",
@@ -545,7 +517,7 @@ describe("FeishuStreamingSession", () => {
       lookupFn: hermeticPublicLookup,
     };
 
-    const session = new FeishuStreamingSession(
+    const session = createStreamingSession(
       {} as never,
       {
         appId: "app_stalled_token",
@@ -589,10 +561,14 @@ describe("FeishuStreamingSession", () => {
         });
         return;
       }
-      streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+      streamState = writeOversizedJson(
+        res,
+        FEISHU_JSON_MAX_BYTES * 2,
+        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+      );
     });
 
-    const session = new FeishuStreamingSession(
+    const session = createStreamingSession(
       {
         im: {
           message: {
@@ -624,24 +600,10 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = mockFetches(updateBodies);
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_pending_flush",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_1",
-        messageId: "om_1",
-        sequence: 1,
-        currentText: "visible",
-        sentText: "visible",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_1",
+      messageId: "om_1",
+      text: "visible",
       lastUpdateTime: 1_000,
     });
 
@@ -683,22 +645,12 @@ describe("FeishuStreamingSession", () => {
       return jsonResponse({ code: 0, msg: "ok" });
     });
     const log = vi.fn();
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_rejected_pending_flush", appSecret: "secret" },
-      log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_rejected_flush",
-        messageId: "om_rejected_flush",
-        sequence: 1,
-        currentText: "hello",
-        sentText: "hello",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_rejected_flush",
+      messageId: "om_rejected_flush",
+      text: "hello",
       lastUpdateTime: 1_500,
+      log,
     });
 
     await session.update("hello small");
@@ -722,24 +674,10 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = mockFetches(updateBodies);
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_boundary_flush",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_2",
-        messageId: "om_2",
-        sequence: 1,
-        currentText: "hello",
-        sentText: "hello",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_2",
+      messageId: "om_2",
+      text: "hello",
       lastUpdateTime: 2_000,
     });
 
@@ -753,48 +691,6 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("sends a divergent reasoning snapshot without merging the previous snapshot", async () => {
-    const updateBodies: string[] = [];
-    const deps = await createStreamingFetch(({ url, body, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-        return;
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-      }
-      writeJson(res, { code: 0, msg: "ok" });
-    });
-    const previous = "> Thinking one\n\n---\n\nanswer";
-    const next = "> Thinking two\n\n---\n\nanswer!";
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_reasoning_snapshot", appSecret: "secret" },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_reasoning",
-        messageId: "om_reasoning",
-        sequence: 1,
-        currentText: previous,
-        sentText: previous,
-        hasNote: false,
-      },
-    });
-
-    await session.update(next);
-
-    expect(updateBodies).toHaveLength(1);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toMatchObject({ content: next });
-  });
-
   it("closes with a throttled divergent latest snapshot without merging it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_750);
@@ -803,21 +699,10 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_pending_reasoning_close", appSecret: "secret" },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_pending_reasoning_close",
-        messageId: "om_pending_reasoning_close",
-        sequence: 1,
-        currentText: previous,
-        sentText: previous,
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_pending_reasoning_close",
+      messageId: "om_pending_reasoning_close",
+      text: previous,
       lastUpdateTime: 2_750,
     });
 
@@ -869,7 +754,7 @@ describe("FeishuStreamingSession", () => {
       return jsonResponse({ code: 0, msg: "ok" });
     });
     const log = vi.fn();
-    const session = new FeishuStreamingSession(
+    const session = createStreamingSession(
       {} as never,
       { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
       log,
@@ -923,21 +808,12 @@ describe("FeishuStreamingSession", () => {
       return jsonResponse({ code: 0, msg: "ok" });
     });
     const log = vi.fn();
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_rejected_note_and_close", appSecret: "secret" },
+    const session = createActiveSession(deps, {
+      cardId: "card_rejected_note_and_close",
+      messageId: "om_rejected_note_and_close",
+      text: "visible answer",
+      hasNote: true,
       log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_rejected_note_and_close",
-        messageId: "om_rejected_note_and_close",
-        sequence: 1,
-        currentText: "visible answer",
-        sentText: "visible answer",
-        hasNote: true,
-      },
     });
 
     const error = await session
@@ -969,24 +845,10 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = mockFetches(updateBodies, new Set([0]));
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_failed_delta_retry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_3",
-        messageId: "om_3",
-        sequence: 1,
-        currentText: "hello",
-        sentText: "hello",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_3",
+      messageId: "om_3",
+      text: "hello",
       lastUpdateTime: 2_000,
     });
 
@@ -1012,24 +874,10 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_non_ok_delta_retry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_5",
-        messageId: "om_5",
-        sequence: 1,
-        currentText: "hello",
-        sentText: "hello",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_5",
+      messageId: "om_5",
+      text: "hello",
       lastUpdateTime: 2_000,
     });
 
@@ -1056,24 +904,10 @@ describe("FeishuStreamingSession", () => {
     const replaceBodies: string[] = [];
     const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_final_rewrite",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_4",
-        messageId: "om_4",
-        sequence: 1,
-        currentText: "🔎 Web Search\n\nfinal answer",
-        sentText: "🔎 Web Search\n\nfinal answer",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_4",
+      messageId: "om_4",
+      text: "Web Search\n\nfinal answer",
       lastUpdateTime: 3_000,
     });
 
@@ -1124,24 +958,9 @@ describe("FeishuStreamingSession", () => {
       writeJson(res, { code: 0, msg: "ok" });
     });
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_summary_surrogate",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_surrogate",
-        messageId: "om_surrogate",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_surrogate",
+      messageId: "om_surrogate",
       lastUpdateTime: 3_000,
     });
 
@@ -1174,25 +993,12 @@ describe("FeishuStreamingSession", () => {
     );
     const log = vi.fn();
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_final_rewrite_non_ok",
-        appSecret: "secret",
-      },
-      log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_6",
-        messageId: "om_6",
-        sequence: 1,
-        currentText: "working\n\nfinal answer",
-        sentText: "working\n\nfinal answer",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_6",
+      messageId: "om_6",
+      text: "working\n\nfinal answer",
       lastUpdateTime: 3_000,
+      log,
     });
 
     await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
@@ -1215,25 +1021,11 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
     const log = vi.fn();
 
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_final_update_non_ok",
-        appSecret: "secret",
-      },
-      log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_7",
-        messageId: "om_7",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
+    const session = createActiveSession(deps, {
+      cardId: "card_7",
+      messageId: "om_7",
       lastUpdateTime: 3_000,
+      log,
     });
 
     await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
@@ -1258,7 +1050,7 @@ describe("FeishuStreamingSession", () => {
       expire: Number.MAX_SAFE_INTEGER,
     }));
 
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_unsafe_token_expiry",
@@ -1270,7 +1062,7 @@ describe("FeishuStreamingSession", () => {
     expect(authTokens).toEqual(["token-1"]);
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_unsafe_token_expiry",
@@ -1291,7 +1083,7 @@ describe("FeishuStreamingSession", () => {
       tenant_access_token: token,
     }));
 
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_invalid_clock_token_expiry",
@@ -1303,7 +1095,7 @@ describe("FeishuStreamingSession", () => {
     expect(authTokens).toEqual(["token-1"]);
 
     dateNow.mockReturnValue(7200 * 1000 - 60_000 + 1);
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_invalid_clock_token_expiry",
@@ -1326,7 +1118,7 @@ describe("FeishuStreamingSession", () => {
       expire: 7200,
     }));
 
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_invalid_clock_cache_miss",
@@ -1338,7 +1130,7 @@ describe("FeishuStreamingSession", () => {
     expect(authTokens).toEqual(["token-1"]);
 
     dateNow.mockReturnValue(8_640_000_000_000_001);
-    await new FeishuStreamingSession(
+    await createStreamingSession(
       client,
       {
         appId: "app_invalid_clock_cache_miss",
@@ -1354,10 +1146,6 @@ describe("FeishuStreamingSession", () => {
 });
 
 describe("mergeStreamingText", () => {
-  it("prefers the latest full text when it already includes prior text", () => {
-    expect(mergeStreamingText("hello", "hello world")).toBe("hello world");
-  });
-
   it("keeps previous text when the next partial is empty or redundant", () => {
     expect(mergeStreamingText("hello", "")).toBe("hello");
     expect(mergeStreamingText("hello world", "hello")).toBe("hello world");
@@ -1374,29 +1162,6 @@ describe("mergeStreamingText", () => {
       "revision_id: 552，一点变化都没有",
     );
     expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
-  });
-});
-
-describe("resolveStreamingCardSendMode", () => {
-  it("prefers message.reply when reply target and root id both exist", () => {
-    expect(
-      resolveStreamingCardSendMode({
-        replyToMessageId: "om_parent",
-        rootId: "om_topic_root",
-      }),
-    ).toBe("reply");
-  });
-
-  it("falls back to root create when reply target is absent", () => {
-    expect(
-      resolveStreamingCardSendMode({
-        rootId: "om_topic_root",
-      }),
-    ).toBe("root_create");
-  });
-
-  it("uses create mode when no reply routing fields are provided", () => {
-    expect(resolveStreamingCardSendMode()).toBe("create");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

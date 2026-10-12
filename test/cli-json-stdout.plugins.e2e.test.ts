@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -91,6 +92,7 @@ describe("cli json stdout contract", () => {
       name: "ClawHub transport fails",
       args: ["plugins", "search", "fixture", "--json"],
       message: "offline fixture",
+      genericStderr: true,
     },
   ])("returns one canonical JSON document when plugins $name", async (testCase) => {
     await withTempHome(
@@ -122,7 +124,12 @@ describe("cli json stdout contract", () => {
             message: testCase.message,
           },
         });
-        expect(result.stderr).toContain(testCase.message);
+        if ("genericStderr" in testCase) {
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(testCase.message);
+        } else {
+          expect(result.stderr).toContain(testCase.message);
+        }
       },
       { prefix: "openclaw-plugins-json-failure-e2e-" },
     );

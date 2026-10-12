@@ -58,8 +58,7 @@ function resolveFastAbortRequest(params: FastAbortRequestParams) {
   const raw = stripStructuralPrefixes(ctx.commandText);
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, resolveTargetAgentId()) : raw;
-  const abortRequested = isAbortRequestText(stripped);
-  if (!abortRequested) {
+  if (!isAbortRequestText(stripped)) {
     return undefined;
   }
 

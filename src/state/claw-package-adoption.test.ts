@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../claws/package-remove.js";
 import {
@@ -10,16 +10,13 @@ import {
   readClawPackageRefs,
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
-import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
-import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { withClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
     cleanup();
   });
 });
@@ -69,12 +66,12 @@ function plan(agentId: string, workspace: string): ClawAddPlan {
 }
 
 describe("Claw package independent adoption", () => {
-  it("does not fail an ordinary install when Claw state is unavailable", () => {
+  it("does not fail an ordinary install when Claw state is unavailable", async () => {
     const path = join(tempDirs.make("claw-adoption-invalid-"), "state.sqlite");
     writeFileSync(path, "not sqlite");
 
     expect(
-      markClawPackageIndependentlyOwned(
+      await markClawPackageIndependentlyOwned(
         {
           kind: "plugin",
           source: "clawhub",
@@ -86,7 +83,7 @@ describe("Claw package independent adoption", () => {
     ).toBe(0);
   });
 
-  it("marks every shared plugin reference independently owned", () => {
+  it("marks every shared plugin reference independently owned", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
@@ -118,8 +115,8 @@ describe("Claw package independent adoption", () => {
       ref: "@acme/audit",
       version: "1.0.0",
     } as const;
-    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 42 })).toBe(2);
-    expect(markClawPackageIndependentlyOwned(artifact, { env, nowMs: 99 })).toBe(0);
+    expect(await markClawPackageIndependentlyOwned(artifact, { env, nowMs: 42 })).toBe(2);
+    expect(await markClawPackageIndependentlyOwned(artifact, { env, nowMs: 99 })).toBe(0);
     const refs = readClawPackageRefs({ env }).toSorted(
       (left, right) =>
         left.agentId.localeCompare(right.agentId) || left.version.localeCompare(right.version),
@@ -133,7 +130,7 @@ describe("Claw package independent adoption", () => {
     expect(refs.every((ref) => ref.origin === "claw-introduced")).toBe(true);
   });
 
-  it("scopes skill adoption to the owning agent workspace", () => {
+  it("scopes skill adoption to the owning agent workspace", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-adoption-") };
     for (const agentId of ["first", "second"]) {
       const current = plan(agentId, `/tmp/${agentId}`);
@@ -157,7 +154,7 @@ describe("Claw package independent adoption", () => {
     }
 
     expect(
-      markClawPackageIndependentlyOwned(
+      await markClawPackageIndependentlyOwned(
         {
           kind: "skill",
           source: "clawhub",
@@ -201,96 +198,102 @@ describe("Claw package independent adoption", () => {
     const results = await applyClawPackageRemovals(decisions, { env });
 
     expect(results).toMatchObject({ packages: [{ action: "retained" }] });
-    const directLease = acquireClawPackageLifecycleLease(
-      { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
-      { env, required: true },
-    );
-    expect(directLease).not.toBeNull();
-    directLease?.release();
-  });
-
-  it("serializes all skill mutations that share a workspace lockfile", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-skill-lease-") };
-    const first = acquireClawPackageLifecycleLease(
-      { kind: "skill", source: "clawhub", ref: "triage", workspace: "/tmp/worker" },
-      { env, required: true },
-    );
-    expect(() =>
-      acquireClawPackageLifecycleLease(
-        { kind: "skill", source: "clawhub", ref: "summarize", workspace: "/tmp/worker" },
-        { env, required: true },
-      ),
-    ).toThrow("being changed by another OpenClaw lifecycle");
-    const otherWorkspace = acquireClawPackageLifecycleLease(
-      { kind: "skill", source: "clawhub", ref: "triage", workspace: "/tmp/other" },
-      { env, required: true },
-    );
-    expect(otherWorkspace).not.toBeNull();
-    otherWorkspace?.release();
-    first?.release();
-  });
-
-  it("leases a direct operation before the first Claw package reference exists", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-first-lease-") };
-    const directLease = acquireClawPackageLifecycleLease(
-      { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
-      { env },
-    );
-    expect(directLease).not.toBeNull();
-    expect(() =>
-      acquireClawPackageLifecycleLease(
+    await expect(
+      withClawPackageLifecycleLease(
         { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
+        async () => "direct operation admitted",
         { env },
       ),
-    ).toThrow("being changed by another OpenClaw lifecycle");
-    expect(() =>
-      acquireClawPackageLifecycleLease(
-        { kind: "plugin", source: "clawhub", ref: "@acme/audit" },
-        { env, required: true },
-      ),
-    ).toThrow("being changed by another OpenClaw lifecycle");
-    directLease?.release();
+    ).resolves.toBe("direct operation admitted");
   });
 
-  it("releases a package lease when process exit bypasses async cleanup", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-exit-lease-") };
+  it("serializes all skill mutations that share a workspace lockfile", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-skill-lease-") };
+    let competingEntered = false;
+    await withClawPackageLifecycleLease(
+      { kind: "skill", source: "clawhub", ref: "triage", workspace: "/tmp/worker" },
+      async () => {
+        await expect(
+          withClawPackageLifecycleLease(
+            { kind: "skill", source: "clawhub", ref: "summarize", workspace: "/tmp/worker" },
+            async () => {
+              competingEntered = true;
+            },
+            { env },
+          ),
+        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+        await expect(
+          withClawPackageLifecycleLease(
+            { kind: "skill", source: "clawhub", ref: "triage", workspace: "/tmp/other" },
+            async () => "other workspace admitted",
+            { env },
+          ),
+        ).resolves.toBe("other workspace admitted");
+      },
+      { env },
+    );
+    expect(competingEntered).toBe(false);
+  });
+
+  it("leases a direct operation before the first Claw package reference exists", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-first-lease-") };
     const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
-    const moduleUrl = resolveRuntimeWorkerUrl(
-      stateNativeProcessEntrypoints.clawPackageLifecycleLease,
+    const entered = createDeferred();
+    const finish = createDeferred();
+    let competingEntered = false;
+    const directOperation = withClawPackageLifecycleLease(
+      artifact,
+      async () => {
+        entered.resolve();
+        await finish.promise;
+      },
+      { env },
     );
-    const result = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
-        ...createNodeEvalArgs(
-          `
-          import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl.href)};
-          await withClawPackageLifecycleLease(
-            ${JSON.stringify(artifact)},
-            async () => { process.exit(23); },
-            { required: true },
-          );
-        `,
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        directOperation,
+        "Package operation settled before acquiring its lease",
+      );
+      await expect(
+        withClawPackageLifecycleLease(
+          artifact,
+          async () => {
+            competingEntered = true;
+          },
+          { env },
         ),
-      ],
-      { ...process.env, ...env },
-      60_000,
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(23);
-    const nextLease = acquireClawPackageLifecycleLease(artifact, { env, required: true });
-    expect(nextLease).not.toBeNull();
-    nextLease?.release();
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+      expect(competingEntered).toBe(false);
+      await expect(
+        withClawPackageLifecycleLease(
+          { kind: "plugin", source: "clawhub", ref: "@acme/other" },
+          async () => "other package admitted",
+          { env },
+        ),
+      ).resolves.toBe("other package admitted");
+    } finally {
+      finish.resolve();
+      await directOperation;
+    }
+    await expect(
+      withClawPackageLifecycleLease(artifact, async () => "successor admitted", { env }),
+    ).resolves.toBe("successor admitted");
   });
 
-  it("fails open only for optional direct leases when lifecycle state is unavailable", () => {
+  it("refuses package mutation when lifecycle state is unavailable", async () => {
     const invalidDatabasePath = tempDirs.make("claw-invalid-db-path-");
     const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
-    expect(acquireClawPackageLifecycleLease(artifact, { path: invalidDatabasePath })).toBeNull();
-    expect(() =>
-      acquireClawPackageLifecycleLease(artifact, {
-        path: invalidDatabasePath,
-        required: true,
-      }),
-    ).toThrow();
+    let entered = false;
+    await expect(
+      withClawPackageLifecycleLease(
+        artifact,
+        async () => {
+          entered = true;
+        },
+        { path: invalidDatabasePath },
+      ),
+    ).rejects.toThrow();
+    expect(entered).toBe(false);
   });
 });

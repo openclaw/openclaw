@@ -1,8 +1,48 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { BoundedSerialQueue } from "./bounded-serial-queue.js";
 
 describe("BoundedSerialQueue", () => {
+  it("retains each caller's async context across waits and failures", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const first = createDeferred();
+    const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 2 });
+    const observed: Array<string | undefined> = [];
+    const failure = new Error("second failed");
+    const one = context.run("first", () =>
+      queue.enqueue(async () => {
+        observed.push(context.getStore());
+        await first.promise;
+        observed.push(context.getStore());
+      }),
+    );
+    const two = context.run("second", () =>
+      queue.enqueue(async () => {
+        observed.push(context.getStore());
+        await Promise.resolve();
+        observed.push(context.getStore());
+        throw failure;
+      }),
+    );
+    const three = queue.enqueue(() => observed.push(context.getStore()));
+    expect(one.accepted && two.accepted && three.accepted).toBe(true);
+    const rejected = expect(two.accepted ? two.completion : Promise.resolve()).rejects.toBe(
+      failure,
+    );
+    first.resolve();
+    await Promise.all([queue.flush(), rejected]);
+
+    expect(observed).toEqual(["first", "first", "second", "second", undefined]);
+    expect(context.getStore()).toBeUndefined();
+    expect(queue.isIdle).toBe(true);
+    const reused = context.run("reused", () => queue.enqueue(() => context.getStore()));
+    expect(reused.accepted).toBe(true);
+    if (reused.accepted) {
+      await expect(reused.completion).resolves.toBe("reused");
+    }
+  });
+
   it("runs one task at a time in FIFO order and continues after failures", async () => {
     const first = createDeferred();
     const order: string[] = [];

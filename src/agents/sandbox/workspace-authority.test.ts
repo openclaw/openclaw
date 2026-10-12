@@ -18,7 +18,7 @@ function configWithSandbox(sandbox: AgentSandboxConfig): OpenClawConfig {
   return {
     agents: {
       defaults: { workspace: "/workspace", sandbox: { scope: "session", ...sandbox } },
-      list: [{ id: "main", default: true, workspace: "/workspace" }],
+      entries: { main: { workspace: "/workspace" } },
     },
     tools: {
       sandbox: { tools: { allow: SAFE_WORKBOARD_TOOLS } },
@@ -156,7 +156,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       workspaceAccess: "rw",
       sessionToolsVisibility: "all",
     });
-    config.agents!.list![0]!.sandbox = { sessionToolsVisibility: "spawned" };
+    config.agents!.entries!.main!.sandbox = { sessionToolsVisibility: "spawned" };
     config.tools!.sessions = { visibility: "all" };
 
     const result = resolveSandboxWorkspaceAuthority({

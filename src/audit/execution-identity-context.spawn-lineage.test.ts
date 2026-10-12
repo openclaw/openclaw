@@ -83,61 +83,34 @@ function prepareContext(
 }
 
 describe("execution identity child lineage", () => {
-  it("preserves private spawn facts across the prepared-admission copy", () => {
+  it("projects copied spawn facts without retaining raw owner refs", () => {
     const context = prepareContext(
       {
-        ...facts("copied-child-run", {
+        ...facts("child-run", {
+          ingress: { kind: "subagent", boundary: "sessions_spawn.subagent", state: "present" },
+          invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
+          applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
+          assurance: [
+            {
+              kind: "spawn-lineage",
+              rawEvidenceRef: "native-spawn-proof",
+              strength: "boundary-verified",
+            },
+          ],
           spawnLineage: {
-            parentContextId: "copied-parent-context",
-            parentExecutionId: "copied-parent-execution",
-            parentRunId: "copied-parent-run",
+            parentContextId: "parent-context",
+            parentExecutionId: "parent-execution",
+            parentRunId: "parent-run",
             parentAgentId: "parent-agent",
             relation: "sessions_spawn",
-            rawRequesterRef: "requester",
-            rawControllerRef: "controller",
-            depth: 1,
-            localPolicyRefs: [],
-            targetPolicyRefs: [],
+            rawRequesterRef: "agent:main:private-requester",
+            rawControllerRef: "agent:main:private-controller",
+            depth: 2,
+            localPolicyRefs: ["local-policy-secret"],
+            targetPolicyRefs: ["target-policy-secret"],
           },
         }),
       },
-      { contextId: "copied-child-context", executionId: "copied-child-execution", now: 100 },
-    );
-
-    expect(context.lineage).toMatchObject({
-      parentContextId: "copied-parent-context",
-      parentExecutionId: "copied-parent-execution",
-      parentRunId: "copied-parent-run",
-      depth: 1,
-    });
-  });
-
-  it("projects bounded narrowing inputs without retaining raw owner refs", () => {
-    const context = prepareContext(
-      facts("child-run", {
-        ingress: { kind: "subagent", boundary: "sessions_spawn.subagent", state: "present" },
-        invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
-        applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
-        assurance: [
-          {
-            kind: "spawn-lineage",
-            rawEvidenceRef: "native-spawn-proof",
-            strength: "boundary-verified",
-          },
-        ],
-        spawnLineage: {
-          parentContextId: "parent-context",
-          parentExecutionId: "parent-execution",
-          parentRunId: "parent-run",
-          parentAgentId: "parent-agent",
-          relation: "sessions_spawn",
-          rawRequesterRef: "agent:main:private-requester",
-          rawControllerRef: "agent:main:private-controller",
-          depth: 2,
-          localPolicyRefs: ["local-policy-secret"],
-          targetPolicyRefs: ["target-policy-secret"],
-        },
-      }),
       { contextId: "child-context", executionId: "child-execution", now: 100 },
     );
 

@@ -22,6 +22,10 @@ import {
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
+import {
+  collectPublishableCorePackages,
+  CORE_PACKAGE_POLICY,
+} from "./lib/npm-core-release-packages.mjs";
 import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
@@ -47,9 +51,6 @@ const CALLER_WORKFLOWS = new Set([
   ".github/workflows/full-release-candidate.yml",
   ".github/workflows/full-release-artifacts.yml",
 ]);
-const CORE_PACKAGE_POLICY = JSON.parse(
-  readFileSync(new URL("./lib/npm-core-release-packages.json", import.meta.url), "utf8"),
-);
 const CORE_PACKAGES = CORE_PACKAGE_POLICY.map((entry) => entry.name);
 const MAX_TARBALL_BYTES = 192 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
@@ -93,7 +94,7 @@ function readJson(path, maxBytes = MAX_MANIFEST_BYTES) {
 }
 
 function writeJson(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 function same(left, right, label) {
@@ -693,6 +694,44 @@ function normalizePackModes(directory) {
   }
 }
 
+function runPackagePack(directory, destination, releaseRef, prepareRoot) {
+  const options = {
+    cwd: directory,
+    env: {
+      ...process.env,
+      OPENCLAW_PREPACK_PREPARED: "1",
+      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+        : {}),
+    },
+    stdio: "inherit",
+    timeout: 30 * 60 * 1000,
+  };
+  if (prepareRoot) {
+    execFileSync("pnpm", ["run", "prepack"], options);
+  }
+  try {
+    prepareRoot?.();
+    // Bundled dependencies require the hoisted linker. Root bytes are already
+    // sealed after prepack; other packages keep their pack hooks enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "pack",
+        ...(prepareRoot ? ["--config.ignore-scripts=true"] : []),
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      options,
+    );
+  } finally {
+    if (prepareRoot) {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], options);
+    }
+  }
+}
+
 export function prepareNpmPackageBundle({
   sourceDir,
   outputDir,
@@ -738,64 +777,15 @@ export function prepareNpmPackageBundle({
       { cwd: sourceDir, stdio: "inherit" },
     );
   },
-  runPack = (directory, destination) =>
-    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
-    execFileSync(
-      "pnpm",
-      ["pack", "--config.node-linker=hoisted", "--pack-destination", destination],
-      {
-        cwd: directory,
-        env: {
-          ...process.env,
-          OPENCLAW_PREPACK_PREPARED: "1",
-          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-            : {}),
-        },
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      },
-    ),
-  runRootPack = (directory, destination) => {
-    const env = {
-      ...process.env,
-      OPENCLAW_PREPACK_PREPARED: "1",
-      ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-        ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-        : {}),
-    };
-    execFileSync("pnpm", ["run", "prepack"], {
-      cwd: directory,
-      env,
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    });
-    try {
+  runPack = (directory, destination) => runPackagePack(directory, destination, releaseRef),
+  runRootPack = (directory, destination) =>
+    runPackagePack(directory, destination, releaseRef, () => {
       // Frozen prepack hooks may rebuild dist even when preparation already ran.
       // Sanitize the final declarations and refresh their hashes, then disable
       // pack hooks so those exact bytes and inventory stay sealed.
       sanitizeRootDeclarations(join(directory, "dist"));
       refreshRootDistInventory(directory);
-      execFileSync(
-        "pnpm",
-        [
-          "pack",
-          "--config.ignore-scripts=true",
-          "--config.node-linker=hoisted",
-          "--pack-destination",
-          destination,
-        ],
-        { cwd: directory, env, stdio: "inherit", timeout: 30 * 60 * 1000 },
-      );
-    } finally {
-      execFileSync("pnpm", ["run", "--if-present", "postpack"], {
-        cwd: directory,
-        env,
-        stdio: "inherit",
-        timeout: 30 * 60 * 1000,
-      });
-    }
-  },
+    }),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,
@@ -859,24 +849,9 @@ export function prepareNpmPackageBundle({
       ),
     };
   };
-  const corePackageTarballs = CORE_PACKAGE_POLICY.flatMap((policy) => {
-    const packageName = policy.name;
-    const directory = join(sourceDir, policy.path);
-    if (policy.dependency) {
-      if (typeof root.dependencies?.[policy.dependency] !== "string") {
-        return [];
-      }
-    } else if (
-      !existsSync(join(directory, "package.json")) ||
-      readJson(join(directory, "package.json")).openclaw?.release?.publishToNpm !== true
-    ) {
-      return [];
-    }
-    if (readJson(join(directory, "package.json")).version !== root.version) {
-      throw new Error(`Core package version mismatch: ${packageName}.`);
-    }
-    return [pack(directory, packageName)];
-  });
+  const corePackageTarballs = collectPublishableCorePackages(sourceDir, root).map((policy) =>
+    pack(join(sourceDir, policy.path), policy.name),
+  );
   const aiPackage = corePackageTarballs.find(({ packageName }) => packageName === "@openclaw/ai");
   const hasRootShrinkwrap = existsSync(join(sourceDir, "npm-shrinkwrap.json"));
   if (aiPackage && hasRootShrinkwrap) {

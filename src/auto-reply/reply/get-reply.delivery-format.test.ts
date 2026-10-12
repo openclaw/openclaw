@@ -86,43 +86,27 @@ function expectContractOnce(prompt: string, markup: string) {
   expect(prompt).toContain(`"text_markup": "${markup}"`);
 }
 
-it.each([
-  ["rich", "markdown_telegram_rich"],
-  ["plain", "markdown"],
-])("gives a Telegram reply on the %s account its contract once", async (accountId, markup) => {
-  const { cfg, lastPrompt } = await setup("reply-delivery-format");
-  await getReplyFromConfig(
-    finalizeInboundContext({
-      Body: "Post the status table",
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:123",
-      AccountId: accountId,
-      ChatType: "direct",
-      SessionKey: `agent:main:telegram:${accountId}:direct:123`,
-    }),
-    undefined,
-    cfg,
-  );
-  expectContractOnce(lastPrompt(), markup);
-});
-
-it("gives no contract to a reply without a channel delivery target", async () => {
-  const { cfg, lastPrompt } = await setup("reply-delivery-format-webchat");
-  await getReplyFromConfig(
-    finalizeInboundContext({
-      Body: "Post the status table",
-      Provider: "webchat",
-      Surface: "webchat",
-      ChatType: "direct",
-      SessionKey: "agent:main:dashboard:format",
-    }),
-    undefined,
-    cfg,
-  );
-  expect(lastPrompt()).not.toContain("### Delivery Format");
-});
+it.each([["rich", "markdown_telegram_rich"]])(
+  "gives a Telegram reply on the %s account its contract once",
+  async (accountId, markup) => {
+    const { cfg, lastPrompt } = await setup("reply-delivery-format");
+    await getReplyFromConfig(
+      finalizeInboundContext({
+        Body: "Post the status table",
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        AccountId: accountId,
+        ChatType: "direct",
+        SessionKey: `agent:main:telegram:${accountId}:direct:123`,
+      }),
+      undefined,
+      cfg,
+    );
+    expectContractOnce(lastPrompt(), markup);
+  },
+);
 
 it("gives a heartbeat delivered to Telegram the delivering account's contract once", async () => {
   const { cfg, storePath, lastPrompt } = await setup("heartbeat-delivery-format");

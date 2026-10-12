@@ -25,6 +25,9 @@ afterEach(async () => {
     for (const capture of logCaptures) {
       await capture.flush();
     }
+    if (vi.isFakeTimers()) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     for (const capture of logCaptures.splice(0)) {
       capture.cleanup();
@@ -114,6 +117,7 @@ describe("node desktop stream tickets", () => {
       const broker = createNodeDesktopStreamBroker();
       const session = { connId: "conn-1", pairingGeneration: "generation-1" };
       const baseUrl = await startBrokerServer({ broker, session });
+      const serverTimers = vi.getTimerCount();
       const binding = { nodeId: "node-1", ...session };
       const minted = kind === "desktop" ? broker.mint(binding) : broker.mintPortal(binding);
       const ws = await connectAndSend(
@@ -121,6 +125,7 @@ describe("node desktop stream tickets", () => {
         kind === "desktop" ? { auth: "vnc-password" } : { ok: true },
       );
       const { stream } = await minted.attached;
+      expect(vi.getTimerCount()).toBe(serverTimers + 1);
       const pings: Buffer[] = [];
       const streamBytes: Buffer[] = [];
       ws.on("ping", (data) => pings.push(data));
@@ -173,7 +178,7 @@ describe("node desktop stream tickets", () => {
       expect(serialized).not.toContain("resumed stream bytes");
       vi.advanceTimersByTime(25_000);
       expect(pings).toHaveLength(3);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(serverTimers);
     },
   );
 

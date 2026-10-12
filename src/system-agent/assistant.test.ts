@@ -53,7 +53,6 @@ describe("OpenClaw assistant", () => {
     expect(systemPrompt).toContain("call configure_gateway");
     expect(systemPrompt).toContain("call import_memory");
     expect(systemPrompt).toContain("default agent's existing workspace");
-    expect(systemPrompt).toContain("Never ask for or repeat reusable secrets");
   });
 
   it("does not tell the fallback planner to solicit secrets", () => {

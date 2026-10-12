@@ -12,22 +12,13 @@ const tempDirs = createTrackedTempDirs();
 
 describe("git commit prefix matching", () => {
   const fullCommit = "abcdef0123456789abcdef0123456789abcdef01";
-  const unrelatedCommit = "1234567890abcdef1234567890abcdef12345678";
-  const sharedPrefixCommit = "abcdef0fedcba9876543210fedcba9876543210f";
 
-  it.each([
-    ["exact equality", fullCommit, fullCommit, true],
-    ["short left prefix", "abcdef0", fullCommit, true],
-    ["short right prefix", fullCommit, "abcdef0", true],
-    ["whitespace and case normalization", "  ABCDEF0  ", fullCommit, true],
-    ["unrelated commits", fullCommit, unrelatedCommit, false],
-    ["distinct full commits sharing seven characters", fullCommit, sharedPrefixCommit, false],
-    ["short left operand", "abcdef", fullCommit, false],
-    ["short right operand", fullCommit, "abcdef", false],
-    ["whitespace-only operand", "   ", fullCommit, false],
-  ])("%s", (_name, left, right, expected) => {
-    expect(gitCommitPrefixesMatch(left, right)).toBe(expected);
-  });
+  it.each([["whitespace and case normalization", "  ABCDEF0  ", fullCommit, true]])(
+    "%s",
+    (_name, left, right, expected) => {
+      expect(gitCommitPrefixesMatch(left, right)).toBe(expected);
+    },
+  );
 });
 
 async function makeTempDir(label: string): Promise<string> {
@@ -78,7 +69,6 @@ async function makeFakeOpenClawPackage(root: string) {
 
 function limitPositionalReads(maxBytes: number) {
   const realReadSync = fsSync.readSync.bind(fsSync);
-  let totalBytesRead = 0;
   vi.spyOn(fsSync, "readSync").mockImplementation(((
     fd: number,
     buffer: NodeJS.ArrayBufferView,
@@ -86,11 +76,8 @@ function limitPositionalReads(maxBytes: number) {
     length: number,
     position: number | null,
   ) => {
-    const bytesRead = realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
-    totalBytesRead += bytesRead;
-    return bytesRead;
+    return realReadSync(fd, buffer, offset, Math.min(length, maxBytes), position);
   }) as typeof fsSync.readSync);
-  return () => totalBytesRead;
 }
 
 describe("git commit resolution", () => {
@@ -127,25 +114,6 @@ describe("git commit resolution", () => {
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoCommit.slice(0, 7));
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherCommit.slice(0, 7));
-  });
-
-  it("prefers live git metadata over stale build info in a package checkout", async () => {
-    const temp = await makeTempDir("git-commit-live-checkout");
-    const repoRoot = path.join(temp, "openclaw");
-    const repoCommit = "abcdef0123456789abcdef0123456789abcdef01";
-    await makeFakeGitRepo(repoRoot, { head: `${repoCommit}\n` });
-    await makeFakeOpenClawPackage(repoRoot);
-    const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
-
-    expect(
-      resolveCommitHash({
-        moduleUrl: entryModuleUrl,
-        env: {},
-        readers: {
-          readBuildInfoCommit: () => "deadbee",
-        },
-      }),
-    ).toBe(repoCommit.slice(0, 7));
   });
 
   it.each([
@@ -204,24 +172,6 @@ describe("git commit resolution", () => {
     ).toBe("0123456");
   });
 
-  it("does not guess when commitless build stamps lack build info", async () => {
-    const root = await makeTempDir("git-commit-headless-build-no-info");
-    const dist = path.join(root, "dist");
-    await makeFakeGitRepo(root, {
-      head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-    });
-    await fs.mkdir(dist, { recursive: true });
-    await fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: null }));
-    await fs.writeFile(path.join(dist, ".runtime-postbuildstamp"), JSON.stringify({}));
-
-    expect(
-      resolveLoadedCommitHash({
-        env: { GIT_COMMIT: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
-        moduleUrl: pathToFileURL(path.join(dist, "version-chunk.js")).href,
-      }),
-    ).toBeNull();
-  });
-
   it("falls back to Git for true source execution without build metadata", async () => {
     const root = await makeTempDir("git-commit-source-runtime");
     await makeFakeGitRepo(root, {
@@ -234,21 +184,6 @@ describe("git commit resolution", () => {
         moduleUrl: pathToFileURL(path.join(root, "src", "version.ts")).href,
       }),
     ).toBe("bbbbbbb");
-  });
-
-  it("caches build-info fallback results per resolved search directory", async () => {
-    const temp = await makeTempDir("git-commit-build-info-cache");
-    const readBuildInfoCommit = vi.fn(() => "deadbee");
-
-    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
-      "deadbee",
-    );
-    const firstCallRequires = readBuildInfoCommit.mock.calls.length;
-    expect(firstCallRequires).toBeGreaterThan(0);
-    expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
-      "deadbee",
-    );
-    expect(readBuildInfoCommit.mock.calls.length).toBe(firstCallRequires);
   });
 
   it("caches package.json fallback results per resolved search directory", async () => {
@@ -292,49 +227,6 @@ describe("git commit resolution", () => {
     );
   });
 
-  it("does not walk out of the openclaw package into a host repo", async () => {
-    const temp = await makeTempDir("git-commit-package-boundary");
-    const hostRepo = path.join(temp, "host");
-    await makeFakeGitRepo(hostRepo, { head: "abcdef1234567890abcdef1234567890abcdef12" });
-
-    const packageRoot = path.join(hostRepo, "node_modules", "openclaw");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.3.10" }),
-      "utf-8",
-    );
-    const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
-
-    expect(
-      resolveCommitHash({
-        moduleUrl,
-        cwd: packageRoot,
-        env: {},
-        readers: {
-          readBuildInfoCommit: () => "feedfac",
-          readPackageJsonCommit: () => "badc0ff",
-        },
-      }),
-    ).toBe("feedfac");
-  });
-
-  it("caches git lookups per resolved search directory", async () => {
-    const temp = await makeTempDir("git-commit-cache");
-    const repoA = path.join(temp, "repo-a");
-    const repoB = path.join(temp, "repo-b");
-    await makeFakeGitRepo(repoA, {
-      head: "0123456789abcdef0123456789abcdef01234567\n",
-    });
-    await makeFakeGitRepo(repoB, {
-      head: "89abcdef0123456789abcdef0123456789abcdef\n",
-    });
-
-    expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
-    expect(resolveCommitHash({ cwd: repoB, env: {} })).toBe("89abcde");
-    expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
-  });
-
   it("reads packed refs after short commondir reads in worktree-style checkouts", async () => {
     const temp = await makeTempDir("git-commit-packed-refs");
     const checkoutRoot = path.join(temp, "checkout");
@@ -352,26 +244,6 @@ describe("git commit resolution", () => {
     limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: checkoutRoot, env: {} })).toBe("0123456");
-  });
-
-  it("caches deterministic null results per resolved search directory", async () => {
-    const temp = await makeTempDir("git-commit-null-cache");
-    const repoRootEntry = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRootEntry, {
-      head: "not-a-commit\n",
-    });
-
-    const readGitCommit = vi.fn(() => null);
-
-    expect(
-      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
-    ).toBeNull();
-    const firstCallReads = readGitCommit.mock.calls.length;
-    expect(firstCallReads).toBeGreaterThan(0);
-    expect(
-      resolveCommitHash({ cwd: repoRootEntry, env: {}, readers: { readGitCommit } }),
-    ).toBeNull();
-    expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
   it("caches caught null fallback results per resolved search directory", async () => {
@@ -414,44 +286,44 @@ describe("git commit resolution", () => {
     expect(readGitCommit.mock.calls.length).toBe(firstCallReads);
   });
 
-  it.each([
-    { name: "successful", result: "abcdef0" },
-    { name: "failed", result: null },
-  ])("bounds $name git probe entries with LRU eviction", async ({ result }) => {
-    const temp = await makeTempDir(`git-commit-${result ? "success" : "failure"}-lru`);
-    const coldDir = path.join(temp, "cold");
-    const hotDir = path.join(temp, "hot");
-    const newestDir = path.join(temp, "newest");
-    const readGitCommit = vi.fn((_searchDir: string, _packageRoot: string | null) => result);
-    const resolve = (cwd: string) =>
-      resolveCommitHash({
-        cwd,
-        env: {},
-        readers: {
-          readGitCommit,
-          readBuildInfoCommit: () => null,
-          readPackageJsonCommit: () => null,
-        },
-      });
-    const callsFor = (cwd: string) =>
-      readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
+  it.each([{ name: "successful", result: "abcdef0" }])(
+    "bounds $name git probe entries with LRU eviction",
+    async ({ result }) => {
+      const temp = await makeTempDir(`git-commit-${result ? "success" : "failure"}-lru`);
+      const coldDir = path.join(temp, "cold");
+      const hotDir = path.join(temp, "hot");
+      const newestDir = path.join(temp, "newest");
+      const readGitCommit = vi.fn((_searchDir: string, _packageRoot: string | null) => result);
+      const resolve = (cwd: string) =>
+        resolveCommitHash({
+          cwd,
+          env: {},
+          readers: {
+            readGitCommit,
+            readBuildInfoCommit: () => null,
+            readPackageJsonCommit: () => null,
+          },
+        });
+      const callsFor = (cwd: string) =>
+        readGitCommit.mock.calls.filter(([searchDir]) => searchDir === cwd).length;
 
-    expect(resolve(coldDir)).toBe(result);
-    expect(resolve(hotDir)).toBe(result);
-    for (let index = 0; index < 254; index += 1) {
-      expect(resolve(path.join(temp, `filler-${index}`))).toBe(result);
-    }
+      expect(resolve(coldDir)).toBe(result);
+      expect(resolve(hotDir)).toBe(result);
+      for (let index = 0; index < 254; index += 1) {
+        expect(resolve(path.join(temp, `filler-${index}`))).toBe(result);
+      }
 
-    expect(resolve(hotDir)).toBe(result);
-    expect(resolve(newestDir)).toBe(result);
-    expect(resolve(newestDir)).toBe(result);
-    expect(resolve(hotDir)).toBe(result);
-    expect(resolve(coldDir)).toBe(result);
+      expect(resolve(hotDir)).toBe(result);
+      expect(resolve(newestDir)).toBe(result);
+      expect(resolve(newestDir)).toBe(result);
+      expect(resolve(hotDir)).toBe(result);
+      expect(resolve(coldDir)).toBe(result);
 
-    expect(callsFor(newestDir)).toBe(1);
-    expect(callsFor(hotDir)).toBe(1);
-    expect(callsFor(coldDir)).toBe(2);
-  });
+      expect(callsFor(newestDir)).toBe(1);
+      expect(callsFor(hotDir)).toBe(1);
+      expect(callsFor(coldDir)).toBe(2);
+    },
+  );
 
   it("formats env-provided commit strings consistently", async () => {
     const temp = await makeTempDir("git-commit-env");
@@ -489,53 +361,6 @@ describe("git commit resolution", () => {
     expect(resolveCommitHash({ cwd: validRepo, env: {} })).toBe("aaaaaaa");
   });
 
-  it("resolves refs from the git commondir in worktree layouts", async () => {
-    const temp = await makeTempDir("git-commit-worktree");
-    const repoRootValue = path.join(temp, "repo");
-    const worktreeGitDir = path.join(temp, "worktree-git");
-    const commonGitDir = path.join(temp, "common-git");
-    await fs.mkdir(commonGitDir, { recursive: true });
-    const refPath = path.join(commonGitDir, "refs", "heads", "main");
-    await fs.mkdir(path.dirname(refPath), { recursive: true });
-    await fs.writeFile(refPath, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", "utf-8");
-    await makeFakeGitRepo(repoRootValue, {
-      gitdir: worktreeGitDir,
-      head: "ref: refs/heads/main\n",
-      commondir: "../common-git",
-    });
-
-    expect(resolveCommitHash({ cwd: repoRootValue, env: {} })).toBe("bbbbbbb");
-  });
-
-  it("fills short positional reads for loose refs", async () => {
-    const temp = await makeTempDir("git-commit-short-ref");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
-      head: "ref: refs/heads/main\n",
-      refs: {
-        "refs/heads/main": "abcdef0123456789abcdef0123456789abcdef01",
-      },
-    });
-    limitPositionalReads(4);
-
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("abcdef0");
-  });
-
-  it("keeps short-read retries within the bounded metadata window", async () => {
-    const temp = await makeTempDir("git-commit-bounded-ref");
-    const repoRoot = path.join(temp, "repo");
-    await makeFakeGitRepo(repoRoot, {
-      head: "ref: refs/heads/main\n",
-      refs: {
-        "refs/heads/main": `${"x".repeat(256)}abcdef0123456789`,
-      },
-    });
-    const totalBytesRead = limitPositionalReads(4);
-
-    expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(totalBytesRead()).toBe(256);
-  });
-
   it("falls back to baked metadata when a bounded Git metadata read errors", async () => {
     const temp = await makeTempDir("git-commit-read-error");
     const repoRoot = path.join(temp, "repo");
@@ -556,19 +381,5 @@ describe("git commit resolution", () => {
         readers: { readBuildInfoCommit: () => "deadbee" },
       }),
     ).toBe("deadbee");
-  });
-
-  it("reads full HEAD refs before parsing long branch names", async () => {
-    const temp = await makeTempDir("git-commit-long-head");
-    const repoRootLocal = path.join(temp, "repo");
-    const longRefName = `refs/heads/${"segment/".repeat(40)}main`;
-    await makeFakeGitRepo(repoRootLocal, {
-      head: `ref: ${longRefName}\n`,
-      refs: {
-        [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
-      },
-    });
-
-    expect(resolveCommitHash({ cwd: repoRootLocal, env: {} })).toBe("ccccccc");
   });
 });

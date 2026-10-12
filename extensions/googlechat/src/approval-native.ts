@@ -183,7 +183,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         accountId && accountId !== "default"
           ? `channels.googlechat.accounts.${accountId}`
           : "channels.googlechat";
-      return `Approve it from the Web UI or terminal UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
+      return `Approve it from the Web UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
     },
     listAccountIds: listGoogleChatAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
@@ -215,10 +215,8 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
-      isConfigured: ({ cfg, accountId }) =>
-        isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
-      shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
-        shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
+      isConfigured: isGoogleChatNativeApprovalClientEnabled,
+      shouldHandle: shouldHandleGoogleChatNativeApprovalRequest,
       load: async () =>
         (await import("./approval-handler.runtime.js")).googleChatApprovalNativeRuntime,
     }),

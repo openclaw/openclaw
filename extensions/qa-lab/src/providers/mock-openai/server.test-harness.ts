@@ -172,3 +172,61 @@ export function makeUserInput(text: string) {
 export function makeToolOutputWithCallId(callId: string, output: unknown) {
   return { type: "function_call_output" as const, call_id: callId, output };
 }
+
+export type AnthropicResponse = Record<string, unknown> & {
+  content: Array<Record<string, unknown>>;
+};
+
+export const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
+  {
+    name: "exec",
+    input_schema: guestCodeModeExecTool.parameters,
+  },
+  {
+    name: "wait",
+    input_schema: {
+      type: "object",
+      properties: { runId: { type: "string" } },
+      required: ["runId"],
+    },
+  },
+] as const;
+
+export async function expectAnthropicMessagesJson(
+  server: MockServer,
+  body: Record<string, unknown>,
+): Promise<AnthropicResponse> {
+  const response = requireRecord(
+    await (
+      await expectOk(
+        postJson(server, "/v1/messages", {
+          model: "claude-opus-4-8",
+          max_tokens: 256,
+          ...body,
+        }),
+      )
+    ).json(),
+    "Anthropic response",
+  );
+  return {
+    ...response,
+    content: requireArray(response.content, "Anthropic content").map((item) =>
+      requireRecord(item, "Anthropic content block"),
+    ),
+  };
+}
+
+export async function readDebugRequest(server: MockServer) {
+  return requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+}
+
+export function makeAnthropicUserText(text: string) {
+  return { role: "user" as const, content: [{ type: "text" as const, text }] };
+}
+
+export function makeAnthropicToolResult(toolUseId: unknown, content: string) {
+  return {
+    role: "user" as const,
+    content: [{ type: "tool_result" as const, tool_use_id: toolUseId as string, content }],
+  };
+}

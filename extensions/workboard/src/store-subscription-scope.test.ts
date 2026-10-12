@@ -85,19 +85,15 @@ describe("Workboard scoped subscription listing", () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness();
     const selected = await store.subscribeNotifications({ boardId: "alpha", cardId: "card" });
     const unrelated = await store.subscribeNotifications({ boardId: "beta", cardId: "other" });
-    const db = new DatabaseSync(dbPath);
-    try {
-      db.prepare(
-        "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
-      ).run("{", unrelated.id);
-      expect(
-        (await store.listNotificationSubscriptions({ boardId: "alpha" })).subscriptions,
-      ).toEqual([selected]);
-      await expect(store.listNotificationSubscriptions({ boardId: "beta" })).rejects.toThrow();
-      await expect(store.listNotificationSubscriptions()).rejects.toThrow();
-    } finally {
-      db.close();
-    }
+    using db = new DatabaseSync(dbPath);
+    db.prepare(
+      "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
+    ).run("{", unrelated.id);
+    expect((await store.listNotificationSubscriptions({ boardId: "alpha" })).subscriptions).toEqual(
+      [selected],
+    );
+    await expect(store.listNotificationSubscriptions({ boardId: "beta" })).rejects.toThrow();
+    await expect(store.listNotificationSubscriptions()).rejects.toThrow();
   });
 
   it("deletes board notification subscriptions with empty board metadata", async () => {
@@ -122,26 +118,20 @@ describe("Workboard scoped subscription listing", () => {
       boardId: "product",
       target: "session:unrelated",
     });
-    const raw = new DatabaseSync(dbPath);
-    try {
-      raw
-        .prepare(
-          "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
-        )
-        .run("{", unrelated.id);
-      const readUnrelated = raw.prepare(
-        "SELECT * FROM workboard_notification_subscriptions WHERE id = ?",
-      );
-      const unrelatedBefore = readUnrelated.get(unrelated.id);
-      expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
+    using raw = new DatabaseSync(dbPath);
+    raw
+      .prepare("UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?")
+      .run("{", unrelated.id);
+    const readUnrelated = raw.prepare(
+      "SELECT * FROM workboard_notification_subscriptions WHERE id = ?",
+    );
+    const unrelatedBefore = readUnrelated.get(unrelated.id);
+    expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
 
-      await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
-      await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
-        subscriptions: [],
-      });
-      expect(readUnrelated.get(unrelated.id)).toEqual(unrelatedBefore);
-    } finally {
-      raw.close();
-    }
+    await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
+      subscriptions: [],
+    });
+    expect(readUnrelated.get(unrelated.id)).toEqual(unrelatedBefore);
   });
 });

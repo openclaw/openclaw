@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw status` (diagnostics, probes, usage snapshots)"
+summary: "CLI reference for `openclaw status` (diagnostics, checks, usage snapshots)"
 read_when:
   - You want a quick diagnosis of channel health + recent session recipients
   - You want a pasteable "all" status for debugging
@@ -26,26 +26,54 @@ openclaw status --usage --agent work
 
 | Flag                    | Description                                                                                                     |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `--all`                 | Full diagnosis (read-only, pasteable). Includes security audit, plugin compatibility, and memory-vector probes. |
-| `--deep`                | Requests channel health (live probes where supported). Also enables the security audit.                         |
+| `--all`                 | Full diagnosis (read-only, pasteable). Includes security audit, plugin compatibility, and memory-vector checks. |
+| `--deep`                | Requests channel health (live checks where supported). Also enables the security audit.                         |
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
 | `--agent <id>`          | Selects the agent auth/profile scope for `--usage`. Required when an explicit multi-agent fleet has no default. |
 | `--json`                | Machine-readable output.                                                                                        |
-| `--timeout <ms>`        | Probe timeout in milliseconds (default: `60000`).                                                               |
+| `--timeout <ms>`        | Check timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
-Status starts one monotonic probe deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local probes report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel probes. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
+Status starts one monotonic check deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local checks report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel checks. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
 
 When no matching Gateway service or live foreground owner exists and its port is
-free, status probes directly instead of waiting for a Gateway startup. Local-only
-agent environments therefore report an unavailable Gateway promptly. Observed startup
+free, status checks directly instead of waiting for a Gateway startup. Local-only
+agent environments therefore report an unavailable Gateway promptly. A listener positively
+identified as another process reports a port conflict with diagnostic guidance instead
+of waiting for the readiness budget. Unknown listener attribution keeps startup grace. Observed startup
 migrations retain startup grace across the handoff to Gateway ownership; unverifiable
 ownership also retains that grace. Lock and native process inspection consume the
-same remaining probe allowance.
+same remaining check allowance.
 
-Channels without a probe, such as WhatsApp, report lifecycle health instead.
+Channels without a check, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
-probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
+checks remain `WARN`. A lifecycle `OK` does not mean a live check ran.
+
+The Update run row preserves the last recorded update outcome. When the local
+Gateway passes the current readiness and connection checks and its serving
+version matches the recorded update target, a previous failure is labeled as
+historical: `Last update run failed (post-update-failed) — Gateway is serving
+2026.9.7; run openclaw update to clear the record.` Build IDs must also match when
+both the target and the live check expose them. A healthy old version, a different
+build, or unknown identity keeps the warning and its recorded failure details,
+with the serving and target versions when known. Rollback and recovery observations
+cannot by themselves establish the intended candidate identity. A
+same-version rollback stays warned when the intended candidate build cannot be
+verified. Status does not rewrite the failed run or claim the update succeeded.
+Starting, unreachable, degraded, and
+remote Gateways do not qualify for this note. Use
+`openclaw update status` to inspect the saved verification failure.
+
+`--deep` also asks the running Gateway whether the Node executable it still holds can be started. A Homebrew upgrade can delete that Cellar path while the LaunchAgent plist still points at a valid symlink and the Gateway port stays reachable. Status then warns:
+
+```text
+Gateway runtime is stale after Node upgrade: child workers are using <path>, which no longer exists. Restart the Gateway.
+```
+
+The check does not restart the Gateway. Run `openclaw gateway restart` after the warning.
+Exec and stdio MCP command relays can use the stable Homebrew Node path when the
+old executable is gone. Workers that require the Gateway's exact runtime still
+need a restart; a failed supervisor or broker launch reports the same warning.
 
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked
@@ -54,7 +82,7 @@ message counts even when a channel connection is healthy. See
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
-security audit, plugin compatibility, and memory-vector probes are left to
+security audit, plugin compatibility, and memory-vector checks are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
@@ -64,7 +92,7 @@ agent database unless its journal state requires private recovery. Startup and
 migration readiness checks retain their full validation.
 
 The CLI runs in a separate process and contacts the Gateway over WebSocket, even
-for a local loopback target. `--timeout` bounds probes, not the entire status
+for a local loopback target. `--timeout` bounds checks, not the entire status
 command. Cold device-token worker initialization happens during request preparation,
 before the RPC timeout starts; connection token reads remain fresh. Compare
 `openclaw gateway call status --json` with `openclaw status --json`
@@ -124,7 +152,7 @@ OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=/tmp/openclaw-status-timeline.jsonl \
 ```
 
 The timeline includes configuration and secret resolution, agent admission,
-local session reads, Gateway probes, and summary collection. Durations include
+local session reads, Gateway checks, and summary collection. Durations include
 waiting; parallel stages overlap and should not be added together.
 
 ## Skills diagnosis
@@ -178,7 +206,7 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - `--usage` prints normalized provider usage windows as `X% left`.
   It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
-  Usage probes receive the remaining shared probe budget, capped by `--timeout` when set;
+  Usage checks receive the remaining shared check budget, capped by `--timeout` when set;
   providers that exceed that bound report `Timeout` in the usage output.
   An exhausted budget reports `Timeout` without starting provider auth or usage
   requests. Expiry cancels active usage requests and prevents late auth results

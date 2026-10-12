@@ -83,6 +83,17 @@ or isolation reason. Unavailable optional live proof may use meaningful boundary
 proof with the limitation stated. Explicit live requests, external API contracts,
 and changes whose risk requires authenticated execution keep their required proof.
 Never describe mocks, skipped checks, or an older head as live evidence.
+For behavioral changes, apply the [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
+and `$test-audit`. Check requested behavior separately from repository standards;
+meeting one does not establish the other.
+
+## CODEOWNERS review
+
+`CODEOWNERS` routes review; check live GitHub enforcement. Restricted/security
+paths and material product, behavior, security, or ownership changes need
+listed-owner involvement. For ownership/review governance, verified active
+organization-admin direction also qualifies; repository admin/bypass alone does
+not. Neither route waives enforced reviews.
 
 ## Review and publish
 
@@ -116,6 +127,10 @@ do not manufacture another task after a bounded request is complete.
 
 ## Finalize and clean up
 
+Never remove the worktree containing a live
+session's cwd, including your own. A child command's `cd` or `cwd` override does
+not move the parent session. Defer that worktree's removal until the session
+exits or releases its cwd; report the retained path in the final handoff.
 Once the requested outcome and required verification are complete, remove the
 task's disposable proof and scratch. This includes test logs, receipts, local
 proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off
@@ -126,3 +141,12 @@ Required pre-merge proof stays mandatory. Preserve requested deliverables,
 explicit retention requests, unfinished source, recovery state needed by unfinished
 operations, active owners, credentials, agent state, and shared dependencies.
 Optional follow-ups do not keep a completed task open.
+
+This applies to every task, not only PR work: report routine findings in
+chat/stdout. Create files only for deliverables or concrete tool/proof/recovery
+needs; state their purpose and reuse them. After the requested outcome and
+required verification are complete, remove task-owned proof, scratch, and
+finished worktrees through their native lifecycle. Do not require an archive or
+evidence handoff. Preserve requested deliverables, explicit retention requests,
+unfinished source and recovery state, live owners, credentials, agent state,
+shared dependencies, and unknown ownership.

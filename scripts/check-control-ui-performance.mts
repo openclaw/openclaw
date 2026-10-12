@@ -1,18 +1,21 @@
 #!/usr/bin/env node
-// Reports and enforces compressed Control UI asset budgets after a production build.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
+  selectControlUiRoutePreloads,
+} from "../src/gateway/control-ui-route-preloads.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
-
-function isMetricsRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./lib/record-shared.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
+const BASELINE_UPDATE_COMMAND =
+  'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   SCRIPT_DIR,
@@ -50,19 +53,20 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
-  startupCssRequests: 1,
-  // Current main plus destination diagnostics measures 370,756 B; retain the fixed allowances.
-  startupJsGzipBytes: 370_756,
+  // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
+  // Allow 3 above the maximum while catching the roughly 19-request facade regression.
+  routeBootJsRequests: 35,
+  // Solid transition (Peter, 2026-10-11): Lit and Solid styles coexist at boot; restore 1 after the Lit sweep.
+  startupCssRequests: 2,
+  // Solid transition allowance (Peter, 2026-10-11): Lit and Solid runtimes coexist until the Lit sweep.
+  // Restore to the pre-transition 374_285 cap (or lower) once Lit is removed; the Solid shell saves about 18 KB.
+  startupJsGzipBytes: 450_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
-  // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
-  // bumped to 53.5 KiB with operator approval on PR #132054. 2026-09-02: side
-  // panel, workboard chip, and Lobsterdex styles moved to their lazy owners,
-  // measured boot sheet 52,337 B; ceiling lowered to keep ~1 KiB headroom.
   largestCssGzipBytes: 53_400,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
@@ -130,10 +134,6 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   )[0]!;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
 function controlUiLocaleAssetIdentity(
   file: string,
 ): { locale: string; kind: "base" | "configHints" } | null {
@@ -141,13 +141,7 @@ function controlUiLocaleAssetIdentity(
   return match ? { locale: match.locale, kind: match.kind } : null;
 }
 
-function collectControlUiLocaleAssetGroups(
-  assets: Array<ReturnType<typeof readAssetMetrics>>,
-): Array<{
-  locale: string;
-  base: Array<ReturnType<typeof readAssetMetrics>>;
-  configHints: Array<ReturnType<typeof readAssetMetrics>>;
-}> {
+function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   const groups = new Map<
     string,
     {
@@ -180,13 +174,29 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
     .filter((entry) => entry.isFile() && /\.(?:css|js)$/u.test(entry.name))
     .map((entry) => readAssetMetrics(assetsDir, entry));
   const assetsByFile = new Map(assets.map((asset) => [asset.file, asset]));
-  const startup = extractControlUiStartupAssetPaths(html).map((file) => {
-    const asset = assetsByFile.get(file);
-    if (!asset) {
-      throw new Error(`Control UI performance check cannot find startup asset ${file}`);
-    }
-    return asset;
-  });
+  const collectBootAssets = (document: string) => {
+    const bootAssets = extractControlUiStartupAssetPaths(document).map((file) => {
+      const asset = assetsByFile.get(file);
+      if (!asset) {
+        throw new Error(`Control UI performance check cannot find startup asset ${file}`);
+      }
+      return asset;
+    });
+    return {
+      js: summarizeAssets(bootAssets.filter((asset) => asset.type === "js")),
+      css: summarizeAssets(bootAssets.filter((asset) => asset.type === "css")),
+      assets: bootAssets,
+    };
+  };
+  // Preserve the historical entry budget; route preloads also account for the
+  // measured immediate dynamic imports that it never included.
+  const startup = collectBootAssets(selectControlUiRoutePreloads(html, null));
+  const routeBoot = html.includes(CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE)
+    ? {
+        chat: collectBootAssets(selectControlUiRoutePreloads(html, "chat")),
+        new: collectBootAssets(selectControlUiRoutePreloads(html, "new")),
+      }
+    : null;
   const jsAssets = assets.filter((asset) => asset.type === "js");
   const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
   const localeCatalogs = jsAssets.filter(
@@ -197,16 +207,13 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
       !MERMAID_RENDERER_ASSET.test(asset.file) && controlUiLocaleAssetIdentity(asset.file) === null,
   );
   const cssAssets = assets.filter((asset) => asset.type === "css");
-  if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
+  if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.assets.length === 0) {
     throw new Error("Control UI performance check found an incomplete production bundle");
   }
   return {
     schemaVersion: 1 as const,
-    startup: {
-      js: summarizeAssets(startup.filter((asset) => asset.type === "js")),
-      css: summarizeAssets(startup.filter((asset) => asset.type === "css")),
-      assets: startup,
-    },
+    startup,
+    routeBoot,
     total: {
       js: summarizeAssets(jsAssets),
       css: summarizeAssets(cssAssets),
@@ -234,6 +241,12 @@ export function evaluateControlUiPerformanceBudgets(
     startupJsTolerance,
   );
   const localeGroups = collectControlUiLocaleAssetGroups(metrics.localeCatalogs);
+  const startupAssetFiles = new Set(
+    [
+      ...metrics.startup.assets,
+      ...Object.values(metrics.routeBoot ?? {}).flatMap((route) => route.assets),
+    ].map((asset) => asset.file),
+  );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
@@ -250,7 +263,7 @@ export function evaluateControlUiPerformanceBudgets(
     ],
     [
       "startup Mermaid JS assets",
-      metrics.startup.assets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file)).length,
+      [...startupAssetFiles].filter((file) => MERMAID_RENDERER_ASSET.test(file)).length,
       0,
       "count",
     ],
@@ -285,12 +298,21 @@ export function evaluateControlUiPerformanceBudgets(
     ],
     [
       "startup locale catalog JS assets",
-      metrics.startup.assets.filter((asset) => controlUiLocaleAssetIdentity(asset.file) !== null)
-        .length,
+      [...startupAssetFiles].filter((file) => controlUiLocaleAssetIdentity(file) !== null).length,
       0,
       "count",
     ],
   ];
+  if (metrics.routeBoot) {
+    for (const route of ["chat", "new"] as const) {
+      checks.push([
+        `${route} boot JS requests`,
+        metrics.routeBoot[route].js.requests,
+        budgets.routeBootJsRequests,
+        "count",
+      ]);
+    }
+  }
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
   );
@@ -376,14 +398,9 @@ function controlUiPerformanceWarnings(
 }
 
 function formatViolation(violation: ControlUiPerformanceBudgetViolation): string {
-  const actual =
-    violation.unit === "bytes"
-      ? formatControlUiPerformanceBytes(violation.actual)
-      : String(violation.actual);
-  const limit =
-    violation.unit === "bytes"
-      ? formatControlUiPerformanceBytes(violation.limit)
-      : String(violation.limit);
+  const format = violation.unit === "bytes" ? formatControlUiPerformanceBytes : String;
+  const actual = format(violation.actual);
+  const limit = format(violation.limit);
   const exactBytes =
     violation.unit === "bytes" && actual === limit
       ? ` (${violation.actual} B vs ${violation.limit} B)`
@@ -427,6 +444,33 @@ export function formatControlUiPerformanceReport(
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
   );
+  if (metrics.routeBoot) {
+    lines.push(
+      "  route boot accounting: initial-entry assets plus measured immediate dynamic imports; existing initial-entry limits unchanged",
+    );
+    for (const route of ["chat", "new"] as const) {
+      const boot = metrics.routeBoot[route];
+      lines.push(
+        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limit: ${formatRequestCount(budgets.routeBootJsRequests)})`,
+        `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
+      );
+      if (baseMetrics) {
+        const baseBoot = baseMetrics.routeBoot?.[route];
+        if (baseBoot) {
+          for (const type of ["js", "css"] as const) {
+            const growth = boot[type].gzipBytes - baseBoot[type].gzipBytes;
+            lines.push(
+              `  ${route} boot ${type.toUpperCase()} gzip vs base: ${baseBoot[type].gzipBytes} B -> ${boot[type].gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B); requests ${baseBoot[type].requests} -> ${boot[type].requests}`,
+            );
+          }
+        } else {
+          lines.push(`  ${route} boot vs base: unavailable (base has no route preload templates)`);
+        }
+      }
+    }
+  } else {
+    lines.push("  route boot accounting: unavailable (build has no route preload templates)");
+  }
   if (baseMetrics) {
     for (const area of ["startup", "largest"] as const) {
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
@@ -465,7 +509,7 @@ export function formatControlUiPerformanceReport(
       startupBudgetBaseline.startupJsGzipBytes
   ) {
     lines.push(
-      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${baselineUpdateCommand()}`,
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${BASELINE_UPDATE_COMMAND}`,
     );
   }
   if (violations.length > 0) {
@@ -475,10 +519,6 @@ export function formatControlUiPerformanceReport(
     );
   }
   return lines.join("\n");
-}
-
-function baselineUpdateCommand(): string {
-  return 'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 }
 
 function isIsoDate(value: string): boolean {
@@ -492,7 +532,7 @@ function isIsoDate(value: string): boolean {
 function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStartupBudgetBaseline {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-    const record: Record<string, unknown> = isMetricsRecord(parsed) ? parsed : {};
+    const record: Record<string, unknown> = isRecord(parsed) ? parsed : {};
     const { startupJsGzipBytes, reason, updatedAt } = record;
     if (
       typeof startupJsGzipBytes !== "number" ||
@@ -511,7 +551,7 @@ function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStar
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Cannot read Control UI startup budget baseline ${baselinePath}: ${detail}. Regenerate it with ${baselineUpdateCommand()}.`,
+      `Cannot read Control UI startup budget baseline ${baselinePath}: ${detail}. Regenerate it with ${BASELINE_UPDATE_COMMAND}.`,
       { cause: error },
     );
   }
@@ -587,6 +627,7 @@ export function runControlUiPerformanceCheck(
 function main(argv: string[] = process.argv.slice(2)): void {
   let json = false;
   let reportOnly = false;
+  let distDir: string | undefined;
   let baseDistDir: string | undefined;
   let updateBaseline = false;
   let reason: string | undefined;
@@ -597,12 +638,16 @@ function main(argv: string[] = process.argv.slice(2)): void {
       json = true;
     } else if (arg === "--report-only") {
       reportOnly = true;
-    } else if (arg === "--base-dist") {
+    } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
-        throw new Error("--base-dist requires a directory");
+        throw new Error(`${arg} requires a directory`);
       }
-      baseDistDir = path.resolve(value);
+      if (arg === "--dist") {
+        distDir = path.resolve(value);
+      } else {
+        baseDistDir = path.resolve(value);
+      }
     } else if (arg === "--update-baseline") {
       updateBaseline = true;
     } else if (arg === "--reason") {
@@ -634,10 +679,12 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
-  if (updateBaseline && (reportOnly || baseDistDir)) {
-    throw new Error("--report-only and --base-dist cannot be combined with --update-baseline");
+  if (updateBaseline && (reportOnly || baseDistDir || distDir)) {
+    throw new Error(
+      "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
+    );
   }
-  const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
+  distDir ??= path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
     if (startupJsBytes !== undefined) {
       const currentBaseline = readControlUiStartupBudgetBaseline(
@@ -671,14 +718,14 @@ function main(argv: string[] = process.argv.slice(2)): void {
       "locale config-hint JS assets per locale",
       "startup locale catalog JS assets",
     ]);
+    const metricFiles: Record<string, string> = {
+      "startup JS gzip baseline": "config/control-ui-startup-budget-baseline.json",
+    };
     const limitsFailed = reportLimitViolations(
       result.violations
         .filter((violation) => !artifactContractMetrics.has(violation.metric))
         .map((violation) => ({
-          file:
-            violation.metric === "startup JS gzip baseline"
-              ? "config/control-ui-startup-budget-baseline.json"
-              : "scripts/check-control-ui-performance.mts",
+          file: metricFiles[violation.metric] ?? "scripts/check-control-ui-performance.mts",
           title: "Control UI asset budget",
           message: formatViolation(violation),
         })),

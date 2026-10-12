@@ -52,8 +52,9 @@ beforeEach(() => {
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
 });
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalWebkit) {
@@ -64,27 +65,6 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it("renders the refresh state and invokes its action", async () => {
-    const element = await mount(null);
-    const onRefresh = vi.fn(async () => false);
-    element.refreshRequired = true;
-    element.onRefresh = onRefresh;
-    await element.updateComplete;
-
-    const card = element.querySelector(".sidebar-update-card");
-    expect(card?.getAttribute("role")).toBe("status");
-    expect(card?.getAttribute("aria-live")).toBe("polite");
-    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
-      "Server updated",
-    );
-    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
-      "Refresh for full capabilities",
-    );
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-
-    expect(onRefresh).toHaveBeenCalledOnce();
-  });
-
   it("restores an actionable retry after stale-client recovery cannot reach the Gateway", async () => {
     const element = await mount(null);
     let completeRefresh: ((reloading: boolean) => void) | undefined;
@@ -175,7 +155,15 @@ describe("SidebarUpdateCard", () => {
     element.onUpdate = onUpdate;
     await element.updateComplete;
 
-    expect(element.textContent).toContain("Server updated");
+    const card = element.querySelector(".sidebar-update-card");
+    expect(card?.getAttribute("role")).toBe("status");
+    expect(card?.getAttribute("aria-live")).toBe("polite");
+    expect(element.querySelector(".sidebar-update-card__title")?.textContent).toBe(
+      "Server updated",
+    );
+    expect(element.querySelector(".sidebar-update-card__subtitle")?.textContent).toBe(
+      "Refresh for full capabilities",
+    );
     expect(element.textContent).not.toContain("Update Gateway");
     expect(element.textContent).not.toContain("v2.0.0");
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
@@ -422,9 +410,11 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
 
     element.remove();
+    await Promise.resolve();
+    expect(element.isConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(timersBefore);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
+    expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

@@ -1,25 +1,23 @@
 // @vitest-environment node
 import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionUnreadPatchGuard } from "./unread.ts";
 
-describe("SessionUnreadPatchGuard", () => {
-  it("patches an unread active session only once per unread episode", () => {
-    const guard = new SessionUnreadPatchGuard();
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-    expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
-    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
-  });
+afterEach(() => vi.restoreAllMocks());
 
+describe("SessionUnreadPatchGuard", () => {
   it.each([undefined, new GatewayProtocolRequestError({ code: ErrorCodes.UNAVAILABLE })])(
     "unlatches after a transient or unsent patch so later snapshots retry (%s)",
     (error) => {
       const guard = new SessionUnreadPatchGuard();
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", error);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      guard.settlePatch()(false, error);
+      clock.mockReturnValue(550);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      // Failures for another session leave the current episode latched.
-      guard.patchFailed("agent:main:b");
+      // A successful request remains latched until a confirmed read.
+      guard.settlePatch()(true);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
     },
   );
@@ -29,7 +27,7 @@ describe("SessionUnreadPatchGuard", () => {
     (code) => {
       const guard = new SessionUnreadPatchGuard();
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
+      guard.settlePatch()(false, new GatewayProtocolRequestError({ code }));
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
@@ -37,7 +35,7 @@ describe("SessionUnreadPatchGuard", () => {
       // A confirmed read ends this episode; new activity can be acknowledged.
       expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
       expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
-      guard.patchFailed("agent:main:a", new GatewayProtocolRequestError({ code }));
+      guard.settlePatch()(false, new GatewayProtocolRequestError({ code }));
       guard.beginActivation("agent:main:a");
       expect(guard.shouldPatch("agent:main:a", true, 200)).toBe(true);
     },
@@ -46,6 +44,7 @@ describe("SessionUnreadPatchGuard", () => {
   it("re-acknowledges when new activity flags the open session unread again", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
+    guard.settlePatch()(true);
     // Server confirms the read, then a background run completes.
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
@@ -57,7 +56,7 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
-    guard.patchFailed("agent:main:a");
+    guard.settlePatch()(false);
     expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
   });
 

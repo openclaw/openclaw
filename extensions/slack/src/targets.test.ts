@@ -5,12 +5,7 @@ import {
   formatSlackTarget,
   slackTargetsMatch,
 } from "./target-parsing.js";
-import {
-  normalizeSlackMessagingTarget,
-  parseSlackTarget,
-  resolveSlackChannelId,
-  slackContextTargetsMatch,
-} from "./targets.js";
+import { parseSlackTarget, resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {
@@ -138,12 +133,6 @@ describe("Slack API target ids", () => {
     { id: "team:T123:channel:C08GQH53EJM", expected: "team:T123:channel:C08GQH53EJM" },
   ])("preserves an ambiguous channel target $id", ({ id, expected }) => {
     expect(canonicalizeSlackApiTargetId("channel", id)).toBe(expected);
-  });
-});
-
-describe("normalizeSlackMessagingTarget", () => {
-  it("defaults raw ids to channels", () => {
-    expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
   });
 });
 

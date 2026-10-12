@@ -1,4 +1,3 @@
-// ClickClack plugin module implements guided setup behavior.
 import {
   baseUrlTextInput,
   createStandardChannelSetupStatus,

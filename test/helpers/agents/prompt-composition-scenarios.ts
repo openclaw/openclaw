@@ -9,11 +9,11 @@ import {
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
+import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-prompt-config.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -32,16 +32,13 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers
 /** One turn in a prompt composition scenario. */
 type PromptScenarioTurn = {
   id: string;
-  label: string;
   systemPrompt: string;
   bodyPrompt: string;
-  notes: string[];
 };
 
 /** Multi-turn prompt composition scenario fixture. */
 export type PromptScenario = {
   scenario: string;
-  focus: string;
   expectedStableSystemAfterTurnIds: string[];
   turns: PromptScenarioTurn[];
 };
@@ -72,8 +69,6 @@ function buildCommonSystemParams(workspaceDir: string) {
       defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
-    userTimezone: "America/Los_Angeles",
-    userDate: "2026-03-16",
     toolNames,
   };
 }
@@ -87,15 +82,11 @@ function buildSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   silentReplyPromptMode?: "generic" | "none";
 }) {
-  const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
-    params.workspaceDir,
-  );
+  const { runtimeInfo, toolNames } = buildCommonSystemParams(params.workspaceDir);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: params.extraSystemPrompt,
     runtimeInfo,
-    userTimezone,
-    userDate,
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
@@ -150,7 +141,7 @@ function buildAutoReplySystemPrompt(params: {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
+      ? buildSourceConversationContext({
           sessionCtx: params.sessionCtx,
         })
       : "",
@@ -185,7 +176,7 @@ function buildToolRichSystemPrompt(params: {
   skillsPrompt: string;
   contextFiles: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userDate } = buildCommonSystemParams(params.workspaceDir);
+  const { runtimeInfo } = buildCommonSystemParams(params.workspaceDir);
   const tools = [
     "bash",
     "read",
@@ -199,14 +190,12 @@ function buildToolRichSystemPrompt(params: {
     "x_search",
     "web_fetch",
   ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
-  return buildEmbeddedSystemPrompt({
+  return buildConfiguredAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,
     runtimeInfo,
     tools,
     modelAliasLines: [],
-    userTimezone,
-    userDate,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: { level: "extensive", channel: "Telegram" },
@@ -229,13 +218,10 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
   };
   return {
     scenario: "auto-reply-direct",
-    focus:
-      "Normal direct-chat turns with ids, reply context, think hint, and runtime event body injection",
     expectedStableSystemAfterTurnIds: ["t2", "t3", "t4"],
     turns: [
       {
         id: "t1",
-        label: "Direct turn with reply context",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -256,11 +242,9 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
           },
           body: "Please summarize yesterday's decision.",
         }),
-        notes: ["Direct chat baseline", "Per-message ids and reply context change in body only"],
       },
       {
         id: "t2",
-        label: "Direct turn with new message id",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -277,11 +261,9 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
           },
           body: "Now open the read tool and inspect AGENTS.md.",
         }),
-        notes: ["Steady-state direct turn", "No runtime event"],
       },
       {
         id: "t3",
-        label: "Direct turn with runtime event and think hint",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -299,11 +281,9 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
           eventLine: "System: [t] Model switched.",
           body: "low use tools if needed and tell me which file controls startup behavior",
         }),
-        notes: ["Touches runtime event body path", "Touches think-hint parsing path"],
       },
       {
         id: "t4",
-        label: "Direct turn after runtime event",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -320,7 +300,6 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
           },
           body: "Repeat the startup file path only.",
         }),
-        notes: ["Checks steady-state after event turn"],
       },
     ],
   };
@@ -344,12 +323,10 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   };
   return {
     scenario: "auto-reply-group",
-    focus: "Group chat bootstrap, steady state, and runtime event turns",
     expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
-        label: "First group turn with session-stable intro",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -370,11 +347,9 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Can you investigate this issue?",
         }),
-        notes: ["Group intro belongs to the session-stable system prompt"],
       },
       {
         id: "t2",
-        label: "Steady-state group turn",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -401,11 +376,9 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Give a short update.",
         }),
-        notes: ["Group intro remains stable after turn one"],
       },
       {
         id: "t3",
-        label: "Group turn with runtime event",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -434,7 +407,6 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           eventLine: "System: [t] Node connected.",
           body: "Tell the room whether tools are available.",
         }),
-        notes: ["Runtime event lands in body", "System prompt should stay stable vs t2"],
       },
     ],
   };
@@ -470,13 +442,10 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
   };
   return {
     scenario: "auto-reply-discord-boundary",
-    focus:
-      "Discord inbound body remains one user turn while supplemental context is structured metadata",
     expectedStableSystemAfterTurnIds: [],
     turns: [
       {
         id: "t1",
-        label: "Discord turn with channel metadata",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: baseCtx,
@@ -486,10 +455,6 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
           ctx: baseCtx,
           body,
         }),
-        notes: [
-          "Inbound body should appear once in the model-bound prompt",
-          "Channel metadata should not use raw EXTERNAL_UNTRUSTED_CONTENT wrappers",
-        ],
       },
     ],
   };
@@ -510,13 +475,10 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
   });
   return {
     scenario: "tool-rich-agent-run",
-    focus:
-      "Tool-enabled system prompt with skills, reactions, workspace bootstrap, and a follow-up after fictional tool calls",
     expectedStableSystemAfterTurnIds: ["t2"],
     turns: [
       {
         id: "t1",
-        label: "Tool-rich turn asking for search, read, and file edits",
         systemPrompt,
         bodyPrompt: [
           "Conversation info:",
@@ -526,11 +488,9 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
           "",
           "high Search the workspace, read AGENTS.md, inspect the failing test, and propose a patch.",
         ].join("\n"),
-        notes: ["Touches tool list in system prompt", "Touches high-thinking hint in body"],
       },
       {
         id: "t2",
-        label: "Follow-up after a fictional tool call",
         systemPrompt,
         bodyPrompt: [
           "Conversation info:",
@@ -554,7 +514,6 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
           "",
           "Continue and explain the root cause.",
         ].join("\n"),
-        notes: ["Simulates tool-call-heavy conversation", "System prompt should stay stable"],
       },
     ],
   };
@@ -567,7 +526,7 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
         bootstrapMaxChars: 1_500,
         bootstrapTotalMaxChars: 2_200,
       },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
   } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);
@@ -600,41 +559,34 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
   }
   return {
     scenario: "bootstrap-warning",
-    focus: "Workspace bootstrap truncation notice inside the system prompt",
     expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
-        label: "First truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
           bootstrapTruncationNotice: truncationNotice,
         }),
         bodyPrompt: "hello",
-        notes: ["Notice rides in the system prompt", "Turn body stays the raw user text"],
       },
       {
         id: "t2",
-        label: "Second truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
           bootstrapTruncationNotice: truncationNotice,
         }),
         bodyPrompt: "hello again",
-        notes: ["Stable truncation state keeps the system prompt byte-identical"],
       },
       {
         id: "t3",
-        label: "Third truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
           bootstrapTruncationNotice: truncationNotice,
         }),
         bodyPrompt: "one more turn",
-        notes: ["Body prompts never carry truncation warnings"],
       },
     ],
   };
@@ -704,28 +656,17 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   });
   return {
     scenario: "maintenance-prompts",
-    focus: "Memory flush and post-compaction maintenance prompts",
     expectedStableSystemAfterTurnIds: [],
     turns: [
       {
         id: "t1",
-        label: "Pre-compaction memory flush run",
         systemPrompt: memoryFlushSystemPrompt,
         bodyPrompt: memoryFlushPrompt,
-        notes: [
-          "Writes to memory/2026-03-15.md",
-          "Separate maintenance run; expected to differ from normal user turns",
-        ],
       },
       {
         id: "t2",
-        label: "Post-compaction refresh context run",
         systemPrompt: postCompactionSystemPrompt,
         bodyPrompt: postCompaction,
-        notes: [
-          "Separate maintenance context payload",
-          "Expected to differ from normal user turns",
-        ],
       },
     ],
   };
@@ -760,8 +701,6 @@ async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
 
 /** Create all prompt composition scenarios plus cleanup handles. */
 export async function createPromptCompositionScenarios(): Promise<{
-  workspaceDir: string;
-  warningWorkspaceDir: string;
   scenarios: PromptScenario[];
   cleanup: () => Promise<void>;
 }> {
@@ -776,8 +715,6 @@ export async function createPromptCompositionScenarios(): Promise<{
     await createMaintenanceScenario(workspaceDir),
   ];
   return {
-    workspaceDir,
-    warningWorkspaceDir,
     scenarios,
     cleanup: async () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });

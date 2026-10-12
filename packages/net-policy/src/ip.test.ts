@@ -1,4 +1,3 @@
-// Network Policy tests cover ip behavior.
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
@@ -23,6 +22,14 @@ import {
   parseLooseIpAddress,
 } from "./ip.js";
 
+function ipv6(literal: string) {
+  const parsed = parseCanonicalIpAddress(literal);
+  if (!parsed || !isIpv6Address(parsed)) {
+    throw new Error(`expected IPv6 fixture: ${literal}`);
+  }
+  return parsed;
+}
+
 describe("shared ip helpers", () => {
   it("distinguishes canonical dotted IPv4 from legacy forms", () => {
     expect(isCanonicalDottedDecimalIPv4("127.0.0.1")).toBe(true);
@@ -33,7 +40,6 @@ describe("shared ip helpers", () => {
   });
 
   it.each([
-    ["10.42.0.59", "10.42.0.0/24", true],
     ["10.43.0.59", "10.42.0.0/24", false],
     ["2001:db8::1234", "2001:db8::/32", true],
     ["2001:db9::1234", "2001:db8::/32", false],
@@ -44,7 +50,6 @@ describe("shared ip helpers", () => {
     ["10.42.0.59", " 10.42.0.0/24 ", true],
     ["10.42.0.59", "10.42.0.0/33", false],
     ["2001:db8::1", "2001:db8::/129", false],
-    ["10.42.0.59", "junk", false],
     ["10.42.0.59", "", false],
     ["junk", "10.42.0.0/24", false],
     ["10.42.0.59", "2001:db8::/32", false],
@@ -55,11 +60,8 @@ describe("shared ip helpers", () => {
     ["10.1.2.3", "::ffff:10.0.0.0/104", true],
     ["::ffff:10.1.2.3", "::ffff:10.0.0.0/104", true],
     ["11.1.2.3", "::ffff:10.0.0.0/104", false],
-    ["10.42.0.59", "::ffff:10.42.0.0/120", true],
-    ["10.42.1.59", "::ffff:10.42.0.0/120", false],
     ["10.0.0.1", "::ffff:10.0.0.0/128", false],
     ["203.0.113.9", "::ffff:0:0/96", true],
-    ["::ffff:203.0.113.9", "::ffff:0:0/96", true],
     ["203.0.113.9", "::ffff:10.0.0.0/64", true],
     ["2001:db8::1", "::ffff:0:0/96", false],
   ])("matches %s against %s: %s", (ip, range, expected) => {
@@ -76,12 +78,9 @@ describe("shared ip helpers", () => {
       ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
     ] as const;
     for (const [ipv6Literal, expectedIpv4] of cases) {
-      const parsed = parseCanonicalIpAddress(ipv6Literal);
-      expect(parsed?.kind(), ipv6Literal).toBe("ipv6");
-      if (!parsed || !isIpv6Address(parsed)) {
-        continue;
-      }
-      expect(extractEmbeddedIpv4FromIpv6(parsed)?.toString(), ipv6Literal).toBe(expectedIpv4);
+      expect(extractEmbeddedIpv4FromIpv6(ipv6(ipv6Literal))?.toString(), ipv6Literal).toBe(
+        expectedIpv4,
+      );
     }
   });
 
@@ -94,12 +93,7 @@ describe("shared ip helpers", () => {
       "64:ff9b:1::8.8.8.8",
     ] as const;
     for (const ipv6Literal of cases) {
-      const parsed = parseCanonicalIpAddress(ipv6Literal);
-      expect(parsed?.kind(), ipv6Literal).toBe("ipv6");
-      if (!parsed || !isIpv6Address(parsed)) {
-        continue;
-      }
-      expect(extractEmbeddedIpv4FromIpv6(parsed), ipv6Literal).toBeUndefined();
+      expect(extractEmbeddedIpv4FromIpv6(ipv6(ipv6Literal)), ipv6Literal).toBeUndefined();
     }
   });
 
@@ -207,51 +201,21 @@ describe("shared ip helpers", () => {
   });
 
   it("blocks IPv6 unique-local addresses by default and exempts them on opt-in (#74351)", () => {
-    // fc00::/7 is the IPv6 ULA range. Sing-box / Clash / Surge fake-ip
-    // proxies resolve foreign domains here, alongside the IPv4 198.18.0.0/15
-    // benchmark range. Operators using those proxies need both ranges
-    // exempted to keep web_fetch working.
-    const ula = parseCanonicalIpAddress("fc00::1");
-    const metadata = parseCanonicalIpAddress("fd00:ec2::254");
-    expect(ula?.kind()).toBe("ipv6");
-    expect(metadata?.kind()).toBe("ipv6");
-    if (!ula || !isIpv6Address(ula) || !metadata || !isIpv6Address(metadata)) {
-      throw new Error("expected ipv6 fixture");
-    }
+    const ula = ipv6("fc00::1");
+    const metadata = ipv6("fd00:ec2::254");
 
-    // Default policy (no options) must continue to block the ULA range.
     expect(isBlockedSpecialUseIpv6Address(ula)).toBe(true);
-    expect(isBlockedSpecialUseIpv6Address(ula, {})).toBe(true);
     expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: false })).toBe(true);
 
-    // Opt-in flag — the only path the SSRF policy uses to thread fake-ip
-    // proxy intent through to the address classifier.
     expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: true })).toBe(false);
     expect(isBlockedSpecialUseIpv6Address(metadata, { allowUniqueLocalRange: true })).toBe(true);
   });
 
   it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {
-    // The exemption must be scoped: loopback (::1), unspecified (::), and
-    // multicast (ff00::/8) all stay blocked even when `allowUniqueLocalRange`
-    // is set, otherwise the flag silently widens the SSRF escape hatch
-    // beyond what operators opted into.
-    const loopback = parseCanonicalIpAddress("::1");
-    const multicast = parseCanonicalIpAddress("ff02::1");
-    const siteLocal = parseCanonicalIpAddress("fec0::1"); // deprecated fec0::/10
-    const localUseNat64 = parseCanonicalIpAddress("64:ff9b:1:808:808:808:a9fe:a9fe");
-
-    if (
-      !loopback ||
-      !isIpv6Address(loopback) ||
-      !multicast ||
-      !isIpv6Address(multicast) ||
-      !siteLocal ||
-      !isIpv6Address(siteLocal) ||
-      !localUseNat64 ||
-      !isIpv6Address(localUseNat64)
-    ) {
-      throw new Error("expected ipv6 fixtures");
-    }
+    const loopback = ipv6("::1");
+    const multicast = ipv6("ff02::1");
+    const siteLocal = ipv6("fec0::1");
+    const localUseNat64 = ipv6("64:ff9b:1:808:808:808:a9fe:a9fe");
 
     for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
       expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);

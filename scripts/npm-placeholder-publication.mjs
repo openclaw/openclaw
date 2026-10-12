@@ -16,6 +16,7 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readPublicationArtifactArchive, sha256Digest } from "./lib/actions-artifact-archive.mjs";
+import { compareAscii } from "./lib/canonical-json.mjs";
 import { fetchNpmRegistryPackumentWithRetry } from "./lib/npm-publish-plan.mjs";
 
 const MANIFEST_FILENAME = "npm-placeholder-manifest.json";
@@ -51,10 +52,6 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
  * @property {string} [tempRoot]
  * @property {string} workflowSha
  */
-
-function compareCodeUnits(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function assertTrimmedString(value, label) {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
@@ -271,17 +268,12 @@ function normalizeDistTags(value, packageName) {
   }
   const entries = [];
   for (const [tag, version] of Object.entries(value)) {
-    if (
-      typeof tag !== "string" ||
-      tag.length === 0 ||
-      typeof version !== "string" ||
-      version.length === 0
-    ) {
+    if (tag.length === 0 || typeof version !== "string" || version.length === 0) {
       throw new Error(`${packageName}: npm dist-tags contain an invalid entry.`);
     }
     entries.push([tag, version]);
   }
-  return Object.fromEntries(entries.toSorted(([left], [right]) => compareCodeUnits(left, right)));
+  return Object.fromEntries(entries.toSorted(([left], [right]) => compareAscii(left, right)));
 }
 
 export function classifyRegistryState(params) {
@@ -523,7 +515,7 @@ export async function verifyPlaceholderArtifact(params) {
       allowPath: (name) =>
         basename(name) === name &&
         (name === MANIFEST_FILENAME || /^[A-Za-z0-9._-]+\.tgz$/u.test(name)),
-      maxEntryBytes: (name) => (name === MANIFEST_FILENAME ? MAX_FILE_BYTES : MAX_FILE_BYTES),
+      maxEntryBytes: () => MAX_FILE_BYTES,
     },
     expected,
     maxArchiveBytes: MAX_ARTIFACT_BYTES,

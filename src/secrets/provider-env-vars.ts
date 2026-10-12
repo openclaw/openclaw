@@ -1,5 +1,4 @@
 /** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -75,28 +74,17 @@ function isWorkspacePluginTrustedForProviderEnvVars(
   });
 }
 
-function shouldUsePluginProviderEnvVars(
+function shouldUsePluginProviderMetadata(
   plugin: PluginManifestRecord,
   params: ProviderEnvVarLookupParams | undefined,
+  kind: "env" | "evidence",
 ): boolean {
-  if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins !== false) {
-    return true;
-  }
-  // Env-var candidates are hints for lookup/scrubbing, but callers can opt into the same
-  // workspace trust filter used for stronger auth evidence when probing scoped workspaces.
-  return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function shouldUsePluginProviderAuthEvidence(
-  plugin: PluginManifestRecord,
-  params: ProviderEnvVarLookupParams | undefined,
-): boolean {
-  if (plugin.origin !== "workspace") {
-    return true;
-  }
-  // Auth evidence can point at local credential files, so workspace plugins must be explicitly
-  // trusted through config before their evidence participates in auth discovery.
-  return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
+  // Env names are lookup/scrubbing hints; file-backed evidence always requires workspace trust.
+  return (
+    plugin.origin !== "workspace" ||
+    (kind === "env" && params?.includeUntrustedWorkspacePlugins !== false) ||
+    isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config)
+  );
 }
 
 function appendUniqueAuthEvidence(
@@ -117,13 +105,6 @@ function appendUniqueAuthEvidence(
     }
     seen.add(key);
     bucket.push(entry);
-  }
-}
-
-function appendUniqueProviderRef(target: Set<string>, providerId: string): void {
-  const normalized = normalizeProviderId(providerId);
-  if (normalized) {
-    target.add(normalized);
   }
 }
 
@@ -186,7 +167,7 @@ function resolveManifestProviderUsageAuthEnvVarNames(
   const snapshot = resolveProviderMetadataSnapshot(params);
   return uniqueStrings(
     snapshot.plugins
-      .filter((plugin) => shouldUsePluginProviderEnvVars(plugin, params))
+      .filter((plugin) => shouldUsePluginProviderMetadata(plugin, params, "env"))
       .flatMap((plugin) => Object.values(plugin.providerUsageAuthEnvVars ?? {}).flat()),
   );
 }
@@ -198,7 +179,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
 ): Record<string, string[]> {
   const candidates: Record<string, string[]> = {};
   for (const { plugin, envProviders } of snapshot.owners.providerAuthContributions) {
-    if (envProviders.length === 0 || !shouldUsePluginProviderEnvVars(plugin, params)) {
+    if (envProviders.length === 0 || !shouldUsePluginProviderMetadata(plugin, params, "env")) {
       continue;
     }
     for (const provider of envProviders) {
@@ -237,7 +218,7 @@ function resolveManifestRuntimeAuthFacts(
     if (snapshot.index.plugins.length > 0 && !isEnabled(plugin.id)) {
       continue;
     }
-    if (shouldUsePluginProviderAuthEvidence(plugin, params)) {
+    if (shouldUsePluginProviderMetadata(plugin, params, "evidence")) {
       for (const provider of evidenceProviders) {
         appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
       }
@@ -255,7 +236,7 @@ function resolveManifestRuntimeAuthFacts(
   // Fallback refs keep insertion order; sorting would change one-pass alias-chain expansion.
   for (const [alias, target] of aliasEntries) {
     if (refs.has(target)) {
-      appendUniqueProviderRef(refs, alias);
+      refs.add(alias);
     }
   }
   return {
@@ -333,7 +314,7 @@ export function getProviderEnvVarsCore(
   const envVars = Object.hasOwn(providerEnvVars, providerId)
     ? providerEnvVars[providerId]
     : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
+  return envVars ? [...envVars] : [];
 }
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must

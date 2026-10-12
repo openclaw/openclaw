@@ -12,12 +12,6 @@ export type ExecutionOwnerBindingResult =
   | "mismatch"
   | "missing";
 
-export function isRetainedExecutionOwnerBinding(
-  result: ExecutionOwnerBindingResult | undefined,
-): result is "bound" | "already-bound" {
-  return result === "bound" || result === "already-bound";
-}
-
 export type ExecutionOwnerBinding = Readonly<{
   contextId: string;
   executionId: string;

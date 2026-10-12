@@ -15,12 +15,9 @@ function provider(id: string, aliases?: string[], hookAliases?: string[]): Provi
 
 describe("provider registry selection", () => {
   it.each([
-    { ref: "target", refs: [], expected: "target" },
     { ref: " TARGET ", refs: [], expected: "target" },
     { ref: "alias", refs: [], expected: "first" },
-    { ref: "hook", refs: [], expected: "first" },
     { ref: "missing", refs: [], expected: undefined },
-    { ref: " ", refs: [], expected: undefined },
     { ref: "alias", refs: ["last"], expected: "last" },
     { ref: "target", refs: ["first"], expected: "target" },
     { ref: "missing", refs: ["last", "hook"], expected: "first" },

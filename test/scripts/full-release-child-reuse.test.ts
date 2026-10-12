@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { releaseChildSpec } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
+import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
@@ -26,16 +28,18 @@ function jsonDigest(value: unknown) {
   return digest(JSON.stringify(canonicalizeJsonValue(value)));
 }
 
-async function fixture(candidate = false) {
-  const role = candidate ? "pluginPrereleaseCandidate" : "normalCi";
-  const workflow = candidate ? "plugin-prerelease.yml" : "ci.yml";
-  const dispatchId = `full-release-validation-77-1${candidate ? "-plugin-prerelease-candidate" : "-ci"}`;
-  const inputs: Record<string, string> = candidate
-    ? { target_ref: TARGET, phase: "candidate", candidate_artifact_json: '{"id":"801"}' }
-    : { target_ref: TARGET, release_scope: "full" };
+async function fixture(role = "normalCi", dispatchInputs?: Record<string, string>) {
+  const { workflow, suffix, displayName } = releaseChildSpec(role);
+  const dispatchId = `full-release-validation-77-1${suffix}`;
+  const inputs: Record<string, string> =
+    dispatchInputs ??
+    (role === "pluginPrereleaseCandidate"
+      ? { target_ref: TARGET, phase: "candidate", candidate_artifact_json: '{"id":"801"}' }
+      : { target_ref: TARGET, release_scope: "full" });
   const request = {
     repository: REPOSITORY,
     targetSha: TARGET,
+    workflowSha: TOOLING,
     role,
     inputs,
   };
@@ -44,7 +48,7 @@ async function fixture(candidate = false) {
     run_attempt: 1,
     event: "workflow_dispatch",
     path: `.github/workflows/${workflow}@refs/heads/main`,
-    display_title: `${candidate ? "Plugin Prerelease" : "CI"} ${dispatchId}`,
+    display_title: `${displayName} ${dispatchId}`,
     head_branch: "main",
     head_sha: TOOLING,
     status: "completed",
@@ -144,9 +148,14 @@ async function fixture(candidate = false) {
   const reads: string[] = [];
   const deps = {
     now: NOW,
+    report: vi.fn<(message: string) => void>(),
     async github(this: void, endpoint: string): Promise<unknown> {
       reads.push(endpoint);
-      if (endpoint === `actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=30`) {
+      if (
+        /^actions\/workflows\/[^/]+\/runs\?event=workflow_dispatch&per_page=(30|100)$/u.test(
+          endpoint,
+        )
+      ) {
         return { workflow_runs: runInventory };
       }
       if (endpoint === "actions/runs/101") {
@@ -160,6 +169,9 @@ async function fixture(candidate = false) {
       }
       if (endpoint.startsWith("actions/runs/101/artifacts?")) {
         return { total_count: 1, artifacts: [artifact] };
+      }
+      if (/^actions\/runs\/[0-9]+\/artifacts\?/u.test(endpoint)) {
+        return { total_count: 0, artifacts: [] };
       }
       const attempt =
         /^actions\/runs\/101\/attempts\/([1-9][0-9]*)\/jobs\?per_page=100&page=1$/u.exec(endpoint);
@@ -193,15 +205,123 @@ async function fixture(candidate = false) {
 }
 
 describe("independent release child reuse", () => {
+  it("accepts candidate-owned evidence outside main ancestry", async () => {
+    const data = await fixture();
+    const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;
+    data.request.workflowSha = TARGET;
+    data.run.head_sha = TARGET;
+    data.run.head_branch = workflowRef;
+    data.run.path = `${data.run.path.split("@", 1)[0]}@refs/heads/${workflowRef}`;
+    data.parent.head_sha = TARGET;
+    data.parent.head_branch = workflowRef;
+    for (const job of data.jobs) {
+      job.head_sha = TARGET;
+    }
+    data.receipt.workflowSha = TARGET;
+    data.receipt.workflowRef = workflowRef;
+    data.artifact.workflow_run.head_sha = TARGET;
+    data.lineage.status = "diverged";
+    await data.seal();
+
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    await expect(
+      validateReusableReleaseChild(selection!, data.request, data.deps),
+    ).resolves.toMatchObject({ receipt: { workflowSha: TARGET, workflowRef } });
+    expect(data.reads).not.toContain(`compare/${TARGET}...main?per_page=1`);
+  });
+
   it.each([
-    { status: "completed", conclusion: "failure" },
-    { status: "completed", conclusion: "cancelled" },
-    { status: "in_progress", conclusion: null },
-  ])(
-    "reuses green children from $status/$conclusion parents without a manifest",
-    async (parentState) => {
+    {
+      role: "productPerformance",
+      workflow: "openclaw-performance.yml",
+      args: [
+        "-f",
+        `target_ref=${TARGET}`,
+        "-f",
+        "profile=release",
+        "-f",
+        "repeat=3",
+        "-f",
+        "publish_reports=false",
+      ],
+    },
+  ])("matches GitHub's omitted empty defaults for $role", async ({ role, workflow, args }) => {
+    const inputs = releaseChildDispatchInputs(
+      readFileSync(`.github/workflows/${workflow}`, "utf8"),
+      args,
+    );
+    const data = await fixture(
+      role,
+      Object.fromEntries(Object.entries(inputs).filter(([, value]) => value !== "")),
+    );
+    data.request.inputs = inputs;
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
+    expect(selection!.inputs).toEqual(data.receipt.inputs);
+    if (role === "productPerformance") {
+      expect(selection!.inputs.mode).toBe("kova");
+    }
+    await expect(
+      validateReusableReleaseChild({ ...selection, inputs }, data.request, data.deps),
+    ).resolves.toMatchObject({ receipt: { inputs: data.receipt.inputs } });
+    Object.assign(data.receipt.inputs, inputs);
+    await data.seal();
+    data.request.inputs = selection!.inputs;
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
+  });
+
+  it.each([
+    { workflowSha: "", reason: "current parent workflow SHA is invalid" },
+    { workflowSha: "c".repeat(40), reason: "same tooling is required" },
+  ])("rejects invalid current-parent tooling: $reason", async ({ workflowSha, reason }) => {
+    const data = await fixture();
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    data.request.workflowSha = workflowSha;
+    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
+      reason,
+    );
+    if (!workflowSha) {
+      await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
+      return;
+    }
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+    expect(data.deps.report).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `run 101 ${data.run.display_title}: rejected: tooling ${TOOLING} differs from current parent ${"c".repeat(40)}`,
+      ),
+    );
+    expect(data.deps.report).toHaveBeenCalledWith(
+      expect.stringContaining('evaluated 0; dispatching fresh work; skipped {"other tooling":1}'),
+    );
+  });
+
+  it("finds the target after other-target runs without spending full validations", async () => {
+    const data = await fixture();
+    data.runInventory.unshift(
+      ...Array.from({ length: 6 }, (_, index) => ({ ...data.run, id: 200 + index })),
+    );
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection?.runId).toBe("101");
+    expect(data.reads[0]).toContain("per_page=100");
+    expect(data.deps.report).toHaveBeenCalledWith(
+      expect.stringContaining('scanned 7 runs, evaluated 1; skipped {"target receipt absent":6}'),
+    );
+  });
+  it.each(["active parent", "publisher cleanup failure"])(
+    "reuses sealed green work despite %s",
+    async (state) => {
       const data = await fixture();
-      Object.assign(data.parent, parentState);
+      if (state === "active parent") {
+        Object.assign(data.parent, { status: "in_progress", conclusion: null });
+      } else {
+        data.jobs[2]!.conclusion = "failure";
+        data.jobs[2]!.steps.push({
+          name: "Post cleanup",
+          status: "completed",
+          conclusion: "failure",
+        });
+      }
       const selection = await discoverReusableReleaseChild(data.request, data.deps);
       expect(selection).toMatchObject({
         role: "normalCi",
@@ -217,7 +337,17 @@ describe("independent release child reuse", () => {
   );
 
   it("carries green workload jobs through publisher-only failed-job retries", async () => {
-    const data = await fixture();
+    const data = await fixture("pluginPrereleaseIndependent", {
+      allow_frozen_target_scenario_omissions: "true",
+      expected_sha: TARGET,
+      extension_test_exclude_patterns_json: "[]",
+      full_release_validation: "true",
+      node_test_exclude_patterns_json: "[]",
+      phase: "independent",
+      target_context_ref: "release/2026.9.7",
+      target_ref: TARGET,
+    });
+    data.request.inputs.candidate_artifact_json = "";
     data.jobs[2]!.conclusion = "failure";
     data.jobs[2]!.steps[2]!.conclusion = "failure";
     data.run.run_attempt = 2;
@@ -233,7 +363,7 @@ describe("independent release child reuse", () => {
         ),
       },
     ]);
-    data.artifact.name = `full-release-child-evidence-${TARGET}-normalCi-101-2`;
+    data.artifact.name = `full-release-child-evidence-${TARGET}-pluginPrereleaseIndependent-101-2`;
     data.receipt.effectiveRunAttempt = 2;
     data.receipt.observedRunAttempts = [1, 2];
     data.receipt.triggeringActor = "release-maintainer";
@@ -245,20 +375,22 @@ describe("independent release child reuse", () => {
     });
     await data.seal();
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).not.toBeNull();
     expect(selection?.runAttempt).toBe(2);
+    expect(selection?.inputs).not.toHaveProperty("candidate_artifact_json");
     expect(
       (await validateReusableReleaseChild(selection, data.request, data.deps)).receipt.jobs,
     ).toEqual(data.receipt.jobs);
   });
 
-  it("accepts successful immutable seal/upload steps despite publisher cleanup failure", async () => {
-    const data = await fixture();
-    data.jobs[2]!.conclusion = "failure";
-    data.jobs[2]!.steps.push({ name: "Post cleanup", status: "completed", conclusion: "failure" });
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
-  });
-
-  it.each([
+  it.each<{
+    name: string;
+    mutate: (
+      data: Awaited<ReturnType<typeof fixture>>,
+      selection: NonNullable<Awaited<ReturnType<typeof discoverReusableReleaseChild>>>,
+    ) => void | Promise<void>;
+    error: string;
+  }>([
     {
       name: "non-main-ancestor tooling",
       mutate: (data: Awaited<ReturnType<typeof fixture>>) => {
@@ -357,72 +489,66 @@ describe("independent release child reuse", () => {
       },
       error: "source parent origin",
     },
+    {
+      name: "canonical receipt mutation with updated artifact digest",
+      mutate: async (data, selection) => {
+        data.receipt.sourceParentRunId = "78";
+        await data.seal();
+        Object.assign(selection.artifact, {
+          digest: data.artifact.digest,
+          sizeInBytes: data.artifact.size_in_bytes,
+        });
+      },
+      error: "receipt digest changed",
+    },
+    {
+      name: "downloaded bytes differing from the selected digest",
+      mutate: (data) => {
+        data.deps.downloadArchive = async () => ({
+          artifactMetadata: data.artifact,
+          archiveBytes: Buffer.alloc(data.artifact.size_in_bytes),
+        });
+      },
+      error: "archive bytes differ",
+    },
+    {
+      name: "rerun started during artifact verification",
+      mutate: (data) => {
+        const github = data.deps.github;
+        data.deps.github = async (endpoint) => {
+          if (endpoint === "actions/runs/77/attempts/1") {
+            data.run.run_attempt = 2;
+          }
+          return github(endpoint);
+        };
+      },
+      error: "current successful attempt",
+    },
   ])("rejects $name at revalidation and discovery", async ({ mutate, error }) => {
     const data = await fixture();
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     expect(selection).not.toBeNull();
-    mutate(data);
+    await mutate(data, selection!);
     await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
       error,
     );
     expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
   });
 
-  it.each([
-    { target_ref: "c".repeat(40), release_scope: "full" },
-    { target_ref: TARGET, release_scope: "npm-beta" },
-    { target_ref: TARGET, release_scope: "" },
-  ])("rejects different exact dispatch inputs %#", async (inputs) => {
-    const data = await fixture();
-    expect(await discoverReusableReleaseChild({ ...data.request, inputs }, data.deps)).toBeNull();
-  });
-
-  it.each(['{ "id": "801" }', '{"id":"802"}', ""])(
-    "requires the exact candidate descriptor bytes %s",
-    async (candidate_artifact_json) => {
-      const data = await fixture(true);
-      expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
-      expect(
-        await discoverReusableReleaseChild(
-          { ...data.request, inputs: { ...data.request.inputs, candidate_artifact_json } },
-          data.deps,
-        ),
-      ).toBeNull();
-    },
-  );
-
-  it("rejects a canonical receipt mutation even when its artifact digest is updated", async () => {
-    const data = await fixture();
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    data.receipt.sourceParentRunId = "78";
-    await data.seal();
-    await expect(
-      validateReusableReleaseChild(
-        {
-          ...selection,
-          artifact: {
-            ...selection!.artifact,
-            digest: data.artifact.digest,
-            sizeInBytes: data.artifact.size_in_bytes,
-          },
-        },
-        data.request,
+  it.each<{ role: string; inputs: Record<string, string> }>([
+    { role: "normalCi", inputs: { target_ref: "c".repeat(40) } },
+    { role: "normalCi", inputs: { release_scope: "" } },
+    { role: "pluginPrereleaseCandidate", inputs: { candidate_artifact_json: '{ "id": "801" }' } },
+    { role: "pluginPrereleaseCandidate", inputs: { candidate_artifact_json: "" } },
+  ])("requires exact dispatch input bytes for $role: $inputs", async ({ role, inputs }) => {
+    const data = await fixture(role);
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
+    expect(
+      await discoverReusableReleaseChild(
+        { ...data.request, inputs: { ...data.request.inputs, ...inputs } },
         data.deps,
       ),
-    ).rejects.toThrow("receipt digest changed");
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-  });
-
-  it("rejects downloaded bytes that do not match the selected artifact digest", async () => {
-    const data = await fixture();
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    data.deps.downloadArchive = async () => ({
-      artifactMetadata: data.artifact,
-      archiveBytes: Buffer.alloc(data.artifact.size_in_bytes),
-    });
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "archive bytes differ",
-    );
+    ).toBeNull();
   });
 
   it("reads binary archives through configured gh auth and rejects failed transfers", async () => {
@@ -454,31 +580,60 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
     ).rejects.toThrow("Command failed");
   });
 
-  it("rejects a rerun started while artifact verification was in flight", async () => {
+  it.each([
+    { limit: "current parent", probes: 0, summary: '"current parent":1' },
+    {
+      limit: "candidates",
+      probes: 5,
+      summary:
+        'scanned 41 runs, evaluated 5; dispatching fresh work; skipped {"budget exhausted":36}',
+    },
+    {
+      limit: "absent receipts",
+      probes: 40,
+      summary: `no reusable normalCi child for ${TARGET}: scanned 100 runs, evaluated 0; dispatching fresh work; skipped {"not-green":1,"other role/suffix":2,"target receipt absent":40,"budget exhausted":57}`,
+    },
+    { limit: "deadline", probes: 0, summary: '"budget exhausted":1' },
+  ])("bounds discovery by $limit", async ({ limit, probes, summary }) => {
     const data = await fixture();
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    const github = data.deps.github;
-    data.deps.github = async (endpoint) => {
-      if (endpoint === "actions/runs/77/attempts/1") {
-        data.run.run_attempt = 2;
+    const deadlineMs = Date.now() + 120_000;
+    const clock = limit === "deadline" ? vi.spyOn(Date, "now") : undefined;
+    try {
+      if (limit === "candidates") {
+        data.runInventory.push(...Array.from({ length: 40 }, () => ({ ...data.run })));
+        data.lineage.status = "diverged";
+      } else if (limit === "absent receipts") {
+        data.runInventory.unshift(
+          { ...data.run, conclusion: "failure" },
+          { ...data.run, display_title: "Other role" },
+          { ...data.run, display_title: "CI full-release-validation-77-1-other-suffix" },
+          ...Array.from({ length: 100 }, (_, index) => ({ ...data.run, id: 200 + index })),
+        );
+      } else if (limit === "deadline") {
+        const github = data.deps.github;
+        data.deps.github = async (endpoint) => {
+          const result = await github(endpoint);
+          clock!.mockReturnValue(deadlineMs);
+          return result;
+        };
       }
-      return github(endpoint);
-    };
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "current successful attempt",
-    );
-  });
-
-  it("bounds discovery and skips explicitly excluded runs", async () => {
-    const data = await fixture();
-    expect(
-      await discoverReusableReleaseChild({ ...data.request, excludeRunId: "77" }, data.deps),
-    ).toBeNull();
-    expect(data.reads).toHaveLength(1);
-    data.reads.length = 0;
-    data.runInventory.push(...Array.from({ length: 40 }, () => ({ ...data.run })));
-    data.lineage.status = "diverged";
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-    expect(data.reads.filter((endpoint) => endpoint.includes("/artifacts?"))).toHaveLength(5);
+      expect(
+        await discoverReusableReleaseChild(
+          { ...data.request, excludeRunId: limit === "current parent" ? "77" : undefined },
+          { ...data.deps, deadlineMs },
+        ),
+      ).toBeNull();
+      expect(data.reads.filter((endpoint) => endpoint.includes("/artifacts?"))).toHaveLength(
+        probes,
+      );
+      if (probes === 0) {
+        expect(data.reads).toHaveLength(1);
+      }
+      expect(data.deps.report).toHaveBeenCalledWith(
+        limit === "absent receipts" ? summary : expect.stringContaining(summary),
+      );
+    } finally {
+      clock?.mockRestore();
+    }
   });
 });

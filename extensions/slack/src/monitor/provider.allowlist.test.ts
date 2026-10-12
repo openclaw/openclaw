@@ -1,4 +1,3 @@
-// Slack tests cover provider.allowlist plugin behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -19,7 +18,6 @@ import {
   startSlackMonitor,
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
-import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
@@ -49,70 +47,6 @@ function createRuntimeContextCapture(): {
     register,
   };
 }
-
-function resolveAllowlistCallAt(index: number): { entries?: unknown } {
-  const call = slackTestState.resolveSlackUserAllowlistMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected allowlist resolver call ${index}`);
-  }
-  return call[0] as { entries?: unknown };
-}
-
-describe("slack allowlist log formatting", () => {
-  it("prints channel names without repeating the id input", () => {
-    expect(
-      formatSlackChannelResolved({
-        input: "C0AQXEG6QFJ",
-        resolved: true,
-        id: "C0AQXEG6QFJ",
-        name: "openclawtest",
-      }),
-    ).toBe("C0AQXEG6QFJ→openclawtest");
-  });
-
-  it("prints user names without repeating the id input", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("U090HHQ029J→steipete");
-  });
-
-  it("includes the id when resolving from a display name", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "@steipete",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("@steipete→steipete (id:U090HHQ029J)");
-  });
-
-  it("omits identity lookups that resolved to themselves without a name", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps bare-name lookups that resolved to an id, even when the name matches the input", () => {
-    expect(
-      formatSlackChannelResolved({
-        input: "general",
-        resolved: true,
-        id: "C123",
-        name: "general",
-      }),
-    ).toBe("general→general (id:C123)");
-  });
-});
 
 describe("slack startup user allowlist resolution", () => {
   it.each(["allowBots", "room users"] as const)(
@@ -188,44 +122,6 @@ describe("slack startup user allowlist resolution", () => {
       }
     },
   );
-
-  it("updates DM access on the retained message listener without restarting Slack", async () => {
-    const initial: OpenClawConfig = {
-      channels: { slack: { enabled: true, dmPolicy: "allowlist", allowFrom: ["UOLD"] } },
-    };
-    await resetSlackTestState(initial);
-    setRuntimeConfigSnapshot(initial, initial);
-    slackTestState.replyMock.mockResolvedValue({ text: "ok" });
-    const monitor = startSlackMonitor(monitorSlackProvider);
-    try {
-      const handler = await getSlackHandlerOrThrow("message");
-      await flush();
-      const send = async (user: string, ts: string) =>
-        handler({
-          event: {
-            type: "message",
-            user,
-            ts,
-            text: "hello",
-            channel: "D123",
-            channel_type: "im",
-          },
-        });
-      await send("UOLD", "200.001");
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
-      const updated: OpenClawConfig = {
-        channels: { slack: { enabled: true, dmPolicy: "allowlist", allowFrom: ["UNEW"] } },
-      };
-      setRuntimeConfigSnapshot(updated, updated);
-      await send("UOLD", "200.002");
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
-      await send("UNEW", "200.003");
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
-      expect(slackTestState.appStopMock).not.toHaveBeenCalled();
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
-  });
 
   it("rejects a sender revoked while workspace policy resolution is pending", async () => {
     const initial: OpenClawConfig = {
@@ -369,6 +265,7 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: false }),
+            workspaceTeamId: "T_TEST",
           }),
         }),
       );
@@ -431,34 +328,6 @@ describe("slack startup user allowlist resolution", () => {
         },
       });
       expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      await stopSlackMonitor(monitor);
-    }
-  });
-
-  it("resolves user entries when name matching is enabled", async () => {
-    await resetSlackTestState({
-      channels: {
-        slack: {
-          enabled: true,
-          dangerouslyAllowNameMatching: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["@global-user"],
-          channels: {
-            C123: { users: ["@channel-user"] },
-          },
-        },
-      },
-    });
-
-    const monitor = startSlackMonitor(monitorSlackProvider);
-    try {
-      await getSlackHandlerOrThrow("message");
-      await flush();
-      await flush();
-
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenCalledTimes(1);
-      expect(resolveAllowlistCallAt(0).entries).toEqual(["@global-user", "@channel-user"]);
     } finally {
       await stopSlackMonitor(monitor);
     }

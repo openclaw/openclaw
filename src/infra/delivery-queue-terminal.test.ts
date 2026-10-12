@@ -8,9 +8,7 @@ import {
 import { pruneDeliveryQueueTombstones } from "./delivery-queue-sqlite-bound.js";
 import {
   countFailedDeliveryQueueEntries,
-  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
@@ -20,7 +18,11 @@ import {
   terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -263,7 +265,7 @@ describe("delivery queue pending terminal transition", () => {
             .map((row) => row.detail)
             .join("\n");
           expect(plan).toMatch(
-            /SEARCH delivery_queue_entries USING INDEX \S+ \(queue_name=\? AND status=\?\)/,
+            /SEARCH delivery_queue_entries USING INDEX \S+ \((?:queue_name=\? AND status=\?|status=\? AND queue_name=\?)\)/,
           );
           expect(plan).not.toContain("SCAN delivery_queue_entries");
         } else {

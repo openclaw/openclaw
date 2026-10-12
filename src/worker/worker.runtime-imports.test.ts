@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { workerImportRuntimeEntrypoints } from "./worker-import-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -14,18 +13,18 @@ const runtimeUrl = resolveRuntimeWorkerUrl(workerImportRuntimeEntrypoints.runtim
 
 describe("worker runtime imports during admission", () => {
   it.each([
-    ["rejected", "preserves rejected hello and joins both imports after one rejects"],
-    ["cancelled", "preserves cancellation and joins both imports after one rejects"],
-    ["import-error", "surfaces import failure after accepted hello and joins the pending import"],
-    ["accepted", "waits for accepted hello before constructing the stream or running the turn"],
+    ["rejected", "rejects hello without preparing the turn runtime"],
+    ["cancelled", "cancels hello without preparing the turn runtime"],
+    ["import-error", "surfaces import failure and joins pending imports and workspace reads"],
+    ["accepted", "prepares runtimes and workspace files after accepted hello before the turn"],
   ])("%s: %s", async (mode) => {
     const root = tempDirs.make("worker-runtime-imports-");
     const workspace = path.join(root, "workspace");
     await mkdir(workspace);
     const result = await runNodeScript(
-      [
+      (workerArgv) => [
         "--unhandled-rejections=strict",
-        ...resolveRuntimeWorkerArgv(runtimeUrl, resolveTestNodeExecPath()).slice(0, -1),
+        ...workerArgv(runtimeUrl).slice(0, -1),
         fileURLToPath(new URL("./worker.runtime-imports.test-support.mjs", import.meta.url)),
         mode,
         workspace,

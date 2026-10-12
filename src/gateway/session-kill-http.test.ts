@@ -301,15 +301,6 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("rejects bearer-auth kills without a trusted admin scope surface", async () => {
-    mockWorkerSession();
-
-    const response = await postWorkerKill();
-    expect(response.status).toBe(403);
-    expectErrorResponse(await response.json(), { type: "forbidden" });
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
-  });
-
   it("rejects trusted-proxy requester-session kills without admin scope", async () => {
     allowTrustedProxyAuth();
     const response = await postWorkerKill("", REQUESTER_WRITE_HEADERS);

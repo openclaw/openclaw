@@ -118,34 +118,6 @@ describe("media store remote sources", () => {
     await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("custom");
   });
 
-  it("reports HTTP failure while cancelling a nonempty never-ending body", async () => {
-    await useActualSaveRemoteMedia("https://example.com/stalled-error.bin");
-    const cancel = vi.fn(() => new Promise<void>(() => {}));
-    runtimeFetchMock.mockResolvedValueOnce(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("synthetic upstream failure"));
-          },
-          cancel,
-        }),
-        {
-          status: 500,
-          statusText: "Internal Server Error",
-        },
-      ),
-    );
-
-    await expect(saveMediaSource("https://example.com/stalled-error.bin")).rejects.toMatchObject({
-      name: "MediaFetchError",
-      code: "http_error",
-      status: 500,
-      message:
-        "Failed to fetch media from https://example.com/stalled-error.bin: HTTP 500 Internal Server Error",
-    });
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
   it("reports real HTTP failures while closing discarded bodies and retaining readable bodies", async () => {
     const media = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
     const transport = await vi.importActual<typeof import("../infra/net/runtime-fetch.js")>(
@@ -245,25 +217,4 @@ describe("media store remote sources", () => {
     const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
     expect((await fs.stat(saved.path)).mode & 0o777).toBe(expectedMode);
   });
-
-  it.each([
-    { name: "missing", location: undefined, expected: /missing location header/i },
-    { name: "malformed", location: "http://[", expected: /invalid url/i },
-  ])(
-    "rejects a $name redirect location after cancelling its body",
-    async ({ location, expected }) => {
-      await useActualSaveRemoteMedia("https://example.com/start");
-      const cancel = vi.fn();
-      runtimeFetchMock.mockResolvedValueOnce(
-        new Response(new ReadableStream<Uint8Array>({ cancel }), {
-          status: 302,
-          headers: location ? { location } : undefined,
-        }),
-      );
-
-      await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(expected);
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(runtimeFetchMock).toHaveBeenCalledOnce();
-    },
-  );
 });

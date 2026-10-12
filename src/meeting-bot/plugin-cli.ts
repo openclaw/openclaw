@@ -74,7 +74,7 @@ function joinPayload(url: string, options: JoinOptions): Record<string, unknown>
     ...(options.transport ? { transport: parseMeetingCliTransport(options.transport) } : {}),
     ...(options.mode ? { mode: parseMeetingCliMode(options.mode) } : {}),
     ...(options.message ? { message: options.message } : {}),
-    ...(options.timeoutMs ? { timeoutMs: parseTimeout(options.timeoutMs) } : {}),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: parseTimeout(options.timeoutMs) }),
   };
 }
 
@@ -155,7 +155,7 @@ export function registerMeetingPluginCli(options: MeetingCliOptions): void {
     ["test-listen", "testListen", options.descriptions.testListen],
   ] as const) {
     addJoinOptions(command(`${name} <url>`, description))
-      .option("--timeout-ms <ms>", "probe timeout in milliseconds")
+      .option("--timeout-ms <ms>", "check timeout in milliseconds")
       .action(async (url: string, joinOptions: JoinOptions) => {
         await call(method(action), joinPayload(url, joinOptions));
       });

@@ -7,29 +7,21 @@ import {
   mergeArgumentChurnActivity,
   recordDiagnosticActivityProgress,
 } from "./diagnostic-argument-churn-activity.js";
-import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
 } from "./diagnostic-repeated-request-activity.js";
-import type {
-  DiagnosticRecoveryEmbeddedRun,
-  DiagnosticRecoveryModelCall,
-  DiagnosticRecoveryTool,
+import {
+  queueRecoveryCutoffCleanup,
+  shouldIgnoreRecoveredOwnerStartEvent,
+  type DiagnosticRecoveryActivity,
 } from "./diagnostic-run-activity-recovery.js";
 
 export type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
+  DiagnosticRepeatedRequestActivity &
+  DiagnosticRecoveryActivity & {
     sessionId?: string;
     sessionKey?: string;
-    activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
-    activeTools: Map<string, DiagnosticRecoveryTool>;
-    activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
-    activeCoreModelCalls: Map<
-      CoreModelRequestOwnerGeneration,
-      Map<string, DiagnosticRecoveryModelCall>
-    >;
-    recoveredOwnerStartEventCutoffs: Map<string, number>;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
@@ -52,7 +44,30 @@ export type DiagnosticOwnerRegistration = {
 
 export const activityByRef = new Map<string, SessionActivity>();
 export const activityByRunId = new Map<string, SessionActivity>();
-export const embeddedRunIndex = createDiagnosticEmbeddedRunIndex(activityByRunId);
+export const embeddedRunIndex = {
+  remove(activity: SessionActivity, workKey: string): void {
+    const embeddedRun = activity.activeEmbeddedRuns.get(workKey);
+    if (!embeddedRun) {
+      return;
+    }
+    activity.activeEmbeddedRuns.delete(workKey);
+    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
+      (candidate) => candidate.runId === embeddedRun.runId,
+    );
+    if (!runIdStillActive && activityByRunId.get(embeddedRun.runId) === activity) {
+      activityByRunId.delete(embeddedRun.runId);
+    }
+  },
+  clear(activity: SessionActivity): void {
+    // Every local owner is leaving; only retain indexes now owned by another activity.
+    for (const { runId } of activity.activeEmbeddedRuns.values()) {
+      if (activityByRunId.get(runId) === activity) {
+        activityByRunId.delete(runId);
+      }
+    }
+    activity.activeEmbeddedRuns.clear();
+  },
+};
 export const activeDiagnosticOwners = new Map<
   CoreModelRequestOwnerGeneration,
   DiagnosticOwnerRegistration
@@ -72,27 +87,24 @@ export function sessionRefs(params: { sessionId?: string; sessionKey?: string })
 
 export function registerSessionActivityRefs(
   activity: SessionActivity,
-  params: { sessionId?: string; sessionKey?: string; runId?: string },
+  params: { sessionId?: string; sessionKey?: string; runId?: string; seq?: number },
 ): void {
   activity.sessionId ??= params.sessionId;
   activity.sessionKey ??= params.sessionKey;
   for (const ref of sessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
-  if (params.runId) {
+  if (params.runId && !shouldIgnoreRecoveredOwnerStartEvent(activity, params)) {
     activityByRunId.set(params.runId, activity);
   }
 }
 
 function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
-  for (const [ref, activity] of activityByRef) {
-    if (activity === source) {
-      activityByRef.set(ref, target);
-    }
-  }
-  for (const [runId, activity] of activityByRunId) {
-    if (activity === source) {
-      activityByRunId.set(runId, target);
+  for (const index of [activityByRef, activityByRunId]) {
+    for (const [key, activity] of index) {
+      if (activity === source) {
+        index.set(key, target);
+      }
     }
   }
 }
@@ -127,6 +139,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
       Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
     );
   }
+  queueRecoveryCutoffCleanup(target);
   const sourceProgressIsNewer =
     source.lastProgressSequence !== undefined
       ? target.lastProgressSequence === undefined ||
@@ -146,15 +159,10 @@ export function resolveSessionActivity(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
+  seq?: number;
   create?: boolean;
 }): SessionActivity | undefined {
-  let activity: SessionActivity | undefined;
-  if (params.runId) {
-    const byRun = activityByRunId.get(params.runId);
-    if (byRun) {
-      activity = byRun;
-    }
-  }
+  let activity = params.runId ? activityByRunId.get(params.runId) : undefined;
 
   for (const ref of sessionRefs(params)) {
     const byRef = activityByRef.get(ref);

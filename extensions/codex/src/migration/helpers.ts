@@ -1,11 +1,8 @@
-// Codex helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { tryReadJson } from "@openclaw/fs-safe/json";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function isDirectory(filePath: string | undefined): Promise<boolean> {
   if (!filePath) {

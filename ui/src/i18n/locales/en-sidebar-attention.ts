@@ -16,7 +16,7 @@ const enSidebarAttention = {
       requesting: "Requesting administrator access…",
       requestingAction: "Requesting…",
       pending:
-        "Approve this browser by running openclaw devices on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
+        "Approve this browser by running {command} on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
       retry: "Retry",
       cancel: "Cancel",
       rejected: "The administrator access request was rejected.",

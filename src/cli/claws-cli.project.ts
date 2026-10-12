@@ -1,4 +1,3 @@
-import { tmpdir } from "node:os";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
@@ -18,6 +17,7 @@ import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import {
   emitClawFailure,
@@ -31,11 +31,6 @@ import type {
   ClawsDevOptions,
   ClawsValidateOptions,
 } from "./claws-cli.js";
-
-type PreparedDev = {
-  build: Awaited<ReturnType<typeof buildClawProject>>;
-  plan: ClawAddPlan;
-};
 
 const CLAW_DEV_RESULT_SCHEMA_VERSION = "openclaw.clawDev.v1" as const;
 
@@ -68,8 +63,11 @@ function logDevPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
 }
 
-async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<PreparedDev> {
-  await using workspace = await tempWorkspace({ rootDir: tmpdir(), prefix: "openclaw-claw-dev-" });
+async function prepareDev(projectPath: string, opts: ClawsDevOptions) {
+  await using workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-claw-dev-",
+  });
   const build = await buildClawProject(projectPath, workspace.path("claw.tgz"));
   await using extracted = await extractBuiltClawArtifact(build.artifact);
   const result = await readClawManifestFile(extracted.packageRoot);
@@ -226,7 +224,7 @@ export async function runClawsDevCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  let prepared: PreparedDev;
+  let prepared: Awaited<ReturnType<typeof prepareDev>>;
   try {
     prepared = await prepareDev(projectPath, opts);
   } catch (error) {

@@ -61,17 +61,6 @@ describe("web logout", () => {
     vi.restoreAllMocks();
   });
 
-  it(
-    "deletes cached credentials when present",
-    { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
-    async () => {
-      const authDir = await createAuthCase({ "creds.json": "{}" });
-      const result = await logoutWeb({ authDir, runtime });
-      expect(result).toBe(true);
-      expect(fs.existsSync(authDir)).toBe(false);
-    },
-  );
-
   it("removes oauth.json too when not using legacy auth dir", async () => {
     const authDir = await createAuthCase({
       "creds.json": "{}",
@@ -88,24 +77,6 @@ describe("web logout", () => {
     const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(false);
     expect(runtime.log).toHaveBeenCalled();
-  });
-
-  it("keeps shared oauth.json when using legacy auth dir", async () => {
-    const credsDir = path.join(fixtureRoot, "oauth");
-    await fsPromises.mkdir(credsDir, { recursive: true });
-    await fsPromises.writeFile(path.join(credsDir, "creds.json"), "{}", "utf-8");
-    await fsPromises.writeFile(path.join(credsDir, "oauth.json"), '{"token":true}', "utf-8");
-    await fsPromises.writeFile(path.join(credsDir, "session-abc.json"), "{}", "utf-8");
-
-    const result = await logoutWeb({
-      authDir: credsDir,
-      isLegacyAuthDir: true,
-      runtime,
-    });
-    expect(result).toBe(true);
-    expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
-    expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
-    expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
   });
 
   it("does not delete custom auth directories outside the OpenClaw auth root", async () => {

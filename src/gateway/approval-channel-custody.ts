@@ -5,11 +5,12 @@ import {
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { canChannelEnforcePluginReviewerPolicy } from "../infra/approval-channel-policy-support.js";
 import {
   doesApprovalRequestSelectChannelAccount,
   type ApprovalRequestLike,
 } from "../infra/approval-request-account-binding.js";
-import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { isPluginApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 
 type PreparedApprovalChannelCustody = {
   resolverId: string;
@@ -29,6 +30,12 @@ export function prepareApprovalChannelCustody(params: {
   }
   const plugin = getLoadedChannelPlugin(channel);
   const capability = resolveChannelApprovalCapability(plugin);
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, capability)
+  ) {
+    return null;
+  }
   const authorizeActorAction = capability?.authorizeActorAction;
   if (!authorizeActorAction) {
     // Without channel approver settings, an OpenClaw change needs a configured
@@ -43,31 +50,47 @@ export function prepareApprovalChannelCustody(params: {
   if (!plugin) {
     return null;
   }
-  const isActorAuthorized = (candidateAccountId: string) =>
-    authorizeActorAction({
+  const isActorAuthorized = (candidateAccountId: string, request?: ApprovalRequestLike) => {
+    const pluginRequest =
+      params.approvalKind === "plugin" && request && isPluginApprovalRequest(request)
+        ? request
+        : undefined;
+    if (params.approvalKind === "plugin" && !pluginRequest) {
+      return false;
+    }
+    return authorizeActorAction({
       cfg: params.cfg,
       accountId: candidateAccountId,
       senderId,
       action: "approve",
       approvalKind: params.approvalKind,
+      ...(pluginRequest ? { request: pluginRequest } : {}),
     }).authorized;
-  if (!isActorAuthorized(accountId)) {
+  };
+  if (params.approvalKind !== "plugin" && !isActorAuthorized(accountId)) {
     return null;
   }
-  const eligibleAccountIds = plugin.config.listAccountIds(params.cfg).filter(isActorAuthorized);
-  if (!eligibleAccountIds.includes(accountId)) {
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  if (!accountIds.includes(accountId)) {
     return null;
   }
   return {
     resolverId: `${channel}:${accountId}`,
-    authorizes: (request) =>
-      doesApprovalRequestSelectChannelAccount({
-        cfg: params.cfg,
-        request,
-        channel,
-        accountId,
-        defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
-        eligibleAccountIds,
-      }),
+    authorizes: (request) => {
+      const eligibleAccountIds = accountIds.filter((candidateAccountId) =>
+        isActorAuthorized(candidateAccountId, request),
+      );
+      return (
+        eligibleAccountIds.includes(accountId) &&
+        doesApprovalRequestSelectChannelAccount({
+          cfg: params.cfg,
+          request,
+          channel,
+          accountId,
+          defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
+          eligibleAccountIds,
+        })
+      );
+    },
   };
 }

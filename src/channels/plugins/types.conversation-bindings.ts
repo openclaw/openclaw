@@ -67,12 +67,7 @@ export type ChannelConversationBindingSupport = {
     targetSessionKey: string;
     accountId?: string | null;
     maxAgeMs: number;
-  }) => Array<{
-    boundAt: number;
-    lastActivityAt: number;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-  }>;
+  }) => ReturnType<NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKey"]>>;
   setIdleTimeoutBySessionKeyAsync?: (
     params: Parameters<
       NonNullable<ChannelConversationBindingSupport["setIdleTimeoutBySessionKey"]>

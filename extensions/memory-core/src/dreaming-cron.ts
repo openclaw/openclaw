@@ -139,7 +139,7 @@ function buildManagedDreamingPatch(
     patch.enabled = true;
   }
 
-  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.schedule?.kind));
+  const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);
   const scheduleExpr = normalizeOptionalString(job.schedule?.expr);
   const scheduleTz = normalizeOptionalString(job.schedule?.tz);
   if (
@@ -150,11 +150,11 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.sessionTarget));
+  const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
   if (sessionTarget !== desired.sessionTarget) {
     patch.sessionTarget = desired.sessionTarget;
   }
-  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.wakeMode));
+  const wakeMode = normalizeLowercaseStringOrEmpty(job.wakeMode);
   if (wakeMode !== "now") {
     patch.wakeMode = "now";
   }
@@ -165,7 +165,7 @@ function buildManagedDreamingPatch(
   if (payloadNeedsUpdate) {
     patch.payload = desired.payload;
   }
-  const deliveryMode = normalizeLowercaseStringOrEmpty(normalizeOptionalString(job.delivery?.mode));
+  const deliveryMode = normalizeLowercaseStringOrEmpty(job.delivery?.mode);
   if (deliveryMode !== "none") {
     patch.delivery = desired.delivery;
   }
@@ -240,10 +240,9 @@ export async function reconcileShortTermDreamingCronJob(params: {
     );
     return { status: "doctor-required", removed };
   };
-
-  if (!params.config.enabled) {
+  const removeJobs = async (jobs: ManagedCronJobLike[], action: "remove" | "prune duplicate") => {
     let removed = 0;
-    for (const job of managed) {
+    for (const job of jobs) {
       try {
         const result = await cron.remove(job.id);
         if (result.removed === true) {
@@ -251,10 +250,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
         }
       } catch (err) {
         params.logger.warn(
-          `memory-core: failed to remove managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
+          `memory-core: failed to ${action} managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
         );
       }
     }
+    return removed;
+  };
+
+  if (!params.config.enabled) {
+    const removed = await removeJobs(managed, "remove");
     if (removed > 0) {
       params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
     }
@@ -275,19 +279,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
   }
 
   const duplicates = sortManagedJobs(managed.filter((job) => job.id !== primary.id));
-  let removed = 0;
-  for (const duplicate of duplicates) {
-    try {
-      const result = await cron.remove(duplicate.id);
-      if (result.removed === true) {
-        removed += 1;
-      }
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
+  const removed = await removeJobs(duplicates, "prune duplicate");
 
   const patch = buildManagedDreamingPatch(primary, desired);
   if (!patch) {

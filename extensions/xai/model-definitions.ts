@@ -1,4 +1,3 @@
-// Xai plugin module implements model definitions behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asOptionalRecord,
@@ -31,10 +30,6 @@ function toXaiModelDefinition(model: (typeof manifest.modelCatalog.providers.xai
   return { ...model, input: model.input.filter(isXaiModelInput) } satisfies ModelDefinitionConfig;
 }
 
-function copyXaiModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return structuredClone(entry);
-}
-
 // The manifest is the one curated xAI model list; discovery only adds or prunes around it.
 const XAI_MODEL_CATALOG: readonly ModelDefinitionConfig[] =
   manifest.modelCatalog.providers.xai.models.map(toXaiModelDefinition);
@@ -44,7 +39,7 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
   const normalized = normalizeXaiCatalogModelId(modelId);
   const entry = XAI_MODEL_CATALOG.find((model) => model.id.toLowerCase() === normalized);
   if (entry) {
-    return copyXaiModelDefinition(entry);
+    return structuredClone(entry);
   }
   if (normalized.includes("multi-agent")) {
     return undefined;
@@ -105,7 +100,7 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
 }
 
 export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
-  return XAI_MODEL_CATALOG.map(copyXaiModelDefinition);
+  return XAI_MODEL_CATALOG.map((entry) => structuredClone(entry));
 }
 
 type LegacyXaiBuiltinSignature = readonly [

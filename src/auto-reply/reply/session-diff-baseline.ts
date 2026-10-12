@@ -1,18 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import type { SessionInitResult } from "./session.js";
+import type { SessionInitResult } from "./session-init.types.js";
 
 export async function prepareReplySessionDiffBaseline(params: {
   agentId: string;
   workspaceDir: string;
   sessionState: Pick<
     SessionInitResult,
-    | "sessionEntry"
-    | "sessionEntryHandle"
-    | "sessionStore"
-    | "isNewSession"
-    | "sessionKey"
-    | "storePath"
+    "sessionEntry" | "sessionEntryHandle" | "isNewSession" | "sessionKey" | "storePath"
   >;
 }): Promise<void> {
   const { sessionState } = params;
@@ -29,5 +24,4 @@ export async function prepareReplySessionDiffBaseline(params: {
   });
   sessionState.sessionEntry = entry;
   sessionState.sessionEntryHandle.replaceCurrent(entry);
-  sessionState.sessionStore[sessionState.sessionKey] = entry;
 }

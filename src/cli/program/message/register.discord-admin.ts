@@ -1,4 +1,3 @@
-// Discord-style admin command registration for roles, channels, members, events, and moderation.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
@@ -10,7 +9,6 @@ const requiredOptions = {
   startTime: ["--start-time <iso>", "Event start time"],
 } as const;
 
-/** Register Discord admin and moderation message subcommands. */
 export function registerMessageDiscordAdminCommands(message: Command, helpers: MessageCliHelpers) {
   function register(
     parent: Command,
@@ -37,9 +35,7 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
 
   const channel = message.command("channel").description("Channel actions");
   helpers
-    .withMessageBase(
-      helpers.withRequiredMessageTarget(channel.command("info").description("Fetch channel info")),
-    )
+    .withMessageBase(channel.command("info").description("Fetch channel info"), "required")
     .action((opts) => helpers.runMessageAction("channel-info", opts));
   register(channel, "list", "List channels", "channel-list", ["guild"]);
 

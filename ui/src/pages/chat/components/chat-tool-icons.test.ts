@@ -1,7 +1,7 @@
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
 
 describe("plugin activity icons", () => {
   it.each([
@@ -13,7 +13,7 @@ describe("plugin activity icons", () => {
     ["assistant", "lobster"],
   ])(
     "uses the owner's monochrome mask for %s %s rows and restores the fallback after failure",
-    (role, name) => {
+    async (role, name) => {
       const container = document.createElement("div");
       const message =
         role === "assistant"
@@ -34,7 +34,7 @@ describe("plugin activity icons", () => {
         showToolCalls: true,
         pluginToolIcons: new Map([[name, { url: "blob:activity-icon", onError }]]),
       };
-      render(
+      await render(
         renderGroupedMessage(prepareChatMessageRender(message), "message", options),
         container,
       );
@@ -48,7 +48,7 @@ describe("plugin activity icons", () => {
       icon?.dispatchEvent(new Event("error"));
       expect(onError).toHaveBeenCalledOnce();
 
-      render(
+      await render(
         renderGroupedMessage(prepareChatMessageRender(message), "message", {
           ...options,
           pluginToolIcons: new Map(),

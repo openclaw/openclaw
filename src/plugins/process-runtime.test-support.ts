@@ -15,6 +15,16 @@ export const pluginProcessRuntimeEntrypoints = {
     sourceWorkerName: "plugin-source-capture-directory",
     distWorkerPath: "plugins/plugin-source-capture-directory.js",
   },
+  doctorLintNativeCapture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/doctor-lint.native-capture.test-support",
+    distWorkerPath: "commands/doctor-lint.native-capture.test-support.js",
+  },
+  scheduler: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-scheduler",
+    distWorkerPath: "infra/gateway-scheduler.js",
+  },
   metadataCapture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "plugin-package-metadata-capture",

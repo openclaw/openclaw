@@ -2,6 +2,7 @@
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import {
   diagnosticLogger as diag,
@@ -10,22 +11,7 @@ import {
 import type { SessionRef } from "./diagnostic-session-state.js";
 
 export function logToolLoopAction(
-  params: SessionRef & {
-    agentId?: string;
-    toolName: string;
-    level: "warning" | "critical";
-    action: "warn" | "block";
-    detector:
-      | "generic_repeat"
-      | "argument_churn"
-      | "unknown_tool_repeat"
-      | "known_poll_no_progress"
-      | "global_circuit_breaker"
-      | "ping_pong";
-    count: number;
-    message: string;
-    pairedToolName?: string;
-  },
+  params: SessionRef & Omit<DiagnosticToolLoopEvent, "type" | "seq" | "ts" | "trace">,
 ) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;

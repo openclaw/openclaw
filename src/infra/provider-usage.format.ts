@@ -1,4 +1,3 @@
-// Formats provider usage summaries for CLI and status output.
 import { clampPercent } from "./provider-usage.shared.js";
 import type {
   ProviderUsageBilling,
@@ -60,7 +59,6 @@ function formatBillingEntry(entry: ProviderUsageBilling): string {
   return `${label}: ${formatBillingAmount(entry.amount, entry.unit)}`;
 }
 
-/** Formats one provider snapshot into a short usage-window summary. */
 export function formatUsageWindowSummary(
   snapshot: ProviderUsageSnapshot,
   opts?: { now?: number; maxWindows?: number; includeResets?: boolean },

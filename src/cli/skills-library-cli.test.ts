@@ -106,14 +106,9 @@ describe("skills library CLI", () => {
     "update",
     "import",
     "remove",
-    "share",
-    "unshare",
     "transfer",
-    "enable",
-    "disable",
     "rollback",
     "attach",
-    "detach",
     "refresh",
   ];
   it.each(leaves)("inherits connection and JSON options before or after %s", async (name) => {
@@ -260,34 +255,17 @@ describe("skills library CLI", () => {
     });
   });
 
-  it.each([
-    [
-      "remove",
-      "removed",
-      "Existing sessions retain their pinned revision. Create a new skill to add it to future sessions.",
-    ],
-    [
-      "disable",
-      "published",
-      "Disabled for new-session defaults. Existing sessions retain their selected revision; explicit attachment remains available.",
-    ],
-    [
-      "unshare",
-      "published",
-      "Enabled for your new sessions, subject to agent policy and prerequisites. Existing session pins remain. Use skills.library.activate to attach or refresh it.",
-    ],
-  ])(
-    "prints the canonical %s receipt without inferring readiness",
-    async (action, state, nextAction) => {
-      mocks.call.mockResolvedValue({ ...receipt, state, nextAction });
-      await parse([action, skillId, "--expected-revision", revision]);
-      const output = mocks.writeStdout.mock.calls[0]?.[0];
-      expect(output).toContain(`${state}: checklist (personal, owner Alice)`);
-      expect(output).toContain(nextAction);
-      expect(output).not.toContain("Available in new sessions");
-      expect(output).not.toContain("ready");
-    },
-  );
+  it("prints the canonical removal receipt without inferring readiness", async () => {
+    const nextAction =
+      "Existing sessions retain their pinned revision. Create a new skill to add it to future sessions.";
+    mocks.call.mockResolvedValue({ ...receipt, state: "removed", nextAction });
+    await parse(["remove", skillId, "--expected-revision", revision]);
+    const output = mocks.writeStdout.mock.calls[0]?.[0];
+    expect(output).toContain("removed: checklist (personal, owner Alice)");
+    expect(output).toContain(nextAction);
+    expect(output).not.toContain("Available in new sessions");
+    expect(output).not.toContain("ready");
+  });
 
   it("lists a session projection and reads only its exact pin", async () => {
     const sessionKey = "agent:main:alice-session";

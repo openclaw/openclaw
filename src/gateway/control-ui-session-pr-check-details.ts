@@ -1,8 +1,13 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
 import type {
   ControlUiSessionPullRequestCheckDetails,
+  ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import {
+  createGitHubReadGroup,
+  prepareSessionPullRequestGitHubRead,
+} from "./control-ui-session-pr-request.js";
 import {
   fetchSessionPullRequestCheckDetails,
   sessionPullRequestRepositoryApiUrl,
@@ -18,12 +23,16 @@ const checkDetailsCache = createRetainedCache<{
   expiresAt: number;
   promise: Promise<ControlUiSessionPullRequestCheckDetails>;
   lastGood?: ControlUiSessionPullRequestCheckDetails;
+  access: ReturnType<typeof createGitHubReadGroup>;
 }>();
 let activeCheckDetails = 0;
 const CHECK_DETAILS_CACHE_MS = 30_000;
 const MAX_CHECK_DETAIL_REQUESTS = 4;
 
-export type ControlUiSessionPullRequestChecksParams = SessionPullRequestCheckTarget & {
+export type ControlUiSessionPullRequestChecksParams = Pick<
+  SessionPullRequestCheckTarget,
+  "owner" | "repo" | "number" | "headSha"
+> & {
   sessionKey: string;
   agentId?: string;
 };
@@ -54,42 +63,42 @@ export async function loadControlUiSessionPullRequestChecks(
     error,
   });
   deps.assertCurrent();
-  const credential = gitHubPublicApi.resolveGitHubApiCredentialScope();
-  const assertCurrent = () => {
-    deps.assertCurrent();
-    if (gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope) {
-      throw new gitHubPublicApi.ControlUiGitHubError(
-        409,
-        "GitHub identity changed; reopen CI details",
-      );
-    }
-  };
+  const matchesTarget = (candidate: ControlUiSessionPullRequest) =>
+    candidate.owner.toLowerCase() === owner.toLowerCase() &&
+    candidate.repo.toLowerCase() === repo.toLowerCase() &&
+    candidate.number === number &&
+    candidate.headSha === headSha;
   const { loadPullRequests } = deps;
   const snapshot = await loadPullRequests(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     { fetchImpl: deps.fetchImpl },
   );
-  assertCurrent();
-  const pull = snapshot.pullRequests.find(
-    (candidate) =>
-      candidate.owner.toLowerCase() === owner.toLowerCase() &&
-      candidate.repo.toLowerCase() === repo.toLowerCase() &&
-      candidate.number === number &&
-      candidate.headSha === headSha,
-  );
+  deps.assertCurrent();
+  const pull = snapshot.pullRequests.find(matchesTarget);
   if (!pull || (pull.state !== "open" && pull.state !== "draft")) {
     return unavailable("The session pull request or head changed; reopen CI details");
   }
+  const host = new URL(pull.url).hostname;
+  const read = prepareSessionPullRequestGitHubRead(
+    host,
+    deps.fetchImpl ?? fetch,
+    deps.assertCurrent,
+  );
+  const assertCurrent = read.assertCurrent;
+  const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
     deps.sessionScope,
+    host,
+    read.apiBaseUrl,
     owner.toLowerCase(),
     repo.toLowerCase(),
     number,
     headSha,
-    credential.cacheScope,
+    read.cacheScope,
   ]);
   let entry = checkDetailsCache.get(key);
-  if (!entry || entry.expiresAt <= Date.now()) {
+  let releaseReader: (() => void) | undefined;
+  if (!entry || entry.expiresAt <= Date.now() || entry.access.signal.aborted) {
     if (activeCheckDetails >= MAX_CHECK_DETAIL_REQUESTS) {
       return { ...unavailable("CI details are busy; retry shortly"), retryAfterMs: 5_000 };
     }
@@ -98,58 +107,45 @@ export async function loadControlUiSessionPullRequestChecks(
       expiresAt: Infinity,
       promise: Promise.resolve(unavailable("CI details are loading")),
       lastGood: previous,
+      access: createGitHubReadGroup(),
     };
+    releaseReader = pending.access.add(deps.assertCurrent);
+    const transportRead = prepareSessionPullRequestGitHubRead(
+      host,
+      deps.fetchImpl ?? fetch,
+      pending.access.assertCurrent,
+      { signal: pending.access.signal },
+    );
     activeCheckDetails += 1;
-    const fetchImpl = deps.fetchImpl ?? fetch;
-    // Shared transport carries no connection closure; every waiter rechecks its own authority.
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
       const deadline = Date.now() + 25_000;
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
-        if (
-          gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope
-        ) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            409,
-            "GitHub identity changed; reopen CI details",
-          );
-        }
+        transportRead.assertCurrent();
         if (++requests > 64 || Date.now() > deadline) {
           throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the request budget; open the job on GitHub",
           );
         }
-        return gitHubPublicApi.withOptionalGitHubAuth(credential.token, async (token) =>
-          gitHubPublicApi.readGitHubJsonResponse(
-            await gitHubPublicApi.fetchGitHubApi(
-              url,
-              fetchImpl,
-              token,
-              async () => {
-                // A renamed/transferred repository is not the session's admitted repository.
-                throw new gitHubPublicApi.ControlUiGitHubError(
-                  409,
-                  "GitHub repository changed; reopen CI details",
-                );
-              },
-              undefined,
-              undefined,
-              signal,
-            ),
-            maxBytes,
-          ),
-        );
+        return transportRead.request(url, maxBytes, signal, async () => {
+          // A renamed/transferred repository is not the session's admitted repository.
+          throw new gitHubPublicApi.ControlUiGitHubError(
+            409,
+            "GitHub repository changed; reopen CI details",
+          );
+        });
       };
       const assertHead = async () => {
         const value = parsePullListItem(
-          await request(`${sessionPullRequestRepositoryApiUrl(target)}/pulls/${number}`),
+          await request(`${sessionPullRequestRepositoryApiUrl(checkTarget)}/pulls/${number}`),
         );
         if (
           !value ||
           value.owner.toLowerCase() !== owner.toLowerCase() ||
           value.repo.toLowerCase() !== repo.toLowerCase() ||
+          new URL(value.url).hostname !== host ||
           value.number !== number ||
           value.headSha?.toLowerCase() !== headSha ||
           (value.state !== "open" && value.state !== "draft")
@@ -162,7 +158,7 @@ export async function loadControlUiSessionPullRequestChecks(
       };
       try {
         await assertHead();
-        const details = await fetchSessionPullRequestCheckDetails(target, request);
+        const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
         // Do not label old-head job steps as current after a push during the request.
         if (
           !(
@@ -230,30 +226,33 @@ export async function loadControlUiSessionPullRequestChecks(
     checkDetailsCache.set(key, pending);
     entry = pending;
   }
-  const result = await entry.promise;
-  assertCurrent();
-  // A summary refresh can replace the PR while this details request is in flight.
-  const current = await loadPullRequests(
-    { sessionKey: params.sessionKey, agentId: params.agentId },
-    { fetchImpl: deps.fetchImpl },
-  );
-  assertCurrent();
-  if (
-    !current.pullRequests.some(
-      (candidate) =>
-        candidate.owner.toLowerCase() === owner.toLowerCase() &&
-        candidate.repo.toLowerCase() === repo.toLowerCase() &&
-        candidate.number === number &&
-        candidate.headSha === headSha &&
-        (candidate.state === "open" || candidate.state === "draft"),
-    )
-  ) {
-    return unavailable("The session pull request or head changed; reopen CI details");
+  const release = releaseReader ?? entry.access.add(deps.assertCurrent);
+  try {
+    const result = await entry.promise;
+    assertCurrent();
+    // A summary refresh can replace the PR while this details request is in flight.
+    const current = await loadPullRequests(
+      { sessionKey: params.sessionKey, agentId: params.agentId },
+      { fetchImpl: deps.fetchImpl },
+    );
+    assertCurrent();
+    if (
+      !current.pullRequests.some(
+        (candidate) =>
+          matchesTarget(candidate) &&
+          new URL(candidate.url).hostname === host &&
+          (candidate.state === "open" || candidate.state === "draft"),
+      )
+    ) {
+      return unavailable("The session pull request or head changed; reopen CI details");
+    }
+    return structuredClone({
+      ...result,
+      ...(result.retryAfterMs === undefined
+        ? {}
+        : { retryAfterMs: Math.max(0, entry.expiresAt - Date.now()) }),
+    });
+  } finally {
+    release();
   }
-  return structuredClone({
-    ...result,
-    ...(result.retryAfterMs === undefined
-      ? {}
-      : { retryAfterMs: Math.max(0, entry.expiresAt - Date.now()) }),
-  });
 }

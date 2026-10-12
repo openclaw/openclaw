@@ -210,7 +210,9 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
-      config: { agents: { defaults: { agentRuntime: { id: "codex" } } } },
+      config: {
+        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+      },
       runId: "forced-unlocked-codex-timeout-owner",
     }).finally(clearAgentHarnesses);
 

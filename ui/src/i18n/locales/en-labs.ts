@@ -6,7 +6,7 @@ const enLabs = {
     decisionAssistance: {
       title: "Decision assistance",
       description:
-        "Enable experimental features powered by Decision models. Requires a Decision model, set globally or per agent. No features use this setting yet.",
+        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -26,6 +26,11 @@ const enLabs = {
       title: "Tool Search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
+    },
+    chatBubbles: {
+      title: "Speech bubbles",
+      description:
+        "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
     customPluginUi: {
       title: "Custom plugin UI",

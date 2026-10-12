@@ -1,20 +1,8 @@
-/** Browser tool host, sandbox, and node target resolution. */
+import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
-import {
-  getRuntimeConfig,
-  hasGatewayToolRoutingContext,
-  listNodes,
-  resolveBrowserConfig,
-  resolveProfile,
-  getBrowserProfileCapabilities,
-} from "./browser-tool.runtime.js";
-
-export type BrowserNodeTarget = {
-  nodeId: string;
-  label?: string;
-  commands: string[];
-  pendingDeclaredCommands: string[];
-};
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
@@ -23,7 +11,7 @@ export async function resolveBrowserToolNodeTarget(params: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   signal?: AbortSignal;
-}): Promise<BrowserNodeTarget | null> {
+}) {
   if (params.allowHostControl === false) {
     if (params.target === "node" || params.requestedNode) {
       throw new Error("Node browser control is disabled by sandbox policy.");

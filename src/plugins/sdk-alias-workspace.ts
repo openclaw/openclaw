@@ -37,6 +37,7 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
   ],
   ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
   ["retry", [""]],
+  ["worker-runtime", ["", "worker", "lifecycle"]],
   [
     "terminal-core",
     [
@@ -103,4 +104,5 @@ export const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "normalization-core",
   "retry",
   "terminal-core",
+  "worker-runtime",
 ]);

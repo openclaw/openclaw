@@ -51,12 +51,11 @@ struct BackgroundAliveBeaconTests {
             pushTransport: "relay")
         let requestJSON = try BackgroundAliveBeacon.makeNodeEventRequestPayloadJSON(payload: payload)
         let requestData = try #require(requestJSON.data(using: .utf8))
-        let request = try JSONDecoder().decode(
-            BackgroundAliveBeacon.NodeEventRequestPayload.self,
-            from: requestData)
+        let request = try #require(JSONSerialization.jsonObject(with: requestData) as? [String: Any])
 
-        #expect(request.event == "node.presence.alive")
-        let payloadData = try #require(request.payloadJSON.data(using: .utf8))
+        #expect(request["event"] as? String == "node.presence.alive")
+        let payloadJSON = try #require(request["payloadJSON"] as? String)
+        let payloadData = try #require(payloadJSON.data(using: .utf8))
         let decodedPayload = try #require(JSONSerialization.jsonObject(with: payloadData) as? [String: Any])
         let sentAtMs = try #require(decodedPayload["sentAtMs"] as? Int)
         #expect(decodedPayload["trigger"] as? String == "silent_push")

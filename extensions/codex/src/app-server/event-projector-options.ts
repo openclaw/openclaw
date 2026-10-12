@@ -1,8 +1,8 @@
 import type { runAgentHarnessBeforeCompactionHook } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexNativePlan } from "./plan-compaction-state.js";
 import type { CodexThreadItem, JsonValue } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 
 export type CodexAsyncDeliverySettlement = "settled" | "retry";
@@ -23,7 +23,7 @@ export type CodexAppServerEventProjectorOptions = {
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   remoteWorkspaceRoot?: string;
-  readRemoteWorkspaceFile?: CodexRemoteWorkspaceFileReader;
+  readRemoteWorkspaceFile?: RemoteWorkspaceFileReader;
   remoteWorkspaceRequestTimeoutMs?: number;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
   onContextCompacted?: () => void | Promise<void>;

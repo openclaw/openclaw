@@ -42,6 +42,7 @@ describe("CLI Gateway state target guard", () => {
         "tsx",
         "src/entry.ts",
         "models",
+        "--json",
         "auth",
         "paste-token",
         "--provider",
@@ -68,7 +69,16 @@ describe("CLI Gateway state target guard", () => {
     });
 
     expect(result, JSON.stringify(result)).toMatchObject({ code: 1, signal: null });
-    expect(result.stderr).toContain("No credentials or configuration were written");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("No credentials or configuration were written"),
+      },
+    });
+    expect(result.stderr).toBe(
+      "[openclaw] The CLI command failed.\n[openclaw] For help, run `openclaw doctor`.\n",
+    );
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).not.toHaveProperty("auth.profiles");
   });
 });

@@ -39,10 +39,11 @@ export async function applyNodeRepositoryCheckpoint(params: {
 }): Promise<void> {
   params.signal?.throwIfAborted();
   // Startup owns a fresh clone. A failed import is discarded on reprovisioning,
-  // so only this operation owns its synchronous apply journal.
+  // so only this operation owns its in-memory apply journal.
   let journal: WorkerWorkspaceReconciliationJournal | undefined;
   const applied = await applyStagedWorkerWorkspace({
     root: params.workspaceDir,
+    assertCurrent: () => params.signal?.throwIfAborted(),
     stagingRoot: params.stagingRoot,
     baseManifestRef: params.baseManifestRef,
     currentManifestRef: params.currentManifestRef,
@@ -50,14 +51,14 @@ export async function applyNodeRepositoryCheckpoint(params: {
     current: params.current,
     acceptance: { kind: "reconcile" },
     journal: {
-      load: () => journal,
-      begin: (next) => {
+      load: async () => journal,
+      begin: async (next) => {
         journal = next;
       },
-      commit: () => {
+      commit: async () => {
         journal = undefined;
       },
-      abort: () => {
+      abort: async () => {
         journal = undefined;
       },
     },

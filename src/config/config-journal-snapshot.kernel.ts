@@ -28,7 +28,7 @@ export function readConfigSnapshotAuditRecordInDatabase(
 
 export function upsertConfigSnapshotAuditRecordInDatabase(
   database: DatabaseSync,
-  input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null },
+  input: { record: PreparedSqliteAuditRecord | null; expectedPayloadJson?: string | null },
 ): boolean {
   const store = createSqliteAuditRecordKernel(database, {
     scope: CONFIG_SNAPSHOT_SCOPE,
@@ -37,6 +37,10 @@ export function upsertConfigSnapshotAuditRecordInDatabase(
   if (input.expectedPayloadJson !== undefined) {
     return store.compareAndSet(CONFIG_SNAPSHOT_KEY, input.expectedPayloadJson, input.record);
   }
-  store.upsert(input.record);
+  if (input.record) {
+    store.upsert(input.record);
+  } else {
+    store.delete(CONFIG_SNAPSHOT_KEY);
+  }
   return true;
 }

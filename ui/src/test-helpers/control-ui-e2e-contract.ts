@@ -1,4 +1,26 @@
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
+
+export type ControlUiMockPresenceUser = {
+  self?: boolean;
+  id: string;
+  identity?: AuthenticatedUser["identity"];
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  deviceFamily?: string;
+  host?: string;
+  ip?: string;
+  instanceId?: string;
+  lastInputSeconds?: number;
+  onlineSince?: number;
+  lastActivityAt?: number;
+  timeZone?: string;
+  mode?: string;
+  platform?: string;
+  ts?: number;
+  watchedSessions?: string[];
+};
 
 export type MockGatewayRequest = {
   id: string;
@@ -6,23 +28,43 @@ export type MockGatewayRequest = {
   params?: unknown;
 };
 
+export type MockGatewayRequestSelector = {
+  method: string;
+  match?: Record<string, unknown>;
+  exactParams?: boolean;
+};
+
 type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
 
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
-  deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
+  /** Returns the matching request count captured when deferral is armed. */
+  deferNext: (
+    method: string,
+    match?: Record<string, unknown>,
+    options?: { exactParams?: boolean },
+  ) => Promise<number>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
-  getRequests: (method?: string, match?: Record<string, unknown>) => Promise<MockGatewayRequest[]>;
+  getRequests: (
+    method?: string,
+    match?: Record<string, unknown>,
+    options?: { exactParams?: boolean },
+  ) => Promise<MockGatewayRequest[]>;
   getSessionRow: (key: string) => Promise<ControlUiSessionFixture>;
   getSocketCount: () => Promise<number>;
   getSocketUrls: () => Promise<string[]>;
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    options?: { match?: Record<string, unknown>; exactParams?: boolean },
   ) => Promise<void>;
-  resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  resolveDeferred: (
+    method: string,
+    payload?: unknown,
+    options?: { match?: Record<string, unknown>; exactParams?: boolean },
+  ) => Promise<void>;
   suspendLatest: () => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   setGatewayBootId: (bootId: string) => Promise<void>;
@@ -44,7 +86,7 @@ export type MockGatewayControls = {
    */
   waitForRequest: (
     method: string,
-    options?: { after?: number; match?: Record<string, unknown> },
+    options?: { after?: number; match?: Record<string, unknown>; exactParams?: boolean },
   ) => Promise<MockGatewayRequest>;
 };
 
@@ -55,18 +97,32 @@ export type ControlUiMockRequestHandler = (request: {
 }) => void;
 
 export type ControlUiMockGateway = {
+  readonly online: boolean;
   closeLatest: (code?: number, reason?: string) => void;
   deliverLatest: (frame: unknown) => void;
-  deferNext: (method: string, match?: Record<string, unknown>) => void;
+  deferNext: (
+    method: string,
+    match?: Record<string, unknown>,
+    options?: { exactParams?: boolean },
+  ) => number;
   emit: (event: string, payload?: unknown) => void;
-  findRequests: (method?: string, match?: Record<string, unknown>) => MockGatewayRequest[];
+  findRequests: (
+    method?: string,
+    match?: Record<string, unknown>,
+    options?: { exactParams?: boolean },
+  ) => MockGatewayRequest[];
   getSessionRow: (key: string) => ControlUiSessionFixture;
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    options?: { match?: Record<string, unknown>; exactParams?: boolean },
   ) => void;
   requests: MockGatewayRequest[];
-  resolveDeferred: (method: string, payload?: unknown) => void;
+  resolveDeferred: (
+    method: string,
+    payload?: unknown,
+    options?: { match?: Record<string, unknown>; exactParams?: boolean },
+  ) => void;
   suspendLatest: () => void;
   setOnline: (online: boolean) => void;
   setGatewayBootId: (bootId: string) => void;

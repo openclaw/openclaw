@@ -10,8 +10,6 @@ import {
 } from "../infra/restart.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
@@ -31,8 +29,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-// Registered server.close, routed by vitest.gateway-server.config.ts to gateway-server.
-it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-only"] as const)(
+it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
@@ -44,15 +41,16 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
     };
     const pluginFailure = new Error("registered plugin cleanup failed");
     const memoryFailure = new Error("registered memory cleanup failed");
-    const hasPluginFailure = mode !== "memory-only";
-    const hasMemoryFailure = mode === "memory-and-plugin" || mode === "memory-only";
+    const stateFailure = mode === "session-store";
+    const hasPluginFailure = !stateFailure;
+    const hasMemoryFailure = mode === "memory-and-plugin";
     const port = await fixture.reservePort();
     const logFile = fixture.state.path("shutdown.log");
     setLoggerOverride({ file: logFile, level: "debug", consoleLevel: "silent" });
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: fixture.pluginId });
     const registered = new PluginInstance(record.id, { record, registry });
-    if (mode !== "cache" && mode !== "restart") {
+    if (mode !== "restart") {
       registry.plugins.push(record);
     }
     const memoryDrain = vi.fn(async () => {
@@ -75,13 +73,10 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
     const releaseShared = createDeferredCore();
     const releaseWork = createDeferredCore();
     const started = createDeferredCore<GatewayServer>();
-    const successorStarted = createDeferredCore();
-    const successorReady = createDeferredCore();
     const exited = createDeferredCore<number>();
     const completeBoot = vi.fn();
     let exitCode: number | undefined;
     let startCount = 0;
-    let restartRequested = false;
     let closing: Promise<unknown> | undefined;
     let activeWork: Promise<void> | undefined;
     let shared: { enabled: boolean } | undefined;
@@ -93,38 +88,30 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
     try {
       let server: GatewayServer;
       if (mode === "restart") {
-        vi.stubEnv("OPENCLAW_NO_RESPAWN", "1");
+        vi.stubEnv("OPENCLAW_NO_RESPAWN", undefined);
         for (const name of SUPERVISOR_HINT_ENV_VARS) {
           vi.stubEnv(name, undefined);
         }
+        vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
         const previousStops = new Set(process.listeners("SIGINT"));
         void runGatewayLoop({
           lockPort: port,
           start: async (options) => {
             startCount += 1;
-            if (startCount > 1) {
-              successorStarted.resolve();
-            }
             const next = await fixture.start(port, {
               hostLifecycle: options?.hostLifecycle,
               startupOperation: options?.startupOperation,
             });
             started.resolve(next);
-            if (startCount > 1) {
-              successorReady.resolve();
-            }
             return next;
           },
-          runtime: {
-            log() {},
-            error() {},
-            exit(code) {
-              exitCode = code;
-              exited.resolve(code);
-            },
-          },
           completeBoot,
-        }).catch(started.reject);
+        })
+          .then((code) => {
+            exitCode = code;
+            exited.resolve(code);
+          })
+          .catch(started.reject);
         server = await started.promise;
         stop = process.listeners("SIGINT").find((listener) => !previousStops.has(listener));
         assert(stop);
@@ -134,13 +121,20 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       }
       const kernel = fixture.kernels.get(port);
       assert(kernel);
+      if (stateFailure) {
+        const closeRegistry = kernel.pluginRuntime.close;
+        vi.spyOn(kernel.pluginRuntime, "close").mockImplementation(async (...args) => ({
+          ...(await closeRegistry(...args)),
+          pluginFailures: [
+            { pluginId: fixture.pluginId, hookId: "session-store", error: pluginFailure },
+          ],
+        }));
+      }
       expect(kernel.pluginRuntime.registry).toBe(registry);
       const metadata = kernel.getPluginMetadataSnapshot();
       assert(metadata);
       const instance =
-        mode === "cache" || mode === "restart"
-          ? getPluginValueInstance(fixture.loadCallback(metadata))
-          : registered;
+        mode === "restart" ? getPluginValueInstance(fixture.loadCallback(metadata)) : registered;
       assert(instance);
       const database = openOpenClawStateDatabase({ env: fixture.state.env }).db;
       expect(database.isOpen).toBe(true);
@@ -163,12 +157,6 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
           }
         },
       );
-      let siblingPort: number | undefined;
-      if (mode === "sibling") {
-        setActivePluginRegistry(createEmptyPluginRegistry());
-        siblingPort = await fixture.reservePort();
-        await fixture.start(siblingPort);
-      }
       const close = vi.spyOn(server, "close");
       if (mode === "restart") {
         activeWork = runWithGatewayIndependentRootWorkAdmission(
@@ -176,7 +164,6 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
           "plugin-close-regression",
         );
         const restart = requestGatewayRestartWithSignalAdmission("plugin-close-regression");
-        restartRequested = restart.status === "emitted";
         expect(restart.status).toBe("emitted");
         await expect.poll(isGatewayRestartDraining).toBe(true);
         await nextTurn();
@@ -202,45 +189,49 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
         .finally(() => {
           closeSettled = true;
         });
-      if (mode !== "sibling") {
-        await Promise.race([
-          sharedEntered.promise,
-          outcome.then(() => {
-            throw new Error("Close settled before shared cleanup");
-          }),
-        ]);
-        await nextTurn();
-        expect(closeSettled).toBe(false);
-        expect(sharedSettled).toBe(false);
-        expect(pluginDisposed).toBe(hasPluginFailure);
-        releaseShared.resolve();
-      }
+      await Promise.race([
+        sharedEntered.promise,
+        outcome.then(() => {
+          throw new Error("Close settled before shared cleanup");
+        }),
+      ]);
+      await nextTurn();
+      expect(closeSettled).toBe(false);
+      expect(sharedSettled).toBe(false);
+      expect(pluginDisposed).toBe(hasPluginFailure);
+      releaseShared.resolve();
       const error = await outcome;
-      if (hasPluginFailure) {
-        expect.soft(collectNestedErrorCandidates(error)).toContain(pluginFailure);
-        expect(pluginSawOpenDatabase).toBe(true);
-        if (mode === "cache" || mode === "restart") {
-          // The process-cache reset retains the same outcome for its next observer.
-          expect((await waitForPluginCacheRetirement()).failures).toEqual([
-            { pluginId: fixture.pluginId, hookId: "instance", error: pluginFailure },
-          ]);
-        }
+      if (stateFailure) {
+        expect(collectNestedErrorCandidates(error)).toContain(pluginFailure);
       } else {
         expect(error).toBeUndefined();
       }
+      if (hasPluginFailure) {
+        expect(pluginSawOpenDatabase).toBe(true);
+      }
       if (mode === "restart") {
-        await Promise.race([exited.promise, successorStarted.promise]);
-        expect.soft(exitCode).toBe(1);
-        expect.soft(completeBoot).toHaveBeenCalledWith({
-          outcome: "forced_stop",
-          reason: "gateway.restart_close_failed",
-        });
+        await exited.promise;
+        expect(exitCode).toBe(0);
+        expect(completeBoot).not.toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "forced_stop" }),
+        );
         expect.soft(startCount).toBe(1);
       }
       await flushLogger();
       const logs = await fs.readFile(logFile, "utf8");
+      if (stateFailure) {
+        expect(logs).toContain(
+          `Plugin ${fixture.pluginId} cleanup failed (session-store): ${pluginFailure.message}`,
+        );
+        expect(logs).toMatch(/shutdown failed/);
+      }
       if (hasPluginFailure) {
-        expect(logs).toMatch(new RegExp(`shutdown failed .*plugin/${fixture.pluginId}`));
+        expect(logs).toMatch(
+          new RegExp(`shutdown completed .*with warnings:.*plugin/${fixture.pluginId}`),
+        );
+        expect(logs).toContain(
+          `Plugin ${fixture.pluginId} cleanup failed (instance): ${pluginFailure.message}`,
+        );
         expect(logs).not.toContain("shutdown completed cleanly");
       }
       if (hasMemoryFailure) {
@@ -250,18 +241,9 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(
         true,
       );
-      if (siblingPort !== undefined) {
-        expect(sharedSettled).toBe(false);
-        expect(database.isOpen).toBe(true);
-        expect(getGatewayPluginMetadataSnapshot()).toBeDefined();
-        const response = await fetch(`http://127.0.0.1:${siblingPort}/healthz`);
-        await response.text();
-        expect(response.ok).toBe(true);
-      } else {
-        expect(sharedSettled).toBe(true);
-        expect(database.isOpen).toBe(false);
-        expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
-      }
+      expect(sharedSettled).toBe(true);
+      expect(database.isOpen).toBe(false);
+      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
     } finally {
       releaseWork.resolve();
       releaseShared.resolve();
@@ -270,14 +252,9 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       }
       await Promise.allSettled([closing, activeWork]);
       if (mode === "restart" && exitCode === undefined && stop) {
-        if (restartRequested) {
-          await Promise.race([exited.promise, successorReady.promise]);
-        }
-        if (exitCode === undefined) {
-          await nextTurn();
-          stop("SIGINT");
-          await exited.promise;
-        }
+        await nextTurn();
+        stop("SIGINT");
+        await exited.promise;
       }
       await fixture.cleanup();
       setLoggerOverride(null);

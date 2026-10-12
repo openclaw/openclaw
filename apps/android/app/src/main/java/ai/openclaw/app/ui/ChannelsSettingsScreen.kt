@@ -6,22 +6,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
-import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
-import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.uppercaseFirstGraphemeOrNull
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material3.Text
+import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.unit.dp
 
 /** Settings screen for gateway channel readiness and account status. */
 @Composable
@@ -32,16 +23,11 @@ internal fun ChannelsSettingsScreen(
   val state by viewModel.channelsState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshChannels()
-    }
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshChannels() }
 
   SettingsDetailFrame(
-    title = nativeString("Channels"),
     subtitle = nativeString("Messaging surfaces connected to this gateway."),
-    icon = Icons.Default.Notifications,
+    route = SettingsRoute.Channels,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshChannels)
@@ -58,17 +44,13 @@ internal fun ChannelsSettingsScreen(
       )
       if (summary.partial || summary.warnings.isNotEmpty()) {
         // Partial scans still contain useful rows; keep them visible beside the warning.
-        ClawPanel {
-          Text(text = channelsWarningText(summary), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+        SettingsMessagePanel(text = channelsWarningText(summary))
       }
       if (channels.isEmpty()) {
-        ClawPanel {
-          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No channels found."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = nativeString("Telegram, WhatsApp, email, and other channels appear here after setup."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
+        SettingsMessagePanel(
+          title = nativeString("No channels found."),
+          text = nativeString("Telegram, WhatsApp, email, and other channels appear here after setup."),
+        )
       } else {
         ClawListPanel(items = channels) { channel -> ChannelRow(channel) }
       }
@@ -78,11 +60,20 @@ internal fun ChannelsSettingsScreen(
 
 @Composable
 private fun ChannelRow(channel: GatewayChannelSummary) {
+  val (statusText, status) =
+    when {
+      channel.error != null -> nativeString("Issue") to ClawStatus.Danger
+      channel.connected -> nativeString("Connected") to ClawStatus.Success
+      channel.running -> nativeString("Running") to ClawStatus.Success
+      channel.linked || channel.configured -> nativeString("Ready") to ClawStatus.Neutral
+      channel.enabled -> nativeString("Setup") to ClawStatus.Warning
+      else -> nativeString("Off") to ClawStatus.Neutral
+    }
   ClawListItem(
     title = channel.label,
     subtitle = channelSubtitle(channel),
-    leading = { ClawTextBadge(text = channelBadge(channel.label)) },
-    trailing = { ClawStatusPill(text = channelStatusText(channel), status = channelStatus(channel)) },
+    leading = { ClawTextBadge(text = badgeInitials(channel.label, fallback = "C")) },
+    trailing = { ClawStatusPill(text = statusText, status = status) },
   )
 }
 
@@ -104,34 +95,6 @@ private fun channelSubtitle(channel: GatewayChannelSummary): String {
     }
   return listOfNotNull(accounts, lifecycle, channel.error).joinToString(" · ")
 }
-
-private fun channelStatusText(channel: GatewayChannelSummary): String =
-  when {
-    channel.error != null -> nativeString("Issue")
-    channel.connected -> nativeString("Connected")
-    channel.running -> nativeString("Running")
-    channel.linked || channel.configured -> nativeString("Ready")
-    channel.enabled -> nativeString("Setup")
-    else -> nativeString("Off")
-  }
-
-private fun channelStatus(channel: GatewayChannelSummary): ClawStatus =
-  when {
-    channel.error != null -> ClawStatus.Danger
-    channel.connected || channel.running -> ClawStatus.Success
-    channel.linked || channel.configured -> ClawStatus.Neutral
-    channel.enabled -> ClawStatus.Warning
-    else -> ClawStatus.Neutral
-  }
-
-private fun channelBadge(label: String): String =
-  label
-    .split(' ', '-', '_')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-    .joinToString("")
-    .ifBlank { "C" }
 
 /** Chooses the first gateway warning or a generic partial-scan message. */
 private fun channelsWarningText(summary: GatewayChannelsSummary): String = summary.warnings.firstOrNull()?.takeIf { it.isNotBlank() } ?: nativeString("Some channel status checks did not complete.")

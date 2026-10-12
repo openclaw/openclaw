@@ -1,3 +1,5 @@
+import { existsSync, renameSync, unlinkSync } from "node:fs";
+import { backup } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,6 +11,11 @@ import * as replyInitialization from "../../config/sessions/session-accessor.res
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -294,6 +301,89 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
       } finally {
         release.resolve();
         await outcome;
+        await native.service.stop?.(native.context);
+      }
+    });
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "rejects first-send consent when its captured database owner is replaced",
+  async () => {
+    await withOpenClawTestState({ label: "chat-native-database-replacement" }, async (state) => {
+      const config = nativeConfig(state.workspaceDir);
+      await state.writeConfig(config);
+      const native = await registerNative(state, config, "owner-agent.mjs");
+      const client = nativeClient();
+      const respond = vi.fn<RespondFn>();
+      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      const sessionKey = "agent:main:main";
+      const entered = createDeferred();
+      const release = createDeferred();
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+      const replacementPath = `${databasePath}.native-replacement`;
+      const displacedPath = `${databasePath}.native-original`;
+      await backup(database.db, replacementPath);
+      const commit = replyInitialization.commitReplySessionInitialization;
+      vi.spyOn(replyInitialization, "commitReplySessionInitialization").mockImplementation(
+        async (params) => {
+          entered.resolve();
+          await release.promise;
+          return commit(params);
+        },
+      );
+      const sending = Promise.resolve(
+        expectDefined(
+          coreGatewayHandlers["chat.send"],
+          "registered chat.send",
+        )({
+          req: { type: "req", id: "replaced-first-send", method: "chat.send" },
+          params: {
+            sessionKey,
+            agentId: "main",
+            message: "Do not create this session in a replacement database.",
+            idempotencyKey: "replaced-native-run",
+          },
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => true,
+        }),
+      );
+      const outcome = sending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      let replaced = false;
+      try {
+        await entered.promise;
+        renameSync(databasePath, displacedPath);
+        renameSync(replacementPath, databasePath);
+        replaced = true;
+        release.resolve();
+        const rejection = await outcome;
+        await closeOpenClawAgentDatabasesAsync();
+        for (const storePath of [databasePath, displacedPath]) {
+          expect(
+            listSessionEntries({ agentId: "main", env: state.env, storePath, readOnly: true }),
+          ).toEqual([]);
+        }
+        expect(rejection).toEqual(expect.any(Error));
+        expect(String(rejection)).toContain("Captured session database changed before read");
+        expect(respond).not.toHaveBeenCalled();
+        expect(context.chatAbortControllers.size).toBe(0);
+      } finally {
+        release.resolve();
+        await outcome;
+        await closeOpenClawAgentDatabasesAsync();
+        if (replaced) {
+          renameSync(databasePath, replacementPath);
+          renameSync(displacedPath, databasePath);
+        }
+        if (existsSync(replacementPath)) {
+          unlinkSync(replacementPath);
+        }
         await native.service.stop?.(native.context);
       }
     });

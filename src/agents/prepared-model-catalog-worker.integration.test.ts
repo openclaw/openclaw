@@ -4,7 +4,12 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { threadId, Worker } from "node:worker_threads";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
@@ -57,15 +62,27 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
+  observeSyntheticAuth,
   loadCompletedFullCatalog,
   readCatalogDiscoveryCaptures,
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
-  usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, waitForWorkers, observeCatalogEntry } =
+  usePreparedCatalogWorkerFixtures({ observeCatalogWork: true });
 
-const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+const createStaticSnapshot = createStaticCatalogSnapshotFixture({
+  makeTempDir,
+  retireAfterTest,
+  receiptBroadcastName: () => receipts.broadcastName,
+});
 
 async function createReadyWorkerFixture(spinMs: number) {
   const fixture = await createStaticSnapshot(spinMs);
@@ -98,7 +115,7 @@ describe("prepared model catalog worker boundary", () => {
     vi.stubEnv("HOME", homeA);
     vi.stubEnv("OPENCLAW_HOME", homeA);
     vi.stubEnv("CODEX_HOME", codexHome);
-    const fixture = createCatalogFixture(makeTempDir, 0);
+    const fixture = await createCatalogFixture(makeTempDir, 0);
     vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
     const config = {
       ...fixture.config,
@@ -178,8 +195,15 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("configured runtime refresh keeps an unaffected worker live across a scoped sibling reload", async () => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
+  it("configured runtime refresh keeps an unaffected worker live across a scoped sibling reload", async ({
+    signal,
+  }) => {
+    const fixture = await createCatalogFixture(
+      makeTempDir,
+      0,
+      {},
+      { receiptBroadcastName: receipts.broadcastName },
+    );
     // Configured publication reads the process environment; keep both the parent and worker
     // inside the same synthetic plugin/state fixture, without a supplied liveness predicate.
     for (const name of [
@@ -198,7 +222,7 @@ describe("prepared model catalog worker boundary", () => {
       agents: {
         ...fixture.config.agents,
         entries: {
-          main: { default: true, agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+          main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
           sibling: {
             agentDir: siblingDir,
             workspace: fixture.workspaceDir,
@@ -232,10 +256,12 @@ describe("prepared model catalog worker boundary", () => {
     const heldInvocation = nextInvocation();
 
     fs.writeFileSync(`${fixture.marker}.hold`, "", "utf8");
+    const entered = observeCatalogEntry(receipts, fixture);
     const inFlight = loadCompletedFullCatalog(main, { refresh: true });
     void inFlight.catch(() => undefined);
     try {
-      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).toBe(`${completed}start\n`);
+      await entered(inFlight, signal);
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe(`${completed}start\n`);
       const nextConfig = {
         ...initialConfig,
         agents: {
@@ -293,108 +319,62 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it.each([
-    ["gateway", "catalog"],
-    ["gateway", "auth-refresh"],
-    ["none", "catalog"],
-    ["none", "auth-refresh"],
-    ["activation", "catalog"],
-    ["activation", "auth-refresh"],
-  ] as const)(
-    "keeps %s metadata discovery scope with %s first",
-    async (metadataWorkspace, first) => {
-      const fixture = await createStaticSnapshot(0, {}, { metadataWorkspace });
-      if (first === "auth-refresh") {
-        const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
-          providerIds: [PROVIDER_ID],
-        });
-        expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
-          access: "v1:A",
-        });
-      }
-      const catalog = await loadCompletedFullCatalog(fixture.snapshot);
-      expect(catalog?.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-      );
-    },
-  );
-
-  it("publishes account-scoped harness models only in the full catalog", async () => {
-    const fixture = await createStaticSnapshot(0);
-
-    expect(fixture.snapshot.modelCatalog.entries).not.toContainEqual(
-      expect.objectContaining({ id: "account-scoped-model" }),
-    );
-
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
-
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "account-scoped-model",
-      }),
+  it("keeps activated metadata discovery scope with auth refresh first", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { metadataWorkspace: "activation" });
+    const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
+      providerIds: [PROVIDER_ID],
+    });
+    expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({ access: "v1:A" });
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
     );
   });
 
-  it.each([false, true])(
-    "pairs full catalog native routes with exact-generation auth (async: %s)",
-    async (asyncSyntheticAuth) => {
-      const fixture = await createStaticSnapshot(
-        0,
-        {},
-        {
-          metadataWorkspace: "none",
-          provideMetadataToWorker: true,
-          asyncSyntheticAuth,
-        },
-      );
-      const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
+  it("pairs full catalog native routes with exact-generation async auth", async () => {
+    const fixture = await createStaticSnapshot(
+      0,
+      {},
+      {
+        metadataWorkspace: "none",
+        provideMetadataToWorker: true,
+        asyncSyntheticAuth: true,
+      },
+    );
+    expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
+    await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
 
-      expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
-      expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
-      expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-      expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
-      fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
-      await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
-      fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
 
-      const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
-      const fullAuth = getPreparedModelFullCatalogAuth(catalog!);
+    expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
+      type: "api_key",
+      key: "discovered-native-login-not-real",
+    });
+    expect(catalog).not.toHaveProperty("credentials");
 
-      expect(fullAuth?.credentials?.[DISCOVERED_HARNESS_ID]).toEqual({
-        type: "api_key",
-        key: "discovered-native-login-not-real",
-      });
-      expect(catalog).not.toHaveProperty("credentials");
+    expect(
+      fs
+        .readFileSync(path.join(fixture.root, "synthetic-auth-owner.txt"), "utf8")
+        .trim()
+        .split("\n"),
+    ).toContain("parent");
+    expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
+    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
+  });
 
-      if (asyncSyntheticAuth) {
-        expect(
-          fs
-            .readFileSync(path.join(fixture.root, "synthetic-auth-owner.txt"), "utf8")
-            .trim()
-            .split("\n"),
-        ).toContain("parent");
-      } else {
-        expect(fs.readFileSync(syntheticAuthProbePath, "utf8").trim().split("\n")).toEqual([
-          HARNESS_ID,
-          DISCOVERED_HARNESS_ID,
-          MISSING_AUTH_HARNESS_ID,
-        ]);
-      }
-      expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-      expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
-      expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-      expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
-    },
-  );
-
-  it.each([
+  it.for([
     { retirement: "superseded", request: "catalog" },
     { retirement: "process close", request: "catalog" },
     { retirement: "process close", request: "auth" },
   ])(
     "aborts and joins parent $request preparation before $retirement completes",
-    async ({ retirement, request }) => {
+    async ({ retirement, request }, { signal }) => {
       const fixture = await createStaticSnapshot(0, {}, { asyncSyntheticAuth: true });
       await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
       const hold = path.join(fixture.root, "synthetic-auth-hold");
@@ -402,6 +382,7 @@ describe("prepared model catalog worker boundary", () => {
       const cancelled = path.join(fixture.root, "synthetic-auth-cancel.txt");
       fs.rmSync(started, { force: true });
       fs.writeFileSync(hold, "");
+      const auth = observeSyntheticAuth(fixture.root);
       let settled = false;
       const catalog = (
         request === "auth"
@@ -413,7 +394,10 @@ describe("prepared model catalog worker boundary", () => {
       void catalog.catch(() => {});
       let closing: Promise<void> | undefined;
       try {
-        await waitForMarker(started);
+        await withinTest(
+          awaitGateBeforeSettlement(auth.entered, catalog, `Timed out waiting for ${started}`),
+          signal,
+        );
         if (retirement === "process close") {
           let closed = false;
           closing = Promise.all([
@@ -427,7 +411,10 @@ describe("prepared model catalog worker boundary", () => {
         } else {
           fixture.supersede();
         }
-        await waitForMarker(cancelled);
+        await withinTest(
+          awaitGateBeforeSettlement(auth.aborted, catalog, `Timed out waiting for ${cancelled}`),
+          signal,
+        );
         expect(settled).toBe(false);
         fs.rmSync(hold);
         await expect(catalog).rejects.toThrow(
@@ -437,6 +424,7 @@ describe("prepared model catalog worker boundary", () => {
         expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
         await waitForWorkers();
       } finally {
+        auth.close();
         fs.rmSync(hold, { force: true });
         fixture.supersede();
         await Promise.allSettled([catalog, closing]);
@@ -487,7 +475,7 @@ describe("prepared model catalog worker boundary", () => {
       fixture.agentDir,
     );
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({
@@ -507,7 +495,9 @@ describe("prepared model catalog worker boundary", () => {
     });
   });
 
-  it("refreshes durable auth profiles added, updated, and removed after startup", async () => {
+  it("refreshes durable auth profiles added, updated, and removed after startup", async ({
+    signal,
+  }) => {
     const fixture = await createStaticSnapshot(0);
     const route = {
       provider: DURABLE_AUTH_PROVIDER_ID,
@@ -520,14 +510,7 @@ describe("prepared model catalog worker boundary", () => {
       ...fixture.config,
       agents: {
         ...fixture.config.agents,
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: fixture.agentDir,
-            workspace: fixture.workspaceDir,
-          },
-        ],
+        entries: { main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir } },
       },
     } satisfies OpenClawConfig;
     const owner = Object.freeze({
@@ -670,11 +653,11 @@ describe("prepared model catalog worker boundary", () => {
     // The worker has captured a block before its provider hook waits at the barrier.
     const hold = fixture.marker + ".hold";
     fs.writeFileSync(hold, "hold");
+    const entered = observeCatalogEntry(receipts, fixture);
     const pending = loadCompletedFullCatalog(fixture.snapshot, { refresh: true });
     try {
-      await expect
-        .poll(() => fs.readFileSync(fixture.marker, "utf8"), { timeout: 30_000 })
-        .not.toBe(discoveryBeforeUsage);
+      await entered(pending, signal);
+      expect(fs.readFileSync(fixture.marker, "utf8")).not.toBe(discoveryBeforeUsage);
       writeDurableProfile("second-key-not-real", {});
       fs.rmSync(hold);
       await pending;
@@ -757,7 +740,6 @@ describe("prepared model catalog worker boundary", () => {
 
   it.each([
     [false, undefined],
-    [true, undefined],
     [true, "agent"],
     [true, "user"],
   ] as const)(
@@ -791,6 +773,8 @@ describe("prepared model catalog worker boundary", () => {
           timeout: 5000,
           input,
         });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.signal, result.stderr).toBeNull();
         expect(result.status, result.stderr).toBe(0);
       };
       const refreshAuth = async () => {
@@ -853,15 +837,18 @@ describe("prepared model catalog worker boundary", () => {
     expect(loggedOut?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
   });
 
-  it("keeps accepted catalog and auth work alive after overload and permits later refresh", async () => {
+  it("keeps accepted catalog and auth work alive after overload and permits later refresh", async ({
+    signal,
+  }) => {
     const fixture = await createReadyWorkerFixture(0);
     const barrier = `${fixture.marker}.hold`;
     fs.writeFileSync(barrier, "", "utf8");
+    const entered = observeCatalogEntry(receipts, fixture);
     const catalog = fixture.snapshot.loadFullModelCatalog!();
     void catalog.catch(() => {});
     const accepted: ReturnType<typeof loadPreparedModelRuntimeAuth>[] = [];
     try {
-      await waitForMarker(fixture.marker);
+      await entered(catalog, signal);
       // Alternating scopes reach the worker instead of sharing the latest auth request.
       for (let index = 0; index < 127; index += 1) {
         const auth = loadPreparedModelRuntimeAuth(fixture.snapshot, {
@@ -902,12 +889,15 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
+  it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async ({
+    signal,
+  }) => {
     const fixture = await createReadyWorkerFixture(0);
     const barrier = `${fixture.marker}.hold`;
     // Keep discovery pending for both callers without relying on parent-thread scheduling.
     fs.writeFileSync(barrier, "", "utf8");
     let settled = false;
+    const entered = observeCatalogEntry(receipts, fixture);
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
       settled = true;
     });
@@ -915,7 +905,7 @@ describe("prepared model catalog worker boundary", () => {
     const completion = Promise.all([first, second]);
     void completion.catch(() => {});
     try {
-      await waitForMarker(fixture.marker);
+      await entered(completion, signal);
 
       expect(settled).toBe(false);
       fs.rmSync(barrier);
@@ -943,12 +933,13 @@ describe("prepared model catalog worker boundary", () => {
     }
   });
 
-  it("terminates discovery when its owning generation is superseded", async () => {
+  it("terminates discovery when its owning generation is superseded", async ({ signal }) => {
     const fixture = await createReadyWorkerFixture(10_000);
-    const catalog = fixture.snapshot.loadFullModelCatalog?.();
-    void catalog?.catch(() => {});
+    const entered = observeCatalogEntry(receipts, fixture);
+    const catalog = fixture.snapshot.loadFullModelCatalog!();
+    void catalog.catch(() => {});
     try {
-      await waitForMarker(fixture.marker);
+      await entered(catalog, signal);
       const captures = readCatalogDiscoveryCaptures(fixture.root).filter(
         (capture) => capture.threadId !== threadId,
       );

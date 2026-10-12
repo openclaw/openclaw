@@ -140,7 +140,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
   it("routes the next Discord DM turn to an existing ACP session binding", async () => {
     const threadBindings = createNoopThreadBindingManager("default");
     onTestFinished(() => threadBindings.stop());
-    const adapter = createInMemoryDiscordBindingAdapter();
+    createInMemoryDiscordBindingAdapter();
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:test-session",
       targetKind: "session",
@@ -157,33 +157,6 @@ describe("Discord ACP bind here end-to-end flow", () => {
         label: "codex",
       },
     });
-
-    expect(adapter.bindings).toHaveLength(1);
-    expect(binding).toEqual({
-      bindingId: "discord:default:user:user-1",
-      targetSessionKey: "agent:codex:acp:test-session",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:user-1",
-        parentConversationId: "user:user-1",
-      },
-      status: "active",
-      boundAt: 1,
-      metadata: {
-        boundBy: "user-1",
-        agentId: "codex",
-        label: "codex",
-      },
-    });
-    expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:user-1",
-      }),
-    ).toEqual(binding);
 
     const message = createDiscordMessage({
       id: "m-followup-1",

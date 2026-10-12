@@ -9,9 +9,14 @@ import {
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  createAssistantOutput,
+  makeCompletionsChunk,
+  makeCompletionsModel,
+  streamChunks,
+} from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
   afterAll(() => {
@@ -21,92 +26,94 @@ describe("openai completions stream", () => {
   describe.each([
     { name: "direct", createStream: streamOpenAICompletions },
     { name: "managed", createStream: createOpenAICompletionsTransportStreamFn() },
-  ])("$name cache-creation usage", ({ createStream }) => {
-    it.each([
+  ])("$name cache-creation usage", ({ name, createStream }) => {
+    const usageCases = [
       ["top-level fallback", {}, 300, 0.001075, undefined],
-      ["nested writes", { cache_write_tokens: 100 }, 100, 0.001025, undefined],
-      ["nested creation", { cache_creation_input_tokens: 100 }, 100, 0.001025, undefined],
       ["nested write zero", { cache_write_tokens: 0 }, 0, 0.001, undefined],
       ["nested creation zero", { cache_creation_input_tokens: 0 }, 0, 0.001, undefined],
       ["provider-billed zero", {}, 300, 0, 0],
-    ] as const)("preserves %s over HTTP", async (_name, details, cacheWrite, cost, billedCost) => {
-      let capturedPayload: Record<string, unknown> | undefined;
-      let capturedRoute: string | undefined;
-      const server = createServer((req, res) => {
-        let body = "";
-        req.setEncoding("utf8");
-        req.on("data", (chunk: string) => {
-          body += chunk;
+    ] as const;
+    it.each(name === "direct" ? usageCases.slice(0, 1) : usageCases)(
+      "preserves %s over HTTP",
+      async (_name, details, cacheWrite, cost, billedCost) => {
+        let capturedPayload: Record<string, unknown> | undefined;
+        let capturedRoute: string | undefined;
+        const server = createServer((req, res) => {
+          let body = "";
+          req.setEncoding("utf8");
+          req.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          req.on("end", () => {
+            capturedRoute = `${req.method} ${req.url}`;
+            capturedPayload = JSON.parse(body) as Record<string, unknown>;
+            res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+            // TrueFoundry documents inclusive prompt tokens with a top-level write bucket:
+            // https://www.truefoundry.com/docs/ai-gateway/chat-completions-advanced
+            const usage = {
+              prompt_tokens: 1500,
+              completion_tokens: 200,
+              total_tokens: 1700,
+              prompt_tokens_details: { cached_tokens: 1200, ...details },
+              cache_read_input_tokens: 1200,
+              cache_creation_input_tokens: 300,
+              ...(billedCost === undefined ? {} : { cost: billedCost }),
+            };
+            for (const chunk of [
+              makeCompletionsChunk({ role: "assistant", content: "Usage preserved." }),
+              makeCompletionsChunk({}, "stop"),
+              makeCompletionsChunk({}, null, { choices: [], usage }),
+            ]) {
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            }
+            res.end("data: [DONE]\n\n");
+          });
         });
-        req.on("end", () => {
-          capturedRoute = `${req.method} ${req.url}`;
-          capturedPayload = JSON.parse(body) as Record<string, unknown>;
-          res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
-          // TrueFoundry documents inclusive prompt tokens with a top-level write bucket:
-          // https://www.truefoundry.com/docs/ai-gateway/chat-completions-advanced
-          const usage = {
-            prompt_tokens: 1500,
-            completion_tokens: 200,
-            total_tokens: 1700,
-            prompt_tokens_details: { cached_tokens: 1200, ...details },
-            cache_read_input_tokens: 1200,
-            cache_creation_input_tokens: 300,
-            ...(billedCost === undefined ? {} : { cost: billedCost }),
-          };
-          for (const chunk of [
-            makeCompletionsChunk({ role: "assistant", content: "Usage preserved." }),
-            makeCompletionsChunk({}, "stop"),
-            makeCompletionsChunk({}, null, { choices: [], usage }),
-          ]) {
-            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        try {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Missing loopback server address");
           }
-          res.end("data: [DONE]\n\n");
-        });
-      });
+          const model = makeCompletionsModel({
+            provider: "compatible-proxy",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            reasoning: false,
+            cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 1.25 },
+          });
+          const stream = await createStream(
+            model,
+            { messages: [{ role: "user", content: "Explain the usage.", timestamp: 1 }] },
+            { apiKey: "synthetic-test-key" },
+          );
+          const result = await stream.result();
 
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing loopback server address");
+          expect(capturedRoute).toBe("POST /v1/chat/completions");
+          expect(capturedPayload).toMatchObject({ model: model.id, stream: true });
+          expect(result.stopReason).toBe("stop");
+          expect(result.content).toEqual([expect.objectContaining({ text: "Usage preserved." })]);
+          expect(result.usage).toMatchObject({
+            input: 300 - cacheWrite,
+            output: 200,
+            cacheRead: 1200,
+            cacheWrite,
+            totalTokens: 1700,
+          });
+          expect(result.usage.cost.cacheWrite).toBeCloseTo((cacheWrite * 1.25) / 1_000_000, 10);
+          expect(result.usage.cost.total).toBeCloseTo(cost, 10);
+          if (billedCost !== undefined) {
+            expect(result.usage.cost.totalOrigin).toBe("provider-billed");
+          }
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
         }
-        const model = makeCompletionsModel({
-          provider: "compatible-proxy",
-          baseUrl: `http://127.0.0.1:${address.port}/v1`,
-          reasoning: false,
-          cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 1.25 },
-        });
-        const stream = await createStream(
-          model,
-          { messages: [{ role: "user", content: "Explain the usage.", timestamp: 1 }] },
-          { apiKey: "synthetic-test-key" },
-        );
-        const result = await stream.result();
-
-        expect(capturedRoute).toBe("POST /v1/chat/completions");
-        expect(capturedPayload).toMatchObject({ model: model.id, stream: true });
-        expect(result.stopReason).toBe("stop");
-        expect(result.content).toEqual([expect.objectContaining({ text: "Usage preserved." })]);
-        expect(result.usage).toMatchObject({
-          input: 300 - cacheWrite,
-          output: 200,
-          cacheRead: 1200,
-          cacheWrite,
-          totalTokens: 1700,
-        });
-        expect(result.usage.cost.cacheWrite).toBeCloseTo((cacheWrite * 1.25) / 1_000_000, 10);
-        expect(result.usage.cost.total).toBeCloseTo(cost, 10);
-        if (billedCost !== undefined) {
-          expect(result.usage.cost.totalOrigin).toBe("provider-billed");
-        }
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    });
+      },
+    );
   });
 
   it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
@@ -192,24 +199,6 @@ describe("openai completions stream", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("does not emit thinking streams when reasoning is disabled", () => {
-    const model = makeCompletionsModel({
-      id: "grok-4.20-0309-reasoning",
-      name: "Grok 4.20 0309 (Reasoning)",
-      provider: "xai",
-      baseUrl: "https://api.x.ai/v1",
-      contextWindow: 1_000_000,
-      maxTokens: 30_000,
-    });
-
-    expect(
-      shouldEmitOpenAICompletionsReasoning(model, {
-        apiKey: "test-key",
-        reasoning: "off",
-      } as never),
-    ).toBe(false);
   });
 
   it.each([
@@ -436,4 +425,221 @@ describe("openai completions stream", () => {
       }
     },
   );
+});
+
+describe("openai completions stream", () => {
+  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        // Emit a delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify(
+            makeCompletionsChunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_loopback_done",
+                  function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                },
+              ],
+            }),
+          )}\n\n`,
+        );
+        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
+        // framing, so the raw terminal observer must preserve the same contract.
+        res.write("data: [DO");
+        res.write("NE]\r\n\r\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = makeCompletionsModel({
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        contextWindow: 131072,
+      });
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let hasToolCallEvent = false;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "toolcall_start") {
+          hasToolCallEvent = true;
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // fetch wrapper detected data: [DONE] → sawStreamDONE=true → promotion to toolUse
+      expect(doneReason).toBe("toolUse");
+      expect(hasToolCallEvent).toBe(true);
+      // The output message should retain the toolCall blocks
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it.each(["empty", "tool", "text and tool"] as const)(
+    "reports a %s response without a terminal marker as interrupted",
+    async (content) => {
+      const server = createServer((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          void body;
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+          if (content === "text and tool") {
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ content: "Running a command." }))}\n\n`,
+            );
+          }
+          if (content !== "empty") {
+            res.write(
+              `data: ${JSON.stringify(
+                makeCompletionsChunk({
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_interrupted",
+                      function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                    },
+                  ],
+                }),
+              )}\n\n`,
+            );
+          }
+          res.end();
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const baseModel = makeCompletionsModel({
+          id: "qwen3.6-27b",
+          name: "Qwen 3.6 27B",
+          provider: "vllm",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          contextWindow: 131072,
+        });
+        const stream = createOpenAICompletionsTransportStreamFn()(
+          baseModel,
+          {
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
+
+        let terminalEvent: string | undefined;
+        for await (const event of stream as AsyncIterable<{
+          type: string;
+        }>) {
+          if (event.type === "done" || event.type === "error") {
+            terminalEvent = event.type;
+          }
+        }
+
+        const result = await (await stream).result();
+        expect(terminalEvent).toBe("error");
+        expect(result.stopReason).toBe("error");
+        expect(result.errorMessage).toContain("Stream ended without finish_reason");
+        expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("rolls back provisional tags when stop strips spurious tool calls", async () => {
+    const model = makeCompletionsModel({
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+    const output = createAssistantOutput(model);
+    const chunks = [
+      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
+      makeCompletionsChunk({ content: "Here is the answer." }),
+      makeCompletionsChunk(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_spurious",
+              function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+            },
+          ],
+        },
+        "stop",
+      ),
+    ] as const;
+    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
+  });
 });

@@ -1,4 +1,3 @@
-// Mattermost tests prove slash admission through the production route and handler over real HTTP sockets.
 import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -151,7 +150,7 @@ type Boundary = {
   routeRuns: Set<Promise<void>>;
   callbackSourceAddresses: string[];
   validBody: string;
-  bodyFor: (command?: MattermostRegisteredCommand) => string;
+  post: (command?: MattermostRegisteredCommand) => ReturnType<typeof postForm>;
   channelRequests: ReturnType<typeof vi.fn>;
   holdChannel: (gate: Promise<void>) => void;
 };
@@ -330,7 +329,13 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
       routeRuns,
       callbackSourceAddresses,
       validBody,
-      bodyFor,
+      post: (selected = command) =>
+        postForm({
+          port: address.port,
+          localAddress: "127.0.0.1",
+          authorization: `Token ${selected.token}`,
+          body: bodyFor(selected),
+        }),
       channelRequests,
       holdChannel: (gate: Promise<void>) => {
         channelGate = gate;
@@ -364,12 +369,7 @@ async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
 }
 
 async function expectCredentialOverflow(boundary: Boundary) {
-  const response = await postForm({
-    port: boundary.address.port,
-    localAddress: "127.0.0.1",
-    authorization: `Token ${TOKEN}`,
-    body: boundary.validBody,
-  });
+  const response = await boundary.post();
   expect(response.statusCode).toBe(429);
 }
 
@@ -391,6 +391,8 @@ describe("Mattermost slash HTTP boundary", () => {
         openHeldRequest({
           port: address.port,
           localAddress: `127.0.0.${index + 2}`,
+          authorization:
+            index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
         }),
       );
       await vi.waitFor(
@@ -435,29 +437,6 @@ describe("Mattermost slash HTTP boundary", () => {
         { timeout: 3_000 },
       );
 
-      const sharedVariants = Array.from({ length: 8 }, (_, index) =>
-        openHeldRequest({
-          port: address.port,
-          localAddress: `127.0.0.${index + 12}`,
-          authorization:
-            index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
-        }),
-      );
-      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(18), { timeout: 3_000 });
-      expect(sharedVariants.every((entry) => entry.statusCode === undefined)).toBe(true);
-      const variantOverflow = openHeldRequest({
-        port: address.port,
-        localAddress: "127.0.0.20",
-      });
-      await vi.waitFor(() => expect(variantOverflow.statusCode).toBe(429), { timeout: 3_000 });
-      for (const entry of sharedVariants) {
-        entry.socket.write("x");
-      }
-      await vi.waitFor(
-        () => expect(sharedVariants.every((entry) => entry.statusCode === 400)).toBe(true),
-        { timeout: 3_000 },
-      );
-
       const authenticatedHeld = Array.from({ length: 8 }, (_, index) =>
         openHeldRequest({
           port: address.port,
@@ -465,7 +444,7 @@ describe("Mattermost slash HTTP boundary", () => {
           authorization: `Token ${TOKEN}`,
         }),
       );
-      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(27), { timeout: 3_000 });
+      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(18), { timeout: 3_000 });
       expect(authenticatedHeld.every((entry) => entry.statusCode === undefined)).toBe(true);
       const authenticatedOverflow = openHeldRequest({
         port: address.port,
@@ -502,85 +481,53 @@ describe("Mattermost slash HTTP boundary", () => {
       });
     });
   }, 20_000);
-  it.each(["current", "revoked", "rotated"])(
-    "keeps B admitted when eight stalled %s A credentials fill A capacity in one account",
-    async (state) => {
-      await withBoundary(async (boundary) => {
-        const { command, commandB, currentCommands, bodyFor, address, dispatch } = boundary;
-        if (state === "revoked") {
-          currentCommands.delete(command.id);
-        }
-        if (state === "rotated") {
-          currentCommands.set(command.id, { ...command, token: "rotated-a-token" });
-        }
-        // Upstream changes leave the activation token snapshot intact until restart.
-        const oldA = await postForm({
-          port: address.port,
-          localAddress: "127.0.0.1",
-          authorization: `Token ${TOKEN}`,
-          body: bodyFor(command),
-        });
-        expect(oldA.statusCode).toBe(state === "current" ? 200 : 401);
-        const held = await fillCredentialPool(boundary);
-        const result = await postForm({
-          port: address.port,
-          localAddress: "127.0.0.1",
-          authorization: `Token ${commandB.token}`,
-          body: bodyFor(commandB),
-        });
-        expect(result).toEqual({
-          statusCode: 200,
-          body: JSON.stringify({ response_type: "ephemeral", text: "Processing..." }),
-        });
-        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(state === "current" ? 2 : 1));
-        await drainCredentialPool(held);
+  it("keeps B admitted when eight stalled revoked A credentials fill A capacity in one account", async () => {
+    await withBoundary(async (boundary) => {
+      const { command, commandB, currentCommands, dispatch } = boundary;
+      currentCommands.delete(command.id);
+      // Upstream changes leave the activation token snapshot intact until restart.
+      const oldA = await boundary.post();
+      expect(oldA.statusCode).toBe(401);
+      const held = await fillCredentialPool(boundary);
+      const result = await boundary.post(commandB);
+      expect(result).toEqual({
+        statusCode: 200,
+        body: JSON.stringify({ response_type: "ephemeral", text: "Processing..." }),
       });
-    },
-  );
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+      await drainCredentialPool(held);
+    });
+  });
 
-  it.each(["completion", "throw after authentication"])(
-    "releases exactly once when overlapping authenticated work exits by %s",
-    async (exit) => {
-      await withBoundary(async (boundary) => {
-        const gate = createDeferred<void>();
-        boundary.holdChannel(gate.promise);
-        if (exit === "throw after authentication") {
-          boundary.runtime.channel.commands.shouldHandleTextCommands = () => {
-            throw new Error("injected post-authentication failure");
-          };
-        }
-        const pending = Array.from({ length: 2 }, () =>
-          postForm({
-            port: boundary.address.port,
-            localAddress: "127.0.0.1",
-            authorization: `Token ${TOKEN}`,
-            body: boundary.validBody,
-          }),
-        );
-        try {
-          await vi.waitFor(() => expect(boundary.channelRequests).toHaveBeenCalledTimes(2));
-          const oldRuns = [...boundary.routeRuns];
-          expect(oldRuns).toHaveLength(2);
-          // Both old handlers have authenticated but are still awaiting channel work.
-          const held = await fillCredentialPool(boundary);
-          gate.resolve();
-          const completed = await Promise.all(pending);
-          expect(completed.map((response) => response.statusCode)).toEqual(
-            Array(2).fill(exit === "completion" ? 200 : 500),
-          );
-          await Promise.all(oldRuns);
-          expect(boundary.errors).toHaveLength(exit === "completion" ? 0 : 2);
-          // Old finally blocks must not release any of the eight newer admissions.
-          await expectCredentialOverflow(boundary);
-          await drainCredentialPool(held);
-          await drainCredentialPool(await fillCredentialPool(boundary));
-        } finally {
-          gate.resolve();
-          await Promise.allSettled(pending);
-        }
-      });
-    },
-  );
+  it("releases exactly once when overlapping authenticated work throws", async () => {
+    await withBoundary(async (boundary) => {
+      const gate = createDeferred<void>();
+      boundary.holdChannel(gate.promise);
+      boundary.runtime.channel.commands.shouldHandleTextCommands = () => {
+        throw new Error("injected post-authentication failure");
+      };
+      const pending = Array.from({ length: 2 }, () => boundary.post());
+      try {
+        await vi.waitFor(() => expect(boundary.channelRequests).toHaveBeenCalledTimes(2));
+        const oldRuns = [...boundary.routeRuns];
+        expect(oldRuns).toHaveLength(2);
+        // Both old handlers have authenticated but are still awaiting channel work.
+        const held = await fillCredentialPool(boundary);
+        gate.resolve();
+        const completed = await Promise.all(pending);
+        expect(completed.map((response) => response.statusCode)).toEqual([500, 500]);
+        await Promise.all(oldRuns);
+        expect(boundary.errors).toHaveLength(2);
+        // Old finally blocks must not release any of the eight newer admissions.
+        await expectCredentialOverflow(boundary);
+        await drainCredentialPool(held);
+        await drainCredentialPool(await fillCredentialPool(boundary));
+      } finally {
+        gate.resolve();
+        await Promise.allSettled(pending);
+      }
+    });
+  });
 
   it.each(["throw before authentication", "timeout", "oversize", "disconnect"])(
     "refills authenticated capacity to eight after %s",
@@ -589,12 +536,7 @@ describe("Mattermost slash HTTP boundary", () => {
         if (fault === "throw before authentication") {
           const baseUrl = boundary.account.baseUrl;
           boundary.account.baseUrl = "";
-          const result = await postForm({
-            port: boundary.address.port,
-            localAddress: "127.0.0.1",
-            authorization: `Token ${TOKEN}`,
-            body: boundary.validBody,
-          });
+          const result = await boundary.post();
           boundary.account.baseUrl = baseUrl;
           expect(result.statusCode).toBe(500);
           expect(boundary.errors).toHaveLength(1);

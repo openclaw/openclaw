@@ -167,19 +167,22 @@ module.exports = { id: '${pluginId}', register(api) {
       };
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
       try {
-        const result = await compactEmbeddedAgentSession({
-          ...target,
-          sessionTarget: target,
-          sessionFile: target.sessionKey,
-          workspaceDir: state.workspaceDir,
-          agentDir: state.agentDir(),
-          config,
-          provider: pluginId,
-          model: "model",
-          trigger: "budget",
-          deferOwningContextEngineCompaction: true,
-          enqueue: async (task) => await task(),
-        });
+        const result = await compactEmbeddedAgentSession(
+          {
+            ...target,
+            sessionTarget: target,
+            sessionFile: target.sessionKey,
+            workspaceDir: state.workspaceDir,
+            agentDir: state.agentDir(),
+            config,
+            provider: pluginId,
+            model: "model",
+            trigger: "budget",
+            deferOwningContextEngineCompaction: true,
+            enqueue: async (task) => await task(),
+          },
+          { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+        );
         expect(result).toMatchObject({ ok: true, compacted: false });
         await bridge.entered.promise;
         await source.release();

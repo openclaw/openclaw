@@ -47,6 +47,11 @@ import {
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
 import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import {
+  createPluginToolInspection,
+  inspectionToolOwners,
+  samePluginToolSource,
+} from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -79,6 +84,7 @@ function inspectPluginTool(
   entry: PluginToolRegistration,
   registry: PluginRegistry,
   assertInvocationCurrent?: () => void,
+  memoryAudience?: OpenClawPluginToolContext["memoryAudience"],
 ): { tool: AnyAgentTool } | { error: string } | null {
   try {
     if (!isRecord(tool)) {
@@ -108,6 +114,7 @@ function inspectPluginTool(
             registry,
             tool as AnyAgentTool,
             assertInvocationCurrent,
+            memoryAudience,
           ),
         };
   } catch (error) {
@@ -312,28 +319,6 @@ export type PluginToolInspectionScope = Omit<
   "preparedRuntime"
 >;
 
-const inspectionToolOwners = new WeakMap<
-  PluginRegistry,
-  { manifests: ReadonlyMap<string, PluginManifestRecord>; assertCurrent: () => void }
->();
-
-function samePluginToolSource(
-  left: PluginManifestRecord | undefined,
-  right: PluginManifestRecord | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.origin === right.origin &&
-    left.rootDir === right.rootDir &&
-    left.source === right.source &&
-    left.setupSource === right.setupSource &&
-    (left.sourcePreferred === true) === (right.sourcePreferred === true) &&
-    (left.packageManifest?.build?.bundledDist === false) ===
-      (right.packageManifest?.build?.bundledDist === false),
-  );
-}
-
 /** One inspection owns registration; each selected agent still invokes its own tool factories. */
 export async function acquirePluginToolInspectionRegistry(params: {
   loadContext: PluginRuntimeLoadContext;
@@ -363,9 +348,6 @@ export async function acquirePluginToolInspectionRegistry(params: {
       selected.set(id, manifest);
     }
   }
-  if (selected.size === 0) {
-    return { release: async () => {} };
-  }
   const acquisition = await acquirePluginRegistryForInspection(
     buildPluginRuntimeLoadOptions(params.loadContext, {
       onlyPluginIds: [...selected.keys()].toSorted(),
@@ -378,18 +360,7 @@ export async function acquirePluginToolInspectionRegistry(params: {
   );
   try {
     setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
-    const current = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
-      scopedRuntime: true,
-    });
-    inspectionToolOwners.set(acquisition.registry, {
-      manifests: selected,
-      assertCurrent: () => {
-        if (!current?.()) {
-          throw new Error("Plugin tool inspection has been released");
-        }
-      },
-    });
-    return acquisition;
+    return createPluginToolInspection(acquisition, selected);
   } catch (error) {
     try {
       await acquisition.release();
@@ -457,10 +428,10 @@ function resolvePluginToolsFromRegistry(
   const pluginToolOwnersByName = new Map<string, string>();
   const denylist = normalizeDenylist(params.toolDenylist);
   const clientCaps = new Set(params.clientCaps ?? []);
+  const preparedRegistry =
+    context === params.preparedRuntime?.loadContext ? params.preparedRuntime.registry : undefined;
   const runtimeRegistry =
-    (context === params.preparedRuntime?.loadContext
-      ? params.preparedRuntime.registry
-      : params.runtimeRegistry) ??
+    (context === params.preparedRuntime?.loadContext ? preparedRegistry : params.runtimeRegistry) ??
     getLoadedRuntimePluginRegistry({ workspaceDir: context.workspaceDir });
   const inspection = runtimeRegistry && inspectionToolOwners.get(runtimeRegistry);
   inspection?.assertCurrent();
@@ -485,10 +456,27 @@ function resolvePluginToolsFromRegistry(
       toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
     }
   }
+  // A prepared generation already decided disabled and failed owners; reloading them would only
+  // repeat that outcome synchronously on the caller's thread.
+  const settledPreparedOutcomes = new Set(
+    preparedRegistry?.plugins
+      .filter((record) => {
+        const manifest = snapshot.byPluginId.get(record.id);
+        return (
+          (record.status === "disabled" || record.status === "error") &&
+          manifest !== undefined &&
+          record.origin === manifest.origin &&
+          record.rootDir === manifest.rootDir &&
+          record.source === manifest.source
+        );
+      })
+      .map((record) => record.id),
+  );
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
       !toolOwners.has(pluginId) &&
+      !settledPreparedOutcomes.has(pluginId) &&
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
@@ -561,7 +549,7 @@ function resolvePluginToolsFromRegistry(
         continue;
       }
       const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
-      const declaredNames = entry.names ?? [];
+      const declaredNames = entry.names;
       const availabilityNames =
         declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin
@@ -671,6 +659,7 @@ function resolvePluginToolsFromRegistry(
           entry,
           owner.registry,
           factoryContext.assertInvocationCurrent,
+          factoryContext.memoryAudience,
         );
         if (!inspected) {
           continue;

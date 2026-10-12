@@ -83,6 +83,7 @@ describe("chat.startup short references", () => {
               message: expect.objectContaining({ content: lateMessage.content }),
             }),
             new Set([client.connId]),
+            { prepareSessionProjection: expect.any(Function) },
           );
           expect(broadcastToConnIds.mock.invocationCallOrder[0]).toBeLessThan(
             respond.mock.invocationCallOrder[0]!,

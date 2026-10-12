@@ -17,6 +17,46 @@ afterEach(() => {
 });
 
 describe("session typing connection state", () => {
+  it("owns idle cleanup, refresh, stop, and reset without further input", () => {
+    const update = (key: string, typing = true) =>
+      updateTypingConnections({ key, connectionId: key, typing, now: Date.now() });
+
+    update("idle");
+    update("refreshed");
+    vi.advanceTimersByTime(2_000);
+    update("refreshed");
+    vi.advanceTimersByTime(500);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(update("idle", false)).toEqual({ typing: false });
+    vi.advanceTimersByTime(2_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(update("refreshed", false)).toEqual({ typing: false });
+
+    update("stopped");
+    update("stopped", false);
+    expect(vi.getTimerCount()).toBe(0);
+    update("reset");
+    clearSessionTypingState();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(update("reset", false)).toEqual({ typing: false });
+  });
+
+  it("cancels cleanup for capacity-evicted buckets without dropping refreshed peers", () => {
+    const update = (key: string, connectionId = key, typing = true) =>
+      updateTypingConnections({ key, connectionId, typing, now: Date.now() });
+
+    for (let index = 0; index < 2_048; index++) {
+      update(String(index));
+    }
+    update("0");
+    update("overflow");
+    expect(vi.getTimerCount()).toBe(2_048);
+    expect(update("1", "other", false)).toEqual({ typing: false });
+    expect(update("0", "other", false)).toEqual({ typing: true });
+    vi.advanceTimersByTime(2_500);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retains the newest live preview across an actor's connections", () => {
     const key = "shared-preview";
 
@@ -164,30 +204,39 @@ describe("session typing broadcast throttle", () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
-  it("emits only the latest draft at the trailing edge of a burst", () => {
-    const previews: string[] = [];
-    const broadcast = (preview: string) =>
-      broadcastTypingThrottled({
-        key: "preview-burst",
-        typing: true,
-        signature: `true\0${preview}`,
-        intervalMs: 250,
-        now: Date.now(),
-        emit: () => {
-          previews.push(preview);
-          return true;
-        },
-      });
+  it.each([true, false])(
+    "attempts only the latest draft at the trailing edge after delivery=%s",
+    (delivered) => {
+      const previews: string[] = [];
+      const broadcast = (preview: string) =>
+        broadcastTypingThrottled({
+          key: "preview-burst",
+          typing: true,
+          signature: `true\0${preview}`,
+          intervalMs: 250,
+          now: Date.now(),
+          emit: () => {
+            previews.push(preview);
+            return delivered;
+          },
+        });
 
-    broadcast("first");
-    vi.advanceTimersByTime(50);
-    broadcast("second");
-    vi.advanceTimersByTime(50);
-    broadcast("latest");
-    vi.advanceTimersByTime(150);
+      broadcast("first");
+      vi.advanceTimersByTime(50);
+      broadcast("second");
+      vi.advanceTimersByTime(50);
+      broadcast("latest");
+      vi.advanceTimersByTime(150);
 
-    expect(previews).toEqual(["first", "latest"]);
-  });
+      expect(previews).toEqual(["first", "latest"]);
+
+      vi.advanceTimersByTime(50);
+      broadcast("after trailing edge");
+      expect(previews).toEqual(["first", "latest"]);
+      vi.advanceTimersByTime(200);
+      expect(previews).toEqual(["first", "latest", "after trailing edge"]);
+    },
+  );
 
   it("preserves boolean-only cancellation and trailing stop behavior", () => {
     const updates: boolean[] = [];

@@ -10,6 +10,12 @@ import {
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  withCliCommandCleanup,
+  withCliProcessScope,
+  type CliHarnessCleanup,
+} from "../runtime-cleanup-scope.js";
+import { waitForCliSignalExit } from "../signal-exit-barrier.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -48,6 +54,7 @@ it("revokes restoration while its ownership inspection is pending", async () => 
   await restored;
   await settled;
   await recovery.restore(true);
+  expect(() => recovery.assertRecoveryCurrent()).toThrow("authority has closed or transferred");
   expect(dispatched).toEqual([]);
   expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
 });
@@ -89,7 +96,27 @@ it("drains a dispatched enable before compensating failed verification", async (
 });
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+const previousExitCode = process.exitCode;
+afterEach(() => {
+  process.exitCode = previousExitCode;
+  vi.restoreAllMocks();
+});
+
+it("refuses caller recovery after transferring native task ownership", async () => {
+  vi.mocked(suspendScheduledTaskAutoStartForUpdate).mockClear();
+  const recovery = createWindowsTaskAutoStartRecovery({
+    serviceEnv: {},
+    alreadySuspended: true,
+  });
+  try {
+    recovery.assertRecoveryCurrent();
+    recovery.handoff(async () => {});
+    expect(() => recovery.assertRecoveryCurrent()).toThrow("authority has closed or transferred");
+  } finally {
+    await recovery.complete(true);
+  }
+  expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+});
 
 it("refuses native compensation after its original live executor changes during inspection", async () => {
   const root = dirs.make("windows-compensation-owner-");
@@ -141,6 +168,7 @@ it("refuses native compensation after its original live executor changes during 
         } catch (error) {
           failure = error;
         }
+        expect(() => recovery.assertRecoveryCurrent()).toThrow(/executor/);
       } finally {
         await recovery.complete(false);
       }
@@ -181,35 +209,47 @@ it("retains the native failure when interrupted cleanup also loses its executor"
     },
   );
   let failure: unknown;
+  let resources: CliHarnessCleanup["pluginResources"];
   await expect(
-    withUpdateCommandExecutor(run.runId, async (executor) => {
-      const executorFence = await executor.enter(root);
-      const recovery = createWindowsTaskAutoStartRecovery({
-        serviceEnv: env,
-        alreadySuspended: true,
-        assertCurrent: executorFence.assertCurrent,
-        updateRun: { runId: run.runId, env, executorFence },
-      });
-      try {
-        await recovery.restore(true);
-        const onSignal = process
-          .listeners("SIGINT")
-          .find((listener) => !listeners.includes(listener));
-        if (!onSignal) {
-          throw new Error("missing owned signal handler");
-        }
-        onSignal("SIGINT");
-        try {
-          await recovery.complete(false);
-        } catch (error) {
-          failure = error;
-        }
-      } finally {
-        await recovery.complete(false);
-      }
-    }),
+    withCliProcessScope(() =>
+      withCliCommandCleanup(false, (cleanup) => {
+        resources = cleanup?.pluginResources;
+        return withUpdateCommandExecutor(run.runId, async (executor) => {
+          const executorFence = await executor.enter(root);
+          const recoveryListeners = process.listeners("SIGINT");
+          const recovery = createWindowsTaskAutoStartRecovery({
+            serviceEnv: env,
+            alreadySuspended: true,
+            assertCurrent: executorFence.assertCurrent,
+            updateRun: { runId: run.runId, env, executorFence },
+          });
+          try {
+            await recovery.restore(true);
+            const onSignal = process
+              .listeners("SIGINT")
+              .find((listener) => !recoveryListeners.includes(listener));
+            if (!onSignal) {
+              throw new Error("missing owned signal handler");
+            }
+            onSignal("SIGINT");
+            expect(process.exitCode).toBe(previousExitCode);
+            expect(exited).not.toHaveBeenCalled();
+            try {
+              await recovery.complete(false);
+            } catch (error) {
+              failure = error;
+            }
+          } finally {
+            await recovery.complete(false);
+          }
+        });
+      }),
+    ),
   ).rejects.toThrow(/executor/);
-  await vi.waitFor(() => expect(exited).toHaveBeenCalledWith(130));
+  expect(await waitForCliSignalExit()).toBe(130);
+  await resources?.release();
+  expect(process.exitCode).toBe(130);
+  expect(exited).not.toHaveBeenCalled();
   expect(failure).toMatchObject({ errors: expect.arrayContaining([nativeFailure]) });
   expect(getUpdateRun(run.runId, { env })).toEqual(run);
   expect(process.listeners("SIGINT")).toEqual(listeners);

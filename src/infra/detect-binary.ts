@@ -9,9 +9,6 @@ import { resolveEnvironmentValue } from "./process-env.js";
 // shell evaluation when probing PATH.
 /** Return true when a safe executable name/path can be found on this host. */
 export async function detectBinary(name: string): Promise<boolean> {
-  if (!name?.trim()) {
-    return false;
-  }
   if (!isSafeExecutableValue(name)) {
     return false;
   }

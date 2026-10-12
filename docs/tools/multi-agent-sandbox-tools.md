@@ -33,9 +33,13 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
     ```json
     {
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "heartbeat": { "agentId": "main" },
+          "systemAgent": { "agentId": "main" }
+        },
         "entries": {
           "main": {
-            "default": true,
             "name": "Personal Assistant",
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
@@ -71,8 +75,13 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
               "id": "120363424282127706@g.us"
             }
           }
+        },
+        {
+          "agentId": "main",
+          "match": { "channel": "whatsapp", "accountId": "*" }
         }
-      ]
+      ],
+      "talk": { "agentId": "main" }
     }
     ```
 
@@ -86,9 +95,14 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
     ```json
     {
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "heartbeat": { "agentId": "personal" },
+          "systemAgent": { "agentId": "personal" },
+          "authInheritance": { "agentId": "personal" }
+        },
         "entries": {
           "personal": {
-            "default": true,
             "workspace": "~/.openclaw/workspace-personal",
             "sandbox": { "mode": "off" }
           },
@@ -105,7 +119,8 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
             }
           }
         }
-      }
+      },
+      "talk": { "agentId": "personal" }
     }
     ```
   </Accordion>
@@ -114,21 +129,27 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
     {
       "tools": { "profile": "coding" },
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "heartbeat": { "agentId": "main" },
+          "systemAgent": { "agentId": "main" }
+        },
         "entries": {
           "main": {
-            "default": true
+            "workspace": "~/.openclaw/workspace"
           },
           "support": {
             "tools": { "profile": "messaging", "allow": ["slack"] }
           }
         }
-      }
+      },
+      "talk": { "agentId": "main" }
     }
     ```
 
     **Result:**
 
-    - default agents get coding tools.
+    - `main` inherits the global coding tool profile.
     - `support` agent is messaging-only (+ Slack tool).
 
   </Accordion>
@@ -136,7 +157,10 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
     ```json
     {
       "agents": {
+        "ownership": "explicit",
         "defaults": {
+          "heartbeat": { "agentId": "main" },
+          "systemAgent": { "agentId": "main" },
           "sandbox": {
             "mode": "non-main",
             "scope": "session"
@@ -144,7 +168,6 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
         },
         "entries": {
           "main": {
-            "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": {
               "mode": "off"
@@ -162,7 +185,8 @@ Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlit
             }
           }
         }
-      }
+      },
+      "talk": { "agentId": "main" }
     }
     ```
   </Accordion>
@@ -238,7 +262,7 @@ The filtering order is:
 
 Tool policies support `group:*` shorthands that expand to multiple tools. See [Tool groups](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands) for the full list.
 
-Configured MCP tools use the same policy surface. Their canonical names are
+Configured MCP tools use the same policy surface. Their full names are
 `<safe-server>__<safe-tool>`; globs can target a server namespace. For example:
 
 ```json5
@@ -292,13 +316,12 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
     }
     ```
   </Tab>
-  <Tab title="After (multi-agent)">
+  <Tab title="After (explicit agent)">
     ```json
     {
       "agents": {
         "entries": {
           "main": {
-            "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
           }
@@ -310,7 +333,9 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
 </Tabs>
 
 <Note>
-Doctor migrates legacy `agents.list` rosters to `agents.entries`. Migrations for
+Doctor migrates legacy `agents.list` rosters and `default` markers to
+`agents.entries` with explicit surface owners. After replacing the binary
+directly, run `openclaw doctor --fix` before starting the Gateway. Migrations for
 pre-June keys such as `sandbox.perSession`, `embeddedPi`, and `embeddedHarness`
 are retired; use `sandbox.scope`, `embeddedAgent`, and provider/model runtime
 policy. For an older installation,
@@ -369,9 +394,9 @@ installing the latest version.
     }
     ```
 
-    `tools.sessions.visibility` is Gateway-wide and cannot be set per agent. Session tools default to `all` with agent-to-agent messaging on. With `tree`, callers can access their current session and sessions they spawn; the canonical main session can still access every session belonging to its agent. Incognito restrictions and the sandbox spawned-session clamp still apply. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
+    `tools.sessions.visibility` is Gateway-wide and cannot be set per agent. Session tools default to `all` with agent-to-agent messaging on. With `tree`, callers can access their current session and sessions they spawn; the main session can still access every session belonging to its agent. Incognito restrictions and the sandbox spawned-session clamp still apply. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 
-    `sessions_history` in this profile still returns a bounded, sanitized recall view rather than a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call scaffolding, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before redaction/truncation.
+    `sessions_history` in this profile still returns a bounded, sanitized recall view rather than a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` wrappers, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call wrappers, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before redaction/truncation.
 
   </Tab>
 </Tabs>

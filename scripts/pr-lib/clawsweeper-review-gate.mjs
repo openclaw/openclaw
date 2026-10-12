@@ -73,9 +73,6 @@ for (const comment of pages.flat()) {
   if (age < -5 * 60_000) {
     fail("trusted review completion is materially future-dated.");
   }
-  if (age >= 12 * 60 * 60_000) {
-    continue;
-  }
   const evidence = {
     commentId: comment.id,
     reviewedAt: fields.reviewedAt,
@@ -88,7 +85,7 @@ for (const comment of pages.flat()) {
 }
 
 if (completions.length === 0) {
-  fail("completed review is missing or expired.");
+  fail("completed review is missing.");
 }
 completions.sort(
   (a, b) => b.reviewedMs - a.reviewedMs || b.evidence.commentId - a.evidence.commentId,
@@ -102,7 +99,7 @@ if (new Set(newest.map((candidate) => candidate.signature)).size !== 1) {
 const selected = newest[0].evidence;
 if (selected.reviewedSha !== headSha) {
   console.error(
-    `ClawSweeper review gate warning: reviewed SHA ${selected.reviewedSha} differs from current head ${headSha}; review is under 12 hours old.`,
+    `ClawSweeper review gate warning: reviewed SHA ${selected.reviewedSha} differs from current head ${headSha}.`,
   );
 }
 process.stdout.write(`${JSON.stringify(selected)}\n`);

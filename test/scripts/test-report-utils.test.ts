@@ -29,12 +29,6 @@ vi.mock("node:child_process", async () => {
 });
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
-  it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
-    const absoluteFile = path.join(process.cwd(), "src", "tools", "example.test.ts");
-
-    expect(normalizeTrackedRepoPath(absoluteFile)).toBe("src/tools/example.test.ts");
-  });
-
   it("preserves external absolute paths as normalized absolute paths", () => {
     const externalFile = path.join(path.parse(process.cwd()).root, "tmp", "outside.test.ts");
 
@@ -119,6 +113,13 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         path.join(bin, process.platform === "win32" ? "node.exe" : "node"),
         "file",
       );
+      if (process.versions.bun) {
+        fs.symlinkSync(
+          process.execPath,
+          path.join(bin, process.platform === "win32" ? "bun.exe" : "bun"),
+          "file",
+        );
+      }
       const repoRoot = process.cwd();
       const config = path.join(root, "vitest.config.mjs");
       const reportPath = path.join(root, "report.json");

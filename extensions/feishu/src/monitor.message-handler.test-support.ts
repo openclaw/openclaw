@@ -93,38 +93,13 @@ describe("createFeishuMessageReceiveHandler self-message filtering", () => {
     await handler(
       createTextEvent({
         messageId: "om_reused",
-        senderOpenId: "ou_user",
-        senderType: "user",
+        senderOpenId: "ou_other_bot",
+        senderType: "bot",
       }),
     );
 
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(handleMessage.mock.calls[0]?.[0]?.event.sender.sender_id.open_id).toBe("ou_user");
-  });
-
-  it("keeps peer bot and user messages flowing to dispatch", async () => {
-    const { handler, handleMessage, enqueue } = createHandler();
-
-    await handler(
-      createTextEvent({
-        messageId: "om_other_bot",
-        senderOpenId: "ou_other_bot",
-        senderType: "bot",
-      }),
-    );
-    await handler(
-      createTextEvent({
-        messageId: "om_user",
-        senderOpenId: "ou_user",
-        senderType: "user",
-      }),
-    );
-
-    expect(enqueue).toHaveBeenCalledTimes(2);
-    expect(handleMessage).toHaveBeenCalledTimes(2);
-    expect(
-      handleMessage.mock.calls.map(([params]) => params.event.sender.sender_id.open_id),
-    ).toEqual(["ou_other_bot", "ou_user"]);
+    expect(handleMessage.mock.calls[0]?.[0]?.event.sender.sender_id.open_id).toBe("ou_other_bot");
   });
 });

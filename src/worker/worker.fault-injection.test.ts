@@ -127,10 +127,12 @@ describe("cloud worker milestone 2 fault injection", () => {
         token: "synthetic-worker-cleanup-token",
         branch: "openclaw/cleanup-fixture",
       };
+      const skillsSnapshot = await buildSkillSnapshot(harness.root, {
+        entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
+      });
+      descriptor.assignment.systemPrompt = skillsSnapshot.prompt;
       descriptor.assignment.skillResources = await prepareSkillResourceDelivery(
-        await buildSkillSnapshot(harness.root, {
-          entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
-        }),
+        skillsSnapshot,
         () => {},
       );
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -242,7 +244,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         if (outcome === "cancellation") {
           expect(payload).toHaveProperty("aborted", true);
         }
-        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
         expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
@@ -403,7 +405,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         expect(settled).toBe(false);
         expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
         expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
-        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
 
@@ -452,10 +454,15 @@ describe("cloud worker milestone 2 fault injection", () => {
     secondRelease.resolve();
     await expect(inference).resolves.toEqual(doneOutcome("partitioned reply"));
 
-    const committed = await current.transcript.commit([
-      transcriptMessage("partitioned user"),
+    const message = transcriptMessage("partitioned user");
+    const commit = current.transcript.commit([
+      message,
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
+    message.content[0]!.text = "caller mutation";
+    const committed = await commit;
+    expect(current.transcript.baseLeafId).toBe(committed.newLeafId);
+    expect(current.transcript.nextSeq).toBe(2);
     for (const delta of ["one", "two", "three"]) {
       current.live.enqueuePreview(RUN_ID, {
         kind: "assistant",
@@ -478,6 +485,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
     const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
+    expect(transcript[0]).toMatchObject({ message: transcriptMessage("partitioned user") });
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
     expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
   });
@@ -581,7 +589,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       return [live.runId, live.seq, live.lastAckedSeq];
     });
     expect(liveRequests).toContainEqual([recoveryRunId, 1, 0]);
-    harness.settleRun(recoveryRunId);
+    await harness.settleRun(recoveryRunId);
   });
 
   it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
@@ -669,9 +677,12 @@ describe("cloud worker milestone 2 fault injection", () => {
       name: "WorkerTranscriptCommitError",
       reason: "stale-base-leaf",
     });
+    expect(current.transcript.baseLeafId).toBeNull();
+    expect(current.transcript.nextSeq).toBe(2);
     await expect(
       current.transcript.commit([transcriptMessage("must not retry after stale")]),
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
+    expect(current.transcript.nextSeq).toBe(2);
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
   });

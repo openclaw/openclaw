@@ -8,12 +8,6 @@ import {
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  countActiveDescendantRunsFromRuns,
-  countPendingDescendantRunsFromRuns,
-  getSubagentRunByChildSessionKeyFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-  listDescendantRunsForRequesterFromRuns,
-  listRunsForControllerFromRuns,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -70,7 +64,7 @@ describe("subagent registry read index", () => {
     expect(index.getLatestSubagentRun("agent:main:subagent:missing")).toBeNull();
   });
 
-  it("matches existing query helpers while reusing one indexed snapshot", () => {
+  it("indexes controller ownership and pending descendants from the latest runs", () => {
     const now = Date.now();
     const root = "agent:main:main";
     const parent = "agent:main:subagent:parent";
@@ -114,27 +108,17 @@ describe("subagent registry read index", () => {
 
     const index = buildSubagentRunReadIndexFromRuns({ runs, now });
 
-    expect(listRunsForController(index, root)).toEqual(listRunsForControllerFromRuns(runs, root));
-    expect(index.getDisplaySubagentRun(parent)).toEqual(
-      getSubagentRunByChildSessionKeyFromRuns(runs, parent),
-    );
-    expect(index.countActiveDescendantRuns(root)).toBe(
-      countActiveDescendantRunsFromRuns(runs, root),
-    );
+    expect(listRunsForController(index, root)).toEqual([
+      runs.get("run-parent"),
+      runs.get("run-moved-old"),
+    ]);
+    expect(index.getDisplaySubagentRun(parent)).toBe(runs.get("run-parent"));
     expect(index.countActiveDescendantRuns(root)).toBe(1);
-    expect(index.countPendingDescendantRuns(root)).toBe(
-      countPendingDescendantRunsFromRuns(runs, root),
-    );
     expect(index.countPendingDescendantRuns(root)).toBe(2);
-    expect(index.hasDescendantRunAwaitingSettle(root)).toBe(
-      hasDescendantRunAwaitingSettleFromRuns(runs, root),
-    );
-    expect(index.listDescendantRunsForRequester(root)).toEqual(
-      listDescendantRunsForRequesterFromRuns(runs, root),
-    );
-    expect(index.listDescendantRunsForRequester(root).map((run) => run.runId)).toEqual([
-      "run-parent",
-      "run-live-child",
+    expect(index.hasDescendantRunAwaitingSettle(root)).toBe(true);
+    expect(index.listDescendantRunsForRequester(root)).toEqual([
+      runs.get("run-parent"),
+      runs.get("run-live-child"),
     ]);
   });
 
@@ -158,7 +142,6 @@ describe("subagent registry read index", () => {
     const runs = toRunMap([run]);
     const index = buildSubagentRunReadIndexFromRuns({ runs });
 
-    expect(listRunsForController(index, root)).toEqual(listRunsForControllerFromRuns(runs, root));
     expect(listRunsForController(index, root)).toEqual([run]);
   });
 
@@ -196,13 +179,7 @@ describe("subagent registry read index", () => {
     ]);
     const index = buildSubagentRunReadIndexFromRuns({ runs, now });
 
-    expect(index.countActiveDescendantRuns(root)).toBe(
-      countActiveDescendantRunsFromRuns(runs, root),
-    );
     expect(index.countActiveDescendantRuns(root)).toBe(0);
-    expect(index.countActiveDescendantRuns(otherRoot)).toBe(
-      countActiveDescendantRunsFromRuns(runs, otherRoot),
-    );
     expect(index.countActiveDescendantRuns(otherRoot)).toBe(2);
   });
 
@@ -333,41 +310,9 @@ describe("subagent registry read index", () => {
     expect(index.getDisplaySubagentRun(normalizedChildSessionKey)).toBe(run);
   });
 
-  it("keeps the display-row preference for in-memory records over persisted snapshots", () => {
-    const childSessionKey = "agent:main:subagent:display-child";
-    const persistedRuns = toRunMap([
-      makeRun({
-        runId: "run-persisted-newer",
-        childSessionKey,
-        requesterSessionKey: "agent:main:main",
-        createdAt: 200,
-        startedAt: 200,
-      }),
-    ]);
-    const inMemoryRuns = toRunMap([
-      makeRun({
-        runId: "run-memory-older-ended",
-        childSessionKey,
-        requesterSessionKey: "agent:main:main",
-        createdAt: 100,
-        startedAt: 100,
-        endedAt: 150,
-      }),
-    ]);
-
-    const index = buildSubagentRunReadIndexFromRuns({
-      runs: persistedRuns,
-      inMemoryRuns: inMemoryRuns.values(),
-    });
-
-    expect(index.getDisplaySubagentRun(childSessionKey)?.runId).toBe("run-memory-older-ended");
-  });
-
   it.each([
-    { label: "active over active", olderEndedAt: undefined, newerEndedAt: undefined },
     { label: "ended over active", olderEndedAt: undefined, newerEndedAt: 250 },
     { label: "active over ended", olderEndedAt: 150, newerEndedAt: undefined },
-    { label: "ended over ended", olderEndedAt: 150, newerEndedAt: 250 },
   ])("selects the latest in-memory generation: $label", ({ olderEndedAt, newerEndedAt }) => {
     const childSessionKey = "agent:main:subagent:display-generation";
     const persisted = makeRun({

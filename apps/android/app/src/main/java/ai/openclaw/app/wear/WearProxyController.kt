@@ -1,7 +1,11 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.takeCodePoints
+import ai.openclaw.app.takeUtf8Bytes
 import ai.openclaw.app.ui.chat.providerQualifiedRef
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProxyCapability
@@ -16,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
@@ -31,12 +36,6 @@ internal class WearProxyGatewayException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal data class WearProxyAgent(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-)
-
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
@@ -47,7 +46,7 @@ internal class WearProxyController(
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
-  private val agents: () -> List<WearProxyAgent> = { emptyList() },
+  private val agents: () -> List<GatewayAgentSummary> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
   private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
@@ -75,8 +74,8 @@ internal class WearProxyController(
           WearRpcMethod.AgentsSelect -> selectAgent(request.params)
           WearRpcMethod.ModelsList -> listModels(request.params)
           WearRpcMethod.ModelsSelect -> selectModel(request.params)
-          WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
-          WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
+          WearRpcMethod.GatewayConnect -> setGatewayEnabled(request.params, enabled = true)
+          WearRpcMethod.GatewayDisconnect -> setGatewayEnabled(request.params, enabled = false)
           WearRpcMethod.ReplyText -> replyText(sourceNodeId, request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
           WearRpcMethod.ChatSend -> sendChat(request.params)
@@ -200,27 +199,21 @@ internal class WearProxyController(
       .firstOrNull { (id) -> id == selected }
       ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
       ?.let { selectedAgent ->
-        if (boundedAgents.size == MAX_AGENT_COUNT) {
-          boundedAgents[boundedAgents.lastIndex] = selectedAgent
-        } else {
-          boundedAgents += selectedAgent
-        }
+        boundedAgents[boundedAgents.lastIndex] = selectedAgent
       }
     return buildJsonObject {
       put(
         "agents",
-        buildJsonArray {
-          boundedAgents.forEach { (id, agent) ->
-            add(
-              buildJsonObject {
-                put("id", id.takeCodePoints(MAX_AGENT_ID_CHARS))
-                agent.name?.takeIf(String::isNotBlank)?.let { put("name", it.takeCodePoints(MAX_AGENT_NAME_CHARS)) }
-                agent.emoji?.takeIf(String::isNotBlank)?.let { put("emoji", it.takeCodePoints(MAX_AGENT_EMOJI_CHARS)) }
-                put("selected", id == selected)
-              },
-            )
-          }
-        },
+        JsonArray(
+          boundedAgents.map { (id, agent) ->
+            buildJsonObject {
+              put("id", id.takeCodePoints(MAX_AGENT_ID_CHARS))
+              agent.name?.takeIf(String::isNotBlank)?.let { put("name", it.takeCodePoints(MAX_AGENT_NAME_CHARS)) }
+              agent.emoji?.takeIf(String::isNotBlank)?.let { put("emoji", it.takeCodePoints(MAX_AGENT_EMOJI_CHARS)) }
+              put("selected", id == selected)
+            }
+          },
+        ),
       )
     }
   }
@@ -249,14 +242,11 @@ internal class WearProxyController(
     }
     val catalog =
       parseGatewayModelCatalog(
-        requestGateway(
-          "models.list",
-          buildJsonObject {
-            put("sessionKey", sessionKey)
-            put("view", "configured")
-            put("includeDetails", true)
-          },
-        ).asObject("models.list"),
+        requestObject("models.list") {
+          put("sessionKey", sessionKey)
+          put("view", "configured")
+          put("includeDetails", true)
+        },
       )
     val availableModels =
       catalog.models
@@ -286,16 +276,14 @@ internal class WearProxyController(
       put("refreshFailed", catalog.refreshFailed)
       put(
         "models",
-        buildJsonArray {
-          boundedModels.forEach { (ref, model) ->
-            add(
-              buildJsonObject {
-                put("ref", ref)
-                put("name", model.name.takeCodePoints(MAX_MODEL_NAME_CHARS))
-              },
-            )
-          }
-        },
+        JsonArray(
+          boundedModels.map { (ref, model) ->
+            buildJsonObject {
+              put("ref", ref)
+              put("name", model.name.takeCodePoints(MAX_MODEL_NAME_CHARS))
+            }
+          },
+        ),
       )
     }
   }
@@ -320,15 +308,12 @@ internal class WearProxyController(
       ?.trim()
       ?.takeIf { ref -> ref.isNotEmpty() && ref.codePointCount() <= MAX_MODEL_REF_CHARS }
 
-  private suspend fun gatewayConnect(params: JsonObject): JsonObject {
+  private suspend fun setGatewayEnabled(
+    params: JsonObject,
+    enabled: Boolean,
+  ): JsonObject {
     params.requireOnly()
-    connectGateway()
-    return proxyStatus(buildJsonObject {})
-  }
-
-  private suspend fun gatewayDisconnect(params: JsonObject): JsonObject {
-    params.requireOnly()
-    disconnectGateway()
+    if (enabled) connectGateway() else disconnectGateway()
     return proxyStatus(buildJsonObject {})
   }
 
@@ -340,38 +325,31 @@ internal class WearProxyController(
     val selectedSessionKey = params.optionalStringParam("selectedSessionKey", MAX_SESSION_KEY_CHARS)
     val agentId = activeAgentId()?.trim()?.takeIf(String::isNotEmpty)
     val gatewayResult =
-      requestGateway(
-        "sessions.list",
-        buildJsonObject {
-          put("limit", limit)
-          offset?.let { put("offset", it) }
-          search?.let { put("search", it) }
-          put("includeGlobal", false)
-          put("includeUnknown", false)
-          agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
-        },
-      ).asObject("sessions.list")
+      requestObject("sessions.list") {
+        put("limit", limit)
+        offset?.let { put("offset", it) }
+        search?.let { put("search", it) }
+        put("includeGlobal", false)
+        put("includeUnknown", false)
+        agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
+      }
     val sessions =
       gatewayResult["sessions"]
         .asArrayOrNull()
         ?.mapNotNull { projectSession(it, agentId) }
         .orEmpty()
-        .toMutableList()
     val selectedSessionValid =
       selectedSessionKey
         ?.takeIf { selectedKey -> sessions.none { session -> session.stringOrNull("key") == selectedKey } }
         ?.let { selectedKey ->
           val lookupResult =
-            requestGateway(
-              "sessions.resolve",
-              buildJsonObject {
-                put("key", selectedKey)
-                put("allowMissing", true)
-                put("includeGlobal", false)
-                put("includeUnknown", false)
-                agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
-              },
-            ).asObject("sessions.resolve")
+            requestObject("sessions.resolve") {
+              put("key", selectedKey)
+              put("allowMissing", true)
+              put("includeGlobal", false)
+              put("includeUnknown", false)
+              agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
+            }
           val resolvedKey = lookupResult.stringOrNull("key")
           lookupResult["ok"].booleanPrimitiveOrNull() == true &&
             resolvedKey == selectedKey &&
@@ -395,45 +373,41 @@ internal class WearProxyController(
     val maxChars = params.intParam("maxChars", default = DEFAULT_HISTORY_CHARS, range = 1..MAX_HISTORY_CHARS)
     val offset = params.optionalIntParam("offset", range = 0..MAX_HISTORY_OFFSET)
     val result =
-      requestGateway(
-        "chat.history",
-        buildJsonObject {
-          put("sessionKey", sessionKey)
-          put("limit", limit)
-          put("maxChars", maxChars)
-          offset?.let { put("offset", it) }
-        },
-      ).asObject("chat.history")
+      requestObject("chat.history") {
+        put("sessionKey", sessionKey)
+        put("limit", limit)
+        put("maxChars", maxChars)
+        offset?.let { put("offset", it) }
+      }
     return projectHistory(result)
   }
 
   private suspend fun sendChat(params: JsonObject): JsonObject {
     params.requireOnly("sessionKey", "message", "idempotencyKey")
     val result =
-      requestGateway(
-        "chat.send",
-        buildJsonObject {
-          put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
-          put("message", params.stringParam("message", MAX_MESSAGE_CHARS))
-          put("idempotencyKey", params.stringParam("idempotencyKey", MAX_IDEMPOTENCY_KEY_CHARS))
-          put("deliver", false)
-        },
-      ).asObject("chat.send")
+      requestObject("chat.send") {
+        put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
+        put("message", params.stringParam("message", MAX_MESSAGE_CHARS))
+        put("idempotencyKey", params.stringParam("idempotencyKey", MAX_IDEMPOTENCY_KEY_CHARS))
+        put("deliver", false)
+      }
     return projectAck(result)
   }
 
   private suspend fun abortChat(params: JsonObject): JsonObject {
     params.requireOnly("sessionKey", "runId")
     val result =
-      requestGateway(
-        "chat.abort",
-        buildJsonObject {
-          put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
-          params.optionalStringParam("runId", MAX_RUN_ID_CHARS)?.let { put("runId", it) }
-        },
-      ).asObject("chat.abort")
+      requestObject("chat.abort") {
+        put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
+        params.optionalStringParam("runId", MAX_RUN_ID_CHARS)?.let { put("runId", it) }
+      }
     return projectAck(result)
   }
+
+  private suspend fun requestObject(
+    method: String,
+    params: JsonObjectBuilder.() -> Unit,
+  ): JsonObject = requestGateway(method, buildJsonObject(params)).asObject(method)
 
   private fun failure(
     requestId: String,
@@ -456,11 +430,8 @@ internal class WearProxyController(
     const val DEFAULT_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_OFFSET = 100_000
-    const val MAX_SESSION_KEY_CHARS = 512
     const val MAX_ATTEMPT_ID_CHARS = 128
     const val MAX_MESSAGE_CHARS = 4_000
-    const val MAX_IDEMPOTENCY_KEY_CHARS = 128
-    const val MAX_RUN_ID_CHARS = 128
     const val MAX_STATUS_CHARS = 200
     const val MAX_AGENT_COUNT = 32
     const val MAX_AGENT_ID_CHARS = 200
@@ -469,10 +440,7 @@ internal class WearProxyController(
     const val MAX_MODEL_COUNT = 50
     const val MAX_MODEL_REF_CHARS = 200
     const val MAX_MODEL_NAME_CHARS = 200
-    const val MAX_SESSION_LABEL_CHARS = 200
-    const val MAX_EVENT_TEXT_CHARS = 2_000
     const val MAX_ERROR_CODE_CHARS = 64
-    const val MAX_ERROR_MESSAGE_CHARS = 300
   }
 }
 
@@ -492,30 +460,14 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
   }
 }
 
-internal fun projectedWearMessageText(message: JsonElement?): String? {
-  val content = (message as? JsonObject)?.get("content")
-  val text =
-    when (content) {
-      is JsonPrimitive -> {
-        content.contentOrNull
-      }
-
-      is JsonArray -> {
-        content.joinToString(separator = "") { part ->
-          when (part) {
-            is JsonPrimitive -> part.contentOrNull.orEmpty()
-            is JsonObject -> part.stringOrNull("text").orEmpty()
-            else -> ""
-          }
-        }
-      }
-
-      else -> {
-        null
-      }
-    }
+internal fun wearStreamMessageText(message: JsonElement?): String? {
+  val source = message as? JsonObject ?: return null
+  if (source.stringOrNull("role") == null) return null
   // Empty canonical content is a replacement, not an absent message/delta.
-  return text
+  return when (source["content"]) {
+    is JsonPrimitive, is JsonArray -> wearReplyText(source)
+    else -> null
+  }
 }
 
 private fun projectHistory(source: JsonObject): JsonObject =
@@ -665,10 +617,7 @@ private fun JsonObject.stringParam(
 private fun JsonObject.optionalStringParam(
   name: String,
   maxChars: Int,
-): String? {
-  if (name !in this) return null
-  return stringParam(name, maxChars)
-}
+): String? = if (name in this) stringParam(name, maxChars) else null
 
 private fun JsonObject.intParam(
   name: String,
@@ -694,8 +643,6 @@ private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
 }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
@@ -733,32 +680,6 @@ private fun kotlinx.serialization.json.JsonObjectBuilder.copyBoolean(
 }
 
 private fun String.codePointCount(): Int = codePointCount(0, length)
-
-private fun String.takeCodePoints(maxCodePoints: Int): String {
-  if (codePointCount() <= maxCodePoints) return this
-  return substring(0, offsetByCodePoints(0, maxCodePoints))
-}
-
-private fun String.takeUtf8Bytes(maxBytes: Int): String {
-  var end = 0
-  var usedBytes = 0
-  while (end < length) {
-    val codePoint = codePointAt(end)
-    val charCount = Character.charCount(codePoint)
-    val byteCount =
-      when {
-        codePoint <= 0x7f -> 1
-        codePoint <= 0x7ff -> 2
-        codePoint <= 0xffff -> 3
-        else -> 4
-      }
-    if (usedBytes + byteCount > maxBytes) break
-    usedBytes += byteCount
-    end += charCount
-  }
-  if (end == length) return this
-  return substring(0, end)
-}
 
 private const val MAX_SESSION_KEY_CHARS = 512
 private const val MAX_PROJECTED_AGENT_ID_CHARS = 200

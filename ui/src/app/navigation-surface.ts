@@ -7,11 +7,19 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import type { ApplicationContext } from "./context.ts";
 
+export const NAVIGATION_RAIL_WIDTH = 52;
+
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+
+export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
+    (candidate) => candidate.checkVisibility(),
+  );
+}
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
   // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
@@ -43,9 +51,7 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   ) {
     return;
   }
-  const focusable = [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  const focusable = navDrawerFocusableElements(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (
@@ -111,9 +117,11 @@ export function navigationSurfaceIsHidden(params: {
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
+  railAvailable?: boolean;
 }): boolean {
   return (
-    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+    params.onboarding ||
+    (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed && !params.railAvailable)
   );
 }
 

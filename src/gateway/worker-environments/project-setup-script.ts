@@ -184,10 +184,9 @@ const runSetup = (script, workspaceDir, homeDir) => {
   const sourceManifestRef = manifest(seed);
   const sourceFile = path.join(workerRoot, "manifests", sourceManifestRef.slice(7) + ".json");
   const sourceBytes = readManifest(sourceFile, sourceManifestRef);
-  const preparedRoot = ownedDirectory(ownedDirectory(workerRoot, "prepared", !inspectOnly), input.namespace, !inspectOnly);
+  const preparedRoot = ownedDirectory(ownedDirectory(workerRoot, "prepared", true), input.namespace, true);
   const directory = path.join(preparedRoot, input.cacheKey);
   const fresh = !fs.existsSync(directory);
-  if (fresh && inspectOnly) return;
   ownedDirectory(preparedRoot, input.cacheKey, fresh);
   if (fresh) {
     fs.mkdirSync(path.join(directory, "home"), { mode: 0o700 });

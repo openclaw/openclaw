@@ -1,14 +1,128 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
+import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
+import {
+  assertSessionEventTargetCurrent,
+  captureSessionEventTargetForHost,
+  combineSessionEventTargetsForHost,
+  enqueueSessionEventForHost,
+  type SessionEventTarget,
+} from "../auto-reply/reply/session-event-handoff.js";
+import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
+import {
+  enqueueSystemEventEntry,
+  peekSystemEventEntries,
+  type SystemEvent,
+} from "../infra/system-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
-const SESSION_STATE_WAKE_COALESCE_MS = 20_000;
+const log = createSubsystemLogger("sessions/state-notices");
+type PendingNotice = {
+  sessionKey: string;
+  changedSessionKey: string;
+  agentId: string;
+  target: SessionEventTarget;
+  occurrence: SystemEvent;
+};
 
-function encodeNoticeTarget(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("hex");
+function noticeKey(notice: PendingNotice): string {
+  return JSON.stringify([
+    notice.sessionKey,
+    notice.target.storePath,
+    notice.target.sessionId,
+    notice.target.lifecycleRevision,
+    notice.target.generation,
+    notice.target.chatType,
+    channelRouteDedupeKey(notice.target.deliveryContext),
+  ]);
 }
+
+const notices = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionStateNotices"),
+  () => {
+    const pendingNotices = new Set<PendingNotice>();
+    const debouncer = createInboundDebouncer<PendingNotice>({
+      debounceMs: 20_000,
+      maxWaitMs: 20_000,
+      buildKey: noticeKey,
+      onCancel: (items) => {
+        for (const item of items) {
+          pendingNotices.delete(item);
+        }
+      },
+      onFlush: (items, createFlush) => {
+        for (const item of items) {
+          pendingNotices.delete(item);
+        }
+        return createFlush({
+          dispatch: async (lifecycle) => {
+            const latest = items.at(-1);
+            if (!latest) {
+              return;
+            }
+            const pending = peekSystemEventEntries(latest.sessionKey);
+            // A user turn or store replacement can consume the notice before admission.
+            const selected = items.filter((item) =>
+              pending.some((event) => event.id === item.occurrence.id),
+            );
+            if (selected.length > 0) {
+              const target = combineSessionEventTargetsForHost(selected.map((item) => item.target));
+              const occurrences = selected.map((item) => item.occurrence);
+              const receipt = enqueueSessionEventForHost(
+                occurrences.map((event) => event.text).join("\n"),
+                {
+                  agentId: latest.agentId,
+                  sessionKey: latest.sessionKey,
+                  source: "session",
+                  expectedTarget: target,
+                  occurrences,
+                  preserveOccurrenceOnRejection: true,
+                  onAdopted: async () => {
+                    await lifecycle.onAdopted();
+                    await acknowledgeSessionStateNoticesInWorker(
+                      latest.sessionKey,
+                      selected.map((item) => ({
+                        targetSessionKey: item.changedSessionKey,
+                        watcherStorePath: item.occurrence.sessionStorePath ?? null,
+                      })),
+                      enqueueSessionStateNotice,
+                      { assertCurrent: () => assertSessionEventTargetCurrent(target) },
+                    );
+                  },
+                },
+              );
+              const outcome = await receipt.settled;
+              if (outcome.status === "failed") {
+                throw new Error(outcome.error ?? "Session state notice failed");
+              }
+              // Cancellation leaves unconsumed notices for an ordinary turn or the next sweep.
+            }
+          },
+        });
+      },
+      onError: (error) => log.warn(`Session state notice was not delivered: ${String(error)}`),
+    });
+    return {
+      enqueue(notice: PendingNotice) {
+        pendingNotices.add(notice);
+        return runInDetachedAsyncContext(() => debouncer.enqueue(notice));
+      },
+      async close() {
+        for (const key of new Set([...pendingNotices].map(noticeKey))) {
+          debouncer.cancelKey(key);
+        }
+        pendingNotices.clear();
+        await debouncer.drain();
+      },
+    };
+  },
+  (owner) => owner.close(),
+);
 
 export function decodeSessionStateNoticeContextKey(contextKey: string): string | undefined {
   if (!contextKey.startsWith(SESSION_STATE_CONTEXT_PREFIX)) {
@@ -18,7 +132,7 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
     return undefined;
   }
-  // encodeNoticeTarget always writes the hex of a valid UTF-8 session key, so a
+  // The notice writer always encodes a valid UTF-8 session key, so a
   // payload that fails strict UTF-8 decoding is corrupt: fail closed instead of
   // letting U+FFFD collisions acknowledge an unrelated watcher cursor.
   try {
@@ -37,10 +151,6 @@ function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: numb
   return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
-function shouldWakeWatcher(watcherSessionKey: string): boolean {
-  return !isSubagentSessionKey(watcherSessionKey);
-}
-
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   watcherStorePath?: string | null;
@@ -48,28 +158,44 @@ export function enqueueSessionStateNotice(params: {
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
-  enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
-    sessionKey: params.watcherSessionKey,
-    sessionStorePath: params.watcherStorePath ?? null,
-    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
-    ...(params.queueOnly ? { replace: true } : {}),
-  });
-  // Group activity is ambient context. Coalesce it for the next main turn instead
-  // of waking the personal agent once per inbound group message.
-  if (params.queueOnly) {
+  const agentId = parseAgentSessionKey(params.watcherSessionKey)?.agentId;
+  if (!agentId) {
     return;
   }
-  if (!shouldWakeWatcher(params.watcherSessionKey)) {
+  const storePath = params.watcherStorePath ?? null;
+  const occurrence = enqueueSystemEventEntry(
+    sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence),
+    {
+      sessionKey: params.watcherSessionKey,
+      sessionStorePath: storePath,
+      contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${Buffer.from(params.targetSessionKey, "utf8").toString("hex")}`,
+      ...(params.queueOnly ? { replace: true } : {}),
+    },
+  );
+  // Ambient group and nested-session notices remain context for the next ordinary turn.
+  if (!occurrence || params.queueOnly || isSubagentSessionKey(params.watcherSessionKey)) {
     return;
   }
-  // Collapse bursts of watched-session changes into one main-session wake. Notices
-  // are already queued and deduped, so none are lost; 20 seconds bounds added latency.
-  requestHeartbeat({
-    source: "session-state",
-    intent: "immediate",
-    reason: `session-state:${params.targetSessionKey}`,
-    sessionKey: params.watcherSessionKey,
-    sessionStorePath: params.watcherStorePath ?? null,
-    coalesceMs: SESSION_STATE_WAKE_COALESCE_MS,
-  });
+  const assertCurrent = () => {
+    if (!isSystemEventStoreCurrent(params.watcherSessionKey, storePath)) {
+      throw new Error("Session state notice watcher store was replaced");
+    }
+  };
+  void captureSessionEventTargetForHost(agentId, params.watcherSessionKey, { assertCurrent })
+    .then((target) => {
+      assertCurrent();
+      if (
+        peekSystemEventEntries(params.watcherSessionKey).some((event) => event.id === occurrence.id)
+      ) {
+        return notices.enqueue({
+          sessionKey: params.watcherSessionKey,
+          changedSessionKey: params.targetSessionKey,
+          agentId,
+          target,
+          occurrence,
+        });
+      }
+      return undefined;
+    })
+    .catch((error: unknown) => log.warn(`Session state notice was not admitted: ${String(error)}`));
 }

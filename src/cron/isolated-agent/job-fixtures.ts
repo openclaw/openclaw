@@ -19,6 +19,7 @@ export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
   const jobOverrides =
     overrides && "job" in overrides ? (overrides.job as LooseRecord | undefined) : undefined;
   return {
+    deliveryAttemptFence: null,
     cfg: {},
     deps: {} as never,
     job: makeIsolatedAgentJobFixture(jobOverrides),

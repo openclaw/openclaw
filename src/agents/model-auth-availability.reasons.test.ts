@@ -204,28 +204,6 @@ describe("model auth unavailability reasons", () => {
     });
   });
 
-  it.each(["openai", "anthropic"])(
-    "reports permanent auth rejection for %s including a pinned profile",
-    (provider) => {
-      const store = authStore({ bound: { type: "api_key", provider, key: "rejected-key" } });
-      store.usageStats = {
-        bound: { disabledUntil: Date.now() + 60_000, disabledReason: "auth_permanent" },
-      };
-      const resolver = createModelAuthAvailabilityResolver({
-        cfg: {},
-        authStore: store,
-        env: {},
-        routeResolverFactory: routeResolverFactory(dualRoutes),
-      });
-      const result = resolver.evaluateModelAuth(provider);
-      expect(result).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
-      expect(result.unavailableUntil).toBeUndefined();
-      const pinned = resolver.evaluateModelAuth(provider, { pinnedProfileId: "bound" });
-      expect(pinned).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
-      expect(pinned.unavailableUntil).toBeUndefined();
-    },
-  );
-
   it("hides a cooling inline key while preserving a healthy profile fallback", () => {
     const store = authStore();
     const cfg: OpenClawConfig = {

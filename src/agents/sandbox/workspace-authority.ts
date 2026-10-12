@@ -20,9 +20,9 @@ import {
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import type { SandboxToolPolicy } from "./types.js";
 
-type WorkspaceToolPolicy = { allow?: string[]; deny?: string[] };
-type RestrictiveWorkspaceToolPolicy = WorkspaceToolPolicy & { allow: string[] };
+type RestrictiveWorkspaceToolPolicy = SandboxToolPolicy & { allow: string[] };
 
 const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
@@ -43,7 +43,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
 ]);
 
 function findUnconfinedAllowedTool(
-  policies: Array<WorkspaceToolPolicy | undefined>,
+  policies: Array<SandboxToolPolicy | undefined>,
   confinedToolNames: ReadonlySet<string>,
 ) {
   const candidatePolicy = policies
@@ -73,8 +73,8 @@ function resolveWorkspaceToolPolicies(params: {
   sessionKey: string;
   modelProvider: string;
   modelId: string;
-  sandboxPolicy: WorkspaceToolPolicy;
-}): Array<WorkspaceToolPolicy | undefined> {
+  sandboxPolicy: SandboxToolPolicy;
+}): Array<SandboxToolPolicy | undefined> {
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     agentId: params.agentId,
@@ -147,12 +147,15 @@ export function resolveSandboxWorkspaceAuthority(params: {
   requiredToolNames?: readonly string[];
   modelProvider?: string;
   modelId?: string;
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }): SandboxWorkspaceAuthority {
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const runtime =
+    params.preparedRuntimeStatus ??
+    resolveSandboxRuntimeStatus({
+      cfg: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
   const sandbox = resolveSandboxConfigForAgent(params.config, runtime.agentId);
   if (!runtime.sandboxed) {
     return { sandboxed: false, workspaceAccess: sandbox.workspaceAccess };
@@ -179,7 +182,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
     const sessionExecHost = normalizeExecTarget(rawSessionExecHost);
     const execHost =
       sessionExecHost ??
-      resolveAgentConfig(params.config, runtime.agentId)?.tools?.exec?.host ??
+      agentConfig?.tools?.exec?.host ??
       params.config.tools?.exec?.host ??
       "auto";
     if (!confinementError && rawSessionExecHost && !sessionExecHost) {

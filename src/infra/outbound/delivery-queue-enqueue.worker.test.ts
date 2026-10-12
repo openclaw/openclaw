@@ -6,11 +6,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import {
-  captureDeliveryQueueStateContext,
   getDeliveryQueueEntryStatus,
-} from "../delivery-queue-sqlite.js";
-import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
+  seedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.test-support.js";
 import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { createDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import {
@@ -115,7 +115,7 @@ describe("outbound enqueue worker", () => {
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
-    const sql = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+    const sql = observeHostDataSql();
     let id: string;
     try {
       id = await enqueueDelivery(payload, undefined, undefined, context);
@@ -144,7 +144,7 @@ describe("outbound enqueue worker", () => {
   it("keeps stages on conflicts and atomically consumes only a matching preparation", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "enqueue-preparation";
-    const stage = createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
+    const stage = await createDeliveryQueueMediaRetention([], "outbound-media-stage", stateDir);
     seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       stateDir,

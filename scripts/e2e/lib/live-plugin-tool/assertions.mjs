@@ -1,4 +1,3 @@
-// Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,7 +7,14 @@ import {
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import {
+  assertPathInside,
+  findPackageJson,
+  managedNpmRoot,
+  npmProjectRootForInstalledPackage,
+} from "../codex-install-utils.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { readJson, writeJson } from "../fixtures/common.mjs";
 import {
   resolveOpenClawConfigPath as configPath,
   resolveOpenClawStateDir as stateDir,
@@ -17,7 +23,6 @@ import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
 const agentTurnTimeoutSeconds = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",
@@ -55,21 +60,16 @@ function agentErrorPath() {
 }
 
 function readNonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-function normalizeToolCallId(value) {
-  const id = readNonEmptyString(value);
-  return id || undefined;
-}
-
-function stringifyToolResult(value) {
+function extractTranscriptText(value, stringifyUnknown = false) {
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     return value
-      .map((entry) => stringifyToolResult(entry))
+      .map((entry) => extractTranscriptText(entry, stringifyUnknown))
       .filter(Boolean)
       .join("\n");
   }
@@ -77,23 +77,9 @@ function stringifyToolResult(value) {
     return value == null ? "" : String(value);
   }
   const nested = value.text ?? value.content ?? value.result ?? value.output;
-  return nested === undefined ? JSON.stringify(value) : stringifyToolResult(nested);
-}
-
-function extractTranscriptText(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((entry) => extractTranscriptText(entry))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (!isRecord(value)) {
-    return value == null ? "" : String(value);
-  }
-  return extractTranscriptText(value.text ?? value.content ?? value.result ?? value.output ?? "");
+  return nested === undefined && stringifyUnknown
+    ? JSON.stringify(value)
+    : extractTranscriptText(nested, stringifyUnknown);
 }
 
 function extractTranscriptToolCalls(message) {
@@ -101,6 +87,19 @@ function extractTranscriptToolCalls(message) {
   if (message.role !== "assistant") {
     return calls;
   }
+  const appendCall = (call, functionRecord) => {
+    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    if (tool) {
+      calls.push({
+        id:
+          readNonEmptyString(call.id) ??
+          readNonEmptyString(call.toolCallId) ??
+          readNonEmptyString(call.toolUseId),
+        tool,
+        input: call.arguments ?? call.input ?? functionRecord?.arguments,
+      });
+    }
+  };
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -111,18 +110,7 @@ function extractTranscriptToolCalls(message) {
       if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
         continue;
       }
-      const tool = readNonEmptyString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        id:
-          normalizeToolCallId(block.id) ??
-          normalizeToolCallId(block.toolCallId) ??
-          normalizeToolCallId(block.toolUseId),
-        tool,
-        input: block.arguments ?? block.input,
-      });
+      appendCall(block);
     }
   }
 
@@ -133,19 +121,7 @@ function extractTranscriptToolCalls(message) {
     if (!isRecord(call)) {
       continue;
     }
-    const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
-    if (!tool) {
-      continue;
-    }
-    calls.push({
-      id:
-        normalizeToolCallId(call.id) ??
-        normalizeToolCallId(call.toolCallId) ??
-        normalizeToolCallId(call.toolUseId),
-      tool,
-      input: call.arguments ?? call.input ?? functionRecord?.arguments,
-    });
+    appendCall(call, isRecord(call.function) ? call.function : undefined);
   }
   return calls;
 }
@@ -172,10 +148,10 @@ function extractTranscriptToolResults(message) {
     const text = extractTranscriptText(message.content);
     results.push({
       id:
-        normalizeToolCallId(message.tool_call_id) ??
-        normalizeToolCallId(message.toolCallId) ??
-        normalizeToolCallId(message.toolUseId) ??
-        normalizeToolCallId(message.id),
+        readNonEmptyString(message.tool_call_id) ??
+        readNonEmptyString(message.toolCallId) ??
+        readNonEmptyString(message.toolUseId) ??
+        readNonEmptyString(message.id),
       ...(tool ? { tool } : {}),
       text,
       failure: isFailureLikeToolResult({
@@ -198,8 +174,9 @@ function extractTranscriptToolResults(message) {
     if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
       continue;
     }
-    const text = stringifyToolResult(
+    const text = extractTranscriptText(
       block.content ?? block.text ?? block.result ?? block.output ?? block.error ?? block.message,
+      true,
     );
     const blockTool =
       readNonEmptyString(block.toolName) ??
@@ -208,11 +185,11 @@ function extractTranscriptToolResults(message) {
       readNonEmptyString(block.tool);
     results.push({
       id:
-        normalizeToolCallId(block.tool_use_id) ??
-        normalizeToolCallId(block.toolUseId) ??
-        normalizeToolCallId(block.tool_call_id) ??
-        normalizeToolCallId(block.toolCallId) ??
-        normalizeToolCallId(block.id),
+        readNonEmptyString(block.tool_use_id) ??
+        readNonEmptyString(block.toolUseId) ??
+        readNonEmptyString(block.tool_call_id) ??
+        readNonEmptyString(block.toolCallId) ??
+        readNonEmptyString(block.id),
       ...(blockTool ? { tool: blockTool } : {}),
       text,
       failure: isFailureLikeToolResult({
@@ -251,13 +228,13 @@ function matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls)
     !isRecord(details) ||
     details.toolName !== toolName ||
     details.isError !== false ||
-    !normalizeToolCallId(details.toolCallId) ||
+    !readNonEmptyString(details.toolCallId) ||
     !isRecord(details.result) ||
     !Array.isArray(details.result.content)
   ) {
     return false;
   }
-  const parentId = normalizeToolCallId(details.parentToolCallId);
+  const parentId = readNonEmptyString(details.parentToolCallId);
   const text = extractTranscriptText(details.result.content);
   return Boolean(
     parentId &&
@@ -470,28 +447,6 @@ function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected
   }
 }
 
-function realPathMaybe(filePath) {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
-
-function assertPathInside(parentPath, childPath, label) {
-  const parent = realPathMaybe(parentPath);
-  const child = realPathMaybe(childPath);
-  const relative = path.relative(parent, child);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${child}`);
-  }
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
 function installRecords() {
   const cfg = fs.existsSync(configPath()) ? readJson(configPath()) : {};
   return readPluginInstallRecords({
@@ -638,23 +593,17 @@ function configure() {
 
 function findDependencyPackageJson(packageName) {
   const installPath = pluginInstallPath();
-  const npmRoot = path.join(stateDir(), "npm");
+  const npmRoot = managedNpmRoot();
   const pluginName = requireEnv("PLUGIN_NAME");
-  const packageRoot = pluginName.split("/").reduce((current) => path.dirname(current), installPath);
-  const projectRoot =
-    path.basename(packageRoot) === "node_modules" ? path.dirname(packageRoot) : npmRoot;
-  return [
-    path.join(projectRoot, "node_modules", packageName, "package.json"),
-    path.join(installPath, "node_modules", packageName, "package.json"),
-    path.join(npmRoot, "node_modules", packageName, "package.json"),
-  ].find((candidate) => fs.existsSync(candidate));
+  const projectRoot = npmProjectRootForInstalledPackage(installPath, pluginName);
+  return findPackageJson(packageName, [projectRoot, installPath, npmRoot]);
 }
 
 function assertInstalled() {
   const pluginId = requireEnv("PLUGIN_ID");
   const pluginName = requireEnv("PLUGIN_NAME");
   const toolName = requireEnv("TOOL_NAME");
-  const npmRoot = path.join(stateDir(), "npm");
+  const npmRoot = managedNpmRoot();
   const installPath = pluginInstallPath();
   assertPathInside(npmRoot, installPath, "fixture plugin install path");
   const packageJson = path.join(installPath, "package.json");

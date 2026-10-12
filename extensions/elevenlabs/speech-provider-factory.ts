@@ -1,5 +1,4 @@
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-// Elevenlabs provider module implements model/runtime integration.
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -19,8 +18,9 @@ import {
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asBoolean,
-  asFiniteNumber,
+  asFiniteNumberInRange,
   asOptionalRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString as trimToUndefined,
   normalizeLowercaseStringOrEmpty,
   parseBooleanValue,
@@ -58,43 +58,12 @@ function normalizeElevenLabsTtsModelId(value: string | undefined): string | unde
   }
 }
 
-type ElevenLabsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-  modelId: string;
-  seed?: number;
-  applyTextNormalization?: string;
-  languageCode?: string;
-  voiceSettings: {
-    stability: number;
-    similarityBoost: number;
-    style: number;
-    useSpeakerBoost: boolean;
-    speed: number;
-  };
-};
-
-function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= min && number <= max ? number : undefined;
-}
-
 function normalizeElevenLabsSeed(value: unknown): number | undefined {
-  const seed = asFiniteNumber(value);
-  return seed !== undefined && Number.isSafeInteger(seed) && seed >= 0 && seed <= 4_294_967_295
-    ? seed
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
 
 function normalizeElevenLabsLatencyTier(value: unknown): number | undefined {
-  const latencyTier = asFiniteNumber(value);
-  return latencyTier !== undefined &&
-    Number.isSafeInteger(latencyTier) &&
-    latencyTier >= 0 &&
-    latencyTier <= 4
-    ? latencyTier
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 4 });
 }
 
 const ELEVENLABS_OUTPUT_FAMILIES = new Set(["opus", "mp3", "pcm", "ulaw", "alaw", "wav"]);
@@ -115,31 +84,29 @@ function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
   };
 }
 
-function normalizeVoiceSettings(
-  rawVoiceSettings: Record<string, unknown> | undefined,
-): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
-  return {
-    ...(normalizeVoiceSetting(rawVoiceSettings?.stability, 0, 1) == null
-      ? {}
-      : { stability: normalizeVoiceSetting(rawVoiceSettings?.stability, 0, 1) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.similarityBoost, 0, 1) == null
-      ? {}
-      : { similarityBoost: normalizeVoiceSetting(rawVoiceSettings?.similarityBoost, 0, 1) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.style, 0, 1) == null
-      ? {}
-      : { style: normalizeVoiceSetting(rawVoiceSettings?.style, 0, 1) }),
-    ...(asBoolean(rawVoiceSettings?.useSpeakerBoost) == null
-      ? {}
-      : { useSpeakerBoost: asBoolean(rawVoiceSettings?.useSpeakerBoost) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.speed, 0.5, 2) == null
-      ? {}
-      : { speed: normalizeVoiceSetting(rawVoiceSettings?.speed, 0.5, 2) }),
-  };
+function definedSettings<T extends Record<string, unknown>>(settings: T): Partial<T> {
+  const defined = { ...settings };
+  for (const key in defined) {
+    if (defined[key] === undefined) {
+      delete defined[key];
+    }
+  }
+  return defined;
 }
 
-function normalizeElevenLabsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): ElevenLabsProviderConfig {
+function normalizeVoiceSettings(
+  raw: Record<string, unknown> | undefined,
+): Partial<Parameters<typeof elevenLabsTTS>[0]["voiceSettings"]> {
+  return definedSettings({
+    stability: asFiniteNumberInRange(raw?.stability, { min: 0, max: 1 }),
+    similarityBoost: asFiniteNumberInRange(raw?.similarityBoost, { min: 0, max: 1 }),
+    style: asFiniteNumberInRange(raw?.style, { min: 0, max: 1 }),
+    useSpeakerBoost: asBoolean(raw?.useSpeakerBoost),
+    speed: asFiniteNumberInRange(raw?.speed, { min: 0.5, max: 2 }),
+  });
+}
+
+function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
   const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
@@ -162,7 +129,7 @@ function normalizeElevenLabsProviderConfig(
   };
 }
 
-function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
+function readElevenLabsProviderConfig(config: SpeechProviderConfig) {
   return normalizeElevenLabsProviderConfig({
     elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) },
   });
@@ -186,24 +153,12 @@ function resolveElevenLabsTalkApiKey(config: SpeechProviderConfig): string | und
   });
 }
 
-function mergeVoiceSettingsOverride(
-  ctx: SpeechDirectiveTokenParseContext,
-  next: Record<string, unknown>,
-): SpeechProviderOverrides {
-  return {
-    ...ctx.currentOverrides,
-    voiceSettings: {
-      ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
-      ...next,
-    },
-  };
-}
-
 function parseDirectiveToken(
   ctx: SpeechDirectiveTokenParseContext,
   formatErrorMessage: PluginCapabilityCatalogContext["formatErrorMessage"],
 ) {
   try {
+    const overrides: SpeechProviderOverrides = { ...ctx.currentOverrides };
     switch (ctx.key) {
       case "voiceid":
       case "voice_id":
@@ -215,10 +170,8 @@ function parseDirectiveToken(
         if (!isValidElevenLabsVoiceId(ctx.value)) {
           return { handled: true, warnings: [`invalid ElevenLabs voiceId "${ctx.value}"`] };
         }
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, voiceId: ctx.value },
-        };
+        overrides.voiceId = ctx.value;
+        break;
       case "model":
       case "modelid":
       case "model_id":
@@ -227,10 +180,8 @@ function parseDirectiveToken(
         if (!ctx.policy.allowModelId) {
           return { handled: true };
         }
-        return {
-          handled: true,
-          overrides: { ...ctx.currentOverrides, modelId: normalizeElevenLabsTtsModelId(ctx.value) },
-        };
+        overrides.modelId = normalizeElevenLabsTtsModelId(ctx.value);
+        break;
       case "stability":
       case "similarity":
       case "similarityboost":
@@ -246,10 +197,11 @@ function parseDirectiveToken(
           return { handled: true, warnings: [`invalid ${setting} value`] };
         }
         requireInRange(value, setting === "speed" ? 0.5 : 0, setting === "speed" ? 2 : 1, setting);
-        return {
-          handled: true,
-          overrides: mergeVoiceSettingsOverride(ctx, { [setting]: value }),
+        overrides.voiceSettings = {
+          ...asOptionalRecord(overrides.voiceSettings),
+          [setting]: value,
         };
+        break;
       }
       case "speakerboost":
       case "speaker_boost":
@@ -262,10 +214,11 @@ function parseDirectiveToken(
         if (value == null) {
           return { handled: true, warnings: ["invalid useSpeakerBoost value"] };
         }
-        return {
-          handled: true,
-          overrides: mergeVoiceSettingsOverride(ctx, { useSpeakerBoost: value }),
+        overrides.voiceSettings = {
+          ...asOptionalRecord(overrides.voiceSettings),
+          useSpeakerBoost: value,
         };
+        break;
       }
       case "normalize":
       case "applytextnormalization":
@@ -273,40 +226,26 @@ function parseDirectiveToken(
         if (!ctx.policy.allowNormalization) {
           return { handled: true };
         }
-        return {
-          handled: true,
-          overrides: {
-            ...ctx.currentOverrides,
-            applyTextNormalization: normalizeApplyTextNormalization(ctx.value),
-          },
-        };
+        overrides.applyTextNormalization = normalizeApplyTextNormalization(ctx.value);
+        break;
       case "language":
       case "languagecode":
       case "language_code":
         if (!ctx.policy.allowNormalization) {
           return { handled: true };
         }
-        return {
-          handled: true,
-          overrides: {
-            ...ctx.currentOverrides,
-            languageCode: normalizeLanguageCode(ctx.value),
-          },
-        };
+        overrides.languageCode = normalizeLanguageCode(ctx.value);
+        break;
       case "seed":
         if (!ctx.policy.allowSeed) {
           return { handled: true };
         }
-        return {
-          handled: true,
-          overrides: {
-            ...ctx.currentOverrides,
-            seed: normalizeSeed(parseStrictInteger(ctx.value) ?? Number.NaN),
-          },
-        };
+        overrides.seed = normalizeSeed(parseStrictInteger(ctx.value) ?? Number.NaN);
+        break;
       default:
         return { handled: false };
     }
+    return { handled: true, overrides };
   } catch (error) {
     return {
       handled: true,
@@ -417,29 +356,15 @@ export function buildElevenLabsSpeechProvider({
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
-          ? {}
-          : {
-              modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
-            }),
-        ...(normalizeElevenLabsSeed(talkProviderConfig.seed) == null
-          ? {}
-          : { seed: normalizeElevenLabsSeed(talkProviderConfig.seed) }),
-        ...(trimToUndefined(talkProviderConfig.applyTextNormalization) == null
-          ? {}
-          : {
-              applyTextNormalization: normalizeApplyTextNormalization(
-                trimToUndefined(talkProviderConfig.applyTextNormalization),
-              ),
-            }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : {
-              languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
-            }),
+        ...definedSettings({
+          voiceId: trimToUndefined(talkProviderConfig.voiceId),
+          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
+          seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
+          applyTextNormalization: normalizeApplyTextNormalization(
+            trimToUndefined(talkProviderConfig.applyTextNormalization),
+          ),
+          languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
+        }),
         voiceSettings: {
           ...base.voiceSettings,
           ...normalizeVoiceSettings(talkVoiceSettings),
@@ -458,22 +383,16 @@ export function buildElevenLabsSpeechProvider({
         useSpeakerBoost: params.speakerBoost,
       });
       return {
-        ...(trimToUndefined(params.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(params.voiceId) }),
-        ...(trimToUndefined(params.modelId) == null
-          ? {}
-          : { modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)) }),
-        ...(trimToUndefined(params.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(params.outputFormat) }),
-        ...(normalizeElevenLabsSeed(params.seed) == null
-          ? {}
-          : { seed: normalizeElevenLabsSeed(params.seed) }),
+        ...definedSettings({
+          voiceId: trimToUndefined(params.voiceId),
+          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)),
+          outputFormat: trimToUndefined(params.outputFormat),
+          seed: normalizeElevenLabsSeed(params.seed),
+        }),
         ...(normalize == null
           ? {}
           : { applyTextNormalization: normalizeApplyTextNormalization(normalize) }),
-        ...(language == null ? {} : { languageCode: normalizeLanguageCode(language) }),
+        languageCode: normalizeLanguageCode(language),
         ...(latencyTier == null ? {} : { latencyTier }),
         ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
       };
@@ -482,9 +401,7 @@ export function buildElevenLabsSpeechProvider({
       const config = req.providerConfig
         ? readElevenLabsProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveElevenLabsApiKey(requestValue, configValue);
+      const apiKey = resolveElevenLabsApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

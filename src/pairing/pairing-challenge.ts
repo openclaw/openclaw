@@ -1,4 +1,3 @@
-// Builds and validates channel pairing challenges for first-time setup.
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildPairingReply } from "./pairing-messages.js";

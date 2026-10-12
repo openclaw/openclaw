@@ -72,37 +72,34 @@ export function insertMeetingTranscriptSnapshots(params: {
             updated_at_ms: params.now,
           }),
         );
-        if (snapshot.utteranceCount > 0) {
-          for (
-            let start = 0;
-            start < snapshot.utteranceCount;
-            start += LEGACY_UTTERANCE_INSERT_CHUNK_SIZE
-          ) {
-            const chunk = readStagedMeetingTranscriptUtterances({
-              stageDatabase: params.stageDatabase,
-              stageKey: snapshot.stageKey,
-              start,
-              limit: LEGACY_UTTERANCE_INSERT_CHUNK_SIZE,
-            });
-            executeSqliteQuerySync(
-              database,
-              db.insertInto("meeting_transcript_utterances").values(
-                chunk.map((utterance, offset) => ({
-                  session_id: snapshot.session.sessionId,
-                  session_started_at: snapshot.session.startedAt,
-                  sequence: start + offset,
-                  utterance_id: utterance.id ?? null,
-                  started_at: utterance.startedAt ?? null,
-                  ended_at: utterance.endedAt ?? null,
-                  speaker_id: utterance.speaker?.id ?? null,
-                  speaker_label: utterance.speaker?.label ?? null,
-                  text: utterance.text,
-                  final: utterance.final === undefined ? null : utterance.final ? 1 : 0,
-                  metadata_json: utterance.metadata ? JSON.stringify(utterance.metadata) : null,
-                })),
-              ),
-            );
-          }
+        for (
+          let start = 0;
+          start < snapshot.utteranceCount;
+          start += LEGACY_UTTERANCE_INSERT_CHUNK_SIZE
+        ) {
+          const chunk = readStagedMeetingTranscriptUtterances({
+            stageDatabase: params.stageDatabase,
+            stageKey: snapshot.relativeDir,
+            start,
+          });
+          executeSqliteQuerySync(
+            database,
+            db.insertInto("meeting_transcript_utterances").values(
+              chunk.map((utterance, offset) => ({
+                session_id: snapshot.session.sessionId,
+                session_started_at: snapshot.session.startedAt,
+                sequence: start + offset,
+                utterance_id: utterance.id ?? null,
+                started_at: utterance.startedAt ?? null,
+                ended_at: utterance.endedAt ?? null,
+                speaker_id: utterance.speaker?.id ?? null,
+                speaker_label: utterance.speaker?.label ?? null,
+                text: utterance.text,
+                final: utterance.final === undefined ? null : utterance.final ? 1 : 0,
+                metadata_json: utterance.metadata ? JSON.stringify(utterance.metadata) : null,
+              })),
+            ),
+          );
         }
         if (snapshot.summary !== undefined || snapshot.markdown !== undefined) {
           executeSqliteQuerySync(

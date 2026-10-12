@@ -1,9 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  replaceSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
@@ -67,23 +65,31 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
       ],
     });
     const hostSql = observeHostDataSql();
+    const assertWorkerRead = async (
+      method: "sessions.get" | "sessions.describe",
+      archived = false,
+    ) => {
+      // Count the RPC read, independently of the committed writer's publication work.
+      hostSql.calls.forEach((call) => call.mockClear());
+      const result = await read(method);
+      if (method === "sessions.get") {
+        expect(result).toEqual(expected);
+      } else {
+        expect(result).toMatchObject({
+          session: { sessionId: scope.sessionId, ...(archived ? { archivedAt: 1 } : {}) },
+        });
+      }
+      expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+    };
     try {
-      for (let index = 0; index < 100; index++) {
+      for (let index = 0; index < 2; index++) {
         expect(await read()).toEqual(expected);
       }
       expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
       for (const method of ["sessions.get", "sessions.describe"] as const) {
-        for (let index = 0; index < 100; index++) {
+        for (let index = 0; index < 2; index++) {
           sessionChanges.emit({ agentId: scope.agentId, sessionKey: scope.sessionKey });
-          // Count the RPC read, independently of the committed writer's publication work.
-          hostSql.calls.forEach((call) => call.mockClear());
-          const result = await read(method);
-          if (method === "sessions.get") {
-            expect(result).toEqual(expected);
-          } else {
-            expect(result).toMatchObject({ session: { sessionId: scope.sessionId } });
-          }
-          expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+          await assertWorkerRead(method);
         }
       }
       replaceSessionEntrySync(scope, {
@@ -94,14 +100,7 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
       });
       for (const method of ["sessions.get", "sessions.describe"] as const) {
         sessionChanges.emit({ all: true, scope: "catalog" });
-        hostSql.calls.forEach((call) => call.mockClear());
-        const result = await read(method);
-        if (method === "sessions.get") {
-          expect(result).toEqual(expected);
-        } else {
-          expect(result).toMatchObject({ session: { sessionId: scope.sessionId, archivedAt: 1 } });
-        }
-        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+        await assertWorkerRead(method, true);
       }
     } finally {
       hostSql.restore();

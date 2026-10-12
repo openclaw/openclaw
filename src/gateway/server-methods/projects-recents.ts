@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import type { ProjectRegistryRecord } from "../../projects/project-registry.js";
+import type { ProjectRegistryRecord } from "../../projects/project-registry.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 
@@ -32,11 +32,11 @@ function indexPathProjects(projects: readonly ProjectRegistryRecord[]) {
   return { byPath, byAgent };
 }
 
-export function listProjectRecents(
+export async function listProjectRecents(
   store: Record<string, SessionEntry>,
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryRecord[],
-): ProjectRecent[] {
+): Promise<ProjectRecent[]> {
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
@@ -53,7 +53,9 @@ export function listProjectRecents(
   let pathProjects: ReturnType<typeof indexPathProjects> | undefined;
   for (const [sessionKey, entry] of candidates) {
     if (entry.repositoryWorkspaceId) {
-      const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+      const repository = await getSessionRepositoryWorkspaceStore().get(
+        entry.repositoryWorkspaceId,
+      );
       const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
       if (
         !repository ||

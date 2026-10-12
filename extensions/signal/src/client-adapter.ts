@@ -1,15 +1,7 @@
-/**
- * Signal client adapter - unified interface for both native signal-cli and bbernhard container.
- *
- * This adapter provides a single API that routes to the concrete account transport.
- * Exports mirror client.ts names so consumers
- * only need to change their import path.
- */
-
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
-import type { SignalRpcOptions } from "./client.js";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import {
   signalCheck as nativeCheck,
   signalRpcRequest as nativeRpcRequest,
@@ -18,17 +10,10 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export type SignalSseEvent = {
-  event?: string;
-  data?: string;
-};
+export type { SignalSseEvent } from "./client-types.js";
 
 export type SignalTransportKind = SignalTransportConfig["kind"];
 
-/**
- * Drop-in replacement for native signalRpcRequest.
- * Routes to native JSON-RPC or container REST based on config.
- */
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
@@ -43,9 +28,6 @@ export async function signalRpcRequest<T = unknown>(
     : nativeRpcRequest<T>(method, params, opts);
 }
 
-/**
- * Drop-in replacement for native signalCheck.
- */
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -60,10 +42,6 @@ export async function signalCheck(
   }
 }
 
-/**
- * Drop-in replacement for native streamSignalEvents.
- * Container mode uses WebSocket; native uses SSE.
- */
 export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;

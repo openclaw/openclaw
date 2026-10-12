@@ -109,6 +109,8 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         serverBuildId: "replacement-build",
+        // This build-admission fence intentionally prevents initial roster hydration.
+        awaitInitialRoster: false,
         terminalEnabled: true,
       });
 

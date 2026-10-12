@@ -1,5 +1,5 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { loadDiscordThreadBindingsManagerModule } from "./channel.loaders.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,
@@ -37,32 +37,28 @@ export const discordConversationBindings: NonNullable<
       persist: false,
       enableSweeper: false,
     }),
-  setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  setIdleTimeoutBySessionKey: (params) =>
     setThreadBindingIdleTimeoutBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      idleTimeoutMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }).map(toConversationLifecycleBinding),
-  setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKey: (params) =>
     setThreadBindingMaxAgeBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      maxAgeMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }).map(toConversationLifecycleBinding),
-  setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  setIdleTimeoutBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingIdleTimeoutBySessionKeyAsync({
-        targetSessionKey,
-        accountId: accountId ?? undefined,
-        idleTimeoutMs,
+        ...params,
+        accountId: params.accountId ?? undefined,
       })
     ).map(toConversationLifecycleBinding),
-  setMaxAgeBySessionKeyAsync: async ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingMaxAgeBySessionKeyAsync({
-        targetSessionKey,
-        accountId: accountId ?? undefined,
-        maxAgeMs,
+        ...params,
+        accountId: params.accountId ?? undefined,
       })
     ).map(toConversationLifecycleBinding),
 };

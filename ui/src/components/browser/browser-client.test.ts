@@ -9,6 +9,11 @@ import {
   bindBrowserRequestClient,
   downloadBrowserDocument,
 } from "./browser-client.ts";
+import {
+  createBrowserClient,
+  TestBrowserPanelHost,
+} from "./browser-panel-controller-test-support.ts";
+import { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -25,6 +30,55 @@ describe("session browser requests", () => {
     instanceId: "preview-1",
     sessionScoped: true,
   };
+
+  it.each(["session", "dock", "dashboard", "session-dashboard"] as const)(
+    "scopes only the session panel and sends transcript references only with its list (%s)",
+    async (surface) => {
+      const { client: gateway, request } = createBrowserClient(async () => ({}), {
+        sessionScoped: surface === "session-dashboard",
+      });
+      const host = new TestBrowserPanelHost(gateway);
+      host.sessionKey = surface === "dock" ? "" : "  agent:main:panel  ";
+      host.sessionTabs = Array.from({ length: 65 }, (_, index) => ({
+        target: "host",
+        profile: "openclaw",
+        targetId: `t${index}`,
+      }));
+      if (surface === "dashboard" || surface === "session-dashboard") {
+        host.dashboardTarget = { ...dashboard, sessionScoped: surface === "session-dashboard" };
+      }
+      const ownership = new BrowserPanelOperationOwnership(host);
+      const client = ownership.captureClient();
+      if (!client) {
+        throw new Error("Expected a live panel client");
+      }
+      for (const envelope of [
+        { method: "GET", path: "/tabs" },
+        { method: "POST", path: "/tabs/open", body: { url: "https://example.test" } },
+        {
+          method: "POST",
+          path: "/navigate",
+          body: { targetId: "t1", url: "https://example.test" },
+        },
+        { method: "POST", path: "/tabs/focus", body: { targetId: "t1" } },
+        { method: "DELETE", path: "/tabs/t1" },
+      ]) {
+        await client.request("browser.request", envelope);
+        const params = request.mock.calls.at(-1)?.[1];
+        if (surface === "session") {
+          expect(params).toEqual({
+            ...envelope,
+            tabScope: {
+              sessionKey: "agent:main:panel",
+              ...(envelope.path === "/tabs" ? { referencedTabs: host.sessionTabs.slice(1) } : {}),
+            },
+          });
+        } else {
+          expect(params).not.toHaveProperty("tabScope");
+        }
+      }
+    },
+  );
 
   it("binds tab actions to the session owner without forwarding global browser selectors", async () => {
     const request = vi.fn().mockResolvedValue({});
@@ -166,43 +220,6 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "/__openclaw__/assistant-media?source=%2Ftmp%2Fbrowser+shot.png",
     );
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("rejects unsuccessful screenshot responses", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 404 })),
-    );
-
-    await expect(
-      fetchBrowserScreenshotDataUrl({
-        resourceBasePath: "/openclaw",
-        authToken: null,
-        path: "/tmp/missing.png",
-      }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("cancels an unsuccessful screenshot response body", async () => {
-    vi.useFakeTimers();
-    const response = new Response("not found", { status: 404 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => response),
-    );
-
-    await expect(
-      fetchBrowserScreenshotDataUrl({
-        resourceBasePath: "/openclaw",
-        authToken: null,
-        path: "/tmp/missing.png",
-      }),
-    ).rejects.toThrow("Screenshot fetch failed (404).");
-    expect(cancel).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 

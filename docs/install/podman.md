@@ -202,10 +202,11 @@ openclaw doctor --json
 - **Stop container:** `podman stop openclaw`
 - **Remove container:** `podman rm -f openclaw`
 - **Open dashboard URL from host CLI:** `openclaw dashboard --no-open`
-- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC probe + extra service scan)
+- **Health/status via host CLI:** `openclaw gateway status --deep` (RPC check + extra service scan)
 
 ## Troubleshooting
 
+- **Token generation fails:** Setup and launch stop before saving a generated token or starting the container when the selected random source (`openssl`, Python, or `od`) fails. Repair that command and retry.
 - **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
 - **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Ensure the host config/workspace paths are owned by your current user.
 - **Gateway start blocked (missing `gateway.mode=local`):** Ensure `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.

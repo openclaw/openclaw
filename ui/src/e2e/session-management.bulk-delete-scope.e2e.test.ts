@@ -13,6 +13,7 @@ import {
   sessionsListResponse,
   waitForConfirmModal,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -135,11 +136,9 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
     };
     const filter = async (label: "Archived" | "All") => {
-      await sidebar.getByRole("button", { name: "Filter & sort" }).click();
-      await sidebar
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: label, exact: true })
-        .click();
+      await sidebar.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await chooseSidebarMenuOption(sidebar.page(), "Status", label);
+      await closeSidebarMenu(page);
     };
     const pageKeys = () =>
       page.evaluate(() => {
@@ -181,7 +180,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "Research", exact: true })
+        .getByRole("menuitem", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
       const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");

@@ -43,11 +43,6 @@ function isBinaryMimeType(mimeType: string): boolean {
   return normalized ? !TEXTUAL_MIME_PATTERN.test(normalized) : false;
 }
 
-function describeOmittedValue(value: unknown, label: string): string {
-  const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
-  return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
-}
-
 function redactInlineDataUris(value: string): string {
   return value.replace(
     INLINE_DATA_URI_PATTERN,
@@ -72,7 +67,8 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
         if (key === "data") {
           const mimeType = readMimeType(this);
           if (mimeType && isBinaryMimeType(mimeType)) {
-            return describeOmittedValue(value, "binary data");
+            const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
+            return length ? `[binary data omitted: ${length} chars]` : "[binary data omitted]";
           }
         }
         if (typeof value === "bigint") {

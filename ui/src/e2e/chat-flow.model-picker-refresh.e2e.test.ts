@@ -122,9 +122,6 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker
-        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
-        .tap();
       await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await screenshot(page, "05-picker-before-touch-selection.png");
@@ -165,9 +162,6 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker
-        .locator('[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]')
-        .tap();
       await picker.locator('[data-chat-model-default="true"]').waitFor();
       await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect

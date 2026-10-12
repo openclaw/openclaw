@@ -105,7 +105,9 @@ import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/
 import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
-import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import type { ClientRequestArgs } from "node:http";
+import type { ClientOptions as PublishedClientOptions, WebSocket as PublishedWebSocket } from "ws";
+import { WebSocket, type ClientOptions } from "openclaw/plugin-sdk/websocket-runtime";
 import { z } from "zod";
 ${privateRuntimeConsumers}
 
@@ -140,6 +142,34 @@ type AckOptionsUnchanged = RequireTrue<Equal<NonNullable<Parameters<QueueOwner["
   expectedPlatformSendAttemptId?: string | null;
 }>>;
 
+// Compile-only consumers retain the WebSocket contract shipped in v2026.9.6.
+type WebSocketOptionsUnchanged = RequireTrue<Equal<ClientOptions, PublishedClientOptions>>;
+type WebSocketConstructorUnchanged = RequireTrue<Equal<typeof WebSocket, typeof PublishedWebSocket>>;
+const legacyWebSocketOptions: ClientOptions = {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+};
+const legacySocket = new WebSocket("wss://gateway.example", legacyWebSocketOptions);
+new WebSocket(null);
+new WebSocket(new URL("wss://gateway.example"), {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", ["fixture"], {
+  checkServerIdentity: (hostname, certificate) => hostname.length > 0 && certificate.length > 0,
+});
+new WebSocket("wss://gateway.example", "fixture", legacyWebSocketOptions);
+const httpWebSocketOptions: ClientRequestArgs = { agent: false };
+new WebSocket("wss://gateway.example", undefined, httpWebSocketOptions);
+const legacySocketArgs: ConstructorParameters<typeof WebSocket> = [
+  new URL("wss://gateway.example"), undefined, legacyWebSocketOptions,
+];
+new WebSocket(...legacySocketArgs);
+const closedSocketState: typeof PublishedWebSocket.CLOSED = WebSocket.CLOSED;
+legacySocket.on("message", (_data, isBinary) => {
+  const binary: boolean = isBinary;
+  void binary;
+});
+void closedSocketState;
+
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {
   byProvider: new Map<string, Set<string>>(),
@@ -149,9 +179,8 @@ const legacyModelsData = {
 };
 const modelsData: ModelsProviderData = legacyModelsData;
 const modelsAdapter: typeof buildModelsProviderData = async () => legacyModelsData;
-const commandAuthModelsAdapter: typeof buildCommandAuthModelsProviderData = modelsAdapter;
 void modelsData;
-void commandAuthModelsAdapter;
+void modelsAdapter;
 declare const preparedModelsData: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
 const preparedCatalog: { id: string; provider: string; contextWindow?: number }[] = preparedModelsData.modelCatalog;
 void preparedCatalog;
@@ -233,11 +262,15 @@ export default defineChannelPluginEntry({
     const openclawPackagePath = join(consumerRoot, "node_modules", "openclaw");
     mkdirSync(dirname(openclawPackagePath), { recursive: true });
     symlinkSync(repoRoot, openclawPackagePath, process.platform === "win32" ? "junction" : "dir");
-    symlinkSync(
-      join(repoRoot, "node_modules", "zod"),
-      join(consumerRoot, "node_modules", "zod"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    for (const dependency of ["zod", "ws", "@types/ws"]) {
+      const dependencyPath = join(consumerRoot, "node_modules", dependency);
+      mkdirSync(dirname(dependencyPath), { recursive: true });
+      symlinkSync(
+        join(repoRoot, "node_modules", dependency),
+        dependencyPath,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     const result = spawnSync(
       tsgoPath,

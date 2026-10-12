@@ -462,18 +462,7 @@ private struct ChatWorkingClawBodyShape: Shape {
         path.addLine(to: CGPoint(x: 13.5, y: 13))
         path.addLine(to: CGPoint(x: 11.5, y: 14.2))
         path.closeSubpath()
-        return path.applying(self.transform(for: rect))
-    }
-
-    private func transform(for rect: CGRect) -> CGAffineTransform {
-        let scale = min(rect.width, rect.height) / 24
-        return CGAffineTransform(
-            a: scale,
-            b: 0,
-            c: 0,
-            d: scale,
-            tx: rect.midX - 12 * scale,
-            ty: rect.midY - 12 * scale)
+        return path.applying(chatWorkingClawTransform(for: rect))
     }
 }
 
@@ -501,15 +490,19 @@ private struct ChatWorkingClawJawShape: Shape {
             control2: CGPoint(x: 12.2, y: 10.9))
         path.addLine(to: CGPoint(x: 6.8, y: 13))
         path.closeSubpath()
-        let scale = min(rect.width, rect.height) / 24
-        return path.applying(CGAffineTransform(
-            a: scale,
-            b: 0,
-            c: 0,
-            d: scale,
-            tx: rect.midX - 12 * scale,
-            ty: rect.midY - 12 * scale))
+        return path.applying(chatWorkingClawTransform(for: rect))
     }
+}
+
+private func chatWorkingClawTransform(for rect: CGRect) -> CGAffineTransform {
+    let scale = min(rect.width, rect.height) / 24
+    return CGAffineTransform(
+        a: scale,
+        b: 0,
+        c: 0,
+        d: scale,
+        tx: rect.midX - 12 * scale,
+        ty: rect.midY - 12 * scale)
 }
 
 struct ChatWorkingStatusText: View {

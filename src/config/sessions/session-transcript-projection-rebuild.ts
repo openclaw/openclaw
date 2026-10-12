@@ -20,10 +20,12 @@ import {
   prepareSessionTranscriptProjectionAppend,
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
+  type PreparedSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -55,12 +57,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 };
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
-  activeRows: Array<{
-    activePosition: number;
-    contextEligible: 0 | 1;
-    eventSeq: number;
-    messagePosition: number | null;
-  }>;
+  activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
   ftsRows: TranscriptIndexEntry[];
 };
 
@@ -92,10 +89,6 @@ type TranscriptProjectionSourceSnapshot = {
 const PROJECTION_FINALIZE_TAIL_ROWS = 512;
 const PROJECTION_FINALIZE_TAIL_BYTES = 256 * 1024;
 
-function transcriptEventStoredByteLength() {
-  return transcriptEventReadBytesSql().as("event_bytes");
-}
-
 function getProjectionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
@@ -125,10 +118,6 @@ function readCanonicalEventId(event: unknown): string | null {
   return event.id.trim() || null;
 }
 
-function changesPriorProjectionVisibility(event: unknown): boolean {
-  return isCanonicalSessionTranscriptEntry(event) && event.type === "reset";
-}
-
 /** Streams projection payloads; only navigation metadata is retained for branch resolution. */
 export function visitSessionTranscriptProjection(
   db: DatabaseSync,
@@ -142,14 +131,10 @@ export function visitSessionTranscriptProjection(
   return source ? visitProjectionSource(source, visitor) : undefined;
 }
 
-function readProjectionSource(
-  db: DatabaseSync,
-  sessionId: string,
-): SessionTranscriptProjectionSource | undefined {
-  const kysely = getProjectionKysely(db);
-  const session = executeSqliteQueryTakeFirstSync(
+function readProjectionSession(db: DatabaseSync, sessionId: string) {
+  return executeSqliteQueryTakeFirstSync(
     db,
-    kysely
+    getProjectionKysely(db)
       .selectFrom("session_windows as session")
       .leftJoin(
         "transcript_rewrite_watermarks as rewrite",
@@ -159,6 +144,14 @@ function readProjectionSource(
       .select(["session.transcript_updated_at", "rewrite.generation"])
       .where("session.session_id", "=", sessionId),
   );
+}
+
+function readProjectionSource(
+  db: DatabaseSync,
+  sessionId: string,
+): SessionTranscriptProjectionSource | undefined {
+  const kysely = getProjectionKysely(db);
+  const session = readProjectionSession(db, sessionId);
   if (!session) {
     return undefined;
   }
@@ -201,24 +194,10 @@ function visitProjectionSource(
       for (const row of source.rows(true)) {
         sourceIndexedSeq = row.seq;
         const event: unknown = JSON.parse(row.event_json);
-        const navigation: Record<string, unknown> & { seq: number } = { seq: row.seq };
-        if (isRecord(event)) {
-          // Preserve own-property presence, including malformed controls, without retaining
-          // message/tool/compaction payloads in the ancestry graph.
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              navigation[key] = event[key];
-            }
-          }
-        }
-        yield navigation;
+        yield {
+          seq: row.seq,
+          ...(isRecord(event) ? projectTranscriptNavigationFields(event) : {}),
+        };
       }
     })(),
   );
@@ -321,18 +300,7 @@ function readProjectionSourceSnapshot(
   sessionId: string,
 ): TranscriptProjectionSourceSnapshot {
   const kysely = getProjectionKysely(db);
-  const session = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("session_windows as session")
-      .leftJoin(
-        "transcript_rewrite_watermarks as rewrite",
-        "rewrite.session_id",
-        "session.session_id",
-      )
-      .select(["session.transcript_updated_at", "rewrite.generation"])
-      .where("session.session_id", "=", sessionId),
-  );
+  const session = readProjectionSession(db, sessionId);
   const latest = executeSqliteQueryTakeFirstSync(
     db,
     kysely
@@ -381,7 +349,7 @@ function projectionTailFitsCatchUpBounds(
     db,
     getProjectionKysely(db)
       .selectFrom("transcript_events")
-      .select(["seq", transcriptEventStoredByteLength()])
+      .select(["seq", transcriptEventReadBytesSql().as("event_bytes")])
       .where("session_id", "=", plan.sessionId)
       .where("seq", ">", plan.sourceIndexedSeq)
       .orderBy("seq", "asc")
@@ -434,29 +402,20 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
   ) {
     return false;
   }
+  const claim = {
+    active_event_count: 0,
+    active_message_count: 0,
+    indexed_seq: -1,
+    leaf_event_id: null,
+    needs_rebuild: 1,
+    updated_at: claimId,
+  };
   executeSqliteQuerySync(
     db,
     kysely
       .insertInto("session_transcript_index_state")
-      .values({
-        active_event_count: 0,
-        active_message_count: 0,
-        indexed_seq: -1,
-        leaf_event_id: null,
-        needs_rebuild: 1,
-        session_id: plan.sessionId,
-        updated_at: claimId,
-      })
-      .onConflict((conflict) =>
-        conflict.column("session_id").doUpdateSet({
-          active_event_count: 0,
-          active_message_count: 0,
-          indexed_seq: -1,
-          leaf_event_id: null,
-          needs_rebuild: 1,
-          updated_at: claimId,
-        }),
-      ),
+      .values({ ...claim, session_id: plan.sessionId })
+      .onConflict((conflict) => conflict.column("session_id").doUpdateSet(claim)),
   );
   return true;
 }
@@ -577,7 +536,7 @@ function prepareProjectionTailCatchUp(
   };
   for (const row of rows) {
     const event: unknown = JSON.parse(row.event_json);
-    if (changesPriorProjectionVisibility(event)) {
+    if (isCanonicalSessionTranscriptEntry(event) && event.type === "reset") {
       return undefined;
     }
     const append = prepareSessionTranscriptProjectionAppend({

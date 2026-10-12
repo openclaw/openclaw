@@ -69,6 +69,23 @@ function response(events: unknown[], trailing = "") {
   );
 }
 
+function openResponse(event: unknown) {
+  const { promise: cancelled, resolve } = Promise.withResolvers<void>();
+  const cancel = vi.fn(resolve);
+  return {
+    response: new Response(
+      new ReadableStream({
+        start(body) {
+          body.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+        },
+        cancel,
+      }),
+    ),
+    cancel,
+    cancelled,
+  };
+}
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.mocked(parseStreamingJson).mockClear();
@@ -113,6 +130,9 @@ describe("Radius native message transport", () => {
     for await (const event of stream) {
       if (event.type === "toolcall_delta") {
         observed.push(event.delta);
+        expect(event.partial.content[event.contentIndex]).toMatchObject({
+          partialJson: observed.join(""),
+        });
       }
     }
     expect(observed).toEqual(deltas);
@@ -122,6 +142,7 @@ describe("Radius native message transport", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", arguments: toolArguments }],
     });
+    expect((await stream.result()).content[0]).not.toHaveProperty("partialJson");
   });
 
   it.each(["\n\n", ""])(
@@ -339,21 +360,15 @@ describe("Radius native message transport", () => {
       stopReason: "error",
       errorMessage: expect.stringContaining(error),
     });
+    for (const block of (await stream.result()).content) {
+      expect(block).not.toHaveProperty("partialJson");
+    }
   });
 
   it("cancels an open response promptly when the caller aborts", async () => {
     const controller = new AbortController();
-    const cancelled = vi.fn();
-    fetchMock.mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(body) {
-            body.enqueue(new TextEncoder().encode('data: {"type":"start"}\n\n'));
-          },
-          cancel: cancelled,
-        }),
-      ),
-    );
+    const open = openResponse({ type: "start" });
+    fetchMock.mockResolvedValue(open.response);
     const stream = createRadiusStreamFn()(model, context, {
       ...options,
       signal: controller.signal,
@@ -364,29 +379,17 @@ describe("Radius native message transport", () => {
       }
     }
     expect(await stream.result()).toMatchObject({ stopReason: "aborted" });
-    expect(cancelled).toHaveBeenCalledOnce();
+    expect(open.cancel).toHaveBeenCalledOnce();
   });
 
   it("releases an open response after terminal completion", async () => {
-    const cancelled = vi.fn();
-    fetchMock.mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(body) {
-            body.enqueue(
-              new TextEncoder().encode(
-                `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`,
-              ),
-            );
-          },
-          cancel: cancelled,
-        }),
-      ),
-    );
+    const open = openResponse({ type: "done", reason: "stop", usage });
+    fetchMock.mockResolvedValue(open.response);
     expect(await createRadiusStreamFn()(model, context, options).result()).toMatchObject({
       stopReason: "stop",
     });
-    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+    await open.cancelled;
+    expect(open.cancel).toHaveBeenCalledOnce();
   });
 
   it("surfaces HTTP failures with status and response-hook metadata", async () => {

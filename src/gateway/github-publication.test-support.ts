@@ -2,10 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  deleteRegistryWorktree,
+  insertRegistryWorktree,
+  updateRegistryWorktree,
+} from "../agents/worktrees/registry.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   replaceSessionEntrySync,
@@ -19,6 +26,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -27,7 +35,7 @@ import {
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   type GitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
@@ -40,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   prepareIdentity: vi.fn(),
   runCommand: vi.fn(),
   findWorktree: vi.fn(),
+  readWorktree: vi.fn(),
   findWorktreeById: vi.fn(),
   resolveRepository: vi.fn(),
   loadSession: vi.fn(),
@@ -74,6 +83,35 @@ vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   unlockWorktree: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Only the synthetic repository lacks physical recovery refs; real Git stays real.
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/worktrees/git.js")>();
+  const runGit: typeof actual.runGit = async (cwd, args, options) => {
+    if (
+      cwd !== "/repo" ||
+      args.length !== 4 ||
+      args[0] !== "show-ref" ||
+      args[1] !== "--verify" ||
+      args[2] !== "--quiet" ||
+      !args[3]?.startsWith("refs/openclaw/removals/")
+    ) {
+      return await actual.runGit(cwd, args, options);
+    }
+    options?.signal?.throwIfAborted();
+    options?.beforeRun?.();
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+      timeoutMs: options?.timeoutMs ?? 120_000,
+    };
+  };
+  return { ...actual, runGit };
+});
+
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
   prepareGitCoauthorAttribution: mocks.prepareAttribution,
@@ -87,9 +125,24 @@ vi.mock("../agents/worktrees/service.js", () => ({
   },
 }));
 
+vi.mock("../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: mocks.readWorktree,
+}));
+
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadGatewaySessionEntryReadOnly: mocks.loadSession,
+}));
+
+// Preparation and live authority checks use the same fixture session state.
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => mocks.loadSession(params.key, { agentId: params.agentId }),
 }));
 
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -117,37 +170,20 @@ export const systemPublicationRequester: GitHubPublicationRequester = Object.fre
   assertInvocationCurrent: () => {},
 });
 
-export async function createGitHubPublicationRequesterFixture(params: {
-  profileId: string;
-  scopes: readonly string[];
-  sessionKey: string;
-  agentId: string;
-  getCommittedRuntimeConfig?: () => OpenClawConfig;
-}) {
-  const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
-    import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
-    import("./server/ws-connection/connect-operator-access.js"),
-  ]);
-  const client = createOperatorWsClient({
-    connId: params.profileId,
-    scopes: [...params.scopes],
-  });
-  client.authenticatedUserProfile = {
-    profileId: params.profileId,
-    displayName: null,
-    avatarRevision: "fixture",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
-  prepareGatewayConnectOperatorAccess(client);
-  const context = {
-    getRuntimeConfig: currentGitHubPublicationConfig,
-    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
-  };
-  const session = { sessionKey: params.sessionKey, agentId: params.agentId };
-  const captured = await captureGitHubPublicationRequester({ client, context }, session);
+export async function createSystemGitHubPublicationRequesterFixture() {
+  const { createSyntheticPluginRuntimeClient } = await import("./server-plugin-runtime-client.js");
+  const captured = await prepareGitHubPublicationRequesterV2(
+    {
+      client: createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.admin"],
+      }),
+      context: { getRuntimeConfig: currentGitHubPublicationConfig },
+    },
+    { sessionKey: SESSION_KEY, agentId: "main" },
+  );
   onTestFinished(captured.release);
-  return { ...captured, client, context, session };
+  return captured;
 }
 
 type PublicationFixtureRequest<T> = Omit<T, "requester"> & {
@@ -243,6 +279,7 @@ export function seedLocalPublication(
     requester?: GitHubPublicationRequesterSnapshot | null;
   },
 ): void {
+  ensureGitHubPublicationSchema(database.db);
   database.db
     .prepare(
       `INSERT INTO github_publication_requests (
@@ -304,6 +341,59 @@ export function publicationTranscriptMessages(events: unknown[], requestId: stri
   );
 }
 
+/** Calibrate the native baseline while the publication consumes the real worker reader. */
+export async function withPublicationWorktreeSqlBoundary<T>(
+  change: "repository identity" | "newer same-owner row" | "restored same-owner row",
+  operation: (changeWorktree: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  const { readLiveRegistryWorktreeByOwner } = await vi.importActual<
+    typeof import("../agents/worktrees/registry-read.js")
+  >("../agents/worktrees/registry-read.js");
+  mocks.readWorktree.mockImplementation(readLiveRegistryWorktreeByOwner);
+  mocks.findWorktree.mockImplementation((kind, id) =>
+    findLiveRegistryWorktreeByOwner(process.env, kind, id),
+  );
+  const original = findLiveRegistryWorktreeByOwner(process.env, "session", SESSION_KEY);
+  if (!original) {
+    throw new Error("Publication fixture worktree is missing");
+  }
+  const successor = {
+    ...original,
+    id: `${original.id}-successor`,
+    path: `${original.path}-successor`,
+    createdAt: original.createdAt + 1,
+  };
+  if (change === "restored same-owner row") {
+    // Seed before guard capture so the awaited mutation proves restoration invalidation alone.
+    await insertRegistryWorktree(process.env, { ...successor, removedAt: 1 });
+  }
+  const changeWorktree = () => {
+    if (change === "repository identity") {
+      return updateRegistryWorktree(process.env, original.id, {
+        repositoryIdentity: {
+          repoRoot: original.repoRoot,
+          repoFingerprint: "replacement-fingerprint",
+        },
+      });
+    }
+    return change === "newer same-owner row"
+      ? insertRegistryWorktree(process.env, successor)
+      : updateRegistryWorktree(process.env, successor.id, { removedAt: undefined });
+  };
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  const worktreeQueries = () => reads.queries.filter((sql) => /\bfrom "worktrees"/iu.test(sql));
+  try {
+    findLiveRegistryWorktreeByOwner(process.env, "session", SESSION_KEY);
+    expect(worktreeQueries().length).toBeGreaterThan(0);
+    reads.queries.length = 0;
+    const result = await operation(changeWorktree);
+    expect(worktreeQueries()).toEqual([]);
+    return result;
+  } finally {
+    reads.restore();
+  }
+}
+
 export let root: string;
 export let commands: string[][];
 export let commandCalls: Array<{ argv: string[]; input?: string }>;
@@ -313,7 +403,7 @@ let realWorktree = false;
 /** Publish and reset the same real SQLite owner while transport faults stay synthetic. */
 export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   setRuntimeConfigSnapshot({
-    agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
+    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
     // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
     session: { maintenance: { mode: "warn" } },
   });
@@ -358,6 +448,18 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   };
 }
 
+export async function persistClaimPublicationWorkspace() {
+  await persistPublicationTestSession(REQUEST.sessionKey);
+  const worktree = mocks.findWorktree("session", REQUEST.sessionKey);
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, {
+    ...worktree,
+    name: "publication",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  });
+}
+
 export function installGitHubPublicationTestHarness(
   harnessOptions: { creatorEmail?: string; sandbox?: "required"; realWorktree?: boolean } = {},
 ): void {
@@ -392,7 +494,7 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: "worktree-1",
         name: "publication",
         repoRoot: "/repo",
@@ -472,6 +574,11 @@ export function installGitHubPublicationTestHarness(
       ownerKind: "session",
       ownerId,
     }));
+    mocks.readWorktree
+      .mockReset()
+      .mockImplementation(async (_context: unknown, kind: string, id: string) =>
+        mocks.findWorktree(kind, id),
+      );
     mocks.findWorktreeById.mockReset().mockReturnValue(undefined);
     mocks.resolveRepository.mockReset().mockResolvedValue({
       checkoutRoot: "/repo/worktree",
@@ -592,7 +699,7 @@ export function installGitHubPublicationTestHarness(
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({
-      agents: { list: [{ id: "main", default: true, workspace: "/repo/worktree" }] },
+      agents: { entries: { main: { workspace: "/repo/worktree" } } },
     });
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: SESSION_KEY },

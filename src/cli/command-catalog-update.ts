@@ -4,6 +4,11 @@ import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
 /** Update commands retain their own config, state, and protocol admission boundaries. */
 export const updateCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
+    commandPath: ["update", "adopt-immutable"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
     commandPath: ["update", "cleanup"],
     exact: true,
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },

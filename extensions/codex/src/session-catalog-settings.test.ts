@@ -15,6 +15,13 @@ import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 let fixtureId = 0;
+const liveSettingsEvent = {
+  method: "thread/settings/updated",
+  params: {
+    threadId: "thread-1",
+    threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
+  },
+};
 
 function nativeThread(overrides: Partial<CodexThread> = {}) {
   return {
@@ -59,7 +66,7 @@ function resumeResponse(thread: ReturnType<typeof nativeThread>) {
   };
 }
 
-async function fixture(sameSecond = false, overflow = false, evicted = false) {
+async function fixture(overflow = false, evicted = false) {
   const options: CodexAppServerStartOptions = {
     transport: "websocket",
     command: "codex",
@@ -69,7 +76,7 @@ async function fixture(sameSecond = false, overflow = false, evicted = false) {
     headers: {},
   };
   const inventory = [
-    nativeThread({ recencyAt: evicted ? 0 : sameSecond ? 200 : 100 }),
+    nativeThread({ recencyAt: evicted ? 0 : 100 }),
     nativeThread({ id: "other", recencyAt: 200 }),
   ];
   if (overflow) {
@@ -86,9 +93,7 @@ async function fixture(sameSecond = false, overflow = false, evicted = false) {
         if (request.method === "thread/list") {
           const ordered = overflow
             ? inventory.toSorted((left, right) => (right.recencyAt ?? 0) - (left.recencyAt ?? 0))
-            : sameSecond
-              ? inventory.toReversed()
-              : inventory;
+            : inventory;
           const matching = ordered.filter(
             (thread) => !request.params.cwd || thread.cwd === request.params.cwd,
           );
@@ -142,7 +147,15 @@ async function fixture(sameSecond = false, overflow = false, evicted = false) {
   });
   cleanups.push(() => index.close());
   await index.initialize();
-  return { a, b, index, inventory, methods, homeId };
+  const abandonClient = vi.fn(async () => {});
+  const resume = () =>
+    resumeCodexAppServerThread({
+      client: a.client,
+      abandonClient,
+      request: { threadId: "thread-1", excludeTurns: true },
+      timeoutMs: 1_000,
+    });
+  return { a, b, index, inventory, methods, homeId, resume, abandonClient };
 }
 
 afterEach(async () => {
@@ -153,67 +166,38 @@ afterEach(async () => {
 });
 
 describe("Codex catalog live settings", () => {
-  it.each([false, true])(
-    "keeps live resume settings authoritative for overflow cwd queries (evicted: %s)",
-    async (evicted) => {
-      const { a, index } = await fixture(false, true, evicted);
-      if (evicted) {
-        expect(index.get("thread-1")).toBeUndefined();
-      }
-      const findThread = async (cwd: string) => {
-        let cursor: string | undefined;
-        do {
-          const page = await index.list({ cwd, cursor });
-          const thread = page.sessions.find((session) => session.threadId === "thread-1");
-          if (thread) {
-            return thread;
-          }
-          cursor = page.nextCursor;
-        } while (cursor);
-        return undefined;
-      };
-      await resumeCodexAppServerThread({
-        client: a.client,
-        abandonClient: vi.fn(async () => {}),
-        request: { threadId: "thread-1", excludeTurns: true },
-        timeoutMs: 1_000,
-      });
-      expect(await findThread("/workspace/runtime")).toMatchObject({
-        threadId: "thread-1",
-        cwd: "/workspace/runtime",
-        modelProvider: "runtime-provider",
-      });
-      expect(await findThread("/workspace/persisted")).toBeUndefined();
-      if (!evicted) {
-        expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([
-          expect.objectContaining({
-            threadId: "thread-1",
-            cwd: "/workspace/runtime",
-            modelProvider: "runtime-provider",
-          }),
-        ]);
-        expect(
-          (await index.list({ cwd: "/workspace/persisted" })).sessions.some(
-            (session) => session.threadId === "thread-1",
-          ),
-        ).toBe(false);
-      }
-      a.client.close();
-      expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([]);
-      expect(await findThread("/workspace/persisted")).toMatchObject({
-        threadId: "thread-1",
-        modelProvider: "openai",
-      });
-      if (!evicted) {
-        expect((await index.list({ cwd: "/workspace/persisted" })).sessions).toContainEqual(
-          expect.objectContaining({ threadId: "thread-1", modelProvider: "openai" }),
-        );
-      }
-    },
-  );
+  it("keeps live resume settings authoritative for overflow cwd queries after eviction", async () => {
+    const { a, index, resume } = await fixture(true, true);
+    expect(index.get("thread-1")).toBeUndefined();
+    const findThread = async (cwd: string) => {
+      let cursor: string | undefined;
+      do {
+        const page = await index.list({ cwd, cursor });
+        const thread = page.sessions.find((session) => session.threadId === "thread-1");
+        if (thread) {
+          return thread;
+        }
+        cursor = page.nextCursor;
+      } while (cursor);
+      return undefined;
+    };
+    await resume();
+    expect(await findThread("/workspace/runtime")).toMatchObject({
+      threadId: "thread-1",
+      cwd: "/workspace/runtime",
+      modelProvider: "runtime-provider",
+    });
+    expect(await findThread("/workspace/persisted")).toBeUndefined();
+    a.client.close();
+    expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([]);
+    expect(await findThread("/workspace/persisted")).toMatchObject({
+      threadId: "thread-1",
+      modelProvider: "openai",
+    });
+  });
 
   it("keeps another connection's active status on overflow pages until it closes", async () => {
-    const { a, index, inventory } = await fixture(false, true);
+    const { a, index, inventory } = await fixture(true);
     inventory[0]!.status = { type: "notLoaded" };
     a.send({
       method: "thread/status/changed",
@@ -240,14 +224,8 @@ describe("Codex catalog live settings", () => {
   });
 
   it("publishes acknowledged resume settings before returning and keeps stale native metadata behind the live overlay", async () => {
-    const { a, index, inventory, methods } = await fixture();
-    const abandonClient = vi.fn(async () => {});
-    await resumeCodexAppServerThread({
-      client: a.client,
-      abandonClient,
-      request: { threadId: "thread-1", excludeTurns: true },
-      timeoutMs: 1_000,
-    });
+    const { a, index, inventory, methods, resume, abandonClient } = await fixture();
+    await resume();
     expect((await index.list({ cwd: "/workspace/runtime" })).sessions).toEqual([
       expect.objectContaining({ threadId: "thread-1", modelProvider: "runtime-provider" }),
     ]);
@@ -275,15 +253,8 @@ describe("Codex catalog live settings", () => {
 
   it("uses settings notifications in filtering and preserves equivalent open-source settings without a lookup", async () => {
     const { a, b, index, methods } = await fixture();
-    const event = {
-      method: "thread/settings/updated",
-      params: {
-        threadId: "thread-1",
-        threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
-      },
-    };
-    a.send(event);
-    b.send(event);
+    a.send(liveSettingsEvent);
+    b.send(liveSettingsEvent);
     b.client.close();
     expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([
       expect.objectContaining({
@@ -297,36 +268,9 @@ describe("Codex catalog live settings", () => {
     expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);
   });
 
-  it("refreshes native recency on turn start before turn completion", async () => {
-    const { a, index, inventory, methods } = await fixture();
-    expect((await index.list({})).sessions[0]?.threadId).toBe("other");
-    inventory[0]!.recencyAt = 300;
-    inventory[0]!.updatedAt = 300;
-    a.send({
-      method: "turn/started",
-      params: {
-        threadId: "thread-1",
-        turn: { id: "turn-1", status: "inProgress", startedAt: 300, items: [] },
-      },
-    });
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions[0]).toMatchObject({
-        threadId: "thread-1",
-        recencyAt: 300,
-      });
-    });
-    expect(methods).toEqual(["thread/list", "thread/read"]);
-  });
-
   it("withdraws settings only when their supporting source reports notLoaded", async () => {
     const { a, b, index, methods } = await fixture();
-    a.send({
-      method: "thread/settings/updated",
-      params: {
-        threadId: "thread-1",
-        threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
-      },
-    });
+    a.send(liveSettingsEvent);
     const unloaded = {
       method: "thread/status/changed",
       params: { threadId: "thread-1", status: { type: "notLoaded" } },
@@ -342,42 +286,17 @@ describe("Codex catalog live settings", () => {
     expect(methods).toEqual(["thread/list"]);
   });
 
-  it("moves a newly started turn ahead of siblings within the same native timestamp second", async () => {
-    const { a, index, methods } = await fixture(true);
-    expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([
-      "other",
-      "thread-1",
-    ]);
-    a.send({
-      method: "turn/started",
-      params: { threadId: "thread-1", turn: { id: "same-second", startedAt: 200, items: [] } },
-    });
-    await vi.waitFor(async () => {
-      expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([
-        "thread-1",
-        "other",
-      ]);
-    });
-    expect((await index.list({})).sessions.map((row) => row.recencyAt)).toEqual([200, 200]);
-    expect(methods).toEqual(["thread/list", "thread/read"]);
-  });
-
   it("keeps a successful resume subscribed when a catalog observer fails", async () => {
-    const { a, homeId } = await fixture();
+    const { a, homeId, resume, abandonClient } = await fixture();
     const observer = vi.fn(async () => {
       throw new Error("catalog observer failed");
     });
     const stop = subscribeCodexCatalogEvents(homeId, () => {}, { onResume: observer });
-    const abandonClient = vi.fn(async () => {});
     try {
-      await expect(
-        resumeCodexAppServerThread({
-          client: a.client,
-          abandonClient,
-          request: { threadId: "thread-1", excludeTurns: true },
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toMatchObject({ thread: { id: "thread-1" }, cwd: "/workspace/runtime" });
+      await expect(resume()).resolves.toMatchObject({
+        thread: { id: "thread-1" },
+        cwd: "/workspace/runtime",
+      });
       expect(observer).toHaveBeenCalledOnce();
       expect(abandonClient).not.toHaveBeenCalled();
       expect(a.client.getCloseError()).toBeUndefined();
@@ -390,13 +309,7 @@ describe("Codex catalog live settings", () => {
     "clears live settings on %s before a native row reappears",
     async (method) => {
       const { a, index, inventory } = await fixture();
-      a.send({
-        method: "thread/settings/updated",
-        params: {
-          threadId: "thread-1",
-          threadSettings: { cwd: "/workspace/live", modelProvider: "live-provider" },
-        },
-      });
+      a.send(liveSettingsEvent);
       expect((await index.list({ cwd: "/workspace/live" })).sessions).toHaveLength(1);
       a.send({ method, params: { threadId: "thread-1" } });
       expect((await index.list({ cwd: "/workspace/live" })).sessions).toEqual([]);

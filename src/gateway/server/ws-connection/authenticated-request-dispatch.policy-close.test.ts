@@ -6,7 +6,8 @@ import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pai
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as profileAuthority from "../../../state/user-channel-identity-operations.js";
-import { ensureProfileForEmail, linkEmail } from "../../../state/user-profiles.js";
+import { linkEmail } from "../../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import * as expectedProfile from "../../expected-profile.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
@@ -43,146 +44,137 @@ describe("policy writer response ownership", () => {
     runtime.handler.mockReset();
   });
 
-  it.each([false, true])(
-    "keeps a later revoke final across profile preparation (failed middle: %s)",
-    async (failedMiddle) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const profile = ensureProfileForEmail("credential-admin@example.test");
-        const targetDeviceId = "another-device";
-        const pairing = await requestDevicePairing({
-          deviceId: targetDeviceId,
-          publicKey: "another-device-public-key",
-          role: "operator",
-          scopes: ["operator.read"],
-        });
-        const approved = await approveDevicePairing(pairing.request.requestId, {
-          callerScopes: ["operator.admin"],
-        });
-        expect(approved?.status).toBe("approved");
-        const client = createOperatorWsClient({ socket: { close: vi.fn() } });
-        client.authenticatedUserId = "credential-admin@example.test";
-        client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
-        client.connect.device = {
-          id: "administrator-device",
-          publicKey: "administrator-public-key",
-          signature: "signature",
-          signedAt: 1,
-          nonce: "nonce",
-        };
-        client.isDeviceTokenAuth = true;
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => ({}),
-          logGateway: createSubsystemLogger("credential-order-test"),
-          invalidateClientsForDevice: vi.fn(),
-          disconnectClientsForDevice: vi.fn(),
-        });
-        const harness = createDispatchTestHarness({ buildRequestContext: () => context });
-        const checkpoint = createDispatchTestHarness({ buildRequestContext: () => context });
-        const { handleGatewayRequest } =
-          await vi.importActual<typeof import("../../server-methods.js")>(
-            "../../server-methods.js",
-          );
-        const credentialExecutions: Promise<void>[] = [];
-        runtime.handler.mockImplementation(async (options) => {
-          if (options.req.method === "test.credential-checkpoint") {
-            // Starts are FIFO across dispatchers. Join earlier mutations that reached
-            // the router, without waiting for the held connection's mutation barrier.
-            await Promise.all(credentialExecutions);
-            options.respond(true, {});
-            return;
-          }
-          const execution = handleGatewayRequest({ ...options, extraHandlers: deviceHandlers });
-          credentialExecutions.push(execution);
-          await execution;
-        });
-        const preparationEntered = createDeferredCore();
-        const releasePreparation = createDeferredCore();
-        const prepareOriginal = profileAuthority.prepareUserProfileSelectionAuthority;
-        const prepare = vi
-          .spyOn(profileAuthority, "prepareUserProfileSelectionAuthority")
-          .mockImplementationOnce(async (...args) => {
-            preparationEntered.resolve();
-            await releasePreparation.promise;
-            return prepareOriginal(...args);
-          });
-        const createBinding = expectedProfile.createExpectedProfileBinding;
-        const binding = failedMiddle
-          ? vi
-              .spyOn(expectedProfile, "createExpectedProfileBinding")
-              .mockImplementationOnce(createBinding)
-              .mockRejectedValueOnce(new Error("middle profile preparation failed"))
-          : undefined;
-        const dispatched: Promise<void>[] = [];
-        try {
-          dispatched.push(
-            harness.dispatcher.dispatch(
-              {
-                type: "req",
-                id: "rotate-before-revoke",
-                method: "device.token.rotate",
-                params: { deviceId: targetDeviceId, role: "operator" },
-                expectedProfileId: profile.id,
-              },
-              client,
-            ),
-          );
-          await preparationEntered.promise;
-          if (failedMiddle) {
-            await expect(
-              harness.dispatcher.dispatch(
-                {
-                  type: "req",
-                  id: "failed-middle-rotation",
-                  method: "device.token.rotate",
-                  params: { deviceId: targetDeviceId, role: "operator" },
-                  expectedProfileId: profile.id,
-                },
-                client,
-              ),
-            ).rejects.toThrow("middle profile preparation failed");
-          }
-          dispatched.push(
-            harness.dispatcher.dispatch(
-              {
-                type: "req",
-                id: "final-revoke",
-                method: "device.token.revoke",
-                params: { deviceId: targetDeviceId, role: "operator" },
-              },
-              client,
-            ),
-          );
-          await checkpoint.dispatcher.dispatch(
-            { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
-            client,
-          );
-          releasePreparation.resolve();
-          await Promise.all(dispatched);
-          expect(await harness.awaitResponseFrame("rotate-before-revoke")).toMatchObject({
-            ok: true,
-            payload: { tokenDelivery: "withheld-cross-device" },
-          });
-          expect(await harness.awaitResponseFrame("final-revoke")).toMatchObject({ ok: true });
-          expect(client.invalidated).not.toBe(true);
-          const stored = expectDefined(await getPairedDevice(targetDeviceId), "paired target");
-          expect(stored.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
-        } finally {
-          releasePreparation.resolve();
-          await Promise.allSettled(dispatched);
-          prepare.mockRestore();
-          binding?.mockRestore();
-        }
+  it("keeps a later revoke final across failed profile preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("credential-admin@example.test");
+      const targetDeviceId = "another-device";
+      const pairing = await requestDevicePairing({
+        deviceId: targetDeviceId,
+        publicKey: "another-device-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
       });
-    },
-  );
+      const approved = await approveDevicePairing(pairing.request.requestId, {
+        callerScopes: ["operator.admin"],
+      });
+      expect(approved?.status).toBe("approved");
+      const client = createOperatorWsClient({ socket: { close: vi.fn() } });
+      client.authenticatedUserId = "credential-admin@example.test";
+      client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: null,
+        avatarRevision: "1",
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      client.connect.device = {
+        id: "administrator-device",
+        publicKey: "administrator-public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      };
+      client.isDeviceTokenAuth = true;
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        logGateway: createSubsystemLogger("credential-order-test"),
+        invalidateClientsForDevice: vi.fn(),
+        disconnectClientsForDevice: vi.fn(),
+      });
+      const harness = createDispatchTestHarness({ buildRequestContext: () => context });
+      const checkpoint = createDispatchTestHarness({ buildRequestContext: () => context });
+      const { handleGatewayRequest } =
+        await vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js");
+      const credentialExecutions: Promise<void>[] = [];
+      runtime.handler.mockImplementation(async (options) => {
+        if (options.req.method === "test.credential-checkpoint") {
+          // Starts are FIFO across dispatchers. Join earlier mutations that reached
+          // the router, without waiting for the held connection's mutation barrier.
+          await Promise.all(credentialExecutions);
+          options.respond(true, {});
+          return;
+        }
+        const execution = handleGatewayRequest({ ...options, extraHandlers: deviceHandlers });
+        credentialExecutions.push(execution);
+        await execution;
+      });
+      const preparationEntered = createDeferredCore();
+      const releasePreparation = createDeferredCore();
+      const prepareOriginal = profileAuthority.prepareUserProfileSelectionAuthority;
+      const prepare = vi
+        .spyOn(profileAuthority, "prepareUserProfileSelectionAuthority")
+        .mockImplementationOnce(async (...args) => {
+          preparationEntered.resolve();
+          await releasePreparation.promise;
+          return prepareOriginal(...args);
+        });
+      const createBinding = expectedProfile.createExpectedProfileBinding;
+      const binding = vi
+        .spyOn(expectedProfile, "createExpectedProfileBinding")
+        .mockImplementationOnce(createBinding)
+        .mockRejectedValueOnce(new Error("middle profile preparation failed"));
+      const dispatched: Promise<void>[] = [];
+      try {
+        dispatched.push(
+          harness.dispatcher.dispatch(
+            {
+              type: "req",
+              id: "rotate-before-revoke",
+              method: "device.token.rotate",
+              params: { deviceId: targetDeviceId, role: "operator" },
+              expectedProfileId: profile.id,
+            },
+            client,
+          ),
+        );
+        await preparationEntered.promise;
+        await expect(
+          harness.dispatcher.dispatch(
+            {
+              type: "req",
+              id: "failed-middle-rotation",
+              method: "device.token.rotate",
+              params: { deviceId: targetDeviceId, role: "operator" },
+              expectedProfileId: profile.id,
+            },
+            client,
+          ),
+        ).rejects.toThrow("middle profile preparation failed");
+        dispatched.push(
+          harness.dispatcher.dispatch(
+            {
+              type: "req",
+              id: "final-revoke",
+              method: "device.token.revoke",
+              params: { deviceId: targetDeviceId, role: "operator" },
+            },
+            client,
+          ),
+        );
+        await checkpoint.dispatcher.dispatch(
+          { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
+          client,
+        );
+        releasePreparation.resolve();
+        await Promise.all(dispatched);
+        expect(await harness.awaitResponseFrame("rotate-before-revoke")).toMatchObject({
+          ok: true,
+          payload: { tokenDelivery: "withheld-cross-device" },
+        });
+        expect(await harness.awaitResponseFrame("final-revoke")).toMatchObject({ ok: true });
+        expect(client.invalidated).not.toBe(true);
+        const stored = expectDefined(await getPairedDevice(targetDeviceId), "paired target");
+        expect(stored.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
+      } finally {
+        releasePreparation.resolve();
+        await Promise.allSettled(dispatched);
+        prepare.mockRestore();
+        binding.mockRestore();
+      }
+    });
+  });
 
-  it.each(["success", "error", "throw"] as const)(
+  it.each(["success", "throw"] as const)(
     "redacts a held %s response after a real profile merge despite the policy-close exception",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -222,7 +214,7 @@ describe("policy writer response ownership", () => {
                 if (outcome === "throw") {
                   throw new Error("original-account-error");
                 }
-                respond(outcome === "success", receipt, {
+                respond(true, receipt, {
                   code: "UNAVAILABLE",
                   message: "original-account-error",
                 });
@@ -326,61 +318,58 @@ describe("policy writer response ownership", () => {
     },
   );
 
-  it.each(["config.patch", "device.token.rotate", "device.token.revoke", "device.pair.remove"])(
-    "keeps only accepted %s results, then closes after the last result",
-    async (method) => {
-      const fixture = createFixture();
-      const writers = (method === "config.patch" ? ["first", "second"] : ["first"]).map((id) => ({
-        id,
-        started: createDeferredCore(),
-        release: createDeferredCore(),
-      }));
-      const readStarted = createDeferredCore();
-      const readRelease = createDeferredCore();
-      runtime.handler.mockImplementation(async ({ req, respond }) => {
-        const writer = writers.find(({ id }) => id === req.id);
-        if (writer) {
-          holdGatewayPolicyResponse(respond);
-          writer.started.resolve();
-          await writer.release.promise;
-          respond(true, { committed: req.id });
-        } else {
-          readStarted.resolve();
-          await readRelease.promise;
-          respond(true, { private: "old-authority-read" });
-        }
-      });
-      const dispatches = [fixture.dispatch("read", "health")];
-      try {
-        await readStarted.promise;
-        for (const writer of writers) {
-          dispatches.push(fixture.dispatch(writer.id, method));
-          await writer.started.promise;
-        }
-        disconnectStaleSharedGatewayAuthClients({
-          clients: [fixture.client],
-          expectedGeneration: null,
-        });
-        readRelease.resolve();
-        await dispatches[0];
-        expect(fixture.harness.send).not.toHaveBeenCalled();
-        for (const [index, writer] of writers.entries()) {
-          expect(fixture.socketClose).not.toHaveBeenCalled();
-          writer.release.resolve();
-          expect(await fixture.harness.awaitResponseFrame(writer.id)).toMatchObject({ ok: true });
-          expect(fixture.harness.send).toHaveBeenCalledTimes(index + 1);
-        }
-        await fixture.closed.promise;
-        expect(fixture.socketClose).toHaveBeenCalledOnce();
-      } finally {
-        readRelease.resolve();
-        for (const writer of writers) {
-          writer.release.resolve();
-        }
-        await Promise.all(dispatches);
+  it("keeps only accepted config.patch results, then closes after the last result", async () => {
+    const fixture = createFixture();
+    const writers = ["first", "second"].map((id) => ({
+      id,
+      started: createDeferredCore(),
+      release: createDeferredCore(),
+    }));
+    const readStarted = createDeferredCore();
+    const readRelease = createDeferredCore();
+    runtime.handler.mockImplementation(async ({ req, respond }) => {
+      const writer = writers.find(({ id }) => id === req.id);
+      if (writer) {
+        holdGatewayPolicyResponse(respond);
+        writer.started.resolve();
+        await writer.release.promise;
+        respond(true, { committed: req.id });
+      } else {
+        readStarted.resolve();
+        await readRelease.promise;
+        respond(true, { private: "old-authority-read" });
       }
-    },
-  );
+    });
+    const dispatches = [fixture.dispatch("read", "health")];
+    try {
+      await readStarted.promise;
+      for (const writer of writers) {
+        dispatches.push(fixture.dispatch(writer.id, "config.patch"));
+        await writer.started.promise;
+      }
+      disconnectStaleSharedGatewayAuthClients({
+        clients: [fixture.client],
+        expectedGeneration: null,
+      });
+      readRelease.resolve();
+      await dispatches[0];
+      expect(fixture.harness.send).not.toHaveBeenCalled();
+      for (const [index, writer] of writers.entries()) {
+        expect(fixture.socketClose).not.toHaveBeenCalled();
+        writer.release.resolve();
+        expect(await fixture.harness.awaitResponseFrame(writer.id)).toMatchObject({ ok: true });
+        expect(fixture.harness.send).toHaveBeenCalledTimes(index + 1);
+      }
+      await fixture.closed.promise;
+      expect(fixture.socketClose).toHaveBeenCalledOnce();
+    } finally {
+      readRelease.resolve();
+      for (const writer of writers) {
+        writer.release.resolve();
+      }
+      await Promise.all(dispatches);
+    }
+  });
 
   it("does not reserve a replacement bearer before the token mutation finishes", async () => {
     const fixture = createFixture();
@@ -456,31 +445,18 @@ describe("policy writer response ownership", () => {
     }
   });
 
-  it.each(["throw", "return"])(
-    "releases a revoked writer when its handler exits with %s",
-    async (completion) => {
-      const fixture = createFixture();
-      runtime.handler.mockImplementation(async ({ respond }) => {
-        holdGatewayPolicyResponse(respond);
-        disconnectStaleSharedGatewayAuthClients({
-          clients: [fixture.client],
-          expectedGeneration: null,
-        });
-        if (completion === "throw") {
-          throw new Error("write failed");
-        }
+  it("releases a revoked writer when its handler returns without responding", async () => {
+    const fixture = createFixture();
+    runtime.handler.mockImplementation(async ({ respond }) => {
+      holdGatewayPolicyResponse(respond);
+      disconnectStaleSharedGatewayAuthClients({
+        clients: [fixture.client],
+        expectedGeneration: null,
       });
-      await fixture.dispatch("writer", "config.apply");
-      await fixture.closed.promise;
-      expect(fixture.socketClose).toHaveBeenCalledOnce();
-      if (completion === "throw") {
-        expect(await fixture.harness.awaitResponseFrame("writer")).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: expect.stringContaining("write failed") },
-        });
-      } else {
-        expect(fixture.harness.send).not.toHaveBeenCalled();
-      }
-    },
-  );
+    });
+    await fixture.dispatch("writer", "config.apply");
+    await fixture.closed.promise;
+    expect(fixture.socketClose).toHaveBeenCalledOnce();
+    expect(fixture.harness.send).not.toHaveBeenCalled();
+  });
 });

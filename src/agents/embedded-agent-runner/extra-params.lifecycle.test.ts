@@ -1,11 +1,16 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   attachModelProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
+import { attachModelProviderRequestRouteFacts } from "../provider-request-config.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { applyExtraParamsToAgent, resolvePreparedExtraParams } from "./extra-params.js";
 
@@ -80,6 +85,108 @@ describe("prepared provider extra-param lifecycle", () => {
       { temperature: 0.1, headers: { owner: "first", preparedBy: "first" } },
       { temperature: 0.1, headers: { owner: "replacement", preparedBy: "replacement" } },
       { temperature: 0.7, headers: { owner: "updated", preparedBy: "updated" } },
+    ]);
+  });
+});
+
+const providerMetadataOwners: PluginMetadataSnapshotOwnerMaps = {
+  channels: new Map(),
+  channelConfigs: new Map(),
+  providers: new Map(),
+  modelCatalogProviders: new Map(),
+  cliBackends: new Map(),
+  setupProviders: new Map(),
+  commandAliases: new Map(),
+  contracts: new Map(),
+  modelIdNormalizationPolicies: new Map(),
+  providerAuthContributions: [],
+  providerEndpoints: [],
+  providerRequests: new Map([["openrouter", { family: "openrouter" }]]),
+};
+
+type StreamPayload = {
+  messages: Array<{
+    role: string;
+    content: unknown;
+  }>;
+};
+
+function runOpenRouterPayload(
+  payload: StreamPayload,
+  modelId: string,
+  streamOptions: Parameters<StreamFn>[2] = {},
+) {
+  // The wrapper mutates provider payloads via onPayload; capture the final body
+  // directly so assertions match transport-facing JSON.
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    options?.onPayload?.(payload, model);
+    return {} as ReturnType<StreamFn>;
+  };
+  const streamFn = createOpenRouterSystemCacheWrapper(baseStreamFn);
+  // Payload tests consume prepared route facts without starting plugin discovery.
+  const model = attachModelProviderRequestRouteFacts(
+    makeProviderModelFixture<"openai-completions">({
+      api: "openai-completions",
+      provider: "openrouter",
+      id: modelId,
+      baseUrl: "",
+    }),
+    providerMetadataOwners,
+  );
+  void streamFn(model, { messages: [] }, streamOptions);
+}
+
+describe("extra-params: OpenRouter Anthropic cache_control", () => {
+  it("skips new cache markers when OpenRouter Anthropic cache retention is none", () => {
+    // Disabling retention must remove stale thinking-block cache markers too;
+    // OpenRouter rejects those markers on reasoning content.
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal",
+              thinkingSignature: "sig_1",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", { cacheRetention: "none" });
+
+    expect(expectDefined(payload.messages[0], "payload.messages[0] test invariant").content).toBe(
+      "You are a helpful assistant.",
+    );
+    expect(
+      expectDefined(payload.messages[1], "payload.messages[1] test invariant").content,
+    ).toEqual([{ type: "thinking", thinking: "internal", thinkingSignature: "sig_1" }]);
+  });
+
+  it("does not inject cache_control into thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "Part 1" },
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(
+      expectDefined(payload.messages[0], "payload.messages[0] test invariant").content,
+    ).toEqual([
+      { type: "text", text: "Part 1", cache_control: { type: "ephemeral" } },
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
     ]);
   });
 });

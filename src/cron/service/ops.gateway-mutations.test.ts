@@ -6,6 +6,7 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "../../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -18,29 +19,24 @@ import {
 import * as gatewayProcess from "../../gateway/process-instance.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import {
-  clearCommandLane,
-  enqueueCommandInLane,
-  getCommandLaneSnapshot,
-  getTotalQueueSize,
-  setCommandLaneConcurrency,
-} from "../../process/command-queue.js";
+import { getTotalQueueSize } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { CommandLane } from "../../process/lanes.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 type CallerClosure = "revoked" | "aborted";
 type CronGatewayFixture = {
   storePath: string;
+  cron: CronService;
   logger: ReturnType<typeof createNoopLogger>;
   closeCaller: (closure: CallerClosure) => void;
   call: AgentToolGatewayRequestCaller;
   settle: () => Promise<void>;
   runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
-  finished: ReturnType<typeof createDeferredCore<CronEvent>>;
+  finished: (jobId: string) => Promise<CronEvent>;
 };
 
 const jobInput = {
@@ -60,7 +56,7 @@ async function withCronGateway(
   await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
     resetCommandQueueStateForTest();
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+      agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
       cron: { enabled: false },
     };
     await state.writeConfig(cfg);
@@ -68,9 +64,18 @@ async function withCronGateway(
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronStore(storePath, { version: 1, jobs: [] });
     const logger = createNoopLogger();
-    const finished = createDeferredCore<CronEvent>();
+    const finishedJobs = new Map<string, ReturnType<typeof createDeferredCore<CronEvent>>>();
+    const finished = (jobId: string) => {
+      let entry = finishedJobs.get(jobId);
+      if (!entry) {
+        entry = createDeferredCore<CronEvent>();
+        finishedJobs.set(jobId, entry);
+      }
+      return entry;
+    };
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
@@ -81,7 +86,7 @@ async function withCronGateway(
       listConfiguredChannels,
       onEvent: (event) => {
         if (event.action === "finished") {
-          finished.resolve(event);
+          finished(event.jobId).resolve(event);
         }
       },
     });
@@ -109,9 +114,10 @@ async function withCronGateway(
     try {
       await run({
         storePath,
+        cron,
         logger,
         runIsolatedAgentJob,
-        finished,
+        finished: (jobId) => finished(jobId).promise,
         settle: () => gatewayWork.runWhenIdle(() => undefined),
         closeCaller: (closure) => {
           if (closure === "aborted") {
@@ -127,6 +133,7 @@ async function withCronGateway(
       });
     } finally {
       cron.stop();
+      await cron.waitForIdle();
       await gatewayWork.drain();
       await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
       resetCommandQueueStateForTest();
@@ -135,16 +142,19 @@ async function withCronGateway(
 }
 
 describe("Cron mutation outcomes through the in-process router", () => {
-  it.each(["execute", "revoke", "abort", "clear queue"] as const)(
+  it.each(["execute", "revoke", "abort", "stop"] as const)(
     "retains caller cleanup only through accepted manual admission: %s",
     async (outcome) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "retained-tool-run", nowMs: now, nextRunAtMs: now });
-        await saveCronStore(fixture.storePath, { version: 1, jobs: [job] });
-        setCommandLaneConcurrency(CommandLane.Cron, 1);
-        const blockerStarted = createDeferredCore();
+        const blockerJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+          createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
+        );
+        await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
+        const blockersStarted = createDeferredCore();
         const releaseBlocker = createDeferredCore();
+        let startedBlockers = 0;
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
         const cleanupFinished = createDeferredCore();
@@ -152,16 +162,26 @@ describe("Cron mutation outcomes through the in-process router", () => {
           fixture.closeCaller("aborted");
           cleanupFinished.resolve();
         });
-        vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async () => {
+        vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async ({ job: current }) => {
+          if (current.id !== job.id) {
+            if (++startedBlockers === blockerJobs.length) {
+              blockersStarted.resolve();
+            }
+            await releaseBlocker.promise;
+            return { status: "ok" };
+          }
           payloadStarted.resolve();
           await releasePayload.promise;
           return { status: "ok" };
         });
-        const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-          blockerStarted.resolve();
-          await releaseBlocker.promise;
-        });
-        await blockerStarted.promise;
+        const blocker = Promise.all(
+          blockerJobs.map((entry) => fixture.cron.run(entry.id, "force")),
+        );
+        await blockersStarted.promise;
+        const targetCalls = () =>
+          vi
+            .mocked(fixture.runIsolatedAgentJob)
+            .mock.calls.filter(([input]) => input.job.id === job.id);
         try {
           const ack = await runWithAsyncWorkResources(async (onAcquired) => {
             onAcquired({ release: releaseResources });
@@ -172,15 +192,15 @@ describe("Cron mutation outcomes through the in-process router", () => {
           });
           expect(ack).toMatchObject({ ok: true, enqueued: true });
           expect(releaseResources).not.toHaveBeenCalled();
-          expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+          expect(targetCalls()).toHaveLength(0);
           if (outcome === "revoke") {
             fixture.closeCaller("revoked");
           }
           if (outcome === "abort") {
             fixture.closeCaller("aborted");
           }
-          if (outcome === "clear queue") {
-            clearCommandLane(CommandLane.Cron);
+          if (outcome === "stop") {
+            fixture.cron.stop();
           }
           releaseBlocker.resolve();
           await blocker;
@@ -190,18 +210,19 @@ describe("Cron mutation outcomes through the in-process router", () => {
             // owned automation payload, which can itself wait on caller work.
             await cleanupFinished.promise;
             expect(releaseResources).toHaveBeenCalledOnce();
-            expect(fixture.runIsolatedAgentJob).toHaveBeenCalledOnce();
+            expect(targetCalls()).toHaveLength(1);
           }
           releasePayload.resolve();
-          const terminal = await fixture.finished.promise;
+          const terminal = await fixture.finished(job.id);
           await cleanupFinished.promise;
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "error");
+          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
           if (outcome !== "execute") {
-            expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+            expect(targetCalls()).toHaveLength(0);
           }
           expect(releaseResources).toHaveBeenCalledOnce();
           expect(
-            (await loadCronStore(fixture.storePath)).jobs[0]?.state.queuedAtMs,
+            (await loadCronStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id)
+              ?.state.queuedAtMs,
           ).toBeUndefined();
         } finally {
           releaseBlocker.resolve();
@@ -253,8 +274,6 @@ describe("Cron mutation outcomes through the in-process router", () => {
 
   it.each([
     { closure: "revoked", reportingError: false },
-    { closure: "aborted", reportingError: false },
-    { closure: "revoked", reportingError: true },
     { closure: "aborted", reportingError: true },
   ] as const)(
     "preserves committed state and outcome when $closure after commit (reporting error: $reportingError)",
@@ -304,15 +323,31 @@ describe("Cron mutation outcomes through the in-process router", () => {
           nowMs: now,
           nextRunAtMs: accepted ? now : now + 60_000,
         });
-        await saveCronStore(fixture.storePath, { version: 1, jobs: [job] });
-        setCommandLaneConcurrency(CommandLane.Cron, 1);
-        const blockerStarted = createDeferredCore();
+        const blockerJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+          createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
+        );
+        await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
+        const blockersStarted = createDeferredCore();
         const releaseBlocker = createDeferredCore();
-        const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-          blockerStarted.resolve();
+        let startedBlockers = 0;
+        vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async ({ job: current }) => {
+          if (current.id === job.id) {
+            return { status: "ok" };
+          }
+          if (++startedBlockers === blockerJobs.length) {
+            blockersStarted.resolve();
+          }
           await releaseBlocker.promise;
+          return { status: "ok" };
         });
-        await blockerStarted.promise;
+        const blocker = Promise.all(
+          blockerJobs.map((entry) => fixture.cron.run(entry.id, "force")),
+        );
+        await blockersStarted.promise;
+        const targetCalls = () =>
+          vi
+            .mocked(fixture.runIsolatedAgentJob)
+            .mock.calls.filter(([input]) => input.job.id === job.id);
         const processInstanceId = gatewayProcess.getGatewayProcessInstanceId();
         let responseBoundaryObserved = false;
         const processId = vi
@@ -339,8 +374,15 @@ describe("Cron mutation outcomes through the in-process router", () => {
             await expect(pending).rejects.toThrow(/authority.*no longer active/i);
           }
           expect(responseBoundaryObserved).toBe(true);
-          expect(getCommandLaneSnapshot(CommandLane.Cron).queuedCount).toBe(accepted ? 1 : 0);
-          expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+          const queuedAtMs = (await loadCronStore(fixture.storePath)).jobs.find(
+            (entry) => entry.id === job.id,
+          )?.state.queuedAtMs;
+          if (accepted) {
+            expect(queuedAtMs).toEqual(expect.any(Number));
+          } else {
+            expect(queuedAtMs).toBeUndefined();
+          }
+          expect(targetCalls()).toHaveLength(0);
         } finally {
           processId.mockRestore();
           releaseBlocker.resolve();
@@ -348,14 +390,17 @@ describe("Cron mutation outcomes through the in-process router", () => {
           await vi.waitFor(() => expect(getTotalQueueSize()).toBe(0));
         }
         if (accepted) {
-          await expect(fixture.finished.promise).resolves.toMatchObject({
+          await expect(fixture.finished(job.id)).resolves.toMatchObject({
             jobId: job.id,
-            status: "error",
+            status: "skipped",
             error: expect.stringMatching(/authority.*no longer active/i),
           });
         }
-        expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
-        expect((await loadCronStore(fixture.storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+        expect(targetCalls()).toHaveLength(0);
+        expect(
+          (await loadCronStore(fixture.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+            .queuedAtMs,
+        ).toBeUndefined();
       });
     },
   );

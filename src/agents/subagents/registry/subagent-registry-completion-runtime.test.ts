@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -13,16 +14,19 @@ import {
 } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { installLifecycleWorkerAckFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 function createHarness() {
-  const entry: SubagentRunRecord = {
+  const entry = createSubagentRunRecord({
     runId: "completion-test",
     generation: 1,
     childSessionKey: "agent:main:subagent:completion-test",
@@ -33,9 +37,10 @@ function createHarness() {
     createdAt: 0,
     execution: { status: "terminal", endedAt: 1, outcome: { status: "error", error: "failed" } },
     cleanupHandled: true,
-  };
+  });
   const runs = new Map([[entry.runId, entry]]);
-  const resumed = new Set([entry.runId]);
+  installLifecycleWorkerAckFixture(runs);
+  const resumed = new Set([getSubagentRunRuntimeKey(entry)]);
   const retryTimers = new Set<ReturnType<typeof setTimeout>>();
   const resumeError = new Error("synthetic resume failure");
   const completeSubagentRun = vi
@@ -233,7 +238,7 @@ describe("subagent completion rejection ownership", () => {
         : kind === "timeout"
           ? h.runtime.pendingLifecycle.scheduleTimeout
           : h.runtime.pendingLifecycle.scheduleCancellation;
-    schedule({ runId: h.entry.runId, endedAt: 1, error: "failed" });
+    schedule({ runId: h.entry.runId, expectedEntry: h.entry, endedAt: 1, error: "failed" });
     await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
     expect(h.completeSubagentRun).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
@@ -243,9 +248,9 @@ describe("subagent completion rejection ownership", () => {
       runId: h.entry.runId,
       error: h.resumeError,
     });
-    expect(h.runs.get(h.entry.runId)).toBe(h.entry);
-    expect(h.entry.cleanupHandled).toBe(false);
-    expect(h.resumed.has(h.entry.runId)).toBe(false);
+    expect(isSameSubagentRunOwner(h.runs.get(h.entry.runId), h.entry)).toBe(true);
+    expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
+    expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
@@ -259,13 +264,14 @@ describe("subagent completion rejection ownership", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("retains the restart-retry diagnostic and retires the fired timer", async () => {
+  it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
     const h = createHarness();
-    h.runtime.scheduleSubagentCompletionRetryAfterRestart(
-      h.request,
-      "explicit-failed-mark",
-      h.entry,
-    );
+    markGatewayRestartDraining();
+    await expect(
+      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
+    ).resolves.toBe(1);
+    expect(h.retryTimers.size).toBe(1);
+    resetGatewayWorkAdmission();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.warn).toHaveBeenLastCalledWith(
       "failed to retry subagent completion after gateway restart",
@@ -275,26 +281,26 @@ describe("subagent completion rejection ownership", () => {
         error: h.resumeError,
       },
     );
-    expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
+    expect(h.completeSubagentRun).toHaveBeenCalledTimes(3);
     expect(h.retryTimers.size).toBe(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each(["replacement", "generation"] as const)(
-    "rejects a stale restart timer after %s",
-    async (change) => {
-      const h = createHarness();
-      h.runtime.scheduleSubagentCompletionRetryAfterRestart(h.request, "restart", h.entry);
-      if (change === "replacement") {
-        h.runs.set(h.entry.runId, { ...h.entry });
-      } else {
-        h.entry.generation = 2;
-      }
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(h.completeSubagentRun).not.toHaveBeenCalled();
-      expect(h.retryTimers.size).toBe(0);
-    },
-  );
+  it("propagates an unknown SQLite outcome from interrupted finalization during restart drain", async () => {
+    const h = createHarness();
+    const error = new SqliteWorkerError("completion commit outcome is unknown", "outcome-unknown");
+    h.completeSubagentRun.mockRejectedValueOnce(error);
+    markGatewayRestartDraining();
+
+    await expect(
+      h.runtime.finalizeInterruptedSubagentRun({ runId: h.entry.runId, error: "interrupted" }),
+    ).rejects.toBe(error);
+    expect(h.completeSubagentRun).toHaveBeenCalledOnce();
+    expect(h.retryTimers.size).toBe(0);
+    expect(h.scheduleSweep).not.toHaveBeenCalled();
+    expect(h.resumeRun).not.toHaveBeenCalled();
+    expect(h.warn).not.toHaveBeenCalled();
+  });
 
   it.each([1, 2])(
     "stops after successful attempt %i without starting cleanup recovery",
@@ -351,7 +357,7 @@ describe("subagent completion rejection ownership", () => {
         expect(h.resumeRun).not.toHaveBeenCalled();
         expect(h.scheduleSweep).not.toHaveBeenCalled();
         expect(h.entry.cleanupHandled).toBe(true);
-        expect(h.resumed.has(h.entry.runId)).toBe(true);
+        expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
       } finally {
         release.resolve();
         await completion;
@@ -376,7 +382,7 @@ describe("subagent completion rejection ownership", () => {
       expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
       expect(h.resumeRun).not.toHaveBeenCalled();
       expect(h.entry.cleanupHandled).toBe(true);
-      expect(h.resumed.has(h.entry.runId)).toBe(true);
+      expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
       if (state === "running") {
         expect(h.scheduleSweep).toHaveBeenCalledExactlyOnceWith({ delayMs: 1_000 });
       } else {

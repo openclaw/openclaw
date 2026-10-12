@@ -1,4 +1,3 @@
-/** Lazy session identity creation, including the original admission's first writer claim. */
 import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
@@ -9,7 +8,6 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -17,23 +15,16 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+/** Lazy session identity creation, including the original admission's first writer claim. */
+import type { InitialSessionEntryCommit } from "./session-manager-write-contract.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
   getOwnedSessionTranscriptInitialWriter,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
-  type SessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type InitialSessionEntryCommit = {
-  owned: boolean;
-  fence?: SessionTranscriptWriterFence;
-  identity?: {
-    previous: Map<string, SessionEntry>;
-    current: Map<string, SessionEntry>;
-  };
-};
 
 /** The transaction owns absence and writer-row checks; callers publish only committed facts. */
 export function ensureSessionEntryInTransaction(
@@ -43,7 +34,7 @@ export function ensureSessionEntryInTransaction(
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
-  const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+  const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
   const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
   if (existing) {
@@ -92,42 +83,46 @@ export function ensureSessionEntrySync(
   const resolved = resolveSqliteScope(fencedScope);
   assertCanonicalSessionKeyWrite(resolved.sessionKey, resolved.agentId);
   let owned = false;
-  const publishCommitted = runOpenClawAgentWriteTransaction((database) => {
-    assertOwnedTranscriptWriteCommit({ ...fencedScope, sessionId: entry.sessionId });
-    const committed = ensureSessionEntryInTransaction(
-      database,
-      resolved,
-      fencedScope,
-      entry,
-      initializing ? initialWriter.writerRunId : undefined,
-    );
-    owned = committed.owned;
-    if (!committed.identity) {
-      return undefined;
-    }
-    const publish = prepareSessionIdentityPublication(
-      database,
-      resolved.agentId,
-      committed.identity.previous,
-      committed.identity.current,
-    );
-    if (initializing && committed.fence) {
-      const fence = committed.fence;
-      // Savepoint success is not COMMIT. The existing transaction owner discards this on rollback.
-      if (
-        !deferOpenClawAgentPostCommitPublication(database, () => {
-          try {
-            initialWriter.recordCommitted(fence);
-          } finally {
-            publish();
-          }
-        })
-      ) {
-        throw new Error("initial session writer requires a managed commit boundary");
+  const publishCommitted = runOpenClawAgentWriteTransaction(
+    (database) => {
+      assertOwnedTranscriptWriteCommit({ ...fencedScope, sessionId: entry.sessionId });
+      const committed = ensureSessionEntryInTransaction(
+        database,
+        resolved,
+        fencedScope,
+        entry,
+        initializing ? initialWriter.writerRunId : undefined,
+      );
+      owned = committed.owned;
+      if (!committed.identity) {
+        return undefined;
       }
-    }
-    return publish;
-  }, toDatabaseOptions(resolved));
+      const publish = prepareSessionIdentityPublication(
+        database,
+        resolved.agentId,
+        committed.identity.previous,
+        committed.identity.current,
+      );
+      if (initializing && committed.fence) {
+        const fence = committed.fence;
+        // Savepoint success is not COMMIT. The existing transaction owner discards this on rollback.
+        if (
+          !deferOpenClawAgentPostCommitPublication(database, () => {
+            try {
+              initialWriter.recordCommitted(fence);
+            } finally {
+              publish();
+            }
+          })
+        ) {
+          throw new Error("initial session writer requires a managed commit boundary");
+        }
+      }
+      return publish;
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session.entry.ensure" },
+  );
   if (!initializing) {
     publishCommitted?.();
   }

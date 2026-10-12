@@ -7,7 +7,8 @@ import {
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
-import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerInferenceManager } from "./inference.js";
 import {
   accept,
   createMemoryStore,

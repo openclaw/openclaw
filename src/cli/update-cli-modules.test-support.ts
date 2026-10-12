@@ -3,7 +3,7 @@ import { commandTransport } from "./update-cli-mocks.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-const { createUpdateStateProfileInitializer, mockUpdateStateSnapshotWorker } =
+const { createUpdateStateProfileInitializer } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
@@ -32,8 +32,9 @@ const {
 const { fetchNpmPackageTargetStatus } = await import("../infra/update-check-package-target.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
-const { runExec, runUtf8CommandWithTimeout } = await import("../process/exec.js");
+const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
 const doctorChild = await import("./update-cli/update-command-doctor-child.js");
+const runExec: typeof import("../process/exec.js").runExec = commandTransport.exec;
 const runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout =
   commandTransport.run;
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
@@ -56,7 +57,6 @@ const {
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
   devTargetRefusalCases,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectUpdateFailureReport,
   expectDelegatedPluginDoctorInput,
@@ -74,7 +74,6 @@ const { updateFinalizeCommand } = await import("./update-cli/update-command-fina
 const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { resolveGitInstallDir } = updateCliShared;
 const { clearRestartSentinelIfRevision, readRestartSentinel } =
   await import("../infra/restart-sentinel.js");
 
@@ -94,7 +93,6 @@ export {
   doctorCommand,
   ExitError,
   expectDelegatedPluginDoctorInput,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectSelectorTriageFailure,
   expectUpdateFailureReport,
@@ -105,7 +103,6 @@ export {
   listUpdateRuns,
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
-  mockUpdateStateSnapshotWorker,
   mutateConfigFileWithRetry,
   readConfigFileSnapshot,
   readRestartSentinel,
@@ -114,7 +111,6 @@ export {
   replaceConfigFile,
   resolveExtendedStablePackage,
   resolveGatewayInstallEntrypoint,
-  resolveGitInstallDir,
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
   resolveOpenClawPackageRootSync,

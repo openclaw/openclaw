@@ -19,33 +19,28 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const payloadJSON =
-      typeof p.payloadJSON === "string"
-        ? p.payloadJSON
-        : p.payload !== undefined
-          ? JSON.stringify(p.payload)
-          : null;
+      p.payloadJSON ?? (p.payload !== undefined ? JSON.stringify(p.payload) : null);
     await respondUnavailableOnThrow(respond, async () => {
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeSession = context.nodeRegistry.get(nodeId);
       const eventConnId = client?.connId;
       const eventPairingGeneration = nodeSession?.pairingGeneration;
+      const sessionForGeneration = (generation: string) =>
+        resolveDispatchableNodeSession(
+          context.nodeRegistry.getForPairingGeneration(nodeId, generation),
+        );
       const isEventConnectionCurrent = async (): Promise<boolean> => {
         if (!eventConnId || !eventPairingGeneration) {
           return false;
         }
-        const before = resolveDispatchableNodeSession(
-          context.nodeRegistry.getForPairingGeneration(nodeId, eventPairingGeneration),
-        );
+        const before = sessionForGeneration(eventPairingGeneration);
         if (!before || before.connId !== eventConnId) {
           return false;
         }
         if (!(await context.nodeRegistry.isConnectionCurrentPairingState(eventConnId))) {
           return false;
         }
-        const after = resolveDispatchableNodeSession(
-          context.nodeRegistry.getForPairingGeneration(nodeId, eventPairingGeneration),
-        );
-        return after?.connId === eventConnId;
+        return sessionForGeneration(eventPairingGeneration)?.connId === eventConnId;
       };
       const { handleNodeEvent } = await import("../server-node-events.js");
       const apnsGeneration =
@@ -54,32 +49,25 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         nodeSession !== undefined &&
         nodeSession.connId === client?.connId &&
         nodeSession.permissions?.accessibility === true;
+      const bindSubscription =
+        (method: "nodeSubscribe" | "nodeUnsubscribe"): NodeEventContext["nodeSubscribe"] =>
+        async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
+          if (
+            subscriptionNodeId !== nodeId ||
+            !subscriptionConnId ||
+            subscriptionConnId !== client?.connId ||
+            !(await isEventConnectionCurrent())
+          ) {
+            return;
+          }
+          context[method](subscriptionNodeId, sessionKey, subscriptionConnId);
+        };
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
-        nodeSubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
-          if (
-            subscriptionNodeId !== nodeId ||
-            !subscriptionConnId ||
-            subscriptionConnId !== client?.connId ||
-            !(await isEventConnectionCurrent())
-          ) {
-            return;
-          }
-          context.nodeSubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
-        },
-        nodeUnsubscribe: async (subscriptionNodeId, sessionKey, subscriptionConnId) => {
-          if (
-            subscriptionNodeId !== nodeId ||
-            !subscriptionConnId ||
-            subscriptionConnId !== client?.connId ||
-            !(await isEventConnectionCurrent())
-          ) {
-            return;
-          }
-          context.nodeUnsubscribe(subscriptionNodeId, sessionKey, subscriptionConnId);
-        },
+        nodeSubscribe: bindSubscription("nodeSubscribe"),
+        nodeUnsubscribe: bindSubscription("nodeUnsubscribe"),
         broadcastVoiceWakeChanged: context.broadcastVoiceWakeChanged,
         addChatRun: context.addChatRun,
         removeChatRun: context.removeChatRun,
@@ -90,14 +78,16 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
-        authorizeNodeSystemRunEvent: (eventParams) =>
-          context.nodeRegistry.authorizeSystemRunEvent({
+        authorizeNodeSystemRunEvent: (eventParams) => {
+          const authorization = context.nodeRegistry.authorizeSystemRunEventWithState({
             nodeId: eventParams.nodeId,
             connId: eventParams.connId,
             runId: eventParams.runId,
             sessionKey: eventParams.sessionKey,
-            terminal: eventParams.terminal,
-          }),
+            terminal: eventParams.event !== "exec.started",
+          });
+          return authorization ?? false;
+        },
         updateNodePresenceActivity: (activity) => {
           const updated = context.nodeRegistry.updatePresenceActivity(activity);
           return updated?.lastActiveAtMs !== undefined && updated.presenceUpdatedAtMs !== undefined
@@ -161,19 +151,16 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             if (!apnsGeneration || !client?.connId) {
               return null;
             }
-            const before = resolveDispatchableNodeSession(
-              context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
-            );
+            const before = sessionForGeneration(apnsGeneration.key);
             if (!before || before.connId !== client.connId) {
               return null;
             }
             if (!(await isNodePairingGenerationCurrent(apnsGeneration))) {
               return null;
             }
-            const after = resolveDispatchableNodeSession(
-              context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key),
-            );
-            return after?.connId === client.connId ? apnsGeneration.key : null;
+            return sessionForGeneration(apnsGeneration.key)?.connId === client.connId
+              ? apnsGeneration.key
+              : null;
           },
         },
       );

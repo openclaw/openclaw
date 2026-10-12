@@ -35,124 +35,105 @@ async function collectDiagnostic(
 }
 
 describe("web_fetch proxy doctor diagnostic", () => {
-  it("reports direct routing for an installed Gateway proxy without exposing its value", async () => {
-    const proxyUrl = "http://private-proxy.example:8080/proxy-value-marker";
-    const diagnostic = await collectDiagnostic({
-      cfg: {},
-      env: {},
-      service: serviceWithEnv({ HTTPS_PROXY: proxyUrl }),
-      probeDirectConnectivity: vi.fn(async () => "unreachable" as const),
-    });
-
-    expect(diagnostic).toContain(
-      "HTTP(S) proxy environment detected in the installed Gateway service: HTTPS_PROXY",
-    );
-    expect(diagnostic).toContain("web_fetch still uses direct connections");
-    expect(diagnostic).toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
-    expect(diagnostic).toContain("Direct TLS connectivity to docs.openclaw.ai:443 failed");
-    expect(diagnostic).toContain("openclaw config set tools.web.fetch.useTrustedEnvProxy true");
-    expect(diagnostic).not.toContain(proxyUrl);
-    expect(diagnostic).not.toContain("proxy-value-marker");
-  });
-
-  it("reports a reachable direct path from the doctor process", async () => {
-    const diagnostic = await collectDiagnostic({
-      cfg: {},
-      env: { http_proxy: "http://proxy.example:8080" },
-      service: serviceWithEnv(),
-      probeDirectConnectivity: vi.fn(async () => "reachable" as const),
-    });
-
-    expect(diagnostic).toContain("proxy environment detected in the doctor process: http_proxy");
-    expect(diagnostic).toContain("Direct TLS connectivity to docs.openclaw.ai:443 succeeded");
-  });
-
-  it("keeps Kubernetes process proxy diagnostics without inspecting a host service", async () => {
-    const service = serviceWithEnv({ HTTPS_PROXY: "http://service-proxy.example:8080" });
-    const diagnostic = await collectDiagnostic({
-      cfg: {},
-      env: {
-        HTTPS_PROXY: "http://pod-proxy.example:8080",
+  const proxyUrl = "http://private-proxy.example:8080/proxy-value-marker";
+  it.each<
+    [
+      string,
+      NodeJS.ProcessEnv,
+      Record<string, string> | undefined,
+      "reachable" | "unreachable",
+      string[],
+    ]
+  >([
+    [
+      "service",
+      {},
+      { HTTPS_PROXY: proxyUrl },
+      "unreachable",
+      ["installed Gateway service: HTTPS_PROXY"],
+    ],
+    ["process", { http_proxy: proxyUrl }, undefined, "reachable", ["doctor process: http_proxy"]],
+    [
+      "Kubernetes",
+      {
+        HTTPS_PROXY: proxyUrl,
         KUBERNETES_SERVICE_HOST: "10.96.0.1",
         KUBERNETES_SERVICE_PORT: "443",
       },
-      service,
-      probeDirectConnectivity: vi.fn(async () => "reachable" as const),
-    });
-
-    expect(diagnostic).toContain("proxy environment detected in the doctor process: HTTPS_PROXY");
-    expect(diagnostic).not.toContain("installed Gateway service");
-    expect(service.readCommand).not.toHaveBeenCalled();
-  });
-
-  it("reports both process and installed service proxy sources", async () => {
-    const diagnostic = await collectDiagnostic({
-      cfg: {},
-      env: { HTTP_PROXY: "http://shell-proxy.example:8080" },
-      service: serviceWithEnv({ HTTPS_PROXY: "http://service-proxy.example:8080" }),
-      probeDirectConnectivity: vi.fn(async () => "reachable" as const),
-    });
-
-    expect(diagnostic).toContain("doctor process: HTTP_PROXY");
-    expect(diagnostic).toContain("installed Gateway service: HTTPS_PROXY");
-  });
-
-  it("does nothing when no HTTP(S) proxy is effective", async () => {
-    const probe = vi.fn(async () => "reachable" as const);
-
-    await expect(
-      collectDiagnostic({
+      { HTTPS_PROXY: proxyUrl },
+      "reachable",
+      ["doctor process: HTTPS_PROXY"],
+    ],
+    [
+      "both",
+      { HTTP_PROXY: proxyUrl },
+      { HTTPS_PROXY: proxyUrl },
+      "reachable",
+      ["doctor process: HTTP_PROXY", "installed Gateway service: HTTPS_PROXY"],
+    ],
+  ])(
+    "reports %s proxy routing without exposing values",
+    async (source, env, serviceEnv, connectivity, sources) => {
+      const service = serviceWithEnv(serviceEnv);
+      const noteFn = vi.fn();
+      await noteWebFetchProxyDiagnostic({
         cfg: {},
-        env: { ALL_PROXY: "socks5://proxy.example:1080" },
-        service: serviceWithEnv(),
-        probeDirectConnectivity: probe,
-      }),
-    ).resolves.toBeNull();
-    expect(probe).not.toHaveBeenCalled();
-  });
+        env,
+        service,
+        noteFn,
+        probeDirectConnectivity: vi.fn(async () => connectivity),
+      });
+      expect(noteFn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("web_fetch"),
+        "Web fetch proxy",
+      );
+      const diagnostic = noteFn.mock.calls[0]?.[0];
+      for (const expected of sources) {
+        expect(diagnostic).toContain(`HTTP(S) proxy environment detected in the ${expected}`);
+      }
+      expect(diagnostic).toContain("web_fetch still uses direct connections");
+      expect(diagnostic).toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+      expect(diagnostic).toContain(
+        `Direct TLS connectivity to docs.openclaw.ai:443 ${connectivity === "reachable" ? "succeeded" : "failed"}`,
+      );
+      expect(diagnostic).toContain("openclaw config set tools.web.fetch.useTrustedEnvProxy true");
+      expect(diagnostic).not.toContain(proxyUrl);
+      expect(diagnostic).not.toContain("proxy-value-marker");
+      if (source === "Kubernetes") {
+        expect(diagnostic).not.toContain("installed Gateway service");
+        expect(service.readCommand).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it.each([
+  it.each<{ name: string; cfg: OpenClawConfig; proxy: boolean }>([
+    { name: "no HTTP(S) proxy is effective", cfg: {}, proxy: false },
     {
       name: "trusted proxy opt-in is enabled",
       cfg: { tools: { web: { fetch: { useTrustedEnvProxy: true } } } },
+      proxy: true,
     },
     {
       name: "web_fetch is disabled",
       cfg: { tools: { web: { fetch: { enabled: false } } } },
+      proxy: true,
     },
-    {
-      name: "Gateway mode is remote",
-      cfg: { gateway: { mode: "remote" } },
-    },
-  ])("does nothing when $name", async ({ cfg }) => {
-    const service = serviceWithEnv({ HTTPS_PROXY: "http://proxy.example:8080" });
+    { name: "Gateway mode is remote", cfg: { gateway: { mode: "remote" } }, proxy: true },
+  ])("does nothing when $name", async ({ cfg, proxy }) => {
+    const service = serviceWithEnv(proxy ? { HTTPS_PROXY: proxyUrl } : undefined);
     const probe = vi.fn(async () => "unreachable" as const);
-
     await expect(
       collectDiagnostic({
-        cfg: cfg as OpenClawConfig,
-        env: {},
+        cfg,
+        env: proxy ? {} : { ALL_PROXY: "socks5://proxy.example:1080" },
         service,
         probeDirectConnectivity: probe,
       }),
     ).resolves.toBeNull();
-    expect(service.readCommand).not.toHaveBeenCalled();
+    if (proxy) {
+      expect(service.readCommand).not.toHaveBeenCalled();
+    }
     expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("emits one titled note", async () => {
-    const noteFn = vi.fn();
-
-    await noteWebFetchProxyDiagnostic({
-      cfg: {},
-      env: { HTTPS_PROXY: "http://proxy.example:8080" },
-      service: serviceWithEnv(),
-      probeDirectConnectivity: vi.fn(async () => "reachable" as const),
-      noteFn,
-    });
-
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(noteFn).toHaveBeenCalledWith(expect.stringContaining("web_fetch"), "Web fetch proxy");
   });
 });
 

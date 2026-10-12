@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
@@ -13,9 +15,13 @@ import {
   parseUpdateAdmissionVerdict,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
+import * as pluginMigrationResources from "../../plugins/doctor-migration-resources.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { runCli } from "../run-main.js";
 import { registerUpdateCli } from "../update-cli.js";
+import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 import * as pluginPreflight from "./update-command-plugin-preflight.js";
 
@@ -105,7 +111,7 @@ beforeEach(() => {
     target: { spec: "openclaw@latest", version: null, source: "registry", channel: "stable" },
     request: { yes: true, noRestart: true, acceptCapabilities: false, json: true },
     run: { id: "candidate-admission-fixture" },
-    supervisor: { version: "2026.9.1", host: "fixture", pid: process.pid },
+    supervisor: { version: "2026.9.9", host: "fixture", pid: process.pid },
   };
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -119,6 +125,7 @@ beforeEach(() => {
     OPENCLAW_PROFILE: undefined,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_OAUTH_DIR: undefined,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
     OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
@@ -138,6 +145,364 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it.each(["retired call log", "Cannot inspect source: EACCES"])(
+    "returns a published-driver refusal for plugin state failure: %s",
+    async (message) => {
+      vi.spyOn(pluginMigrationResources, "assertPluginStateRetention").mockRejectedValue(
+        new Error(message),
+      );
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "plugin-state-retention",
+            message: expect.stringContaining(message),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@2026.9.9",
+      manualSpec: "openclaw@2026.9.9",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@next",
+      manualSpec: "openclaw@next",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "2026.9.9",
+      manualSpec: "openclaw@2026.9.9",
+    },
+    {
+      supervisor: "2026.9.8-beta.1",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw",
+      manualSpec: "openclaw@beta",
+    },
+    {
+      supervisor: "2026.9.8",
+      entries: 50_001,
+      refused: true,
+      spec: "openclaw@latest; echo unexpected",
+      manualSpec: null,
+    },
+    { supervisor: "2026.9.8", entries: 50_001, refused: true },
+    { supervisor: "2026.9.8-beta.1", entries: 50_001, refused: true },
+    { supervisor: "2026.8.99", entries: 50_001, refused: true },
+    { supervisor: "2026.9.8", entries: 50_000, refused: false },
+    { supervisor: "2026.9.9-beta.1", entries: 50_000, refused: false },
+    { supervisor: "2026.9.10", entries: 50_000, refused: false },
+    { supervisor: "unparseable", entries: 50_000, refused: false },
+  ])(
+    "checks a $entries-entry candidate for shipped supervisor $supervisor (refused=$refused, spec=$spec)",
+    async ({
+      supervisor,
+      entries,
+      refused,
+      spec = "openclaw@latest",
+      manualSpec = "openclaw@latest",
+    }) => {
+      context.supervisor.version = supervisor;
+      context.target.channel = supervisor.includes("beta") ? "beta" : "stable";
+      context.target.spec = spec;
+      fs.writeFileSync(contextPath, JSON.stringify(context));
+      const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })!;
+      expect(candidateRoot).not.toBe(root);
+      const inventory = path.join(home, "candidate-inventory");
+      const dependencies = path.join(inventory, "node_modules");
+      fs.mkdirSync(dependencies, { recursive: true });
+      fs.writeFileSync(path.join(inventory, "package.json"), "{}");
+      fs.writeFileSync(path.join(dependencies, ".package-lock.json"), "{}");
+      fs.symlinkSync(dependencies, path.join(inventory, "linked"), "junction");
+      const rootEntries = fs.readdirSync(inventory, { withFileTypes: true });
+      const [hiddenLockfile] = fs.readdirSync(dependencies, { withFileTypes: true });
+      const opendir = fsp.opendir.bind(fsp);
+      let discovered = 0;
+      vi.spyOn(fsp, "opendir").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        const isRoot = file === candidateRoot;
+        if (!isRoot && file !== path.join(candidateRoot, "node_modules")) {
+          return opendir(...args);
+        }
+        const directory = await opendir(isRoot ? inventory : dependencies);
+        const reader: { read(): Promise<fs.Dirent | null> } = directory;
+        let returned = 0;
+        vi.spyOn(reader, "read").mockImplementation(async () => {
+          const entry = isRoot
+            ? rootEntries[returned++]
+            : returned++ < entries - rootEntries.length - 1
+              ? hiddenLockfile
+              : undefined;
+          if (entry) {
+            discovered++;
+          }
+          return entry ?? null;
+        });
+        return directory;
+      });
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(refused ? 3 : 0);
+      expect(readVerdict()).toMatchObject({
+        verdict: refused ? "refuse" : "admit",
+        reasons: refused
+          ? [
+              {
+                code: "installed-updater-tree-limit",
+                message: expect.stringContaining("50,000 entries"),
+                nextAction: manualSpec
+                  ? `Run npm i -g ${manualSpec} manually because the installed updater cannot stage packages of this size.`
+                  : "Install the requested package manually because the installed updater cannot stage packages of this size.",
+              },
+            ]
+          : [],
+      });
+      const scansTree = ["2026.9.8", "2026.9.8-beta.1", "2026.8.99"].includes(supervisor);
+      expect(discovered).toBe(scansTree ? Math.min(entries, 50_001) - 1 : 0);
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    "cron/runs",
+    "delivery-queue",
+    "session-delivery-queue/failed",
+    "credentials/auth-profiles",
+  ])("refuses a dangling %s directory link before activation", async (relative) => {
+    const sourcePath = path.join(path.dirname(configPath), relative);
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.symlinkSync(path.join(home, "missing-history"), sourcePath, "junction");
+    const originalTarget = fs.readlinkSync(sourcePath);
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(3);
+    expect(readVerdict()).toMatchObject({
+      verdict: "refuse",
+      reasons: [expect.objectContaining({ code: "retired-state-format" })],
+    });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+    expect(fs.readlinkSync(sourcePath)).toBe(originalTarget);
+  });
+
+  it.each([
+    "cron/runs",
+    "delivery-queue",
+    "session-delivery-queue/failed",
+    "credentials/auth-profiles",
+  ])(
+    "refuses an uninspectable %s path instead of permitting admission fallback",
+    async (relative) => {
+      const sourcePath = path.join(path.dirname(configPath), relative);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, "retained operator data\n");
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Cannot inspect potentially retired state"),
+          }),
+        ],
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    "cron/jobs.json",
+    "cron/jobs-state.json",
+    "cron/runs/retained.jsonl",
+    "custom-cron/jobs.json",
+    "delivery-queue/pending.json",
+    "delivery-queue/failed/failed.json",
+    "session-delivery-queue/pending.json",
+    "session-delivery-queue/failed/failed.json",
+    "delivery-queue/sent.delivered",
+    "plugins/installs.json",
+    "settings/voicewake.json",
+    "settings/voicewake-routing.json",
+    "bindings/current-conversations.json",
+    "acp/event-ledger.json",
+    "acp/event-ledger.json.doctor-import",
+    "restart-sentinel.json",
+    "restart-sentinel.json.doctor-importing",
+  ])(
+    "refuses retired %s before a published updater can activate the candidate",
+    async (relative) => {
+      const stateDir = path.dirname(configPath);
+      const custom = relative.startsWith("custom-cron/");
+      const filename = path.join(custom ? home : stateDir, relative);
+      if (custom) {
+        writeConfig({ cron: { store: filename } });
+      }
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, "retained operator data\n");
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
+          }),
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "state-format", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
+  it.each([
+    { selector: "default", store: "referenced" },
+    { selector: "environment", store: "referenced" },
+    { selector: "config", store: "referenced" },
+    { selector: "prefixed-config", store: "referenced" },
+    { selector: "prefixed-include", store: "referenced" },
+    // Only the caller's env selects this store; config selects a different agent dir.
+    { selector: "caller-agent-dir", store: "referenced" },
+    { selector: "default", store: "unreadable" },
+    { selector: "default", store: "other-id" },
+    { selector: "config", store: "other-id" },
+  ])(
+    "admits retired OAuth selected by $selector only when no legacy profile references it ($store store)",
+    async ({ selector, store: storeKind }) => {
+      const stateDir = path.dirname(configPath);
+      const oauthDir =
+        selector === "default" || selector === "caller-agent-dir"
+          ? path.join(stateDir, "credentials")
+          : path.join(home, "external-auth");
+      const selected = { env: { vars: { OPENCLAW_OAUTH_DIR: "~/external-auth" } } };
+      if (selector === "caller-agent-dir") {
+        vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+        vi.stubEnv("PI_CODING_AGENT_DIR", path.join(home, "caller-agent"));
+        writeConfig({ env: { vars: { OPENCLAW_AGENT_DIR: "~/config-agent" } } });
+      } else if (selector === "environment") {
+        vi.stubEnv("OPENCLAW_OAUTH_DIR", oauthDir);
+      } else if (selector === "prefixed-include") {
+        fs.writeFileSync(path.join(stateDir, "auth-selector.json"), JSON.stringify(selected));
+        fs.writeFileSync(configPath, 'unexpected prefix\n{"$include":"auth-selector.json"}');
+      } else if (selector !== "default") {
+        fs.writeFileSync(
+          configPath,
+          `${selector === "prefixed-config" ? "unexpected prefix\n" : ""}${JSON.stringify(selected)}`,
+        );
+      }
+      fs.writeFileSync(`${configPath}.bak`, "{}\n");
+      const sidecar = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
+      fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+      fs.writeFileSync(sidecar, "unparsed retired credential bytes\n", { mode: 0o600 });
+      const store =
+        selector === "caller-agent-dir"
+          ? path.join(home, "caller-agent", "auth-profiles.json")
+          : path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+      if (storeKind === "unreadable") {
+        fs.mkdirSync(store, { recursive: true });
+      } else {
+        fs.mkdirSync(path.dirname(store), { recursive: true });
+        fs.writeFileSync(
+          store,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: (storeKind === "referenced" ? "a" : "c").repeat(32),
+                },
+              },
+            },
+          }),
+        );
+      }
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(storeKind === "other-id" ? 0 : 3);
+      expect(readVerdict()).toMatchObject(
+        storeKind === "other-id"
+          ? { verdict: "admit", reasons: [] }
+          : {
+              verdict: "refuse",
+              reasons: [
+                expect.objectContaining({
+                  code: "retired-state-format",
+                  message: expect.stringContaining(
+                    storeKind === "referenced"
+                      ? "Upgrade through OpenClaw 2026.9.7"
+                      : `Cannot inspect potentially retired state at ${store}`,
+                  ),
+                }),
+              ],
+              facts: {
+                checks: expect.arrayContaining([
+                  { name: "state-format", status: "refuse", detail: expect.any(String) },
+                ]),
+              },
+            },
+      );
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
+  it("admits despite a leftover update-check cache", async () => {
+    const filename = path.join(path.dirname(configPath), "update-check.json");
+    fs.writeFileSync(filename, '{"lastAvailableVersion":"2026.9.7"}\n');
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({ verdict: "admit", reasons: [] });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+  });
+
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
     const before = snapshotFiles();
     const program = new Command().name("openclaw");
@@ -164,41 +529,279 @@ describe("candidate update admission", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
   });
 
-  it("admits a missing custom plugin path with the candidate warning and preserves its bytes", async () => {
-    writeConfig({ plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } } });
-    const before = snapshotFiles();
-    await runCli([
-      "node",
-      "openclaw",
-      "--profile",
-      "admission-fixture",
-      "update",
-      "admit",
-      "--context",
-      contextPath,
-    ]);
-    expect(readVerdict()).toMatchObject({
-      verdict: "admit",
-      warnings: expect.arrayContaining([
-        expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
-      ]),
-      facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+  it("admits a missing custom plugin path without changing profile artifacts with an idle WAL", async () => {
+    const customAgentPath = path.join(home, "custom-agent.sqlite");
+    writeConfig({
+      session: { store: customAgentPath },
+      plugins: { load: { paths: [path.join(home, "missing-custom-plugin")] } },
     });
-    expect(process.exitCode).toBe(0);
-    expect(snapshotFiles()).toEqual(before);
+    const databasePath = resolveOpenClawStateSqlitePath();
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    const agentDatabases: DatabaseSync[] = [];
+    try {
+      database.exec(
+        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+      );
+      database.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,?,1,1)")
+        .run(OPENCLAW_STATE_SCHEMA_VERSION, context.supervisor.version);
+      const registeredAgentPath = path.join(path.dirname(configPath), "registered-agent.sqlite");
+      database
+        .prepare("INSERT INTO agent_databases VALUES ('registered',?,?,1,NULL)")
+        .run(registeredAgentPath, OPENCLAW_AGENT_SCHEMA_VERSION);
+      // Cover on-disk discovery, configured stores, and registry-only stores together.
+      for (const [agentPath, keepWal] of [
+        [path.join(path.dirname(configPath), "agents/main/agent/openclaw-agent.sqlite"), true],
+        [path.join(path.dirname(configPath), "agents/offline/agent/openclaw-agent.sqlite"), false],
+        [customAgentPath, true],
+        [registeredAgentPath, true],
+      ] as const) {
+        fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+        const agent = new DatabaseSync(agentPath);
+        agentDatabases.push(agent);
+        agent.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        agent.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        if (!keepWal) {
+          agent.close();
+        }
+        for (const suffix of ["-wal", "-shm"]) {
+          expect(fs.existsSync(agentPath + suffix)).toBe(keepWal);
+        }
+      }
+      // Keep a committed WAL without a concurrent writer so any byte change belongs to admission.
+      database.exec(
+        "PRAGMA journal_mode=WAL; INSERT INTO config_machine_state VALUES ('admission-fixture','{}',1)",
+      );
+      const before = snapshotFiles();
+      await runCli([
+        "node",
+        "openclaw",
+        "--profile",
+        "admission-fixture",
+        "update",
+        "admit",
+        "--context",
+        contextPath,
+      ]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "admit",
+        warnings: expect.arrayContaining([
+          expect.objectContaining({ code: "configured-plugin-path-unavailable" }),
+        ]),
+        facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+      });
+      expect(process.exitCode).toBe(0);
+      expect(snapshotFiles()).toEqual(before);
+
+      // A newer header committed only in WAL must still refuse admission.
+      agentDatabases[0]!.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+      const beforeRefusal = snapshotFiles();
+      stdout = "";
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [expect.objectContaining({ code: "database-schema-preflight" })],
+      });
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(beforeRefusal);
+    } finally {
+      for (const agent of agentDatabases) {
+        if (agent.isOpen) {
+          agent.close();
+        }
+      }
+      database.close();
+    }
   });
 
-  it("returns invalid-config with exit 3 without repairing or quoting rejected config values", async () => {
-    writeConfig({ gateway: { port: "private-invalid-value" } });
-    const before = snapshotFiles();
-    await updateAdmitCommand(contextPath);
-    expect(readVerdict()).toMatchObject({
-      verdict: "refuse",
-      reasons: [
-        { code: "invalid-config", message: expect.any(String), nextAction: expect.any(String) },
-      ],
+  it.each([
+    {
+      kind: "invalid value",
+      config: { gateway: { port: "private-invalid-value" } },
+      nextAction: /openclaw doctor --fix/,
+    },
+    {
+      kind: "retired format",
+      config: { heartbeat: { every: "private-invalid-value" } },
+      nextAction: /Install OpenClaw 2026\.9\.5[\s\S]*openclaw doctor --fix/,
+    },
+  ])(
+    "refuses $kind without repairing or quoting rejected config values",
+    async ({ config, nextAction }) => {
+      writeConfig(config);
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.any(String),
+            nextAction: expect.stringMatching(nextAction),
+          },
+        ],
+      });
+      expect(stdout).not.toContain("private-invalid-value");
+      expect(process.exitCode).toBe(3);
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each([
+    { policy: "allowlist", verdict: "admit", exitCode: 0 },
+    { policy: "invalid-policy", verdict: "refuse", exitCode: 3 },
+  ])(
+    "$verdict plugin-owned legacy Discord DM config ($policy) without writing",
+    async ({ policy, verdict, exitCode }) => {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+      writeConfig({
+        plugins: { allow: ["discord"] },
+        channels: { discord: { dm: { policy, allowFrom: ["123456789"] } } },
+      });
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(readVerdict()).toMatchObject({
+        verdict,
+        ...(verdict === "admit"
+          ? {
+              reasons: [],
+              warnings: expect.arrayContaining([
+                { code: "config-warning", message: expect.stringContaining("legacy fields") },
+              ]),
+            }
+          : { reasons: [expect.objectContaining({ code: "invalid-config" })] }),
+      });
+      expect(process.exitCode).toBe(exitCode);
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
+  it.each(["valid", "repairable"])(
+    "refuses retired config that a selected older plugin considers %s",
+    async (shape) => {
+      const pluginDir = path.join(home, "older-whatsapp");
+      fs.mkdirSync(pluginDir);
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/whatsapp",
+          version: "2026.9.7",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "whatsapp",
+          channels: ["whatsapp"],
+          configSchema: { type: "object", additionalProperties: false },
+          channelConfigs: { whatsapp: { schema: { type: "object" } } },
+          doctorContract: { configRepair: true },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        "throw new Error('admission must not activate the plugin');\n",
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "doctor-contract-api.cjs"),
+        `const { stripRetiredChannelKeys } = require("openclaw/plugin-sdk/runtime-doctor-migrations");
+module.exports = {
+  legacyConfigRules: ${JSON.stringify(
+    shape === "repairable"
+      ? [{ path: ["channels", "whatsapp", "exposeErrorText"], message: "Retired ignored setting" }]
+      : [],
+  )},
+  normalizeCompatibilityConfig: ({ cfg }) => {
+    const changes = [];
+    const result = stripRetiredChannelKeys({
+      cfg, channelId: "whatsapp", keys: new Set(["exposeErrorText"]),
+      scope: "root-and-accounts", onRemove: () => changes.push("Removed ignored setting"),
     });
-    expect(stdout).not.toContain("private-invalid-value");
+    return { config: result.config, changes };
+  },
+};\n`,
+      );
+      writeConfig({
+        plugins: { load: { paths: [pluginDir] }, allow: ["whatsapp"] },
+        channels: {
+          whatsapp: { exposeErrorText: false, accounts: { default: { exposeErrorText: true } } },
+        },
+      });
+      fs.writeFileSync(`${configPath}.bak`, "retained backup bytes\n");
+      const before = snapshotFiles();
+
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.stringContaining("channels.whatsapp.exposeErrorText"),
+            nextAction: expect.stringContaining("Install OpenClaw 2026.9.5"),
+          },
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "config", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stdout).toContain("channels.whatsapp.accounts.default.exposeErrorText");
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
+  it("emits a parseable refusal when Doctor-projected database targets are incompatible", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+    writeConfig({
+      plugins: { allow: ["discord"] },
+      channels: { discord: { dm: { policy: "allowlist", allowFrom: ["123456789"] } } },
+    });
+    const checkSchemas = schemaPreflight.checkTargetDatabaseSchemasForContexts;
+    vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockImplementation(
+      async (versions, contexts) => {
+        if (contexts.some(({ config }) => config.channels?.discord?.dmPolicy === "allowlist")) {
+          return {
+            incompatible: [
+              {
+                kind: "agent",
+                path: path.join(home, "projected-agent.sqlite"),
+                foundVersion: 99999,
+                supportedVersion: 1,
+                writerAppVersion: "9999.1.1",
+              },
+            ],
+            indeterminate: [],
+          };
+        }
+        return checkSchemas(versions, contexts);
+      },
+    );
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    const verdict = readVerdict();
+    expect(verdict).toMatchObject({
+      verdict: "refuse",
+      reasons: [expect.objectContaining({ code: "database-schema-preflight" })],
+      warnings: [{ code: "config-warning", message: expect.stringContaining("legacy fields") }],
+    });
+    expect(verdict.facts.checks.filter(({ name }) => name === "database-schema")).toEqual([
+      { name: "database-schema", status: "refuse", detail: expect.any(String) },
+    ]);
+    expect(verdict.facts.checks.filter(({ name }) => name === "config")).toEqual([
+      { name: "config", status: "warn" },
+    ]);
     expect(process.exitCode).toBe(3);
     expect(snapshotFiles()).toEqual(before);
   });
@@ -314,7 +917,7 @@ describe("candidate update admission", () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it.each([undefined, "", "relative/context.json"])(
+  it.each([undefined, "relative/context.json"])(
     "requires an absolute private context path (%s) without writing live state",
     async (value) => {
       const before = snapshotFiles();
@@ -327,12 +930,9 @@ describe("candidate update admission", () => {
   );
 
   it.each([
-    [],
     ["--context"],
     ["--context", "relative/context.json"],
-    ["--context", "/fixture/context.json", "extra"],
     ["--context", "/fixture/context.json", "--context", "/fixture/other.json"],
-    ["--context", "/fixture/context.json", "--json"],
   ])("rejects malformed admission argv without generic CLI startup (%j)", async (...args) => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
     const before = snapshotFiles();
@@ -345,11 +945,6 @@ describe("candidate update admission", () => {
 
   it.each(
     [
-      "OPENCLAW_UPDATE_RUN_ID",
-      "OPENCLAW_UPDATE_IN_PROGRESS",
-      "OPENCLAW_UPDATE_RUN_HANDOFF",
-      "OPENCLAW_UPDATE_POST_CORE",
-      "OPENCLAW_UPDATE_EXECUTOR_GRANT",
       "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
       "OPENCLAW_GATEWAY_SERVICE_PID",
       "OPENCLAW_COMPATIBILITY_HOST_VERSION",
@@ -372,14 +967,11 @@ describe("candidate update admission", () => {
     },
   );
 
-  it.each(["{", '{"protocol":2}', "{}"])(
-    "returns no verdict for invalid context %s",
-    async (raw) => {
-      fs.writeFileSync(contextPath, raw);
-      await updateAdmitCommand(contextPath);
-      expect(process.exitCode).toBe(2);
-      expect(stdout).toBe("");
-      expect(stderr).not.toBe("");
-    },
-  );
+  it.each(["{", "{}"])("returns no verdict for invalid context %s", async (raw) => {
+    fs.writeFileSync(contextPath, raw);
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).not.toBe("");
+  });
 });

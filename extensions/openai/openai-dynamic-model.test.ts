@@ -47,6 +47,22 @@ describe("OpenAI dynamic model capabilities", () => {
       cacheWrite: 0.0125,
     },
     {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_000,
+      inputRate: 2,
+      output: 0.01,
+      cacheRead: 0.00005,
+      cacheWrite: 0.00125,
+    },
+    {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_001,
+      inputRate: 4,
+      output: 0.015,
+      cacheRead: 0.0001,
+      cacheWrite: 0.0025,
+    },
+    {
       id: "gpt-6-sol",
       promptTokens: 272_000,
       inputRate: 2,
@@ -111,6 +127,13 @@ describe("OpenAI dynamic model capabilities", () => {
         off: null,
         efforts: ["low", "medium", "high", "xhigh", "max"],
         cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      },
+      {
+        api,
+        id: "gpt-6.1-sol",
+        off: null,
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
       },
       {
         api,
@@ -221,16 +244,6 @@ describe("OpenAI dynamic model capabilities", () => {
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
       codeMode: "capable",
     },
-    {
-      id: "gpt-5.6-terra",
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      codeMode: "preferred",
-    },
-    {
-      id: "gpt-5.6-luna",
-      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      codeMode: undefined,
-    },
   ] as const)("preserves exact registry metadata for $id", ({ id, cost, codeMode }) => {
     const provider = buildOpenAIProvider();
     const exactModel: ProviderRuntimeModel = {
@@ -258,7 +271,7 @@ describe("OpenAI dynamic model capabilities", () => {
     expect(model).toBe(exactModel);
   });
 
-  it.each(["chat-latest", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"])(
+  it.each(["chat-latest", "gpt-5.4-mini"])(
     "does not promote unpreferred %s without discovery",
     (modelId) => {
       const model = buildOpenAIProvider().resolveDynamicModel?.({
@@ -365,5 +378,30 @@ describe("OpenAI dynamic model capabilities", () => {
       modelRegistry: modelRegistry([exact]),
     });
     expect(model?.compat).toEqual(exact.compat);
+  });
+
+  // The API-key listing hides these families; config defaults and session overrides still name them.
+  it.each([
+    ["gpt-4o", false],
+    ["o3", true],
+    ["ft:gpt-4.1-mini:acme::abc123", false],
+  ] as const)("resolves the selected pre-GPT-5 ref %s with listing metadata", (id, reasoning) => {
+    const model = buildOpenAIProvider().resolveDynamicModel?.({
+      provider: "openai",
+      modelId: id,
+      modelRegistry: modelRegistry(),
+    });
+    expect(model).toEqual({
+      id,
+      name: id,
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
   });
 });

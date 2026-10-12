@@ -42,7 +42,7 @@ export async function repairAuthProfileMigration(params: {
   );
   const aliases =
     params.prompter.shouldRepair || authorized.size > 0
-      ? maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
+      ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
       : { profileIdMap: authorized, changes: [], warnings: [] };
   const repaired = maybeRepairOpenAICodexAuthConfig(config, { profileIdMap: aliases.profileIdMap });
   return {

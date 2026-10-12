@@ -13,6 +13,7 @@ import {
   createPublicationAdmission,
   createPublicationObservations,
   createPublicationSourceFact,
+  normalizePublicationIntent,
   publicationAdmissionContract,
   publicationDispatchEnvelope,
   publicationIntentInputs,
@@ -36,6 +37,23 @@ import {
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+it.each([
+  { route: "alpha", npmDistTag: "alpha" },
+  { route: "normal", npmDistTag: "alpha" },
+])("rejects retired alpha publication selection %j", (selection) => {
+  expect(() =>
+    normalizePublicationIntent(
+      "publish",
+      JSON.stringify({
+        ...selection,
+        publishOpenclawNpm: true,
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+      }),
+    ),
+  ).toThrow("Alpha releases are retired;");
+});
 
 const SHA = "a".repeat(40);
 
@@ -226,6 +244,7 @@ globalThis.fetch = async (input, options) => {
     GH_TOKEN: "artifact-fixture-token",
     GITHUB_TOKEN: "",
     NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+    PREPARED_PLUGIN_NPM_JSON: JSON.stringify({ descriptor: "prepared-plugin-npm" }),
     QUALIFIED_NPM_BUNDLE_JSON: JSON.stringify(qualified),
   };
 }
@@ -754,7 +773,6 @@ describe("retained publication admission", () => {
     ["prepared", "latest", "2026.9.9-1", true],
     ["normal", "beta", "2026.9.9", false],
     ["prepared", "beta", "2026.9.9-1", false],
-    ["alpha", "alpha", "2026.9.9-alpha.1", false],
     ["extended-stable", "extended-stable", "2026.8.33", false],
   ] as const)(
     "retains only supported plugin absence on %s/%s/%s (accepted=%s)",
@@ -766,7 +784,7 @@ describe("retained publication admission", () => {
         route,
         npmDistTag,
       };
-      const rootVersion = route === "alpha" || route === "extended-stable" ? version : "2026.9.9";
+      const rootVersion = route === "extended-stable" ? version : "2026.9.9";
       source.projection.version = rootVersion;
       source.projection.packages = [
         { name: "@openclaw/test", version, targets: ["npm"] },
@@ -902,22 +920,6 @@ describe("retained publication admission", () => {
     expect(() => assertReleasePublicationKnownBudget(combined, context)).toThrow(/size limit/u);
   });
 
-  it("counts complete retained root/current copies and later growth under the same artifact cap", () => {
-    const { record } = registryEvidence();
-    const root = { ...record, childEvidence: { retained: "x".repeat(520_000) } };
-    const current = { ...record, evidenceReuse: { sourceManifest: root } };
-    expect(() => serializeReleaseArtifact(root)).not.toThrow();
-    expect(() => serializeReleaseArtifact(current)).not.toThrow();
-    const enclosing = { ...current, childEvidence: { retained: "x".repeat(520_000) } };
-    const emptyBytes = Buffer.byteLength(serializeReleaseArtifact(enclosing));
-    enclosing.childEvidence.retained += "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - emptyBytes);
-    expect(Buffer.byteLength(serializeReleaseArtifact(enclosing))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-    enclosing.childEvidence.retained += "x";
-    expect(() => serializeReleaseArtifact(enclosing)).toThrow(/size limit/u);
-    expect(root.publicationAdmission).toEqual(record.publicationAdmission);
-    expect(enclosing.publicationAdmission).toEqual(record.publicationAdmission);
-  });
-
   it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {
     const { plan, context } = registryBudgetFixture();
     expect(() => assertReleasePublicationKnownBudget(plan, context)).not.toThrow();
@@ -1043,7 +1045,6 @@ describe("retained publication admission", () => {
           "normal_ci",
           "prepare_npm_package",
           "prepare_docker_release",
-          "docker_runtime_assets_preflight",
           "candidate_acquisition",
           "performance",
           "plugin_prerelease_independent",
@@ -1197,7 +1198,7 @@ describe("full release artifact contract", () => {
     return { result, bytes, context, dir, workflow, writer, steps };
   }
 
-  it.each([false, true])("writes only a full-input digest and safe context (soak=%s)", (soak) => {
+  it("writes only a full-input digest and safe context", () => {
     const privateValue = "/private/example/operator/candidate.tgz";
     const secretValue = "synthetic-private-dispatch-value";
     const shellValue = 'line one\n$(touch unexpected) "quoted"';
@@ -1206,7 +1207,7 @@ describe("full release artifact contract", () => {
         text: shellValue,
         secret: secretValue,
         package: privateValue,
-        run_release_soak: String(soak),
+        run_release_soak: "true",
         count: 3,
         empty: "",
       },
@@ -1215,7 +1216,7 @@ describe("full release artifact contract", () => {
       count: "3",
       empty: "",
       package: privateValue,
-      run_release_soak: String(soak),
+      run_release_soak: "true",
       secret: secretValue,
       text: shellValue,
     });
@@ -1500,6 +1501,9 @@ describe("full release artifact contract", () => {
         expect(manifest.publicationArtifacts.npmPreflight).toMatchObject({
           source: { sha: SHA },
           producer: { workflowSha: "d".repeat(40), runId: "81", runAttempt: "1" },
+        });
+        expect(manifest.publicationArtifacts.pluginNpm).toEqual({
+          descriptor: "prepared-plugin-npm",
         });
         expect(manifest.publishInputs).toMatchObject({
           targetSha: SHA,

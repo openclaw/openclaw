@@ -36,7 +36,7 @@ type NativeToolState = {
   item: AgentsApiItem;
   canonicalItem?: AgentsApiItem;
   terminal: boolean;
-  tool?: AgentsApiNativeTool;
+  tool: AgentsApiNativeTool;
   startProjected: boolean;
   callRecorded: boolean;
   resultRecorded: boolean;
@@ -63,7 +63,7 @@ export class AgentsApiNativeToolProjection {
   constructor(
     private readonly params: AgentHarnessAttemptParamsV2,
     private readonly remoteSessionId: string,
-    private readonly emitEvent: (event: AgentEvent) => void | Promise<void>,
+    private readonly emit: (event: AgentEvent) => void | Promise<void>,
     private readonly assertCurrent: () => void,
     private readonly nextTimestamp: () => number,
     private readonly isPresentationEnabled: () => boolean,
@@ -85,12 +85,6 @@ export class AgentsApiNativeToolProjection {
       completedCount,
       activeCount: states.length - completedCount,
     };
-  }
-
-  get hadPotentialSideEffects(): boolean {
-    return [...this.items.values()].some(
-      (state) => state.item.type === "command_execution" || state.item.type === "mcp_call",
-    );
   }
 
   resolveTurnId(itemId: string): string | undefined {
@@ -218,14 +212,14 @@ export class AgentsApiNativeToolProjection {
           itemId: id,
           toolCallId: id,
           phase: "delta",
-          name: state.tool?.name ?? "bash",
+          name: state.tool.name,
           title:
-            typeof state.tool?.args.command === "string"
+            typeof state.tool.args.command === "string"
               ? state.tool.args.command
               : "Command output",
           output: delta.length > remaining ? `${text}\n...(truncated)...` : text,
           status: "running",
-          ...(typeof state.tool?.args.cwd === "string" ? { cwd: state.tool.args.cwd } : {}),
+          ...(typeof state.tool.args.cwd === "string" ? { cwd: state.tool.args.cwd } : {}),
         },
       });
     }
@@ -233,7 +227,7 @@ export class AgentsApiNativeToolProjection {
   }
 
   private async startTool(state: NativeToolState): Promise<void> {
-    if (!state.tool || state.startProjected) {
+    if (state.startProjected) {
       return;
     }
     const id = this.identity(state.turnId, state.item.id);
@@ -270,9 +264,6 @@ export class AgentsApiNativeToolProjection {
     canonical = false,
     recordTranscript = true,
   ): Promise<void> {
-    if (!state.tool) {
-      return;
-    }
     const id = this.identity(state.turnId, state.item.id);
     const item = canonical ? (state.canonicalItem ?? state.item) : state.item;
     const tool =
@@ -464,7 +455,6 @@ export class AgentsApiNativeToolProjection {
     isError = false,
   ): Promise<void> {
     if (
-      !state.tool ||
       !this.shouldEmitToolOutput() ||
       state.outputProgressChars >= TOOL_PROGRESS_OUTPUT_MAX_CHARS ||
       state.outputProgressMessages >= MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM
@@ -539,15 +529,6 @@ export class AgentsApiNativeToolProjection {
 
   private identity(turnId: string, itemId: string): string {
     return `agentsapi:${this.remoteSessionId}:${turnId}:${itemId}`;
-  }
-
-  private async emit(event: AgentEvent): Promise<void> {
-    this.assertCurrent();
-    if (!this.isPresentationEnabled()) {
-      return;
-    }
-    await this.emitEvent(event);
-    this.assertCurrent();
   }
 }
 

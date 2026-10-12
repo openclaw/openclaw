@@ -194,12 +194,8 @@ final class ChromeExtensionSetup {
                     }
                     let task = Task { try await self.performAction(action, isCurrent) }
                     self.manualTasks[id] = task
-                    do {
-                        let result = try await task.value
-                        self.manualReplies.removeValue(forKey: id)?.resume(returning: result)
-                    } catch {
-                        self.manualReplies.removeValue(forKey: id)?.resume(throwing: error)
-                    }
+                    let result = await task.result
+                    self.manualReplies.removeValue(forKey: id)?.resume(with: result)
                     self.manualTasks.removeValue(forKey: id)
                 }
             }
@@ -239,7 +235,7 @@ final class ChromeExtensionSetup {
 
     private static func resolveLaunch(action: ChromeExtensionSetupAction) async throws -> MacNodeHostWorkerLaunch {
         if Bundle.main.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.browserSetupLaunch(bundle: .main, action: action)
+            return try BundledRuntime.browserSetupLaunch(bundle: .main, action: action)
         }
         // The ordinary command resolver follows SSH Gateway settings. This action always owns this Mac.
         let executable: String? = if case let .ready(location, _) = await CLIInstaller.status() {

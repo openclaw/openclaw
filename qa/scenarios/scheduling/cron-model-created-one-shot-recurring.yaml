@@ -17,8 +17,8 @@ scenario:
         - qa-cron-operator
   objective: Verify a live model can author one-off and recurring cron jobs whose natural scheduler behavior matches their requested semantics.
   successCriteria:
-    - The model creates exactly one `at` job and one `every` job through the cron tool.
-    - Both jobs persist the concrete creator tool surface as explicit default authority.
+    - The model creates exactly one `at` job and one `every` job through the automations tool.
+    - Both jobs persist exactly ["*"] so runs inherit the owner session policy.
     - The one-off job fires naturally once and is deleted after success.
     - The recurring job fires naturally at least twice, remains enabled, and advances its next run.
     - Stored jobs use isolated agent turns with no delivery side effects.
@@ -63,6 +63,9 @@ flow:
         - set: conversationId
           value:
             expr: "`${config.conversationPrefix}-${suffix}`"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', mainKey: env.cfg.session?.mainKey, channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: oneShotName
           value:
             expr: "`qa-model-at-${suffix}`"
@@ -92,7 +95,7 @@ flow:
             senderId: qa-cron-operator
             senderName: QA Cron Operator
             text:
-              expr: "`Use the cron tool now. Create exactly two jobs and do not run either manually. Job 1: name '${oneShotName}', one-off absolute at '${oneShotAt}', isolated agent turn, payload message 'Reply exactly ${oneShotPayloadMarker}', delivery none. Job 2: name '${recurringName}', recurring every ${config.recurringEveryMs / 1000} seconds using an every schedule, isolated agent turn, payload message 'Reply exactly ${recurringPayloadMarker}', delivery none. After both tool calls succeed, reply exactly ${config.authorDoneMarker}.`"
+              expr: "`Use the automations tool now. Create exactly two jobs and do not run either manually. Job 1: name '${oneShotName}', one-off absolute at '${oneShotAt}', isolated agent turn, payload message 'Reply exactly ${oneShotPayloadMarker}', delivery none. Job 2: name '${recurringName}', recurring every ${config.recurringEveryMs / 1000} seconds using an every schedule, isolated agent turn, payload message 'Reply exactly ${recurringPayloadMarker}', delivery none. After both tool calls succeed, reply exactly ${config.authorDoneMarker}.`"
         - waitForOutbound:
             conversation:
               id:
@@ -105,13 +108,34 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 180000)
           saveAs: authorReply
-        - set: cronToolCalls
-          value:
-            expr: "(authorReply.toolCalls ?? []).filter((toolCall) => toolCall.name === 'cron')"
+        - call: waitForAgentHistory
+          saveAs: cronToolCalls
+          args:
+            - ref: env
+            - ref: sessionKey
+            - lambda:
+                params: [history]
+                expr: >-
+                  (() => {
+                    const mutations = projectQaToolMessages(history.messages ?? [])
+                      .flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : [])
+                      .filter((item) => item.type === 'toolCall' && item.name === 'automations'
+                        && item.isError !== true
+                        && !['list', 'status', 'get', 'runs'].includes(item.arguments?.action));
+                    return mutations.filter((call) => call.arguments?.action === 'add').length >= 2
+                      || mutations.some((call) => call.arguments?.action !== 'add')
+                      ? mutations : undefined;
+                  })()
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 250
         - assert:
-            expr: "(authorReply.toolCalls ?? []).length === 2 && cronToolCalls.length === 2 && cronToolCalls.every((toolCall) => toolCall.arguments?.job && typeof toolCall.arguments.job === 'object')"
+            expr: "cronToolCalls.length === 2 && cronToolCalls.every((toolCall) => toolCall.arguments?.action === 'add' && toolCall.arguments?.job && typeof toolCall.arguments.job === 'object')"
             message:
-              expr: "`expected exactly two native cron add calls, saw ${JSON.stringify(authorReply.toolCalls ?? [])}`"
+              expr: "`expected exactly two logical automations add calls and no other mutations, saw ${JSON.stringify(cronToolCalls)}`"
+        - assert:
+            expr: "cronToolCalls.some((call) => call.arguments.job.name === oneShotName && call.arguments.job.schedule?.kind === 'at' && call.arguments.job.schedule.at === oneShotAt && call.arguments.job.payload?.message === `Reply exactly ${oneShotPayloadMarker}`) && cronToolCalls.some((call) => call.arguments.job.name === recurringName && call.arguments.job.schedule?.kind === 'every' && call.arguments.job.schedule.everyMs === config.recurringEveryMs && call.arguments.job.payload?.message === `Reply exactly ${recurringPayloadMarker}`)"
+            message:
+              expr: "`model submitted wrong job names, schedules, or payloads: ${JSON.stringify(cronToolCalls)}`"
         - call: waitForCondition
           saveAs: jobs
           args:
@@ -142,10 +166,14 @@ flow:
             message:
               expr: "`model created unsafe job shape: ${JSON.stringify(jobs)}`"
         - assert:
-            expr: "jobs.every((job) => Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.length > 0 && job.payload.toolsAllow.includes('cron') && !job.payload.toolsAllow.includes('*') && job.payload.toolsAllowIsDefault === true)"
+            expr: "oneShotJob.payload.message === `Reply exactly ${oneShotPayloadMarker}` && recurringJob.payload.message === `Reply exactly ${recurringPayloadMarker}`"
             message:
-              expr: "`model-created jobs did not persist concrete default authority: ${JSON.stringify(jobs.map((job) => job.payload))}`"
-      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority-counts=${jobs.map((job) => job.payload.toolsAllow.length).join(',')}`"
+              expr: "`model-created job payloads changed: ${JSON.stringify(jobs.map((job) => job.payload))}`"
+        - assert:
+            expr: "jobs.every((job) => JSON.stringify(job.payload.toolsAllow) === JSON.stringify(['*']))"
+            message:
+              expr: "`model-created jobs did not persist the wildcard cap: ${JSON.stringify(jobs.map((job) => job.payload))}`"
+      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority=${jobs.map((job) => JSON.stringify(job.payload.toolsAllow)).join(';')}`"
 
     - name: scheduler fires one-off once and recurring repeatedly
       actions:
@@ -249,13 +277,16 @@ flow:
             message:
               expr: "`recurring next run did not advance from ${recurringJob.state.nextRunAtMs}: ${JSON.stringify(finalRecurring)}`"
         - assert:
-            expr: "JSON.stringify([...(finalRecurring.payload.toolsAllow ?? [])].sort()) === JSON.stringify([...(recurringJob.payload.toolsAllow ?? [])].sort()) && finalRecurring.payload.toolsAllowIsDefault === true"
+            expr: "JSON.stringify(finalRecurring.payload.toolsAllow) === JSON.stringify(recurringJob.payload.toolsAllow)"
             message:
               expr: "`recurring authority changed across restart: before=${JSON.stringify(recurringJob.payload)} after=${JSON.stringify(finalRecurring?.payload)}`"
+        - set: finalOwnedJobs
+          value:
+            expr: "finalList.jobs.filter((job) => job.name === oneShotName || job.name === recurringName)"
         - assert:
-            expr: "finalList.jobs.length === 1 && finalList.jobs[0].id === recurringJob.id"
+            expr: "finalOwnedJobs.length === 1 && finalOwnedJobs[0].id === recurringJob.id"
             message:
-              expr: "`gateway restart replayed or created unexpected cron jobs: ${JSON.stringify(finalList.jobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
+              expr: "`gateway restart replayed or created unexpected scenario cron jobs: ${JSON.stringify(finalOwnedJobs.map((job) => ({ id: job.id, name: job.name, schedule: job.schedule })))}`"
         - call: env.gateway.call
           saveAs: oneShotRunsPage
           args:

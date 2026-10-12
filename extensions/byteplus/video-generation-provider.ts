@@ -1,12 +1,9 @@
-/**
- * BytePlus Seedance video generation provider implementation.
- */
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -107,14 +104,13 @@ function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
   });
 }
 
-/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
     models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "byteplus", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "byteplus", ...ctx }),
     capabilities: {
       providerOptions: {
         seed: "number",
@@ -213,12 +209,10 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         body.watermark = req.watermark;
       }
 
-      // Forward declared providerOptions: seed, draft, camerafixed.
       // draft=true forces 480p resolution for faster generation.
       const opts = req.providerOptions ?? {};
       const seed = asSafeIntegerInRange(opts.seed, { min: -1, max: BYTEPLUS_SEED_MAX });
       const draft = opts.draft === true;
-      // Official JSON body field is camera_fixed (with underscore).
       const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
       if (seed != null) {
         body.seed = seed;

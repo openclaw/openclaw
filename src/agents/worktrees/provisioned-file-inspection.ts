@@ -1,19 +1,53 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { lstatIfExists } from "./git.js";
+
+type DirectoryIdentity = { path: string; dev: number; ino: number };
+
+export async function captureParentDirectoryIdentities(
+  root: string,
+  relativePath: string,
+): Promise<DirectoryIdentity[]> {
+  const directories = [root];
+  let current = root;
+  for (const segment of relativePath.split("/").slice(0, -1)) {
+    current = path.join(current, segment);
+    directories.push(current);
+  }
+  const identities: DirectoryIdentity[] = [];
+  for (const directory of directories) {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`unsafe provisioned parent directory: ${directory}`);
+    }
+    identities.push({ path: directory, dev: stat.dev, ino: stat.ino });
+  }
+  return identities;
+}
+
+export async function validateDirectoryIdentities(identities: readonly DirectoryIdentity[]) {
+  for (const identity of identities) {
+    const stat = await fs.lstat(identity.path);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.dev !== identity.dev ||
+      stat.ino !== identity.ino
+    ) {
+      throw new Error(`provisioned parent directory changed: ${identity.path}`);
+    }
+  }
+}
 
 export function normalizeProvisionedRelativePath(relativePath: string): string | undefined {
   if (path.isAbsolute(relativePath)) {
     return undefined;
   }
   const segments = relativePath.split("/");
-  if (
-    segments.length === 0 ||
-    segments.some((segment) => !segment || segment === "." || segment === "..")
-  ) {
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     return undefined;
   }
-  return segments.join("/");
+  return relativePath;
 }
 
 export function resolveGitPath(root: string, relativePath: string): string {
@@ -28,29 +62,12 @@ export async function hasSafeParentDirectories(
   let current = root;
   for (const segment of segments.slice(0, -1)) {
     current = path.join(current, segment);
-    try {
-      const stat = await fs.lstat(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        return false;
-      }
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+    const stat = await lstatIfExists(current);
+    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+      return false;
     }
   }
   return true;
-}
-
-export async function lstatIfExists(target: string) {
-  try {
-    return await fs.lstat(target);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 type ProvisionedFile = {

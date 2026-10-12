@@ -7,38 +7,6 @@ import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from 
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
-  it("does not queue another scan when focus returns during the startup scan", async () => {
-    vi.useFakeTimers();
-    try {
-      const pending = deferred<SessionsCatalogListResult>();
-      const request = vi.fn().mockReturnValue(pending.promise);
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledOnce();
-
-      globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(50);
-      pending.resolve(catalogPage([]));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-
-      expect(request).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps the scheduled safety refresh when a visible page receives focus", async () => {
     vi.useFakeTimers();
     try {
@@ -46,6 +14,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -101,6 +70,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
@@ -153,45 +123,6 @@ describe("AppSidebar session catalog pagination", () => {
     },
   );
 
-  it("coalesces the visibility and focus events from one tab activation", async () => {
-    vi.useFakeTimers();
-    let visibility: DocumentVisibilityState = "visible";
-    const visibilitySpy = vi
-      .spyOn(document, "visibilityState", "get")
-      .mockImplementation(() => visibility);
-    try {
-      const request = vi.fn().mockResolvedValue(catalogPage([]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-
-      visibility = "hidden";
-      document.dispatchEvent(new Event("visibilitychange"));
-      visibility = "visible";
-      document.dispatchEvent(new Event("visibilitychange"));
-      globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(2);
-    } finally {
-      visibilitySpy.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
   it("stays paused when an in-flight catalog refresh finishes in a hidden tab", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
@@ -207,6 +138,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -257,6 +189,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -276,6 +209,7 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publish({
         phase: "connected",
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });

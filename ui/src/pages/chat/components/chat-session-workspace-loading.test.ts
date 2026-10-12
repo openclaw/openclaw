@@ -4,6 +4,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
+import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -50,6 +51,8 @@ function fixture() {
           name: "inventory.csv",
           kind: "read",
           missing: false,
+          previewKind: "text",
+          contentEncoding: "utf8",
           content: "item,count\nnotebooks,3",
         },
       }),
@@ -66,7 +69,7 @@ describe("workspace listing ownership", () => {
       createSessionWorkspaceProps(state, { expanded: true });
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
       const props = createSessionWorkspaceProps(state);
-      props.onRefresh();
+      loadSessionWorkspace(state, getSessionWorkspace(state), true);
       props.onBrowsePath("reports");
       if (outcome === "success") {
         resolve(listing);
@@ -95,7 +98,7 @@ describe("workspace listing ownership", () => {
       vi.useFakeTimers();
       try {
         const props = createSessionWorkspaceProps(state);
-        props.onRefresh();
+        loadSessionWorkspace(state, getSessionWorkspace(state), true);
         props.onSearch("inventory");
         if (outcome === "success") {
           resolve(listing);
@@ -135,7 +138,7 @@ describe("workspace listing ownership", () => {
           expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
         );
       }
-      createSessionWorkspaceProps(state).onRefresh();
+      loadSessionWorkspace(state, getSessionWorkspace(state), true);
       openSessionWorkspaceFile(state, { path: "reports/inventory.csv" });
       await vi.waitFor(() =>
         expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
@@ -146,7 +149,7 @@ describe("workspace listing ownership", () => {
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
       expect(createSessionWorkspaceProps(state).activeId).toBe(selected);
 
-      createSessionWorkspaceProps(state).onRefresh();
+      loadSessionWorkspace(state, getSessionWorkspace(state), true);
       await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
       expect(createSessionWorkspaceProps(state).activeId).toBe(selected);
       listFiles.mockResolvedValue({

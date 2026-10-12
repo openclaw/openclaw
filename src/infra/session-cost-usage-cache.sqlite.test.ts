@@ -273,9 +273,12 @@ describe("session cost usage SQLite cache", () => {
         );
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(process, "kill").mockImplementation(() => true);
-      vi.spyOn(fs, "readFileSync").mockImplementation((filePath) => {
-        expect(String(filePath)).toBe(`/proc/${zombiePid}/status`);
-        return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\nThreads:\t1\n`;
+      const readFile = fs.readFileSync;
+      vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+        if (String(filePath) === `/proc/${zombiePid}/status`) {
+          return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\nThreads:\t1\n`;
+        }
+        return readFile(filePath, options);
       });
 
       const readLock = () =>
@@ -380,7 +383,7 @@ describe("session cost usage SQLite cache", () => {
     },
   );
 
-  it("bounds stale-rollup deletion work while preserving each snapshot comparison", async () => {
+  it("prunes stale rollups off-thread while preserving each snapshot comparison", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-prune-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
@@ -431,8 +434,7 @@ describe("session cost usage SQLite cache", () => {
             row.scope !== scope || ["live\0雪", "stale-17", "stale-49"].includes(String(row.key)),
         ),
       );
-      expect(executions.counts.delete).toBeGreaterThan(0);
-      expect(executions.counts.delete).toBeLessThan(12);
+      expect(executions.counts.delete).toBe(0);
       executions.restore();
     });
   });
@@ -444,6 +446,8 @@ describe("session cost usage SQLite cache", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         const agentId = "worker-1";
         const { db } = openOpenClawAgentDatabase({ agentId });
+        const owner = prepareSessionCostUsageRefreshLock(agentId);
+        expect(await owner.acquire()).toBe(true);
         const insert = db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
         );
@@ -457,27 +461,25 @@ describe("session cost usage SQLite cache", () => {
         }
         insert.run("session-cost-usage", "cache", "{}", 1);
         insert.run("session-cost-usage-rollup-v1", "retired", "{}", 1);
-        insert.run("session-cost-usage", "refresh-lock", "{}", 1);
         const rows = readSessionCostUsageRollupRows(agentId).map((row) => ({
           key: row.key,
           updatedAt: row.updatedAt,
           valueJson: encodeJson(row.valueJson, format),
         }));
         const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
-        db.exec(`CREATE TEMP TRIGGER refuse_late_rollup_prune BEFORE DELETE ON cache_entries
+        db.exec(`CREATE TRIGGER refuse_late_rollup_prune BEFORE DELETE ON cache_entries
         WHEN OLD.scope = 'session-cost-usage-rollup-v3' AND OLD.key = 'stale-080'
         BEGIN SELECT RAISE(ABORT, 'late rollup prune refused'); END;`);
-        await expect(
-          deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows }),
-        ).rejects.toThrow("late rollup prune refused");
+        await expect(owner.pruneRows(rows)).rejects.toThrow("late rollup prune refused");
         expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(before);
         db.exec("DROP TRIGGER refuse_late_rollup_prune");
 
-        await deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows });
+        await owner.pruneRows(rows);
 
         expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(
           before.filter((row) => row.key === "refresh-lock"),
         );
+        await owner.release();
       });
     },
   );

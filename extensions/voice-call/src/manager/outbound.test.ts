@@ -95,6 +95,26 @@ function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn>
   return { call, ctx, hangupCall };
 }
 
+function createDialContext<T extends object>(config: T) {
+  return {
+    mutationQueue: new KeyedAsyncQueue(),
+    isStopping: () => false,
+    trackCallWork: vi.fn(),
+    notifyHangupTimers: new Map(),
+    pendingCallAdmissions: new Set<string>(),
+    activeCalls: new Map<string, CallRecord>(),
+    providerCallIdMap: new Map<string, string>(),
+    config: {
+      maxConcurrentCalls: 3,
+      outbound: { defaultMode: "conversation" },
+      fromNumber: "+14155550100",
+      ...config,
+    },
+    storePath: "/tmp/voice-call.json",
+    webhookUrl: "https://example.com/webhook",
+  };
+}
+
 describe("voice-call outbound helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -172,26 +192,41 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+  it("holds Twilio notify calls silently until AMD classification", async () => {
+    const initiate = vi.fn(async (_input: unknown) => ({
+      providerCallId: "CA-notify",
+      status: "initiated",
+    }));
+    const ctx = {
+      ...createDialContext({ voicemail: { detection: "twilio", onMachine: "leave-message" } }),
+      provider: { name: "twilio", initiateCall: initiate },
+    };
+    await initiateCall(ctx as never, "+14155550123", undefined, {
+      mode: "notify",
+      message: "Your parcel is ready.",
+    });
+    expect(initiate.mock.calls[0]?.[0]).toMatchObject({
+      inlineTwiml: '<Response><Pause length="60"/></Response>',
+    });
+    const call = [...ctx.activeCalls.values()][0];
+    expect(call?.metadata?.pendingNotifyAmd).toBe(true);
+    const playTts = vi.fn(async () => {});
+    getCallByProviderCallIdMock.mockReturnValue(call);
+    await speakInitialMessage(
+      { ...ctx, initialMessageInFlight: new Set(), provider: { name: "twilio", playTts } } as never,
+      "CA-notify",
+    );
+    expect(playTts).not.toHaveBeenCalled();
+  });
+
   it("initiates notify-mode calls with inline TwiML and records provider ids", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "twilio", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
+      ...createDialContext({
         tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
-      },
+      }),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
       coreSession: { mainKey: "work" },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
     };
 
     const result = await initiateCall(ctx as never, "+14155550123", "main", {
@@ -220,23 +255,11 @@ describe("voice-call outbound helpers", () => {
   it("persists the configured agent on outbound call records", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "twilio", initiateCall: initiateProviderCall },
-      config: {
+      ...createDialContext({
         agentId: "operator",
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
         sessionScope: "per-call",
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
+      }),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
     };
 
     const result = await initiateCall(ctx as never, "+14155550123");
@@ -250,27 +273,44 @@ describe("voice-call outbound helpers", () => {
     expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("operator");
   });
 
+  it.each(["off", "twilio"] as const)(
+    "validates a capped brief and records voicemail ownership with detection=%s",
+    async (detection) => {
+      const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-brief" }));
+      const ctx = {
+        ...createDialContext({
+          maxDurationSeconds: 300,
+          voicemail: { detection, onMachine: "leave-message" },
+        }),
+        provider: { name: "mock", initiateCall: initiateProviderCall },
+      };
+      const brief = { task: "Book a plumber", maxDurationSeconds: 600 };
+      const result = await initiateCall(ctx as never, "+14155550123", undefined, { brief });
+      expect(ctx.activeCalls.get(result.callId)?.metadata).toMatchObject({
+        brief,
+        maxDurationSeconds: 300,
+      });
+      expect(ctx.activeCalls.get(result.callId)?.metadata?.voicemailManagedByHost).toBe(
+        detection === "twilio" ? true : undefined,
+      );
+      const invalid = await initiateCall(ctx as never, "+14155550123", undefined, {
+        brief: { task: "x".repeat(2001) },
+      });
+      expect(invalid.success).toBe(false);
+      expect(invalid.error).toContain("brief");
+      expect(initiateProviderCall).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("uses the per-call agent for explicit session normalization", async () => {
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
+      ...createDialContext({
+        agentId: "main",
+      }),
       provider: {
         name: "twilio",
         initiateCall: vi.fn(async () => ({ providerCallId: "provider-1" })),
       },
-      config: {
-        agentId: "main",
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
     };
 
     const result = await initiateCall(
@@ -289,21 +329,8 @@ describe("voice-call outbound helpers", () => {
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
+      ...createDialContext({}),
       provider: { name: "twilio", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
     };
 
     const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
@@ -339,21 +366,10 @@ describe("voice-call outbound helpers", () => {
   it("rejects DTMF sequences outside conversation mode", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "twilio", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
+      ...createDialContext({
         outbound: { defaultMode: "notify" },
-        fromNumber: "+14155550100",
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
+      }),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
     };
 
     await expect(
@@ -373,25 +389,15 @@ describe("voice-call outbound helpers", () => {
 
   it("fails initiateCall cleanly when provider initiation throws", async () => {
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
+      ...createDialContext({
+        fromNumber: undefined,
+      }),
       provider: {
         name: "mock",
         initiateCall: vi.fn(async () => {
           throw new Error("provider down");
         }),
       },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
     };
 
     const result = await initiateCall(ctx as never, "+14155550123");
@@ -692,12 +698,9 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("hangup-bot");
-    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
-      { maxDurationTimers: ctx.maxDurationTimers },
-      "call-1",
-    );
+    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
+      ctx,
       "call-1",
       "Call ended: hangup-bot",
     );
@@ -726,11 +729,7 @@ describe("voice-call outbound helpers", () => {
       expect(endedAt).toBeLessThanOrEqual(afterEndMs);
     }
     expect(call.state).toBe("timeout");
-    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      { transcriptWaiters: ctx.transcriptWaiters },
-      "call-1",
-      "Call ended: timeout",
-    );
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(ctx, "call-1", "Call ended: timeout");
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {
@@ -783,22 +782,10 @@ describe("voice-call outbound helpers", () => {
       streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
     }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "telnyx", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
+      ...createDialContext({
         realtime: { enabled: true },
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
+      }),
+      provider: { name: "telnyx", initiateCall: initiateProviderCall },
       streamSessionIssuer,
     };
 
@@ -830,22 +817,10 @@ describe("voice-call outbound helpers", () => {
       streamUrl: "wss://example.test/should-not-be-used",
     }));
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "twilio", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
+      ...createDialContext({
         realtime: { enabled: true },
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
+      }),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
       streamSessionIssuer,
     };
 
@@ -864,22 +839,10 @@ describe("voice-call outbound helpers", () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
     const streamSessionIssuer = vi.fn();
     const ctx = {
-      mutationQueue: new KeyedAsyncQueue(),
-      isStopping: () => false,
-      trackCallWork: vi.fn(),
-      notifyHangupTimers: new Map(),
-      pendingCallAdmissions: new Set<string>(),
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      provider: { name: "telnyx", initiateCall: initiateProviderCall },
-      config: {
-        maxConcurrentCalls: 3,
-        outbound: { defaultMode: "conversation" },
-        fromNumber: "+14155550100",
+      ...createDialContext({
         realtime: { enabled: false },
-      },
-      storePath: "/tmp/voice-call.json",
-      webhookUrl: "https://example.com/webhook",
+      }),
+      provider: { name: "telnyx", initiateCall: initiateProviderCall },
       streamSessionIssuer,
     };
 

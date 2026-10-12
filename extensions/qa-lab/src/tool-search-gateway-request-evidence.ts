@@ -8,12 +8,7 @@ import {
 import { qaMockRequestsAfterUrl } from "./providers/shared/debug-request-cursor.js";
 
 const TOOL_SEARCH_REQUEST_EVIDENCE_LIMIT = 12;
-const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set([
-  "tool_search_code",
-  "tool_search",
-  "tool_describe",
-  "tool_call",
-]);
+const SAFE_TOOL_SEARCH_STAGE_NAMES = new Set(["tool_search", "tool_describe", "tool_call"]);
 
 function projectToolSearchGatewayLogFacts(logs: string, targetTool: string) {
   const safeTargets = [...SAFE_TOOL_SEARCH_STAGE_NAMES, targetTool].filter(Boolean);
@@ -52,7 +47,6 @@ function projectToolSearchProviderRequests(requests: unknown, targetTool: string
             : "<other>",
       declaredToolCount: tools.length,
       targetDeclared: declaredNames.has(targetTool),
-      bridgeDeclared: declaredNames.has("tool_search_code"),
       targetResultObserved:
         targetTool.length > 0 &&
         typeof record.toolOutput === "string" &&
@@ -70,7 +64,6 @@ export async function countToolSearchSessionLogMentions(params: {
     identifierKeys: new Set([...SAFE_TOOL_SEARCH_STAGE_NAMES, params.targetTool]),
     sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
     needles: {
-      tool_search_code: "tool_search_code",
       tool_search: "tool_search",
       tool_describe: "tool_describe",
       tool_call: "tool_call",

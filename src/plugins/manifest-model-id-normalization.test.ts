@@ -8,7 +8,7 @@ import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 // Registers the snapshot resolver in the runtime bridge slot. Production and
@@ -32,8 +32,8 @@ function restoreEnv(): void {
   testEnvSnapshot.restore();
 }
 
-function writeInstallIndex(params: { stateDir: string; pluginDir: string }): void {
-  writePersistedInstalledPluginIndexSync(
+async function writeInstallIndex(params: { stateDir: string; pluginDir: string }): Promise<void> {
+  await writePersistedInstalledPluginIndex(
     {
       version: 1,
       hostContractVersion: "test",
@@ -107,10 +107,10 @@ describe("manifest model id normalization", () => {
     tempDirs.cleanup();
   });
 
-  it("does not reuse broader normalization policies in a narrowed metadata view", () => {
+  it("does not reuse broader normalization policies in a narrowed metadata view", async () => {
     const stateDir = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
-    writeInstallIndex({ stateDir, pluginDir });
+    await writeInstallIndex({ stateDir, pluginDir });
     writeNormalizerManifest({ pluginDir, prefix: "scoped" });
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     deleteTestEnvValue("OPENCLAW_HOME");
@@ -139,10 +139,10 @@ describe("manifest model id normalization", () => {
     expect(normalize(snapshot)).toBe("scoped/demo-model");
   });
 
-  it("keeps process metadata stable until the lifecycle owner reloads it", () => {
+  it("keeps process metadata stable until the lifecycle owner reloads it", async () => {
     const stateDirA = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
-    writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
+    await writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "alpha" });
 
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDirA);
@@ -160,7 +160,7 @@ describe("manifest model id normalization", () => {
 
     const stateDirB = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");
-    writeInstallIndex({ stateDir: stateDirB, pluginDir: pluginDirB });
+    await writeInstallIndex({ stateDir: stateDirB, pluginDir: pluginDirB });
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
 
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDirB);
@@ -168,10 +168,10 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 
-  it("reuses manifest metadata for the same environment identity", () => {
+  it("reuses manifest metadata for the same environment identity", async () => {
     const stateDir = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
-    writeInstallIndex({ stateDir, pluginDir });
+    await writeInstallIndex({ stateDir, pluginDir });
     writeNormalizerManifest({ pluginDir, prefix: "alpha" });
 
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);

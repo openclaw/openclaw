@@ -29,7 +29,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["host", "writable sandbox", "cloud"])(
+it.each(["writable sandbox", "cloud"])(
   "retains private staged inputs through reconciliation and restore without publishing them (%s)",
   async (mode) => {
     await withSandboxMediaTempHome("private-input-lifecycle-", async (home) => {
@@ -139,9 +139,10 @@ it.each(["host", "writable sandbox", "cloud"])(
           return order(a) - order(b);
         });
       } else {
-        sandbox.ensureSandboxWorkspaceForSession.mockResolvedValue(
-          mode === "host" ? null : { workspaceDir: cwd, workspaceAccess: "rw" },
-        );
+        sandbox.ensureSandboxWorkspaceForSession.mockResolvedValue({
+          workspaceDir: cwd,
+          workspaceAccess: "rw",
+        });
         const ctx = { media };
         const staged = await stageSandboxMedia({
           ctx,
@@ -227,7 +228,12 @@ it.each(["host", "writable sandbox", "cloud"])(
         base: base.manifest,
         current,
         acceptance: { kind: "reconcile" },
-        journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+        journal: {
+          load: async () => undefined,
+          begin: async () => {},
+          commit: async () => {},
+          abort: async () => {},
+        },
       });
       expect(applied.conflictPaths).toEqual([]);
       const replacement = await snapshot(cwd, "replacement-transfer");

@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import {
+  bindExecutionGuards,
   executionParams,
   mocks,
   successfulUpdate,
@@ -44,11 +45,13 @@ export function registerExecutionTimeoutTests() {
         },
       );
 
-      const execution = await executeMutableUpdate({
-        ...executionParams(kind),
-        timeoutMs,
-        updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
-      });
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards({
+          ...executionParams(kind),
+          timeoutMs,
+          updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
+        }),
+      );
 
       expect(execution?.result.status, JSON.stringify(execution?.result)).toBe("ok");
       if (kind === "package") {

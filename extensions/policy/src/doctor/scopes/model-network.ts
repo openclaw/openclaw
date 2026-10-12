@@ -1,36 +1,10 @@
 // Policy doctor checks and findings for MCP, model provider, and network policy.
-import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { PolicyEvidence } from "../../policy-state.js";
-import { createPolicyScopedChecks } from "../check-factory.js";
 import { CHECK_IDS } from "../check-ids.js";
 import { policyEvidenceFinding } from "../policy-evidence-finding.js";
-import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
-
-export function createPolicyModelNetworkChecks(
-  deps: PolicyDoctorCheckDeps,
-): readonly HealthCheck[] {
-  return createPolicyScopedChecks(deps, [
-    [CHECK_IDS.policyDeniedMcpServer, "Configured MCP servers do not match policy deny rules."],
-    [
-      CHECK_IDS.policyUnapprovedMcpServer,
-      "Configured MCP servers do not match policy allow rules.",
-    ],
-    [
-      CHECK_IDS.policyDeniedModelProvider,
-      "Configured model providers do not match policy deny rules.",
-    ],
-    [
-      CHECK_IDS.policyUnapprovedModelProvider,
-      "Configured model providers do not match policy allow rules.",
-    ],
-    [
-      CHECK_IDS.policyPrivateNetworkAccess,
-      "Network SSRF policy settings match private-network requirements.",
-    ],
-  ]);
-}
 
 export function mcpServerFindings(
   policy: unknown,
@@ -38,35 +12,27 @@ export function mcpServerFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   const denied = new Set(readStringList(policy, ["mcp", "servers", "deny"], { lowercase: false }));
-  const allowed = readStringList(policy, ["mcp", "servers", "allow"], { lowercase: false });
-  const allowedSet = new Set(allowed);
-  const findings: HealthFinding[] = [];
-
-  for (const server of evidence.mcpServers) {
-    if (denied.has(server.id)) {
-      findings.push(
-        policyEvidenceFinding(server, {
-          checkId: CHECK_IDS.policyDeniedMcpServer,
-          message: `MCP server '${server.id}' is denied by policy.`,
-          requirement: `oc://${policyDocName}/mcp/servers/deny`,
-          fixHint: "Remove this configured MCP server or update the policy after review.",
-        }),
-      );
-      continue;
+  const allowed = new Set(
+    readStringList(policy, ["mcp", "servers", "allow"], { lowercase: false }),
+  );
+  return evidence.mcpServers.flatMap((server) => {
+    const isDenied = denied.has(server.id);
+    if (!isDenied && (allowed.size === 0 || allowed.has(server.id))) {
+      return [];
     }
-    if (allowedSet.size > 0 && !allowedSet.has(server.id)) {
-      findings.push(
-        policyEvidenceFinding(server, {
-          checkId: CHECK_IDS.policyUnapprovedMcpServer,
-          message: `MCP server '${server.id}' is not in the policy allowlist.`,
-          requirement: `oc://${policyDocName}/mcp/servers/allow`,
-          fixHint: "Use an approved MCP server or update the policy after review.",
-        }),
-      );
-    }
-  }
-
-  return findings;
+    return [
+      policyEvidenceFinding(server, {
+        checkId: isDenied ? CHECK_IDS.policyDeniedMcpServer : CHECK_IDS.policyUnapprovedMcpServer,
+        message: isDenied
+          ? `MCP server '${server.id}' is denied by policy.`
+          : `MCP server '${server.id}' is not in the policy allowlist.`,
+        requirement: `oc://${policyDocName}/mcp/servers/${isDenied ? "deny" : "allow"}`,
+        fixHint: isDenied
+          ? "Remove this configured MCP server or update the policy after review."
+          : "Use an approved MCP server or update the policy after review.",
+      }),
+    ];
+  });
 }
 
 export function modelProviderFindings(
@@ -75,62 +41,37 @@ export function modelProviderFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
-  const allowed = readModelProviderPolicyList(policy, ["models", "providers", "allow"]);
-  const allowedSet = new Set(allowed);
-  const findings: HealthFinding[] = [];
-
+  const allowed = new Set(readModelProviderPolicyList(policy, ["models", "providers", "allow"]));
   // Provider declarations precede model refs in the attested findings order.
-  for (const provider of evidence.modelProviders) {
-    findings.push(...modelProviderConformanceFindings(provider, denied, allowedSet, policyDocName));
-  }
-  for (const modelRef of evidence.modelRefs) {
-    findings.push(...modelProviderConformanceFindings(modelRef, denied, allowedSet, policyDocName));
-  }
-
-  return findings;
+  return [...evidence.modelProviders, ...evidence.modelRefs].flatMap((entry) => {
+    const isModelRef = "ref" in entry;
+    const provider = isModelRef ? entry.provider : entry.id;
+    const isDenied = denied.has(provider);
+    if (!isDenied && (allowed.size === 0 || allowed.has(provider))) {
+      return [];
+    }
+    const message = isModelRef
+      ? `Model ref '${entry.ref}' uses ${isDenied ? "denied" : "unapproved"} provider '${provider}'.`
+      : `Model provider '${provider}' is ${isDenied ? "denied by policy" : "not in the policy allowlist"}.`;
+    return [
+      policyEvidenceFinding(entry, {
+        checkId: isDenied
+          ? CHECK_IDS.policyDeniedModelProvider
+          : CHECK_IDS.policyUnapprovedModelProvider,
+        message,
+        requirement: `oc://${policyDocName}/models/providers/${isDenied ? "deny" : "allow"}`,
+        fixHint: isModelRef
+          ? "Select an approved model provider or update the policy after review."
+          : isDenied
+            ? "Remove this configured provider or update the policy after review."
+            : "Use an approved model provider or update the policy after review.",
+      }),
+    ];
+  });
 }
 
 function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
   return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
-}
-
-function modelProviderConformanceFindings(
-  entry: PolicyEvidence["modelProviders"][number] | PolicyEvidence["modelRefs"][number],
-  denied: ReadonlySet<string>,
-  allowed: ReadonlySet<string>,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const isModelRef = "ref" in entry;
-  const provider = isModelRef ? entry.provider : entry.id;
-  if (denied.has(provider)) {
-    return [
-      policyEvidenceFinding(entry, {
-        checkId: CHECK_IDS.policyDeniedModelProvider,
-        message: isModelRef
-          ? `Model ref '${entry.ref}' uses denied provider '${provider}'.`
-          : `Model provider '${provider}' is denied by policy.`,
-        requirement: `oc://${policyDocName}/models/providers/deny`,
-        fixHint: isModelRef
-          ? "Select an approved model provider or update the policy after review."
-          : "Remove this configured provider or update the policy after review.",
-      }),
-    ];
-  }
-  if (allowed.size === 0 || allowed.has(provider)) {
-    return [];
-  }
-  return [
-    policyEvidenceFinding(entry, {
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      message: isModelRef
-        ? `Model ref '${entry.ref}' uses unapproved provider '${provider}'.`
-        : `Model provider '${provider}' is not in the policy allowlist.`,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: isModelRef
-        ? "Select an approved model provider or update the policy after review."
-        : "Use an approved model provider or update the policy after review.",
-    }),
-  ];
 }
 
 export function networkFindings(

@@ -5,16 +5,10 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  CORE_TOOL_GROUPS,
-  resolveCoreToolProfilePolicy,
-  type ToolProfileId,
-} from "./tool-catalog.js";
+import { CORE_TOOL_GROUPS } from "./tool-catalog.js";
 
-type ToolProfilePolicy = {
-  allow?: string[];
-  deny?: string[];
-};
+export { resolveCoreToolProfilePolicy as resolveToolProfilePolicy } from "./tool-catalog.js";
+export type { ToolProfileId } from "./tool-catalog.js";
 
 const TOOL_NAME_ALIASES = new Map<string, string>([
   ["bash", "exec"],
@@ -29,7 +23,7 @@ type ToolAllowlistWithIntersection = readonly string[] & {
 };
 
 /** Core tool groups exposed to allow/deny policy config. */
-export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
+const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 /**
  * Preserves independent allowlists until a concrete tool surface can evaluate
@@ -54,9 +48,17 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
-/** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
-export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
+/**
+ * Normal (non-error) result for a tool that keeps its schema but sits outside the run's
+ * execution allowlist. Background runs treat it as guidance, never as a run failure.
+ */
+export function formatToolExecutionGatedMessage(
+  toolName: string,
+  allowNames: readonly string[],
+): string {
+  const allowed = allowNames.length > 0 ? allowNames.join(", ") : "the tools named in your task";
+  return `${toolName} is not available in this background run. Use ${allowed} instead; do not retry ${toolName}.`;
+}
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
@@ -65,8 +67,7 @@ export function isToolExecutionAllowed(allowNames: readonly string[], toolName: 
 
 /** Snapshot exact names for one synchronous batch; never retain this matcher across awaits. */
 export function createToolExecutionMatcher(allowNames: readonly string[]) {
-  const allowed = new Set<string>();
-  allowNames.forEach((name) => allowed.add(normalizeToolPolicyName(name)));
+  const allowed = new Set(allowNames.map(normalizeToolPolicyName));
   return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
 }
 
@@ -143,10 +144,3 @@ export function expandToolGroups(list?: string[]) {
   }
   return uniqueStrings(expanded);
 }
-
-/** Resolves a built-in tool profile policy by id. */
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  return resolveCoreToolProfilePolicy(profile);
-}
-
-export type { ToolProfileId };

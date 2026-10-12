@@ -1,4 +1,3 @@
-// Browser-safe redaction for tool details rendered by the Control UI.
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {

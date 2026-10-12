@@ -1,11 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredNpmPluginTargets } from "../../commands/doctor/shared/missing-configured-plugin-install.targets.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNpmSpecMetadata } from "../../infra/install-source-utils.js";
 import { readInstalledPackageManifest } from "../../infra/package-update-utils.js";
-import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
+import { resolveRegistryUpdateChannel } from "../../infra/update-channels.js";
 import {
   NpmChannelResolutionError,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -40,15 +38,12 @@ function incompatibleRequirement(
 }
 
 /** Report unavailable replacements without vetoing the core package update. */
-export async function preflightConfiguredNpmPluginTargets(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  targetVersion: string | null;
-  channel: UpdateChannel;
-  timeoutMs: number;
-  /** Read-only admission carries already-inspected records without opening a mutable actor. */
-  installRecords?: Record<string, PluginInstallRecord>;
-}): Promise<PluginUpdateWarning[]> {
+export async function preflightConfiguredNpmPluginTargets(
+  params: Omit<Parameters<typeof collectConfiguredNpmPluginTargets>[0], "targetVersion"> & {
+    targetVersion: string | null;
+    timeoutMs: number;
+  },
+): Promise<PluginUpdateWarning[]> {
   return await withCommandProcessScope(async () => {
     const targetVersion = params.targetVersion;
     if (!targetVersion) {
@@ -105,10 +100,10 @@ export async function preflightConfiguredNpmPluginTargets(params: {
             failure = `resolved plugin requires ${candidateRequirement}`;
           }
         } catch (error) {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          if (!(error instanceof NpmChannelResolutionError)) {
+          if (
+            hasCommandProcessCleanupError(error) ||
+            !(error instanceof NpmChannelResolutionError)
+          ) {
             throw error;
           }
           failure = `registry could not be reached: ${formatErrorMessage(error)}`;

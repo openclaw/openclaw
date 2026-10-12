@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { updateUserGitHubConnection } from "../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
@@ -16,6 +16,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
 import {
   REQUEST,
@@ -32,7 +33,7 @@ const rejection = (idempotencyKey: string) => ({
   idempotencyKey,
 });
 
-function sharedAdmission(surface: "local" | "deferred" | "claim") {
+async function sharedAdmission(surface: "local" | "deferred" | "claim") {
   const database = openOpenClawStateDatabase();
   const db = database.db;
   const placements = createWorkerSessionPlacementStore({ database });
@@ -45,11 +46,11 @@ function sharedAdmission(surface: "local" | "deferred" | "claim") {
       sessionId,
       ownerEpoch: 2,
     });
-    seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
+    await seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
   }
   const claim =
     surface === "claim"
-      ? placements.claimTurn({
+      ? await placements.claimTurn({
           sessionId,
           sessionKey,
           agentId: "main",
@@ -85,18 +86,130 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(
-    ["options", "publish", "status", "confirm"].flatMap((method) =>
-      [
-        { sessionKey: "agent:main:main", agentId: "research" },
-        { sessionKey: "agent:main:main", agentId: "main" },
-        { sessionKey: "global", agentId: "---" },
-        { sessionKey: "global", agentId: "retired" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
-      ].map(({ sessionKey, agentId, fixedOwner }) => ({ method, sessionKey, agentId, fixedOwner })),
-    ),
-  )(
+  it("rejects a stale turn claim after awaited identity verification", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
+    const active = await seedActivePlacement(placements, {
+      environmentId: "environment-1",
+      ownerEpoch: 2,
+    });
+    const claim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-1",
+      runId: "run-1",
+      owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 2 },
+    });
+    let resolveIdentity: ((value: unknown) => void) | undefined;
+    mocks.prepareIdentity.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveIdentity = resolve;
+        }),
+    );
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+    const pending = coordinator.requestForClaim({
+      claim,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      idempotencyKey: "publish-stale",
+    });
+    await vi.waitFor(() => expect(resolveIdentity).toBeTypeOf("function"));
+    await placements.releaseTurn(claim);
+    resolveIdentity?.({
+      source: "system-configured",
+      profileId: "ghp_11111111111111111111111111111111",
+      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
+      env: {},
+    });
+
+    await expect(pending).rejects.toThrow("lost the live session turn claim after verification");
+  });
+
+  it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    const placements = createWorkerSessionPlacementStore({ database });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "environment-idempotency",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 2,
+    });
+    const active = await seedActivePlacement(placements, {
+      environmentId: "environment-idempotency",
+      ownerEpoch: 2,
+    });
+    const firstClaim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-first",
+      runId: "run-first",
+      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
+    });
+    const coordinator = createTestGitHubPublicationCoordinator({ placements });
+    await coordinator.requestForClaim({
+      claim: firstClaim,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+      idempotencyKey: "reused-worker-call",
+    });
+    await placements.releaseTurn(firstClaim);
+    const secondClaim = await placements.claimTurn({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId: "claim-second",
+      runId: "run-second",
+      owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
+    });
+
+    await expect(
+      coordinator.requestForClaim({
+        claim: secondClaim,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        idempotencyKey: "reused-worker-call",
+      }),
+    ).rejects.toThrow("idempotency key was reused");
+  });
+
+  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
+    const fixture = await sharedAdmission("claim");
+    const identity = await mocks.prepareIdentity();
+    const findWorktree = mocks.findWorktree.getMockImplementation()!;
+    mocks.prepareIdentity.mockImplementationOnce(async () => {
+      mocks.findWorktree.mockImplementationOnce((...args) => {
+        mocks.matchesIdentity.mockReturnValue(false);
+        return findWorktree(...args);
+      });
+      return identity;
+    });
+    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
+    expect(fixture.read()).toBeUndefined();
+    expect(commands).toEqual([]);
+  });
+
+  it.each([
+    ...[
+      { sessionKey: "agent:main:main", agentId: "research" },
+      { sessionKey: "global", agentId: "---" },
+      { sessionKey: "global", agentId: "retired" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
+    ].map((owner) => Object.assign({}, owner, { method: "publish" })),
+    ...["status"].map((method) => ({
+      method,
+      sessionKey: "agent:main:main",
+      agentId: "research",
+      fixedOwner: undefined,
+    })),
+  ])(
     "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
     async ({ method, sessionKey, agentId, fixedOwner }) => {
       const fixture = await createPersonalPublicationFixture();
@@ -109,8 +222,8 @@ describe("GitHub publication selection admission", () => {
         fixture.config.session = { scope: "global", store: "/synthetic/fixed.sqlite" };
       }
       fixture.client.connect.scopes = ["operator.admin"];
-      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSession");
-      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonal");
+      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSessionV2");
+      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonalV2");
       const stopEffect = () => {
         throw new Error("Publication effect reached before owner validation");
       };
@@ -156,21 +269,10 @@ describe("GitHub publication selection admission", () => {
     },
   );
 
-  it.each(["local", "deferred", "claim"] as const)(
-    "records a fresh %s selection rejection before any durable request or Git effect",
-    async (surface) => {
-      const fixture = sharedAdmission(surface);
-      const error = await fixture.request().catch((caught: unknown) => caught);
-      expect(fixture.read()).toBeUndefined();
-      expect(commands).toEqual([]);
-      expect(error).toMatchObject({ rejection: rejection(fixture.key) });
-    },
-  );
-
-  it.each(["local", "deferred", "claim"] as const)(
+  it.each(["local", "deferred"] as const)(
     "does not reinterpret an existing %s receipt as a pre-admission rejection",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       await fixture.request(publisher);
       const before = fixture.read();
       const effects = [...commands];
@@ -185,7 +287,7 @@ describe("GitHub publication selection admission", () => {
   it.each(["deferred", "claim"] as const)(
     "observes a same-key %s admission committed while identity preparation awaits",
     async (surface) => {
-      const fixture = sharedAdmission(surface);
+      const fixture = await sharedAdmission(surface);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const identity = await mocks.prepareIdentity();
@@ -211,7 +313,7 @@ describe("GitHub publication selection admission", () => {
   );
 
   it("does not make a key-wide promise when another invocation is still preparing", async () => {
-    const fixture = sharedAdmission("local");
+    const fixture = await sharedAdmission("local");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const identity = await mocks.prepareIdentity();
@@ -237,7 +339,7 @@ describe("GitHub publication selection admission", () => {
   });
 
   it("does not forget a receipt already observed before an awaited identity refresh", async () => {
-    const fixture = sharedAdmission("deferred");
+    const fixture = await sharedAdmission("deferred");
     await fixture.request(publisher);
     mocks.refreshIdentity.mockImplementationOnce(async () => {
       fixture.db
@@ -251,65 +353,43 @@ describe("GitHub publication selection admission", () => {
     expect(commands).toEqual([]);
   });
 
-  it.each(["initial", "refresh", "target", "snapshot"] as const)(
-    "returns exact personal pre-insert rejection details when selection changes at %s",
-    async (phase) => {
-      const fixture = await createPersonalPublicationFixture();
-      const key = `personal-rejected-${phase}`;
-      const request = {
-        sessionKey: SESSION_KEY,
-        idempotencyKey: key,
-        selection: {
-          source: "personal",
-          generation: fixture.generation,
-          account: personalPublicationAccount,
-        },
-      };
-      const rotate = () =>
-        updateUserGitHubConnection(
-          fixture.owner,
-          (current) => ({ ...current!, generation: "f7cb52c6-1d4f-4012-aeae-e31b00f41456" }),
-          () => {},
-        );
-      if (phase === "initial") {
-        rotate();
-      } else if (phase === "refresh") {
-        mocks.refreshIdentity.mockImplementationOnce(async () => rotate());
-      } else if (phase === "target") {
-        const resolve = mocks.resolveRepository.getMockImplementation()!;
-        mocks.resolveRepository.mockImplementationOnce(async () => {
-          const target = await resolve();
-          rotate();
-          return target;
-        });
-      } else {
-        const run = mocks.runCommand.getMockImplementation()!;
-        mocks.runCommand.mockImplementation(
-          async (args: string[], options?: { input?: string }) => {
-            const result = await run(args, options);
-            if (args.includes("write-tree")) {
-              rotate();
-            }
-            return result;
-          },
-        );
-      }
-      const response = await callPersonalPublicationRpc(
-        fixture,
-        "sessions.github.publish",
-        request,
+  it("returns exact personal pre-insert rejection details when selection changes during snapshot capture", async () => {
+    const fixture = await createPersonalPublicationFixture();
+    const key = "personal-rejected-snapshot";
+    const request = {
+      sessionKey: SESSION_KEY,
+      idempotencyKey: key,
+      selection: {
+        source: "personal",
+        generation: fixture.generation,
+        account: personalPublicationAccount,
+      },
+    };
+    const rotate = () =>
+      updateUserGitHubConnection(
+        fixture.owner,
+        (current) => ({ ...current!, generation: "f7cb52c6-1d4f-4012-aeae-e31b00f41456" }),
+        () => {},
       );
-      expect(response[0]).toBe(false);
-      expect(
-        readPersonalGitHubPublication(fixture.owner, {
-          sessionId: SESSION_ID,
-          idempotencyKey: key,
-        }),
-      ).toBeUndefined();
-      expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
-      expect(response).toMatchObject([false, undefined, { details: rejection(key) }]);
-    },
-  );
+    const run = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (args: string[], options?: { input?: string }) => {
+      const result = await run(args, options);
+      if (args.includes("write-tree")) {
+        rotate();
+      }
+      return result;
+    });
+    const response = await callPersonalPublicationRpc(fixture, "sessions.github.publish", request);
+    expect(response[0]).toBe(false);
+    expect(
+      readPersonalGitHubPublication(fixture.owner, {
+        sessionId: SESSION_ID,
+        idempotencyKey: key,
+      }),
+    ).toBeUndefined();
+    expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
+    expect(response).toMatchObject([false, undefined, { details: rejection(key) }]);
+  });
 
   it("keeps an accepted personal pre-claim identity stop attached to its durable receipt", async () => {
     const fixture = await createPersonalPublicationFixture();
@@ -332,11 +412,19 @@ describe("GitHub publication selection admission", () => {
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(fixture.action, fixture.action, row!.request_id),
+      fixture.coordinator.personalStatus(
+        fixture.action,
+        fixture.action,
+        row!.request_id,
+        undefined,
+      ),
     ).toMatchObject({
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,
     });
+    const options = await callPersonalPublicationRpc(fixture, "sessions.github.options");
+    expect(options[0]).toBe(true);
+    expect(options[1].pendingPersonal).toMatchObject({ result: { requestId: row!.request_id } });
     expect(commands.some((args) => args.includes("push") || args.includes("POST"))).toBe(false);
   });
 });

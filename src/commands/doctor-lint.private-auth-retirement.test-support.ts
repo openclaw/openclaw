@@ -16,7 +16,10 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -93,6 +96,13 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         kind: "core",
         description: "inspects private runtime state",
         async detect() {
+          if (mode === "normal") {
+            expect(() =>
+              runOpenClawStateWriteTransaction(() => undefined, { database: source }),
+            ).toThrow(
+              "Programming error: shared-state write during artifact-preserving inspection.",
+            );
+          }
           writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
           const writer = openOpenClawStateDatabase();
           const reader = openOpenClawStateReadConnection(writer.path, writer.path);

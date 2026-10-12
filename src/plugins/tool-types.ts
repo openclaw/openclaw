@@ -1,4 +1,3 @@
-// Defines plugin tool metadata and filesystem policy types.
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -6,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -65,8 +65,20 @@ type OpenClawPluginToolContextBase = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
+  memoryAudience?: MemoryAudience;
+  /** Stable identity for one provider-owned pre-compaction flush cycle. */
+  memoryFlush?: { flushId: string };
+  /** Rejects a retained audience after any captured session incarnation changes. */
+  assertMemoryAudienceCurrent?: () => void;
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
   assertInvocationCurrent?: () => void;
+  /**
+   * Host-bound client-input policy. Pure synchronous guard for final storage admission;
+   * performs no database reads and grants no invocation or mutation authority.
+   * Omitted for agent-generated input. Do not apply to accepted results or cleanup.
+   */
+  assertInputCommitAllowed?: () => void;
   /**
    * Server-owned origin for this operation. Missing values are delegated.
    * Plugins must use it only for conversation-read visibility policy.

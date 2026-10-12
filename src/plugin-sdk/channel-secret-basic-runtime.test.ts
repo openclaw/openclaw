@@ -5,6 +5,7 @@ import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectConditionalChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
+  collectSecretInputAssignment,
   createChannelSecretTargetRegistryEntries,
   resolveChannelAccountSurface,
   type ResolverContext,
@@ -22,6 +23,21 @@ function createContext(): ResolverContext {
 }
 
 describe("createChannelSecretTargetRegistryEntries", () => {
+  it("keeps providerless refs accepted by the public assignment collector", () => {
+    const context = createContext();
+    collectSecretInputAssignment({
+      value: { source: "env", id: "SYNTHETIC_CHANNEL_KEY" },
+      path: "channels.example.token",
+      expected: "string",
+      defaults: { env: "channel-env" },
+      context,
+      apply: () => undefined,
+    });
+    expect(context.assignments.map(({ ref }) => ref)).toEqual([
+      { source: "env", provider: "channel-env", id: "SYNTHETIC_CHANNEL_KEY" },
+    ]);
+  });
+
   it("builds account and channel SecretInput targets with fixed registry metadata", () => {
     expect(
       createChannelSecretTargetRegistryEntries({
@@ -85,7 +101,7 @@ describe("createChannelSecretTargetRegistryEntries", () => {
 
   it("partitions inherited and overridden credentials by channel account", () => {
     const channel = {
-      token: { source: "env" as const, provider: "default", id: "FIXTURE_SHARED" },
+      token: { source: "env" as const, id: "FIXTURE_SHARED" },
       accounts: {
         alpha: {},
         beta: {

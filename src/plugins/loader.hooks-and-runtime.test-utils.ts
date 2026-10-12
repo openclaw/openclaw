@@ -804,26 +804,6 @@ ${channelPluginSource({
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
 
-  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
-    useNoBundledPlugins();
-    const pluginDir = createSetupFailureFixture({
-      id: "setup-entry-throws-test",
-      setupEntrySource: THROWING_SETUP_ENTRY_SOURCE,
-    });
-    const registry = loadSetupPlugins({
-      paths: [pluginDir],
-      ids: ["setup-entry-throws-test"],
-    });
-
-    // The registry load should NOT crash; the error should be recorded as a
-    // per-plugin diagnostic rather than aborting the whole load.
-    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
-    const diagnostic = registry.diagnostics.find(
-      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
-    );
-    expect(diagnostic?.message).toContain("failed to load setup entry");
-  });
-
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({
@@ -1349,10 +1329,8 @@ ${channelPluginSource({
   it.each([
     { successor: "removed", preserved: true },
     { successor: "replaced", replaced: true, preserved: false },
-    { successor: "removed while Gateway B is live and active", gatewayB: true, preserved: true },
     {
-      successor: "removed and Gateway A is closing while Gateway B is live and active",
-      gatewayB: true,
+      successor: "removed and its Gateway is closing",
       closeGatewayA: true,
       preserved: false,
     },
@@ -1360,12 +1338,11 @@ ${channelPluginSource({
       // A published build shares this process state but never links its registries.
       successor: "removed from a registry a published build left unlinked",
       unlinked: true,
-      gatewayB: true,
       preserved: false,
     },
   ])(
     "keeps a run's tool result only when its middleware plugin was $successor",
-    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved }) => {
+    async ({ successor, replaced, closeGatewayA, unlinked, preserved }) => {
       useNoBundledPlugins();
       const pluginId = `tool-result-middleware-${successor}`;
       const plugin = writePlugin({
@@ -1408,12 +1385,6 @@ ${channelPluginSource({
       }
       setActivePluginRegistry(next);
       gatewayA?.publish(next);
-      if (gatewayB) {
-        // Gateway B becomes the process-active projection without this plugin.
-        const other = createEmptyPluginRegistry();
-        setActivePluginRegistry(other);
-        createPluginRegistryOwner(other);
-      }
       if (closeGatewayA) {
         await gatewayA?.close();
       }

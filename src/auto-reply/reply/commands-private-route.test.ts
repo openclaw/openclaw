@@ -3,7 +3,6 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -11,7 +10,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
-  buildPrivateCommandApprovalRequest,
+  buildCommandExecApprovalDefaults,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -98,6 +97,7 @@ function registerApprovalChannelPlugins(plugins: ChannelPlugin[]) {
 function buildCommandParams(cfg: OpenClawConfig): HandleCommandsParams {
   return {
     cfg,
+    agentId: "main",
     ctx: {
       Provider: "discord",
       Surface: "discord",
@@ -131,39 +131,79 @@ function buildCommandParams(cfg: OpenClawConfig): HandleCommandsParams {
   } as unknown as HandleCommandsParams;
 }
 
-function buildApprovalRequest(): ExecApprovalRequest {
-  return {
-    id: "diagnostics-private-route",
-    request: {
-      command: "openclaw gateway diagnostics export --json",
-      sessionKey: "agent:main:discord:channel:1487138064806449297",
-      turnSourceChannel: "discord",
-      turnSourceTo: "channel:1487138064806449297",
-      turnSourceAccountId: "discord-bot-account",
-    },
-    createdAtMs: 1,
-    expiresAtMs: 60_001,
-  };
-}
-
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
 });
 
-describe("buildPrivateCommandApprovalRequest", () => {
-  it.each([
-    ["a valid clock", 1_800_000_000_000, 1_800_000_300_000],
-    ["an invalid clock", Number.NaN, 0],
-    ["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0],
-  ])("bounds private route expiry with %s", (_label, createdAtMs, expiresAtMs) => {
-    const request = buildPrivateCommandApprovalRequest({
-      commandParams: buildCommandParams({}),
-      id: "diagnostics-private-route",
-      command: "openclaw gateway diagnostics export --json",
-      agentId: "main",
-      createdAtMs,
+describe("private command approval requests", () => {
+  it.each([["an overflowing clock", MAX_DATE_TIMESTAMP_MS, 0]])(
+    "preserves command identity and bounds private route expiry with %s",
+    async (_label, createdAtMs, expiresAtMs) => {
+      vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
+      const plugin = createApprovalChannelPlugin({ id: "discord", targets: [] });
+      registerApprovalChannelPlugins([plugin]);
+      const commandParams = buildCommandParams({});
+      commandParams.ctx.OriginatingTo = "origin-group";
+      commandParams.ctx.MessageThreadId = 42;
+      await resolvePrivateCommandRouteTargets({
+        commandParams,
+        id: "diagnostics-private-route",
+        command: "openclaw gateway diagnostics export --json",
+        commandArgv: ["openclaw", "gateway", "diagnostics", "export", "--json"],
+      });
+      expect(plugin.approvalCapability?.native?.resolveApproverDmTargets).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: {
+            approvalKind: "exec",
+            id: "diagnostics-private-route",
+            request: {
+              command: "openclaw gateway diagnostics export --json",
+              commandArgv: ["openclaw", "gateway", "diagnostics", "export", "--json"],
+              agentId: "main",
+              sessionKey: commandParams.sessionKey,
+              turnSourceChannel: "discord",
+              turnSourceTo: "origin-group",
+              turnSourceAccountId: "discord-bot-account",
+              turnSourceThreadId: "42",
+            },
+            createdAtMs,
+            expiresAtMs,
+          },
+        }),
+      );
+    },
+  );
+});
+
+describe("buildCommandExecApprovalDefaults", () => {
+  it("preserves origin reviewer custody when delivery moves to a private target", () => {
+    const commandParams = buildCommandParams({});
+    commandParams.ctx.ApprovalReviewerDeviceId = "  device-origin-reviewer  ";
+
+    expect(
+      buildCommandExecApprovalDefaults(commandParams, {
+        channel: "telegram",
+        to: "849985193",
+        accountId: "telegram-owner-account",
+        threadId: 42,
+      }),
+    ).toEqual({
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      allowBackground: true,
+      cwd: "/tmp",
+      sessionKey: "agent:main:discord:channel:1487138064806449297",
+      eventRouting: { mainKey: undefined, sessionScope: undefined },
+      notifyOnExit: undefined,
+      notifyOnExitEmptySuccess: undefined,
+      messageProvider: "telegram",
+      currentChannelId: "849985193",
+      currentThreadTs: "42",
+      accountId: "telegram-owner-account",
+      approvalReviewerDeviceId: "device-origin-reviewer",
     });
-    expect(request.expiresAtMs).toBe(expiresAtMs);
   });
 });
 
@@ -186,7 +226,8 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ownerAllowFrom: ["telegram:849985193", "discord:493655423946194964"],
         },
       } as OpenClawConfig),
-      request: buildApprovalRequest(),
+      id: "diagnostics-private-route",
+      command: "openclaw gateway diagnostics export --json",
     });
 
     expect(targets[0]).toEqual({
@@ -229,7 +270,8 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ],
         },
       } as OpenClawConfig),
-      request: buildApprovalRequest(),
+      id: "diagnostics-private-route",
+      command: "openclaw gateway diagnostics export --json",
     });
 
     expect(targets[0]?.channel).toBe("telegram");
@@ -256,7 +298,8 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ownerAllowFrom: ["telegram:849985193"],
         },
       } as OpenClawConfig),
-      request: buildApprovalRequest(),
+      id: "diagnostics-private-route",
+      command: "openclaw gateway diagnostics export --json",
     });
 
     expect(targets).toEqual([
@@ -292,7 +335,8 @@ describe("resolvePrivateCommandRouteTargets", () => {
           },
         },
       } as OpenClawConfig),
-      request: buildApprovalRequest(),
+      id: "diagnostics-private-route",
+      command: "openclaw gateway diagnostics export --json",
     });
 
     expect(targets).toEqual([

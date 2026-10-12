@@ -172,19 +172,13 @@ suite.define(() => {
         await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
 
         const stream = page.locator(".log-stream");
-        const autoFollow = page.locator("wa-switch.settings-toggle").filter({
-          hasText: "Auto-follow",
-        });
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await expect
           .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
           .toBeGreaterThan(0);
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(true);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
         await autoFollow.click();
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(false);
+        await expect.poll(() => autoFollow.isChecked()).toBe(false);
         await stream.evaluate((element) => {
           element.scrollTop = 0;
           element.dispatchEvent(new Event("scroll"));
@@ -192,9 +186,7 @@ suite.define(() => {
         await expect.poll(() => stream.evaluate((element) => element.scrollTop)).toBe(0);
 
         await autoFollow.click();
-        await expect
-          .poll(() => autoFollow.evaluate((element) => Reflect.get(element, "checked")))
-          .toBe(true);
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
 
         await expect
           .poll(() =>

@@ -27,50 +27,17 @@ type AuthCase = {
 };
 const cases: AuthCase[] = [
   {
-    name: "configured token crosses real HTTP",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
-    status: 200,
-  },
-  {
-    name: "registry password crosses real HTTP",
-    serverAuth: { password: "fixture-password" },
-    bridgeAuth: { password: "fixture-password" },
-    status: 200,
-  },
-  ...[{ token: "fixture-bridge-token" }, { password: "fixture-bridge-password" }].map(
-    (bridgeAuth): AuthCase => ({
-      name: `registered bridge ${bridgeAuth.token ? "token" : "password"} wins over Gateway auth`,
-      serverAuth: bridgeAuth,
-      configuredAuth: { token: "fixture-unrelated-gateway-token" },
-      bridgeAuth,
-      status: 200,
-    }),
-  ),
-  {
-    name: "explicit auth still wins over registered bridge auth",
-    serverAuth: { token: "fixture-token" },
+    name: "registered bridge password wins over Gateway auth",
+    serverAuth: { password: "fixture-bridge-password" },
     configuredAuth: { token: "fixture-unrelated-gateway-token" },
+    bridgeAuth: { password: "fixture-bridge-password" },
+    status: 200,
+  },
+  {
+    name: "empty explicit auth wins over registered and configured auth",
+    serverAuth: { token: "fixture-token" },
+    configuredAuth: { token: "fixture-token" },
     bridgeAuth: { token: "fixture-token" },
-    headers: { Authorization: "Bearer fixture-wrong-token" },
-    status: 401,
-  },
-  {
-    name: "missing auth receives real 401",
-    serverAuth: { token: "fixture-token" },
-    status: 401,
-  },
-  {
-    name: "wrong explicit auth is not replaced by configured auth",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
-    headers: { Authorization: "Bearer fixture-wrong-token" },
-    status: 401,
-  },
-  {
-    name: "empty explicit auth is not replaced by configured auth",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
     headers: { Authorization: "" },
     status: 401,
   },

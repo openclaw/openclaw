@@ -15,10 +15,6 @@ export const loadMatrixAuthClientDeps = createLazyRuntimeModule(() =>
 const MATRIX_AUTH_REQUEST_RETRY_RE =
   /\b(fetch failed|econnreset|econnrefused|enotfound|etimedout|ehostunreach|enetunreach|eai_again|und_err_|socket hang up|network|headers timeout|body timeout|connect timeout)\b/i;
 
-function shouldRetryMatrixAuthRequest(err: unknown): boolean {
-  return MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err));
-}
-
 export async function retryMatrixAuthRequest<T>(
   label: string,
   run: () => Promise<T>,
@@ -30,7 +26,7 @@ export async function retryMatrixAuthRequest<T>(
     maxDelayMs: 1_500,
     jitter: 0.1,
     label,
-    shouldRetry: (err) => shouldRetryMatrixAuthRequest(err),
+    shouldRetry: (err) => MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err)),
     sleep: (ms) => sleepWithAbort(ms, signal),
   });
 }

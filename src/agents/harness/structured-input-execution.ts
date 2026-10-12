@@ -92,11 +92,7 @@ async function runConfirmation(
     };
   }
   if (result.status !== "answered") {
-    const cancellation = cancellationFor(result, confirmation.subject);
-    if (cancellation.message) {
-      await showStatus(params, cancellation.message);
-    }
-    return cancellation;
+    return cancelInput(params, result, confirmation.subject);
   }
   const answer = result.answers.answers[question.id]?.[0];
   return answer?.toLowerCase() === confirmation.acceptLabel.toLowerCase()
@@ -141,11 +137,7 @@ async function runForm(
       return { status: "cancelled", message: `${subject} was cancelled before commit.` };
     }
     if (result.status !== "answered") {
-      const cancellation = cancellationFor(result, subject);
-      if (cancellation.message) {
-        await showStatus(params, cancellation.message);
-      }
-      return cancellation;
+      return cancelInput(params, result, subject);
     }
     for (const entry of batchFields) {
       answers[entry.question.id] = result.answers.answers[entry.question.id] ?? [];
@@ -196,14 +188,14 @@ function isActive(params: StructuredInputExecutionParams): boolean {
   return params.signal?.aborted !== true && (params.isActive?.() ?? true);
 }
 
-function cancellationFor(
+async function cancelInput(
+  params: StructuredInputExecutionParams,
   result: Exclude<QuestionWaitAnswerResult, { status: "answered" }>,
   subject: string,
-): { status: "cancelled"; message: string } {
-  return {
-    status: "cancelled",
-    message: result.status === "expired" ? `${subject} expired.` : `${subject} was cancelled.`,
-  };
+): Promise<{ status: "cancelled"; message: string }> {
+  const message = result.status === "expired" ? `${subject} expired.` : `${subject} was cancelled.`;
+  await showStatus(params, message);
+  return { status: "cancelled", message };
 }
 
 async function showStatus(params: StructuredInputExecutionParams, message: string): Promise<void> {

@@ -99,7 +99,7 @@ function agentCommandCallsFor(runId: string) {
 
 async function prepareAuthDispatchAgents(affectedAgentId: string) {
   testState.agentsConfig = {
-    list: [{ id: "main", default: true }, { id: affectedAgentId }],
+    entries: { main: {}, [affectedAgentId]: {} },
   };
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "claude-opus-4-6", provider: "anthropic", input: ["text"] }];

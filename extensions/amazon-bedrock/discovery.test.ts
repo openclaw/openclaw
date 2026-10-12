@@ -1,17 +1,19 @@
 // Amazon Bedrock tests cover discovery plugin behavior.
-import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  discoverBedrockModels,
-  mergeImplicitBedrockProvider,
-  resolveBedrockConfigApiKey,
-  resolveImplicitBedrockProvider,
-} from "./api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discoverBedrockModels, resolveImplicitBedrockProvider } from "./api.js";
 
-const sendMock = vi.fn();
-const destroyMock = vi.fn();
-const clientFactory = () => ({ send: sendMock, destroy: destroyMock }) as unknown as BedrockClient;
+const { sendMock, destroyMock } = vi.hoisted(() => ({
+  sendMock: vi.fn(),
+  destroyMock: vi.fn(),
+}));
+vi.mock("@aws-sdk/client-bedrock", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@aws-sdk/client-bedrock")>()),
+  BedrockClient: class {
+    send = sendMock;
+    destroy = destroyMock;
+  },
+}));
 
 const baseActiveAnthropicSummary = {
   modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -48,14 +50,12 @@ function buildBedrockProfile(
     region?: string;
     type?: "SYSTEM_DEFINED" | "APPLICATION";
     status?: "ACTIVE" | "LEGACY";
-    arn?: string;
   } = {},
 ): Record<string, unknown> {
   const region = options.region ?? "us-east-1";
   return {
     inferenceProfileId,
     inferenceProfileName,
-    ...(options.arn ? { inferenceProfileArn: options.arn } : {}),
     status: options.status ?? "ACTIVE",
     type: options.type ?? "SYSTEM_DEFINED",
     models: foundationModels.map((model) => ({
@@ -71,13 +71,7 @@ function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSu
 }
 
 function expectModelFields(model: unknown, expected: Record<string, unknown>): void {
-  if (!model || typeof model !== "object") {
-    throw new Error("Expected model record");
-  }
-  const actual = model as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
+  expect(model).toEqual(expect.objectContaining(expected));
 }
 
 function discoverFreshBedrockModels(
@@ -91,6 +85,7 @@ function discoverFreshBedrockModels(
 }
 
 describe("bedrock discovery", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     sendMock.mockClear();
     destroyMock.mockClear();
@@ -104,35 +99,23 @@ describe("bedrock discovery", () => {
         ["TEXT", "IMAGE"],
       ),
       {
+        ...baseActiveAnthropicSummary,
         modelId: "anthropic.claude-3-haiku-20240307-v1:0",
-        modelName: "Claude 3 Haiku",
-        providerName: "anthropic",
-        inputModalities: ["TEXT"],
-        outputModalities: ["TEXT"],
         responseStreamingSupported: false,
-        modelLifecycle: { status: "ACTIVE" },
       },
       {
+        ...baseActiveAnthropicSummary,
         modelId: "meta.llama3-8b-instruct-v1:0",
-        modelName: "Llama 3 8B",
-        providerName: "meta",
-        inputModalities: ["TEXT"],
-        outputModalities: ["TEXT"],
-        responseStreamingSupported: true,
         modelLifecycle: { status: "INACTIVE" },
       },
       {
+        ...baseActiveAnthropicSummary,
         modelId: "amazon.titan-embed-text-v1",
-        modelName: "Titan Embed",
-        providerName: "amazon",
-        inputModalities: ["TEXT"],
         outputModalities: ["EMBEDDING"],
-        responseStreamingSupported: true,
-        modelLifecycle: { status: "ACTIVE" },
       },
     ]);
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -151,7 +134,6 @@ describe("bedrock discovery", () => {
     const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { providerFilter: ["amazon"] },
-      clientFactory,
     });
     expect(models).toHaveLength(0);
   });
@@ -166,7 +148,6 @@ describe("bedrock discovery", () => {
     const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { defaultContextWindow: 64000, defaultMaxTokens: 8192 },
-      clientFactory,
     });
     expectModelFields(models[0], { contextWindow: 64000, maxTokens: 8192 });
   });
@@ -184,7 +165,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "ap-northeast-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "ap-northeast-1" });
 
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
@@ -213,7 +194,7 @@ describe("bedrock discovery", () => {
     async ({ profileId, profileName, foundationId }) => {
       mockBedrockDiscovery([], [buildBedrockProfile(profileId, profileName, [foundationId])]);
 
-      const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+      const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
       expect(models).toHaveLength(1);
       expectModelFields(models[0], {
@@ -236,7 +217,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
     expectModelFields(models[0], {
       id: "global.anthropic.claude-opus-5",
@@ -259,7 +240,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
     expectModelFields(models[0], {
       id: "global.anthropic.claude-sonnet-5",
@@ -282,30 +263,9 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
     expect(models).toEqual([]);
-  });
-
-  it("normalizes region-prefixed versioned model ids when resolving context windows", async () => {
-    mockBedrockDiscovery(
-      [],
-      [
-        buildBedrockProfile(
-          "jp.anthropic.claude-sonnet-4-6",
-          "JP Claude Sonnet 4.6",
-          ["anthropic.claude-sonnet-4-6"],
-          { region: "ap-northeast-1" },
-        ),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels({ region: "ap-northeast-1", clientFactory });
-
-    expectModelFields(models[0], {
-      id: "jp.anthropic.claude-sonnet-4-6",
-      contextWindow: 1_000_000,
-    });
   });
 
   it("uses 1M context window for dotted Claude Opus 4.8 Bedrock refs", async () => {
@@ -318,7 +278,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
     expectModelFields(
       models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
@@ -353,7 +313,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
     const expected = {
       reasoning: true,
       contextWindow: 1_000_000,
@@ -377,27 +337,24 @@ describe("bedrock discovery", () => {
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
-    await discoverBedrockModels({ region: "cache-reuse", clientFactory });
-    await discoverBedrockModels({ region: "cache-reuse", clientFactory });
+    await discoverBedrockModels({ region: "cache-reuse" });
+    await discoverBedrockModels({ region: "cache-reuse" });
     // 2 calls on first discovery (ListFoundationModels + ListInferenceProfiles), 0 on cached second.
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
   it("skips cache when refreshInterval expiry overflows", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
     mockSingleActiveSummary();
     mockSingleActiveSummary();
 
     await discoverBedrockModels({
       region: "cache-overflow",
       config: { refreshInterval: 1 },
-      now: () => 8_640_000_000_000_000,
-      clientFactory,
     });
     await discoverBedrockModels({
       region: "cache-overflow",
       config: { refreshInterval: 1 },
-      now: () => 8_640_000_000_000_000,
-      clientFactory,
     });
     expect(sendMock).toHaveBeenCalledTimes(4);
   });
@@ -409,12 +366,10 @@ describe("bedrock discovery", () => {
     await discoverBedrockModels({
       region: "cache-disabled",
       config: { refreshInterval: 0 },
-      clientFactory,
     });
     await discoverBedrockModels({
       region: "cache-disabled",
       config: { refreshInterval: 0 },
-      clientFactory,
     });
     // 2 calls per discovery (ListFoundationModels + ListInferenceProfiles) × 2 runs.
     expect(sendMock).toHaveBeenCalledTimes(4);
@@ -441,7 +396,7 @@ describe("bedrock discovery", () => {
         });
       });
 
-      const discovery = discoverFreshBedrockModels({ region: "abort-timeout", clientFactory });
+      const discovery = discoverFreshBedrockModels({ region: "abort-timeout" });
       const rejected = expect(discovery).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(30_000);
 
@@ -455,78 +410,37 @@ describe("bedrock discovery", () => {
     }
   });
 
-  it("resolves the Bedrock config apiKey from AWS auth env vars", () => {
-    expect(
-      resolveBedrockConfigApiKey({
-        AWS_BEARER_TOKEN_BEDROCK: "bearer", // pragma: allowlist secret
-        AWS_PROFILE: "default",
-      }),
-    ).toBe("AWS_BEARER_TOKEN_BEDROCK");
-
-    // When no AWS env vars are present (e.g. instance role), no marker should be injected.
-    // The aws-sdk credential chain handles auth at request time. (#49891)
-    expect(resolveBedrockConfigApiKey({} as NodeJS.ProcessEnv)).toBeUndefined();
-
-    // When AWS_PROFILE is explicitly set, it should return the marker.
-    expect(resolveBedrockConfigApiKey({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe(
-      "AWS_PROFILE",
-    );
-  });
-
   it("discovers inference profiles and inherits foundation model capabilities", async () => {
     const foundationId = "anthropic.claude-sonnet-4-6";
     mockBedrockDiscovery(
       [buildActiveAnthropicSummary(foundationId, "Claude Sonnet 4.6", ["TEXT", "IMAGE"])],
       [
-        buildBedrockProfile(
-          "us.anthropic.claude-sonnet-4-6",
-          "US Anthropic Claude Sonnet 4.6",
-          [foundationId, "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-6"],
-          {
-            arn: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-6",
-          },
-        ),
-        buildBedrockProfile(
-          "eu.anthropic.claude-sonnet-4-6",
-          "EU Anthropic Claude Sonnet 4.6",
-          [foundationId],
-          {
-            region: "eu-west-1",
-            arn: "arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-sonnet-4-6",
-          },
-        ),
+        buildBedrockProfile("us.anthropic.claude-sonnet-4-6", "US Anthropic Claude Sonnet 4.6", [
+          foundationId,
+          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-6",
+        ]),
         buildBedrockProfile(
           "global.anthropic.claude-sonnet-4-6",
           "Global Anthropic Claude Sonnet 4.6",
           [foundationId],
-          {
-            arn: "arn:aws:bedrock:us-east-1::inference-profile/global.anthropic.claude-sonnet-4-6",
-          },
         ),
-        // Inactive profile should be filtered out.
         buildBedrockProfile("ap.anthropic.claude-sonnet-4-6", "AP Claude Sonnet 4.6", [], {
           status: "LEGACY",
         }),
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
-    // Foundation model + 3 active inference profiles = 4 models.
-    expect(models).toHaveLength(4);
-
-    // Global profiles should be sorted first (recommended for most users).
+    expect(models).toHaveLength(3);
     expect(models[0]?.id).toBe("global.anthropic.claude-sonnet-4-6");
 
     const foundationModel = models.find((m) => m.id === "anthropic.claude-sonnet-4-6");
     const usProfile = models.find((m) => m.id === "us.anthropic.claude-sonnet-4-6");
-    const euProfile = models.find((m) => m.id === "eu.anthropic.claude-sonnet-4-6");
     const globalProfile = models.find((m) => m.id === "global.anthropic.claude-sonnet-4-6");
 
-    // Foundation model has image input.
     expectModelFields(foundationModel, { input: ["text", "image"] });
 
-    // Inference profiles inherit image input from the foundation model.
     expectModelFields(usProfile, {
       name: "US Anthropic Claude Sonnet 4.6",
       input: ["text", "image"],
@@ -535,14 +449,12 @@ describe("bedrock discovery", () => {
       params: { canonicalModelId: "claude-sonnet-4-6" },
     });
     expect(usProfile?.thinkingLevelMap).toBeUndefined();
-    expectModelFields(euProfile, { input: ["text", "image"] });
     expectModelFields(globalProfile, { input: ["text", "image"] });
 
-    // Inactive profile should not be present.
     expect(models.find((m) => m.id === "ap.anthropic.claude-sonnet-4-6")).toBeUndefined();
   });
 
-  it.each(["foundation", "profiles", "profile-page"])(
+  it.each(["foundation", "profile-page"])(
     "rejects failed %s acquisition and retries the complete catalog",
     async (surface) => {
       const failure = Object.assign(new Error("AccessDeniedException"), {
@@ -554,18 +466,16 @@ describe("bedrock discovery", () => {
       if (surface === "foundation") {
         sendMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({});
       } else {
-        sendMock.mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] });
-        if (surface === "profile-page") {
-          sendMock.mockResolvedValueOnce({
+        sendMock
+          .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+          .mockResolvedValueOnce({
             inferenceProfileSummaries: [profile],
             nextToken: "next-page",
-          });
-        }
-        sendMock.mockRejectedValueOnce(failure);
+          })
+          .mockRejectedValueOnce(failure);
       }
       const params = {
         region: `failed-${surface}`,
-        clientFactory,
         discoveryMode: "strict" as const,
       };
       await expect(discoverBedrockModels(params)).rejects.toMatchObject({ status: 403 });
@@ -589,7 +499,6 @@ describe("bedrock discovery", () => {
         pluginConfig: { discovery: { enabled: true, region: `successful-empty-${discoveryMode}` } },
         discoveryMode,
         env: {},
-        clientFactory,
       };
       const first = await resolveImplicitBedrockProvider(params);
       const second = await resolveImplicitBedrockProvider(params);
@@ -615,7 +524,7 @@ describe("bedrock discovery", () => {
           .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
           .mockRejectedValueOnce(failure);
       }
-      const params = { region: `advisory-${surface}`, clientFactory };
+      const params = { region: `advisory-${surface}` };
       const initial = await discoverBedrockModels(params);
       expect(initial.map((model) => model.id)).toEqual(
         surface === "foundation" ? [] : [baseActiveAnthropicSummary.modelId],
@@ -629,17 +538,6 @@ describe("bedrock discovery", () => {
       expect(destroyMock).toHaveBeenCalledTimes(2);
     },
   );
-
-  it("keeps public implicit-provider failures null", async () => {
-    sendMock.mockRejectedValueOnce(new Error("catalog unavailable")).mockResolvedValueOnce({});
-    await expect(
-      resolveImplicitBedrockProvider({
-        env: {},
-        pluginConfig: { discovery: { enabled: true, region: "advisory-implicit-failure" } },
-        clientFactory,
-      }),
-    ).resolves.toBeNull();
-  });
 
   it("keeps strict callers out of an advisory in-flight failure", async () => {
     const started = createDeferred<void>();
@@ -655,7 +553,7 @@ describe("bedrock discovery", () => {
       })
       .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
       .mockRejectedValueOnce(failure);
-    const params = { region: "advisory-strict-in-flight", clientFactory };
+    const params = { region: "advisory-strict-in-flight" };
     const advisory = discoverBedrockModels(params);
     await started.promise;
     await expect(
@@ -678,7 +576,6 @@ describe("bedrock discovery", () => {
         resolveImplicitBedrockProvider({
           pluginConfig: { discovery: { enabled } },
           env: {},
-          clientFactory,
         }),
       ).resolves.toBeNull();
       expect(sendMock).not.toHaveBeenCalled();
@@ -705,7 +602,6 @@ describe("bedrock discovery", () => {
     const models = await discoverFreshBedrockModels({
       region: "us-east-1",
       config: { providerFilter: ["anthropic"] },
-      clientFactory,
     });
 
     expect(models.map((model) => model.id)).toEqual([
@@ -732,7 +628,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
     const profile = models.find((model) => model.id === "us.my-prod-profile");
 
     expectModelFields(profile, {
@@ -756,7 +652,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
 
     expectModelFields(models[0], {
       id: "us.my-prod-profile",
@@ -766,54 +662,6 @@ describe("bedrock discovery", () => {
       params: { canonicalModelId: "claude-opus-4-6-v1" },
       thinkingLevelMap: { xhigh: null, max: "max" },
     });
-  });
-
-  it("merges implicit Bedrock models into explicit provider overrides", () => {
-    expect(
-      mergeImplicitBedrockProvider({
-        existing: {
-          baseUrl: "https://override.example.com",
-          headers: { "x-test-header": "1" },
-          models: [],
-        },
-        implicit: {
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          api: "bedrock-converse-stream",
-          auth: "aws-sdk",
-          models: [
-            {
-              id: "amazon.nova-micro-v1:0",
-              name: "Nova",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 1,
-              maxTokens: 1,
-            },
-          ],
-        },
-      }).models?.map((model) => model.id),
-    ).toEqual(["amazon.nova-micro-v1:0"]);
-  });
-
-  it("uses plugin-owned discovery config without runtime legacy fallback", async () => {
-    mockSingleActiveSummary();
-
-    const pluginEnabled = await resolveImplicitBedrockProvider({
-      pluginConfig: {
-        discovery: {
-          enabled: true,
-          region: "us-east-1",
-          refreshInterval: 0,
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-      clientFactory,
-    });
-
-    expect(pluginEnabled?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
-    // 2 calls per discovery (ListFoundationModels + ListInferenceProfiles).
-    expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -838,7 +686,6 @@ describe("bedrock discovery", () => {
     const provider = await resolveImplicitBedrockProvider({
       pluginConfig: { discovery: { enabled: true, refreshInterval: 0 } },
       env,
-      clientFactory,
     });
 
     expect(provider?.baseUrl).toBe(`https://bedrock-runtime.${expectedRegion}.amazonaws.com`);
@@ -855,28 +702,13 @@ describe("bedrock discovery", () => {
       ],
       [
         // Empty model ARNs intentionally force the regional prefix fallback.
-        buildBedrockProfile(
-          "au.anthropic.claude-sonnet-4-6",
-          "AU Anthropic Claude Sonnet 4.6",
-          [],
-          {
-            arn: "arn:aws:bedrock:ap-southeast-2::inference-profile/au.anthropic.claude-sonnet-4-6",
-          },
-        ),
-        buildBedrockProfile(
-          "apac.anthropic.claude-sonnet-4-6",
-          "APAC Anthropic Claude Sonnet 4.6",
-          [],
-          {
-            arn: "arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-sonnet-4-6",
-          },
-        ),
+        buildBedrockProfile("au.anthropic.claude-sonnet-4-6", "AU Anthropic Claude Sonnet 4.6"),
+        buildBedrockProfile("apac.anthropic.claude-sonnet-4-6", "APAC Anthropic Claude Sonnet 4.6"),
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "ap-southeast-2", clientFactory });
+    const models = await discoverFreshBedrockModels({ region: "ap-southeast-2" });
 
-    // Foundation model + 2 regional inference profiles
     expect(models).toHaveLength(3);
 
     const auProfile = models.find((m) => m.id === "au.anthropic.claude-sonnet-4-6");

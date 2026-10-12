@@ -87,8 +87,13 @@ leading indentation. Existing empty-message validation still applies.
 Ordinary message and caption delivery still trims trailing whitespace.
 
 Local message actions run the loaded plugins' shutdown hooks before exiting, including
-after an action fails. Cleanup has a 2.5-second overall budget and does not change
-the action's exit status. `message read` skips these shutdown hooks.
+after an action fails. These hooks have a 2.5-second overall budget and do not change
+the action's exit status. `message read` skips these shutdown hooks. The executable
+then drains shared-state database workers within its existing five-second cleanup
+budget. If plugin disposal is still pending, it records a deferral and schedules that
+drain after disposal settles, preserving state for unfinished writes without making
+the command wait again. Cleanup warnings preserve the action's result; they do not
+claim the unfinished cleanup completed.
 
 ## SecretRef resolution
 
@@ -190,7 +195,7 @@ openclaw message send --channel slack --target channel:C123 \
 ```
 
 Slack also renders explicit table blocks natively. Other channels receive the
-caption and every row as deterministic text:
+caption and every row in a fixed text format:
 
 ```bash
 openclaw message send --channel slack --target channel:C123 \

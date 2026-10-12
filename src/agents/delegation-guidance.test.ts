@@ -54,7 +54,7 @@ describe("resolveMainSessionDelegationMode", () => {
       config: {
         agents: {
           defaults: { subagents: { delegationMode: "suggest" } },
-          list: [{ id: "coordinator", subagents: { delegationMode: "prefer" } }],
+          entries: { coordinator: { subagents: { delegationMode: "prefer" } } },
         },
       },
       agentId: "coordinator",
@@ -66,7 +66,7 @@ describe("resolveMainSessionDelegationMode", () => {
       config: {
         agents: {
           defaults: { subagents: { delegationMode: "prefer" } },
-          list: [{ id: "main", subagents: { delegationMode: "suggest" } }],
+          entries: { main: { subagents: { delegationMode: "suggest" } } },
         },
       },
       agentId: "main",

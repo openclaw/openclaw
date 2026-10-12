@@ -117,6 +117,9 @@ export type PluginLifecycleRuntimeApply = (params: {
   write?: Pick<ConfigReplaceResult, "persistedHash" | "persistedSourceConfig">;
   pluginIds: readonly string[];
   reason: PluginLifecycleReason;
+  /** Explicit reload admission wait; cancellation never owns recovery or published cleanup. */
+  waitForDrain?: boolean;
+  drainSignal?: AbortSignal;
   expectedSourceDigests?: Readonly<Record<string, string>>;
   /** Canonical install owners whose committed contents may already be running. */
   expectedInstallHashes?: Readonly<Record<string, string>>;

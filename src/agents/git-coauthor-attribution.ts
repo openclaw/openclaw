@@ -72,6 +72,7 @@ async function resolveAttribution(
     sessionKeys: [params.sessionKey],
     storePath,
     includeParticipantRecords: true,
+    snapshotFields: [],
   });
   const entry = read.entries.find(({ sessionKey }) => sessionKey === params.sessionKey)?.entry;
   if (!entry || entry.incognito || (params.sessionId && entry.sessionId !== params.sessionId)) {

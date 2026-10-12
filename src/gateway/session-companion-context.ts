@@ -1,14 +1,21 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureIncognitoSessionSource,
+  withIncognitoSessionEntry,
+} from "../config/sessions/session-incognito-binding.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type {
-  SessionCompanionContextMessage,
-  SessionCompanionPreparedContext,
+import {
+  selectSessionCompanionReferenceItems,
+  type SessionCompanionContextMessage,
+  type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
 const CONTEXT_MAX_BYTES = 24 * 1024;
@@ -23,12 +30,11 @@ type SessionCompanionContextReadResult =
   | { kind: "unavailable" };
 
 export type SessionCompanionContextReader = {
-  currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
-  read: (params: {
+  currentSessionId: (params: {
     agentId: string;
     sessionKey: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionCompanionContextReadResult>;
+  }) => Promise<string | undefined>;
+  read: typeof readSessionCompanionContext;
 };
 
 function normalizeContextText(value: string): string {
@@ -40,24 +46,8 @@ function normalizeContextText(value: string): string {
 
 function extractUserText(message: unknown): string | undefined {
   const content = asOptionalObjectRecord(message)?.content;
-  if (typeof content === "string") {
-    return normalizeContextText(content) || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((block) => {
-      const record = asOptionalObjectRecord(block);
-      const blockText = record?.type === "text" ? record.text : undefined;
-      return typeof blockText === "string" ? [blockText] : [];
-    })
-    .join("\n");
+  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("\n");
   return normalizeContextText(text) || undefined;
-}
-
-function readMessageTimestamp(message: unknown): number {
-  return resolveNonNegativeIntegerOption(asOptionalObjectRecord(message)?.timestamp, 0);
 }
 
 function appendContextMessages(
@@ -79,23 +69,9 @@ function appendContextMessages(
           ? extractUserText(message)
           : undefined;
     if (text && (role === "assistant" || role === "user")) {
-      messages.push({ role, text, ts: readMessageTimestamp(message) });
+      messages.push({ role, text, ts: resolveNonNegativeIntegerOption(message?.timestamp, 0) });
     }
   }
-}
-
-function selectContextMessages(messages: SessionCompanionContextMessage[]) {
-  const selected: SessionCompanionContextMessage[] = [];
-  let bytes = 2;
-  for (const message of messages) {
-    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
-      break;
-    }
-    selected.push(message);
-    bytes += messageBytes;
-  }
-  return selected.toReversed();
 }
 
 async function readSessionCompanionContext(params: {
@@ -103,7 +79,38 @@ async function readSessionCompanionContext(params: {
   sessionKey: string;
   signal?: AbortSignal;
 }): Promise<SessionCompanionContextReadResult> {
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const binding = captureIncognitoSessionSource(params);
+  if (binding) {
+    return withIncognitoSessionEntry(
+      binding,
+      params.sessionKey,
+      () => params.signal?.throwIfAborted(),
+      (entry, assertCurrent) =>
+        readSessionCompanionContextFromEntry(
+          params,
+          {
+            entry,
+            storePath: "kind" in binding ? binding.path : binding.actor.path,
+          },
+          assertCurrent,
+        ),
+    );
+  }
+  return readSessionCompanionContextFromEntry(
+    params,
+    await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: params.sessionKey,
+      agentId: params.agentId,
+    }),
+  );
+}
+
+async function readSessionCompanionContextFromEntry(
+  params: { agentId: string; sessionKey: string; signal?: AbortSignal },
+  loaded: { entry?: { sessionId: string }; storePath: string },
+  assertCurrent?: () => void,
+): Promise<SessionCompanionContextReadResult> {
   const sessionId = loaded.entry?.sessionId?.trim();
   if (!sessionId) {
     return { kind: "missing" };
@@ -123,20 +130,12 @@ async function readSessionCompanionContext(params: {
     let scannedMessages = 0;
     let totalMessages = 0;
     let stoppedAtOlderByteBoundary = false;
-    let snapshot:
-      | {
-          activeLeafEntryId?: string | null;
-          generation?: string;
-          indexedSeq: number;
-          totalMessages: number;
-        }
-      | undefined;
     const contextMessages: SessionCompanionContextMessage[] = [];
     while (
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
     ) {
-      const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
         maxBytes: CONTEXT_READ_MAX_BYTES - rawBytes,
         maxMessages: Math.min(
           CONTEXT_READ_PAGE_MESSAGES,
@@ -144,22 +143,8 @@ async function readSessionCompanionContext(params: {
         ),
         offset,
       });
+      assertCurrent?.();
       if (params.signal?.aborted) {
-        return { kind: "unavailable" };
-      }
-      const pageSnapshot = {
-        activeLeafEntryId: page.activeLeafEntryId,
-        generation: page.snapshot.generation,
-        indexedSeq: page.snapshot.indexedSeq,
-        totalMessages: page.totalMessages,
-      };
-      snapshot ??= pageSnapshot;
-      if (
-        pageSnapshot.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-        pageSnapshot.generation !== snapshot.generation ||
-        pageSnapshot.indexedSeq !== snapshot.indexedSeq ||
-        pageSnapshot.totalMessages !== snapshot.totalMessages
-      ) {
         return { kind: "unavailable" };
       }
       totalMessages = page.totalMessages;
@@ -192,26 +177,12 @@ async function readSessionCompanionContext(params: {
     ) {
       return { kind: "unavailable" };
     }
-    const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
-      maxBytes: 0,
-      maxMessages: 0,
-      offset: 0,
-    });
-    if (
-      params.signal?.aborted ||
-      !snapshot ||
-      fence.activeLeafEntryId !== snapshot.activeLeafEntryId ||
-      fence.snapshot.generation !== snapshot.generation ||
-      fence.snapshot.indexedSeq !== snapshot.indexedSeq ||
-      fence.totalMessages !== snapshot.totalMessages
-    ) {
-      return { kind: "unavailable" };
-    }
+    assertCurrent?.();
     return {
       kind: "ready",
       context: {
         empty: totalMessages === 0,
-        messages: selectContextMessages(contextMessages),
+        messages: selectSessionCompanionReferenceItems(contextMessages, CONTEXT_MAX_BYTES),
         sessionId,
       },
     };
@@ -221,7 +192,19 @@ async function readSessionCompanionContext(params: {
 }
 
 export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
-  currentSessionId: ({ agentId, sessionKey }) =>
-    loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined,
+  currentSessionId: async ({ agentId, sessionKey }) => {
+    const binding = captureIncognitoSessionSource({ agentId, sessionKey });
+    if (binding) {
+      return "kind" in binding
+        ? undefined
+        : binding.actor.sessions.readSharing(sessionKey)?.entry?.sessionId?.trim();
+    }
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: sessionKey,
+      agentId,
+    });
+    return loaded.entry?.sessionId?.trim() || undefined;
+  },
   read: readSessionCompanionContext,
 };

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
@@ -11,35 +11,19 @@ import {
   type SkillsLibraryImportParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import {
   prepareSkillLibraryBundle,
   readSkillLibraryTree,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
   SKILL_LIBRARY_MAX_TREE_ENTRIES,
 } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 import { saveSkillLibrary, skillLibraryReceipt } from "./service.js";
-import {
-  ensureSkillLibrarySchema,
-  requireSkillLibraryEntry,
-  requireSkillLibraryProfile,
-  requireSkillLibraryUpload,
-  requireSkillLibraryUploadMetadata,
-  selectSkillLibraryOwner,
-  skillLibraryDb,
-  type SkillLibraryAuthority,
-} from "./store.js";
-
-const MAX_CHUNK_BYTES = 256 * 1024;
-const MAX_ACTIVE_UPLOADS = 32;
+import { captureSkillLibraryAccess } from "./store-access.js";
+import type { SkillLibraryAuthority } from "./store.js";
 
 async function publishDirectory(
   authority: SkillLibraryAuthority,
@@ -72,7 +56,8 @@ export async function importSkillLibrary(
   params: SkillsLibraryImportParams,
   options: OpenClawStateDatabaseOptions = {},
 ) {
-  requireSkillLibraryProfile(openOpenClawStateDatabase(options).db, authority);
+  const access = captureSkillLibraryAccess(authority, options);
+  await access.read("profile", undefined);
   return withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-source-" },
     async ({ dir }) => {
@@ -82,11 +67,16 @@ export async function importSkillLibrary(
         version: params.source.version,
         config: authority.getConfig(),
       });
-      authority.assertCurrent();
+      access.assertCurrent();
       if (!installed.ok) {
         throw new SkillLibraryError("POLICY_BLOCKED", installed.error);
       }
-      return publishDirectory(authority, params.slug, installed.targetDir, options);
+      return publishDirectory(
+        { ...authority, assertCurrent: access.assertCurrent },
+        params.slug,
+        installed.targetDir,
+        access.options,
+      );
     },
   );
 }
@@ -100,101 +90,15 @@ export async function uploadSkillLibrary(
   if (!validateSkillsLibraryUploadParams(params)) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Invalid library upload parameters.");
   }
-  requireSkillLibraryProfile(openOpenClawStateDatabase(options).db, authority);
-  ensureSkillLibrarySchema(options);
-  if (params.action === "begin") {
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      const actor = requireSkillLibraryProfile(db, authority);
-      const kysely = skillLibraryDb(db);
-      executeSqliteQuerySync(
-        db,
-        kysely.deleteFrom("skill_library_uploads").where("expires_at", "<=", Date.now()),
-      );
-      // Completed receipts remain replayable without occupying an active upload slot.
-      const activeUploads = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("skill_library_uploads")
-          .select("owner_profile_id")
-          .where("published_skill_id", "is", null)
-          .limit(MAX_ACTIVE_UPLOADS),
-      ).rows;
-      // One canonical profile may fill only half the pool, including uploads begun before a merge.
-      if (
-        activeUploads.length >= MAX_ACTIVE_UPLOADS ||
-        activeUploads.filter(
-          (upload) => selectSkillLibraryOwner(db, upload.owner_profile_id)?.id === actor,
-        ).length >=
-          MAX_ACTIVE_UPLOADS / 2
-      ) {
-        throw new SkillLibraryError(
-          "LIMIT",
-          "Active import limit reached for your profile or the Gateway. Finish an existing import or retry after it expires.",
-        );
-      }
-      const uploadId = randomUUID();
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("skill_library_uploads").values({
-          upload_id: uploadId,
-          owner_profile_id: actor,
-          slug: params.slug,
-          size_bytes: params.sizeBytes,
-          sha256: params.sha256,
-          archive_blob: Buffer.alloc(0),
-          expires_at: Date.now() + 3_600_000,
-          published_skill_id: null,
-        }),
-      );
-      return { uploadId, offset: 0, maxChunkBytes: MAX_CHUNK_BYTES };
-    }, options);
+  const access = captureSkillLibraryAccess(authority, options);
+  if (params.action !== "commit") {
+    return access.write("skillLibrary.upload", { params });
   }
-  const readOwned = () =>
-    requireSkillLibraryUpload(openOpenClawStateDatabase(options).db, params.uploadId, authority);
-  if (params.action === "chunk") {
-    const bytes = Buffer.from(params.data, "base64");
-    if (
-      !bytes.length ||
-      bytes.length > MAX_CHUNK_BYTES ||
-      bytes.toString("base64") !== params.data
-    ) {
-      throw new SkillLibraryError(
-        "INVALID_BUNDLE",
-        "Invalid upload chunk; send canonical base64, at most 256 KiB decoded.",
-      );
-    }
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      const upload = readOwned();
-      const current = Buffer.from(upload.archive_blob);
-      if (
-        upload.published_skill_id ||
-        params.offset !== current.length ||
-        current.length + bytes.length > upload.size_bytes
-      ) {
-        throw new SkillLibraryError(
-          "CONFLICT",
-          "Upload offset changed or upload completed. Start a new import.",
-        );
-      }
-      const next = Buffer.concat([current, bytes]);
-      executeSqliteQuerySync(
-        db,
-        skillLibraryDb(db)
-          .updateTable("skill_library_uploads")
-          .set({ archive_blob: next })
-          .where("upload_id", "=", params.uploadId),
-      );
-      return { uploadId: params.uploadId, offset: next.length, maxChunkBytes: MAX_CHUNK_BYTES };
-    }, options);
-  }
-  const upload = readOwned();
+  const prepared = await access.read("upload", { uploadId: params.uploadId });
+  const upload = prepared.value;
   if (upload.published_skill_id) {
     return skillLibraryReceipt(
-      requireSkillLibraryEntry(
-        openOpenClawStateDatabase(options).db,
-        upload.published_skill_id,
-        authority,
-      ),
+      (await access.read("entry", { skillId: upload.published_skill_id })).value,
       "unchanged",
     );
   }
@@ -212,6 +116,7 @@ export async function uploadSkillLibrary(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-import-" },
     async ({ dir }) => {
       const archivePath = path.join(dir, "skill.zip");
+      authority.assertFileMutationAllowed?.();
       await fs.writeFile(archivePath, bytes, { mode: 0o600, flag: "wx" });
       const result = await withExtractedArchiveRoot({
         archivePath,
@@ -231,16 +136,16 @@ export async function uploadSkillLibrary(
           receipt: await publishDirectory(
             {
               ...authority,
-              assertCurrent: () =>
-                requireSkillLibraryUploadMetadata(
-                  openOpenClawStateDatabase(options).db,
-                  params.uploadId,
-                  authority,
-                ),
+              assertCurrent: () => {
+                prepared.assertCurrent();
+                if (upload.expires_at <= Date.now()) {
+                  throw new SkillLibraryError("NOT_FOUND", "Upload expired. Start a new import.");
+                }
+              },
             },
             upload.slug,
             rootDir,
-            options,
+            access.options,
             upload.upload_id,
           ),
         }),

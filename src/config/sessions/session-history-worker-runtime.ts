@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
-import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
+import { prepareGatewaySessionStoreReadSourcesAsync } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -11,37 +11,37 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
+import { getCliSessionBinding } from "./cli-session-binding.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
 import {
   prepareSqliteTranscriptReadScope,
   resolveSqliteScope,
   toDatabaseOptions,
-  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
-  ChatHistoryPage,
-  ReadSessionMessageByIdResult,
   SessionHistoryDelta,
-  SessionHistoryTranscriptBinding,
-  SessionHistorySnapshot,
+  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+} from "./session-transcript-inventory.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type {
-  SessionColdMetadataWorkerInput,
-  SessionColdMetadataWorkerResult,
-  SessionTranscriptHistoryWorkerInput,
-} from "./session-transcript-worker.types.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForegroundHistoryResult = SessionHistoryWorkerResult | SessionColdMetadataWorkerResult;
@@ -65,7 +65,22 @@ function receivePage(
       queued.remainingReaders--;
       signal?.throwIfAborted();
       // Dispatch closes the group; the final receiver owns the original after earlier clones finish.
-      return queued.remainingReaders === 0 ? page : structuredClone(page);
+      if (queued.remainingReaders === 0) {
+        return page;
+      }
+      if (page.kind === "rpc" && page.page.encodedResponse) {
+        // Wire bytes are immutable; each reader still owns its mutable page metadata.
+        const { messages, ...response } = page.page.encodedResponse;
+        const copy = structuredClone({
+          ...page,
+          page: { ...page.page, encodedResponse: response },
+        });
+        return {
+          ...copy,
+          page: { ...copy.page, encodedResponse: { ...copy.page.encodedResponse, messages } },
+        };
+      }
+      return structuredClone(page);
     },
     (error: unknown) => {
       queued.remainingReaders--;
@@ -102,11 +117,18 @@ function readQueuedHistory(
   const operation =
     input.kind === "cold-metadata"
       ? owner.readColdMetadata({ sessionId: input.sessionId, env: input.env })
-      : owner.run(() => {
-          // Page callers cannot join a SQLite snapshot that has already started.
-          forget();
-          return input;
-        }, key.length * 2);
+      : owner.run(
+          () => {
+            // Page callers cannot join a SQLite snapshot that has already started.
+            forget();
+            return input;
+          },
+          key.length * 2 +
+            (input.kind === "history-page" &&
+            (input.request.kind === "rpc" || input.request.kind === "rpc-message")
+              ? (input.request.params.cliHistoryRedaction?.retainedBytes ?? 0)
+              : 0),
+        );
   // Initial metadata probes share only in-flight work; queued restores bypass this map.
   void operation.then(
     (result) => {
@@ -122,80 +144,46 @@ function readQueuedHistory(
 }
 
 function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHistoryWorkerRequest {
-  if (request.kind !== "rpc" && request.kind !== "http") {
+  if (request.kind !== "rpc" && request.kind !== "rpc-message" && request.kind !== "http") {
     const target = request.params.target;
     const capturedTarget = {
       ...target,
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
-    if (request.kind === "transcript-binding") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-          run: request.params.run ? { ...request.params.run } : undefined,
-        },
-      };
+    const captured = { ...request };
+    captured.params = {
+      ...structuredClone({ ...request.params, target: undefined }),
+      target: capturedTarget,
+    };
+    if (captured.kind === "recent-page") {
+      if (captured.params.exactArchivePath) {
+        captured.params.exactArchivePath = path.resolve(captured.params.exactArchivePath);
+      } else {
+        delete captured.params.exactArchivePath;
+      }
     }
-    if (request.kind === "message-count") {
-      return { kind: request.kind, params: { target: capturedTarget } };
-    }
-    if (request.kind === "message-by-id") {
-      return {
-        kind: request.kind,
-        params: {
-          target: capturedTarget,
-          messageId: request.params.messageId,
-          options: request.params.options ? { ...request.params.options } : undefined,
-        },
-      };
-    }
-    if (request.kind === "recent") {
-      return {
-        kind: "recent",
-        params: {
-          target: capturedTarget,
-          maxMessages: request.params.maxMessages,
-          maxLines: request.params.maxLines,
-          allowResetArchiveFallback: request.params.allowResetArchiveFallback,
-        },
-      };
-    }
-    return request.kind === "delta"
-      ? { kind: "delta", params: { target: capturedTarget, limits: { ...request.params.limits } } }
-      : {
-          kind: "message-lookup",
-          params: { target: capturedTarget, messageId: request.params.messageId },
-        };
+    return captured;
   }
-  const entry = request.kind === "rpc" ? request.params.entry : request.params.target.sessionEntry;
+  const entry = request.kind === "http" ? request.params.target.sessionEntry : request.params.entry;
+  const cliBinding = getCliSessionBinding(entry, "claude-cli");
   const capturedEntry = entry
     ? {
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
+        ...(cliBinding
+          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
+          : {}),
       }
     : undefined;
-  if (request.kind === "rpc") {
-    const params = request.params;
-    return {
-      kind: "rpc",
-      params: {
-        entry: capturedEntry,
-        provider: params.provider,
-        sessionId: params.sessionId,
-        storePath: params.storePath,
-        sessionAgentId: params.sessionAgentId,
-        canonicalKey: params.canonicalKey,
-        max: params.max,
-        maxHistoryBytes: params.maxHistoryBytes,
-        effectiveMaxChars: params.effectiveMaxChars,
-        offset: params.offset,
-        messageId: params.messageId,
-        ignoreCliSessionImports: params.ignoreCliSessionImports,
-      },
+  if (request.kind === "rpc" || request.kind === "rpc-message") {
+    const captured = { ...request };
+    captured.params = {
+      ...structuredClone({ ...request.params, entry: undefined }),
+      entry: capturedEntry,
     };
+    return captured;
   }
   const params = request.params;
   return {
@@ -218,51 +206,40 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
   };
 }
 
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
+type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
+  ? Value
+  : Result extends { binding: infer Value }
+    ? Value
+    : Result extends { page: infer Value }
+      ? Value
+      : Result extends { snapshot: infer Value }
+        ? Value
+        : Result extends { count: infer Value }
+          ? Value
+          : Result extends { messages: infer Value }
+            ? Value
+            : Result extends { kind: "delta" }
+              ? AdmittedSessionHistoryDelta
+              : Result extends { kind: "inline-visibility" }
+                ? { subagentCoordination: SessionHistorySubagentFacts; assertCurrent: () => void }
+                : never;
+
+type SessionHistoryPageValues = {
+  [Result in SessionHistoryWorkerResult as Result["kind"]]: SessionHistoryPageValue<Result>;
+};
+
+export function readSessionHistoryPageInWorker<Request extends SessionHistoryWorkerRequest>(
+  request: Request,
   signal?: AbortSignal,
-): Promise<SessionHistoryTranscriptBinding | undefined>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-by-id" }>,
-  signal?: AbortSignal,
-): Promise<ReadSessionMessageByIdResult>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-count" }>,
-  signal?: AbortSignal,
-): Promise<number>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>,
-  signal?: AbortSignal,
-): Promise<ChatHistoryPage>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "http" }>,
-  signal?: AbortSignal,
-): Promise<SessionHistorySnapshot>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
-  signal?: AbortSignal,
-): Promise<AdmittedSessionHistoryDelta>;
-export function readSessionHistoryPageInWorker(
-  request: Extract<SessionHistoryWorkerRequest, { kind: "message-lookup" | "recent" }>,
-  signal?: AbortSignal,
-): Promise<unknown[]>;
+): Promise<SessionHistoryPageValues[Request["kind"]]>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<
-  | SessionHistoryTranscriptBinding
-  | undefined
-  | ChatHistoryPage
-  | SessionHistorySnapshot
-  | AdmittedSessionHistoryDelta
-  | ReadSessionMessageByIdResult
-  | number
-  | unknown[]
-> {
+) {
   signal?.throwIfAborted();
   const capturedRequest = captureHistoryRequest(request);
   const scope: SessionTranscriptReadScope =
-    capturedRequest.kind === "rpc"
+    capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message"
       ? {
           agentId: capturedRequest.params.sessionAgentId,
           sessionId: capturedRequest.params.sessionId,
@@ -286,8 +263,22 @@ export async function readSessionHistoryPageInWorker(
     sessionId: scope.sessionId,
   });
   const admission = receipt ? { ...receipt } : undefined;
-  let resolved: ResolvedTranscriptReadScope | undefined;
-  let inputBytes = JSON.stringify(capturedRequest).length * 2;
+  const redaction =
+    capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message"
+      ? capturedRequest.params.cliHistoryRedaction
+      : undefined;
+  const keyedRequest =
+    (capturedRequest.kind === "rpc" || capturedRequest.kind === "rpc-message") && redaction
+      ? {
+          ...capturedRequest,
+          params: {
+            ...capturedRequest.params,
+            cliHistoryRedaction: { policyToken: redaction.policyToken },
+          },
+        }
+      : capturedRequest;
+  const redactionBytes = redaction?.retainedBytes ?? 0;
+  let inputBytes = JSON.stringify(keyedRequest).length * 2 + redactionBytes;
   // Retain caller admission across asynchronous target discovery as well as the page read.
   if (
     pendingHistoryReaders >= DEFAULT_WORKER_PENDING_TASKS ||
@@ -298,10 +289,8 @@ export async function readSessionHistoryPageInWorker(
   pendingHistoryReaders++;
   pendingHistoryBytes += inputBytes;
   try {
-    resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
+    const resolved = await prepareSqliteTranscriptReadScope(capturedScope, signal);
     signal?.throwIfAborted();
-    stateContext.maintenanceScope?.assertAdmission();
-    stateContext.admission.assertCurrent();
     // Key normalization needs no second store discovery after the physical target is prepared.
     const entryValidationKey = bound.entryValidationScope
       ? resolveSqliteScope({
@@ -316,151 +305,219 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
-    const sourceReads = prepareGatewaySessionStoreReadSources({
-      cfg,
-      currentSource,
-      env,
-      registryPath: stateContext.admission.databasePath,
-    });
-    const assertStateCurrent = () => {
-      signal?.throwIfAborted();
-      stateContext.maintenanceScope?.assertAdmission();
-      stateContext.admission.assertCurrent();
-      sourceReads.assertCurrent();
-    };
-    assertStateCurrent();
-    const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
-      transcript: {
-        agentId: resolved.agentId,
-        sessionId: resolved.sessionId,
-        ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
-        storePath: capturedScope.storePath,
-        sessionFile: sessionKey ?? resolved.sessionId,
-      },
-      stateDatabase: {
-        path: stateContext.admission.databasePath,
-        environment: stateContext.environment,
-        coordinatorRuntime: stateContext.coordinatorRuntime,
-      },
-      sourceDatabases: sourceReads.sources,
-      ...(entryValidationKey ? { entryValidationKey } : {}),
-    };
-    const input: SessionTranscriptHistoryWorkerInput = {
-      kind: "history-page",
-      database: currentSource,
-      request: capturedRequest,
-      target,
-      ...(admission ? { admission } : {}),
-    };
-    const key = JSON.stringify(input);
-    const metadataInput: SessionColdMetadataWorkerInput = {
-      kind: "cold-metadata",
-      database: currentSource,
-      sessionId: resolved.sessionId,
-      env,
-    };
-    const metadataKey = JSON.stringify(metadataInput);
-    const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
-    if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
-      throw new WorkerTaskError("worker task capacity reached", "overloaded");
-    }
-    pendingHistoryBytes += additionalBytes;
-    inputBytes += additionalBytes;
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
+      // Only display-history projections resolve subagent lineage across stores.
+      const sourceReads =
+        capturedRequest.kind === "rpc" ||
+        capturedRequest.kind === "rpc-message" ||
+        capturedRequest.kind === "http" ||
+        capturedRequest.kind === "delta" ||
+        capturedRequest.kind === "inline-visibility"
+          ? await prepareGatewaySessionStoreReadSourcesAsync({
+              cfg,
+              currentSource,
+              env,
+              registryPath: stateContext.admission.databasePath,
+            })
+          : undefined;
+      const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
+        transcript: {
+          agentId: preparedTarget.agentId,
+          sessionId: preparedTarget.sessionId,
+          ...(normalizedSessionKey ? { sessionKey: normalizedSessionKey } : {}),
+          storePath: capturedScope.storePath,
+          sessionFile: sessionKey ?? preparedTarget.sessionId,
+        },
+        stateDatabase: {
+          path: stateContext.admission.databasePath,
+          environment: stateContext.environment,
+        },
+        ...(sourceReads?.request
+          ? { sourceDiscovery: sourceReads.request }
+          : { sourceDatabases: {} }),
+        ...(entryValidationKey ? { entryValidationKey } : {}),
+      };
+      const input: SessionTranscriptHistoryWorkerInput = {
+        kind: "history-page",
+        database: currentSource,
+        request: capturedRequest,
+        target,
+        ...(admission ? { admission } : {}),
+      };
+      const key = JSON.stringify({ ...input, request: keyedRequest });
+      const metadataInput: SessionColdMetadataWorkerInput = {
+        kind: "cold-metadata",
+        database: currentSource,
+        sessionId: preparedTarget.sessionId,
+        env,
+      };
+      const metadataKey = JSON.stringify(metadataInput);
+      const additionalBytes = (key.length + metadataKey.length) * 2 + redactionBytes - inputBytes;
+      if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
+        throw new WorkerTaskError("worker task capacity reached", "overloaded");
+      }
+      pendingHistoryBytes += additionalBytes;
+      inputBytes += additionalBytes;
       const assertCurrent = () => {
-        assertStateCurrent();
+        signal?.throwIfAborted();
+        stateContext.maintenanceScope?.assertAdmission();
+        stateContext.admission.assertCurrent();
         owner.assertCurrent();
       };
       let result: SessionHistoryWorkerResult;
+      const exactArchiveRead =
+        capturedRequest.kind === "recent-page" &&
+        capturedRequest.params.exactArchivePath !== undefined;
+      const readOnly =
+        capturedRequest.kind === "active-accounting" ||
+        capturedRequest.kind === "bounded-tail" ||
+        capturedRequest.kind === "recent-text"
+          ? true
+          : capturedRequest.kind === "artifacts"
+            ? capturedRequest.params.query.kind === "image-page"
+            : exactArchiveRead
+              ? true
+              : capturedRequest.kind === "message-page" ||
+                  capturedRequest.kind === "around-id" ||
+                  capturedRequest.kind === "source-messages" ||
+                  capturedRequest.kind === "recent-page"
+                ? capturedRequest.params.options.readOnly
+                : false;
+      let retriedProjection = false;
+      const readPage = () => readQueuedHistory(input, key, owner, signal);
       try {
-        result = await readRestoredSessionTranscript(
-          capturedScope,
-          async () => {
-            assertCurrent();
-            const page = await readQueuedHistory(
-              input,
-              `${owner.generation}:${key}`,
-              owner,
-              signal,
-            );
-            if (page.kind === "cold-metadata") {
-              throw new Error("Session history worker returned cold metadata instead of history");
-            }
-            return page;
-          },
-          {
-            assertCurrent,
-            coldRead: {
-              target: preparedTarget,
-              readMetadata: async (phase) => {
-                assertCurrent();
-                const metadata =
-                  phase === "initial"
-                    ? await readQueuedHistory(
-                        metadataInput,
-                        `${owner.generation}:${metadataKey}`,
-                        owner,
-                        signal,
-                      )
-                    : await owner.readColdMetadata({ sessionId: metadataInput.sessionId, env });
-                assertCurrent();
-                if (metadata.kind !== "cold-metadata") {
-                  throw new Error(
-                    "Session history worker returned history instead of cold metadata",
-                  );
+        if (exactArchiveRead) {
+          const page = await readPage();
+          if (page.kind === "cold-metadata") {
+            throw new Error("Session history worker returned cold metadata instead of history");
+          }
+          result = page;
+        } else {
+          result = await readRestoredSessionTranscript(
+            capturedScope,
+            async () => {
+              let page: ForegroundHistoryResult;
+              try {
+                page = await readPage();
+              } catch (error) {
+                if (
+                  (capturedRequest.kind === "active-accounting" ||
+                    capturedRequest.kind === "recent-text" ||
+                    (capturedRequest.kind === "bounded-tail" &&
+                      !capturedRequest.params.options.readOnly)) &&
+                  isSessionTranscriptProjectionUnavailableError(error)
+                ) {
+                  startSessionTranscriptIndexReconcile({
+                    ...databaseOptions,
+                    preferredSessionId: preparedTarget.sessionId,
+                  });
                 }
-                return metadata.archive;
+                if (
+                  readOnly ||
+                  retriedProjection ||
+                  !isSessionTranscriptProjectionUnavailableError(error) ||
+                  error.reason !== "rebuilding"
+                ) {
+                  throw error;
+                }
+                retriedProjection = true;
+                startSessionTranscriptIndexReconcile({
+                  ...databaseOptions,
+                  preferredSessionId: preparedTarget.sessionId,
+                });
+                const deadline = new AbortController();
+                const timer = setTimeout(() => deadline.abort(error), 3_000);
+                timer.unref();
+                try {
+                  await waitForSessionTranscriptProjection(
+                    capturedScope,
+                    signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
+                  );
+                } catch (waitError) {
+                  if (
+                    waitError === error ||
+                    (waitError instanceof Error &&
+                      waitError.name === "AbortError" &&
+                      waitError.cause === error)
+                  ) {
+                    throw error;
+                  }
+                  throw waitError;
+                } finally {
+                  clearTimeout(timer);
+                }
+                page = await readPage();
+              }
+              if (page.kind === "cold-metadata") {
+                throw new Error("Session history worker returned cold metadata instead of history");
+              }
+              return page;
+            },
+            {
+              readOnly,
+              assertCurrent,
+              coldRead: {
+                target: preparedTarget,
+                readMetadata: async (phase) => {
+                  const metadata =
+                    phase === "initial"
+                      ? await readQueuedHistory(metadataInput, metadataKey, owner, signal)
+                      : await owner.readColdMetadata({
+                          sessionId: metadataInput.sessionId,
+                          env,
+                        });
+                  if (metadata.kind !== "cold-metadata") {
+                    throw new Error(
+                      "Session history worker returned history instead of cold metadata",
+                    );
+                  }
+                  return metadata.archive;
+                },
               },
             },
-          },
-        );
+          );
+        }
       } catch (error) {
         if (
           error instanceof SessionHistoryDeltaPreparationError &&
           capturedRequest.kind === "delta"
         ) {
-          // Failed execution/retirement has joined. Recover inside the retained
-          // scope so primary revocation and release failures still refuse it.
-          owner.assertCurrent();
           result = { kind: "delta", ...error.partial };
         } else {
           throw error;
         }
       }
-      return { result, assertCurrent: owner.assertCurrent };
+      return {
+        result,
+        assertCurrent,
+      };
     });
-    const assertCurrent = () => {
-      acquired.assertCurrent();
-      assertStateCurrent();
-    };
+    const { assertCurrent, result } = acquired;
     assertCurrent();
-    const result = acquired.result;
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
     if (result.kind === "transcript-binding") {
       return result.binding;
     }
+    if ("result" in result) {
+      return result.result;
+    }
+    if (result.kind === "delta") {
+      const delta: AdmittedSessionHistoryDelta = { ...result, assertCurrent };
+      return delta;
+    }
+    if (result.kind === "inline-visibility") {
+      return { subagentCoordination: result.subagentCoordination, assertCurrent };
+    }
     return result.kind === "rpc"
       ? result.page
       : result.kind === "http"
         ? result.snapshot
-        : result.kind === "delta"
-          ? { ...result, assertCurrent }
-          : result.kind === "message-by-id"
-            ? result.result
-            : result.kind === "message-count"
-              ? result.count
-              : result.messages;
-  } catch (error) {
-    if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
-      startSessionTranscriptIndexReconcile({
-        ...toDatabaseOptions(resolved),
-        preferredSessionId: resolved.sessionId,
-      });
-    }
-    throw error;
+        : result.kind === "message-count"
+          ? result.count
+          : result.messages;
   } finally {
     pendingHistoryReaders--;
     pendingHistoryBytes -= inputBytes;

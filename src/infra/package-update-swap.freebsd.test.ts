@@ -10,43 +10,114 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
-import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
+import {
+  createPackageSwapFixture,
+  createRetainedPackageSwap,
+} from "./package-update-swap.test-support.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("FreeBSD package replacement ownership", () => {
+async function expectPackageVersion(packageRoot: string, version: string) {
+  expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+    `"version":"${version}"`,
+  );
+}
+
+describe("system package replacement ownership", () => {
+  it.each(
+    (["freebsd", "linux"] as const).flatMap((platform) =>
+      [
+        { kind: "directory", ownership: "artifact" },
+        { kind: "symlink", ownership: "artifact" },
+        { kind: "symlink", ownership: "target" },
+        { kind: "directory", ownership: "unavailable" },
+      ].map(({ kind, ownership }) => ({ kind, ownership, platform })),
+    ),
+  )(
+    "retires a historical $kind with $platform ownership $ownership",
+    async ({ kind, ownership, platform }) => {
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      await withTestDir({ prefix: "openclaw-pkg-historical-backup-" }, async (base) => {
+        const checkout = path.join(base, "checkout");
+        await fs.mkdir(checkout);
+        await fs.writeFile(path.join(checkout, "sentinel"), "operator checkout");
+        const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
+        await withMockedPlatform(platform, async () => {
+          const { transaction, globalRoot, packageRoot } = await createRetainedPackageSwap(
+            base,
+            async ({ globalRoot: fixtureGlobalRoot }) => {
+              const historical = path.join(fixtureGlobalRoot, ".openclaw.package-backup-1-100");
+              if (kind === "symlink") {
+                await fs.symlink(checkout, historical, linkType);
+              } else {
+                await fs.mkdir(historical);
+                await fs.writeFile(path.join(historical, "sentinel"), "historical package");
+              }
+              const later = path.join(fixtureGlobalRoot, ".openclaw.package-backup-2-200");
+              await fs.mkdir(later);
+              await fs.writeFile(path.join(later, "sentinel"), "second historical package");
+            },
+          );
+          const historical = path.join(globalRoot, ".openclaw.package-backup-1-100");
+          const later = path.join(globalRoot, ".openclaw.package-backup-2-200");
+          const registered =
+            ownership === "target"
+              ? path.join(checkout, "sentinel")
+              : kind === "symlink"
+                ? historical
+                : path.join(historical, "sentinel");
+          // Package ownership can change after capture and successful activation.
+          query
+            .mockClear()
+            .mockResolvedValue(
+              ownership === "unavailable"
+                ? pkgQueryResult("", { code: 1 })
+                : pkgQueryResult(`${registered}\n`),
+            );
+
+          const completion = await transaction.complete({ activationVerified: true }, () => {});
+
+          if (ownership === "target" || ownership === "unavailable") {
+            expect(completion).toBeUndefined();
+            await expect(fs.lstat(historical)).rejects.toMatchObject({ code: "ENOENT" });
+          } else {
+            expect(completion).toMatchObject({
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: expect.stringContaining(platform === "freebsd" ? "FreeBSD pkg" : "pacman"),
+              },
+            });
+            await expect(fs.lstat(historical)).resolves.toBeDefined();
+          }
+          if (ownership === "unavailable") {
+            expect(query).toHaveBeenCalledTimes(2);
+          }
+          await expect(fs.lstat(later)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await fs.readFile(path.join(checkout, "sentinel"), "utf8")).toBe(
+            "operator checkout",
+          );
+          await expectPackageVersion(packageRoot, "2.0.0");
+        });
+      });
+    },
+  );
+
   it("retains the installed candidate and recovery copy when pkg claims a launcher before rollback", async () => {
     await withTestDir({ prefix: "openclaw-pkg-rollback-" }, async (base) => {
-      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
       const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
-      let transaction: PackageUpdateTransaction | undefined;
       await withMockedPlatform("freebsd", async () => {
-        await expect(
-          swapStagedPackageInstall({
-            ...params,
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          }),
-        ).resolves.toMatchObject({ status: "committed" });
-        if (!transaction) {
-          throw new Error("Expected a retained package transaction");
-        }
+        const { transaction, packageRoot, launcher } = await createRetainedPackageSwap(base);
         query.mockResolvedValue(pkgQueryResult(`${launcher}\n`));
         await expect(transaction.rollback(() => {})).resolves.toMatchObject({
           exitCode: 1,
           stderrTail: expect.stringContaining("retained for manual recovery"),
         });
-        await expect(
-          fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"1.0.0"');
+        await expectPackageVersion(transaction.backupRoot, "1.0.0");
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+        await expectPackageVersion(packageRoot, "2.0.0");
       });
-      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"2.0.0"',
-      );
     });
   });
   it("refuses an uninspectable in-place fallback instead of running the manager", async () => {
@@ -71,65 +142,32 @@ describe("FreeBSD package replacement ownership", () => {
         });
       });
       expect(runStep).not.toHaveBeenCalled();
-      await expect(
-        fs.readFile(path.join(target.packageRoot!, "package.json"), "utf8"),
-      ).resolves.toContain('"version":"1.0.0"');
+      await expectPackageVersion(target.packageRoot!, "1.0.0");
     });
   });
-  it.each(["package root", "launcher"])(
-    "preserves a pkg-owned %s before service preparation",
-    async (owned) => {
-      await withTestDir({ prefix: "openclaw-pkg-swap-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-        const file = owned === "launcher" ? launcher : path.join(packageRoot, "package.json");
-        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult(`${file}\n`));
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        const onTransaction = vi.fn();
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation, onTransaction }),
-          ).rejects.toMatchObject({ cause: { reason: "pkg-owned-install" } });
-        });
-        expect(beforeActivate).not.toHaveBeenCalled();
-        expect(onLiveMutation).not.toHaveBeenCalled();
-        expect(onTransaction).not.toHaveBeenCalled();
-        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-        await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"1.0.0"');
+  it("preserves a pkg-owned package root acquired during service drain", async () => {
+    await withTestDir({ prefix: "openclaw-pkg-swap-" }, async (base) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const file = path.join(packageRoot, "package.json");
+      const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
+      const beforeActivate = vi.fn(async () => {
+        query.mockResolvedValue(pkgQueryResult(`${file}\n`));
       });
-    },
-  );
-
-  it.each(["package root", "launcher"])(
-    "rechecks pkg ownership acquired during service drain (%s)",
-    async (owned) => {
-      await withTestDir({ prefix: "openclaw-pkg-drain-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-        const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
-        const beforeActivate = vi.fn(async () => {
-          const file = owned === "launcher" ? launcher : path.join(packageRoot, "package.json");
-          query.mockResolvedValue(pkgQueryResult(`${file}\n`));
-        });
-        const onLiveMutation = vi.fn();
-        const onTransaction = vi.fn();
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
-            swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation, onTransaction }),
-          ).rejects.toMatchObject({ cause: { reason: "pkg-owned-install" } });
-        });
-        expect(beforeActivate).toHaveBeenCalledTimes(1);
-        expect(query).toHaveBeenCalledTimes(2);
-        expect(onLiveMutation).not.toHaveBeenCalled();
-        expect(onTransaction).not.toHaveBeenCalled();
-        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      const onLiveMutation = vi.fn();
+      const onTransaction = vi.fn();
+      await withMockedPlatform("freebsd", async () => {
         await expect(
-          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ).resolves.toContain('"version":"1.0.0"');
+          swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation, onTransaction }),
+        ).rejects.toMatchObject({ cause: { reason: "pkg-owned-install" } });
       });
-    },
-  );
+      expect(beforeActivate).toHaveBeenCalledOnce();
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect(onTransaction).not.toHaveBeenCalled();
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      await expectPackageVersion(packageRoot, "1.0.0");
+    });
+  });
 
   it("rechecks executor authority after the final pkg query", async () => {
     await withTestDir({ prefix: "openclaw-pkg-fence-" }, async (base) => {
@@ -164,27 +202,7 @@ describe("FreeBSD package replacement ownership", () => {
       expect(onLiveMutation).not.toHaveBeenCalled();
       expect(onTransaction).not.toHaveBeenCalled();
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
-      );
-    });
-  });
-
-  it("allows an unowned installation beside a pkg-owned Node launcher", async () => {
-    await withTestDir({ prefix: "openclaw-pkg-sibling-" }, async (base) => {
-      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-      const node = path.join(path.dirname(launcher), "node");
-      await fs.writeFile(node, "system node\n");
-      vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult(`${node}\n`));
-      await withMockedPlatform("freebsd", async () => {
-        await expect(swapStagedPackageInstall(params)).resolves.toMatchObject({
-          status: "committed",
-        });
-      });
-      await expect(fs.readFile(node, "utf8")).resolves.toBe("system node\n");
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"2.0.0"',
-      );
+      await expectPackageVersion(packageRoot, "1.0.0");
     });
   });
 

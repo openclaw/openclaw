@@ -1,4 +1,5 @@
 //! Dashboard-only transport for the shared native browser contract.
+use crate::gateway_windows::matches_route as matches_dashboard;
 use crate::native_browser::NativeBrowserState;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -27,23 +28,6 @@ struct BridgeState {
 pub struct NativeBrowserBridgeState {
     inner: Mutex<BridgeState>,
     lifecycle: tokio::sync::Mutex<()>,
-}
-
-fn matches_dashboard(candidate: &Url, dashboard: &Url) -> bool {
-    if !matches!(candidate.scheme(), "http" | "https")
-        || candidate.origin() != dashboard.origin()
-        || !candidate.username().is_empty()
-        || candidate.password().is_some()
-    {
-        return false;
-    }
-    let base = dashboard.path().trim_end_matches('/');
-    base.is_empty()
-        || candidate.path() == base
-        || candidate
-            .path()
-            .strip_prefix(base)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 impl NativeBrowserBridgeState {
@@ -238,29 +222,27 @@ pub fn dashboard_is_current(app: &AppHandle, webview: &Webview) -> bool {
 }
 
 fn dashboard_source_matches(app: &AppHandle, source: &Url) -> bool {
-    let Some(state) = app.try_state::<NativeBrowserBridgeState>() else {
-        return false;
-    };
-    let Ok(inner) = state.inner.lock() else {
-        return false;
-    };
-    inner
-        .document
-        .as_ref()
-        .is_some_and(|document| document.ready && matches_dashboard(source, &document.url))
+    current_document_matches(app, |document| matches_dashboard(source, &document.url))
 }
 
 // Native callbacks can already hold the runtime's webview registry borrow. Their
 // authority check must use the document lifecycle without reentering URL dispatch.
 // Page-load callbacks invalidate this generation before a new document is ready.
 pub fn generation_is_current(app: &AppHandle, generation: u64) -> bool {
+    current_document_matches(app, |document| document.generation == generation)
+}
+
+fn current_document_matches(
+    app: &AppHandle,
+    matches: impl FnOnce(&DashboardDocument) -> bool,
+) -> bool {
     app.try_state::<NativeBrowserBridgeState>()
         .is_some_and(|state| {
             state.inner.lock().is_ok_and(|inner| {
                 inner
                     .document
                     .as_ref()
-                    .is_some_and(|document| document.ready && document.generation == generation)
+                    .is_some_and(|document| document.ready && matches(document))
             })
         })
 }
@@ -272,16 +254,8 @@ pub fn request_is_current(app: &AppHandle, generation: u64) -> bool {
     let Ok(url) = webview.url() else {
         return false;
     };
-    let Some(state) = app.try_state::<NativeBrowserBridgeState>() else {
-        return false;
-    };
-    let Ok(inner) = state.inner.lock() else {
-        return false;
-    };
-    inner.document.as_ref().is_some_and(|document| {
-        document.ready
-            && document.generation == generation
-            && matches_dashboard(&url, &document.url)
+    current_document_matches(app, |document| {
+        document.generation == generation && matches_dashboard(&url, &document.url)
     })
 }
 

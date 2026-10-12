@@ -6,14 +6,12 @@ import type { CliDeps } from "../cli/deps.js";
 /** Creates mocked CLI delivery deps for isolated-agent delivery tests. */
 export function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
-    sendMessageSlack: vi.fn().mockResolvedValue({ messageTs: "slack-1", channel: "C1" }),
-    sendMessageWhatsApp: vi
-      .fn()
-      .mockResolvedValue({ messageId: "wa-1", toJid: "123@s.whatsapp.net" }),
-    sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "123" }),
-    sendMessageDiscord: vi.fn().mockResolvedValue({ messageId: "discord-1", channelId: "123" }),
-    sendMessageSignal: vi.fn().mockResolvedValue({ messageId: "signal-1", conversationId: "123" }),
-    sendMessageIMessage: vi.fn().mockResolvedValue({ messageId: "imessage-1", chatId: "123" }),
+    slack: vi.fn().mockResolvedValue({ messageTs: "slack-1", channel: "C1" }),
+    whatsapp: vi.fn().mockResolvedValue({ messageId: "wa-1", toJid: "123@s.whatsapp.net" }),
+    telegram: vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "123" }),
+    discord: vi.fn().mockResolvedValue({ messageId: "discord-1", channelId: "123" }),
+    signal: vi.fn().mockResolvedValue({ messageId: "signal-1", conversationId: "123" }),
+    imessage: vi.fn().mockResolvedValue({ messageId: "imessage-1", chatId: "123" }),
     ...overrides,
   };
 }

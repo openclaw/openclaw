@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
@@ -14,22 +15,22 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { createJob } from "../cron/service/jobs.js";
 import { createCronServiceState } from "../cron/service/state.js";
-import {
-  loadCronJobsStoreSync,
-  resolveCronJobsStorePath,
-  saveCronJobsStoreWithRevisionNative,
-} from "../cron/store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
@@ -85,12 +86,16 @@ export async function seedHeartbeatScratchForTest(params: {
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
   const storePath = params.storePath ?? resolveCronJobsStorePath();
-  const store = loadCronJobsStoreSync(storePath);
+  const store = loadCronStoreFromDatabase(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(storePath),
+  ).store;
   const declarationKey = `heartbeat:${agentId}`;
   let job = store.jobs.find((entry) => entry.declarationKey === declarationKey);
   if (!job) {
     const noop = () => {};
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
@@ -111,9 +116,9 @@ export async function seedHeartbeatScratchForTest(params: {
       wakeMode: "next-heartbeat",
     });
     // Fixture preparation needs persisted rows, not a cold scheduler worker per case.
-    saveCronJobsStoreWithRevisionNative(storePath, { ...store, jobs: [...store.jobs, job] });
+    seedCronStoreInCurrentDatabase(storePath, { ...store, jobs: [...store.jobs, job] });
   }
-  writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
+  writeCronJobScratchForMaintenance({ storePath, jobId: job.id, content: params.content });
   return job.id;
 }
 

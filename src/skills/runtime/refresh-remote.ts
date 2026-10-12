@@ -99,11 +99,10 @@ export function ensureRemoteSkillsWatcher(params: {
   void task.finally(() => remoteWatchTasks.delete(task));
 }
 
-export function disposeRemoteSkillsWatcher(watcherKey: string): boolean {
+export function disposeRemoteSkillsWatcher(watcherKey: string): void {
   const state = remoteWatchers.get(watcherKey);
   remoteWatchers.delete(watcherKey);
   state?.controller.abort();
-  return Boolean(state);
 }
 
 export async function closeRemoteSkillsWatchers(): Promise<void> {

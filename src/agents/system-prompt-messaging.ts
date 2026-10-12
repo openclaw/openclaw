@@ -3,7 +3,22 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import { buildMessageToolTargetGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ChatType } from "../channels/chat-type.js";
-import type { SilentReplyPromptMode } from "./system-prompt.types.js";
+import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import type { SilentReplyPromptMode, SystemPromptRuntimeInfo } from "./system-prompt.types.js";
+
+export function resolveSilentReplyPromptMode(params: {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  promptSurface?: AgentPromptSurfaceKind;
+  runtimeInfo?: SystemPromptRuntimeInfo;
+  silentReplyPromptMode?: SilentReplyPromptMode;
+}): SilentReplyPromptMode {
+  return params.sourceReplyDeliveryMode === "message_tool_only" ||
+    params.promptSurface === "subagent" ||
+    !isDeliverableMessageChannel(normalizeMessageChannel(params.runtimeInfo?.channel) ?? "")
+    ? "none"
+    : (params.silentReplyPromptMode ?? "generic");
+}
 
 export function buildMessagingSection(params: {
   isMinimal: boolean;

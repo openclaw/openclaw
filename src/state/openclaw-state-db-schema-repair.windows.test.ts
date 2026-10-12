@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as boundaryPath from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -7,12 +8,23 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { migrateAgentDatabaseRelativePaths } from "./openclaw-state-db-schema-repair.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";
 
+vi.hoisted(() => {
+  // The custody runner can preload these owners before the Windows path mock.
+  vi.resetModules();
+});
+
 vi.mock("node:path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:path")>();
   return { ...actual, default: actual.win32 };
 });
 
-beforeEach(() => mockProcessPlatform("win32"));
+beforeEach(() => {
+  mockProcessPlatform("win32");
+  // The in-memory migration rows use synthetic roots, including UNC hosts.
+  vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
+    (root) => root,
+  );
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(

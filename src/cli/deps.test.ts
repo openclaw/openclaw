@@ -4,22 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createOutboundSendDeps } from "./outbound-send-deps.js";
 
-const runtimeFactories = vi.hoisted(() => ({
-  whatsapp: vi.fn(),
-  telegram: vi.fn(),
-  discord: vi.fn(),
-  slack: vi.fn(),
-  signal: vi.fn(),
-  imessage: vi.fn(),
-}));
-
-const sendFns = vi.hoisted(() => ({
-  whatsapp: vi.fn(async () => ({ messageId: "w1", toJid: "whatsapp:1" })),
-  telegram: vi.fn(async () => ({ messageId: "t1", chatId: "telegram:1" })),
-  discord: vi.fn(async () => ({ messageId: "d1", channelId: "discord:1" })),
-  slack: vi.fn(async () => ({ messageId: "s1", channelId: "slack:1" })),
-  signal: vi.fn(async () => ({ messageId: "sg1", conversationId: "signal:1" })),
-  imessage: vi.fn(async () => ({ messageId: "i1", chatId: "imessage:1" })),
+const mocks = vi.hoisted(() => ({
+  runtimeLoaded: vi.fn(),
+  sendMessage: vi.fn(async () => ({ messageId: "sent" })),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -33,16 +20,13 @@ vi.mock("../channels/plugins/index.js", () => ({
     ),
 }));
 
-vi.mock("./send-runtime/channel-outbound-send.js", () => ({
-  createChannelOutboundRuntimeSend: ({
-    channelId,
-  }: {
-    channelId: keyof typeof runtimeFactories;
-  }) => {
-    runtimeFactories[channelId]();
-    return { sendMessage: sendFns[channelId] };
-  },
-}));
+vi.mock("./send-runtime/channel-outbound-send.js", async (importOriginal) => {
+  mocks.runtimeLoaded();
+  return {
+    ...(await importOriginal<typeof import("./send-runtime/channel-outbound-send.js")>()),
+    sendChannelOutboundMessage: mocks.sendMessage,
+  };
+});
 
 describe("createDefaultDeps", () => {
   async function loadCreateDefaultDeps(scope: string) {
@@ -54,37 +38,29 @@ describe("createDefaultDeps", () => {
     ).createDefaultDeps;
   }
 
-  function expectUnusedRuntimeFactoriesNotLoaded(exclude: keyof typeof runtimeFactories): void {
-    const keys = Object.keys(runtimeFactories) as Array<keyof typeof runtimeFactories>;
-    for (const key of keys) {
-      if (key === exclude) {
-        continue;
-      }
-      expect(runtimeFactories[key]).not.toHaveBeenCalled();
-    }
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("does not build runtime send surfaces until a dependency is used", async () => {
+  it("loads the send runtime only when used and routes each call to its channel", async () => {
     const createDefaultDeps = await loadCreateDefaultDeps("lazy-load");
     const deps = createDefaultDeps();
-
-    expect(runtimeFactories.whatsapp).not.toHaveBeenCalled();
-    expect(runtimeFactories.telegram).not.toHaveBeenCalled();
-    expect(runtimeFactories.discord).not.toHaveBeenCalled();
-    expect(runtimeFactories.slack).not.toHaveBeenCalled();
-    expect(runtimeFactories.signal).not.toHaveBeenCalled();
-    expect(runtimeFactories.imessage).not.toHaveBeenCalled();
-
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
-    await sendTelegram("chat", "hello", { verbose: false });
+    const sendDiscord = deps.discord as (...args: unknown[]) => Promise<unknown>;
 
-    expect(runtimeFactories.telegram).toHaveBeenCalledTimes(1);
-    expect(sendFns.telegram).toHaveBeenCalledTimes(1);
-    expectUnusedRuntimeFactoriesNotLoaded("telegram");
+    expect(mocks.runtimeLoaded).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+
+    await sendTelegram("chat", "hello", { verbose: false });
+    await sendDiscord("channel", "first", { verbose: false });
+    await sendDiscord("channel", "second", { verbose: false });
+
+    expect(mocks.runtimeLoaded).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage.mock.calls).toEqual([
+      ["telegram", "chat", "hello", { verbose: false }],
+      ["discord", "channel", "first", { verbose: false }],
+      ["discord", "channel", "second", { verbose: false }],
+    ]);
   });
 
   it("does not create channel senders for Discord voice helper keys", async () => {
@@ -93,7 +69,7 @@ describe("createDefaultDeps", () => {
 
     expect(deps.discordVoice).toBeUndefined();
     expect(deps.sendDiscordVoice).toBeUndefined();
-    expect(runtimeFactories.discord).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("does not expose lazy channel senders as low-level outbound transports", async () => {
@@ -106,39 +82,22 @@ describe("createDefaultDeps", () => {
     const outbound = createOutboundSendDeps(deps);
     expect(outbound.telegram).toBeUndefined();
     expect(outbound.sendTelegram).toBeUndefined();
-    expect(runtimeFactories.telegram).toHaveBeenCalledOnce();
-    expect(sendFns.telegram).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
   });
 
-  it("reuses cached runtime send surfaces after first lazy load", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
-    const deps = createDefaultDeps();
-    const sendDiscord = deps.discord as (...args: unknown[]) => Promise<unknown>;
-
-    await sendDiscord("channel", "first", { verbose: false });
-    await sendDiscord("channel", "second", { verbose: false });
-
-    expect(runtimeFactories.discord).toHaveBeenCalledTimes(1);
-    expect(sendFns.discord).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries a channel runtime after a transient load failure", async () => {
-    runtimeFactories.telegram.mockImplementationOnce(() => {
-      throw new Error("transient channel load");
-    });
-    const createDefaultDeps = await loadCreateDefaultDeps("module-retry");
+  it("allows another send after a transient channel failure", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(new Error("transient channel failure"));
+    const createDefaultDeps = await loadCreateDefaultDeps("send-retry");
     const deps = createDefaultDeps();
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
 
     await expect(sendTelegram("chat", "first", { verbose: false })).rejects.toThrow(
-      "transient channel load",
+      "transient channel failure",
     );
     await expect(sendTelegram("chat", "second", { verbose: false })).resolves.toEqual({
-      messageId: "t1",
-      chatId: "telegram:1",
+      messageId: "sent",
     });
 
-    expect(runtimeFactories.telegram).toHaveBeenCalledTimes(2);
-    expect(sendFns.telegram).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
   });
 });

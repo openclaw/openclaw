@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runAllowBotsMentionsMentionedRoomScenario } from "./scenario-runtime-allowbots.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
-import {
-  runMatrixQaCanary,
-  runObserverAllowlistOverrideScenario,
-} from "./scenario-runtime-thread.js";
+import { runMatrixQaCanary } from "./scenario-runtime-thread.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,6 +10,15 @@ describe("Matrix top-level scenario artifacts", () => {
     "keeps %s report fields independent of transport observation state",
     async (scenario) => {
       const context = createMatrixQaE2eeTestContext();
+      context.topology.rooms.push({
+        key: "main",
+        kind: "group",
+        memberRoles: ["driver", "observer", "sut"],
+        memberUserIds: [context.driverUserId, context.observerUserId, context.sutUserId],
+        name: "QA report fixture",
+        requireMention: true,
+        roomId: context.roomId,
+      });
       const actorId = scenario === "canary" ? "driver" : "observer";
       let marker = "";
       let triggerBody = "";
@@ -24,7 +31,7 @@ describe("Matrix top-level scenario artifacts", () => {
           const content = (await new Response(init.body).json()) as { body: string };
           triggerBody = content.body;
           marker = triggerBody.split("exact marker: ")[1] ?? "";
-          expect(marker).toMatch(/^MATRIX_QA_(?:CANARY|OBSERVER_ALLOWLIST)_[A-F0-9]+$/);
+          expect(marker).toMatch(/^MATRIX_QA_(?:CANARY|ALLOWBOTS_MENTIONS_MENTIONED)_[A-F0-9]+$/);
           return Response.json({ event_id: "$trigger" });
         }
         if (!url.searchParams.has("since")) {
@@ -53,7 +60,7 @@ describe("Matrix top-level scenario artifacts", () => {
       const result =
         scenario === "canary"
           ? await runMatrixQaCanary(context)
-          : (await runObserverAllowlistOverrideScenario(context)).artifacts;
+          : (await runAllowBotsMentionsMentionedRoomScenario(context)).artifacts;
       const reply = {
         bodyPreview: marker,
         eventId: "$reply",
@@ -65,7 +72,7 @@ describe("Matrix top-level scenario artifacts", () => {
       expect(result).toEqual({
         ...(scenario === "canary"
           ? { body: triggerBody }
-          : { actorUserId: context.observerUserId, triggerBody }),
+          : { actorUserId: context.observerUserId, roomKey: "main", triggerBody }),
         driverEventId: "$trigger",
         reply,
         token: marker,

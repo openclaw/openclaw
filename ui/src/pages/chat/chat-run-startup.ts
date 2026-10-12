@@ -53,6 +53,10 @@ const STARTUP_LABEL_KEYS = {
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 
+export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPhase {
+  return typeof value === "string" && Object.hasOwn(STARTUP_LABEL_KEYS, value);
+}
+
 export function chatStartupStatusLabel(
   run: ChatRunStartupStatus | null | undefined,
   placement: ApplicationPlacementStartupStatus | null | undefined,

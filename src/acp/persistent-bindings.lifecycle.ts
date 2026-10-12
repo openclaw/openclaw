@@ -1,4 +1,3 @@
-/** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +11,6 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
-// Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
@@ -53,7 +51,6 @@ function sessionStructurallyMatchesConfiguredBinding(params: {
   return true;
 }
 
-/** Creates or replaces the ACP session required by one configured binding. */
 export async function ensureConfiguredAcpBindingSession(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -66,11 +63,13 @@ export async function ensureConfiguredAcpBindingSession(params: {
     ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
   };
   try {
-    const resolution = acpManager.resolveSession({
+    const resolution = await acpManager.resolveSessionAsync({
       cfg: params.cfg,
       agentId: params.spec.agentId,
       sessionKey,
+      assertCurrent: params.assertActive,
     });
+    params.assertActive?.();
     if (
       resolution.kind === "ready" &&
       sessionStructurallyMatchesConfiguredBinding({
@@ -146,7 +145,6 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
-/** Resolves a configured binding for a conversation and ensures its ACP session exists. */
 export async function ensureConfiguredAcpBindingReadyCore(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -165,6 +163,6 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
 }

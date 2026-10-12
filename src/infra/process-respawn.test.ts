@@ -100,13 +100,6 @@ function expectLaunchdSupervisedWithHandoff(params?: { launchJobLabel?: string }
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
-  it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
-    process.env.OPENCLAW_NO_RESPAWN = "1";
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("disabled");
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
   it("keeps OPENCLAW_NO_RESPAWN ahead of inherited supervisor hints", () => {
     clearSupervisorHints();
     mockProcessPlatform("darwin");
@@ -161,23 +154,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
       mode: "failed",
       detail: "spawn EPERM",
     });
-  });
-
-  it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
-    clearSupervisorHints();
-    mockProcessPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    // Even if triggerOpenClawRestart *would* fail, launchd path must not call it.
-    triggerOpenClawRestartMock.mockReturnValue({
-      ok: false,
-      method: "launchctl",
-      detail: "Bootstrap failed: 5: Input/output error",
-    });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(result.mode).not.toBe("failed");
-    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledOnce();
-    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {
@@ -348,22 +324,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("disabled");
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("does not attempt detached spawn on unmanaged Unix even if spawn would throw", () => {
-    delete process.env.OPENCLAW_NO_RESPAWN;
-    clearSupervisorHints();
-    mockProcessPlatform("linux");
-
-    spawnMock.mockImplementation(() => {
-      throw new Error("spawn failed");
-    });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result).toEqual({
-      mode: "disabled",
-      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
-    });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });

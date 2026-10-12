@@ -421,6 +421,11 @@
     "mediaUnderstandingProviders": ["qwen"],
     "videoGenerationProviders": ["qwen"]
   },
+  "videoGenerationProviderMetadata": {
+    "qwen": {
+      "authSignals": [{ "provider": "qwen" }]
+    }
+  },
   "mediaUnderstandingProviderMetadata": {
     "qwen": {
       "capabilities": ["image", "video"],

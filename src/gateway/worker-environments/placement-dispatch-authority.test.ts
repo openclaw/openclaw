@@ -342,6 +342,58 @@ describe("worker placement cancellation and reclaim authority", () => {
 
 describe("worker placement dispatch authority", () => {
   const effects = ["create", "attach", "tunnel:attached", "sync", "placement:starting"];
+  const deviceNode: NodeWorkerSupervisorNodeProof = {
+    nodeId: "device-1",
+    connId: "device-connection-1",
+    pairingIdentity: "device-identity-1",
+    pairingGeneration: "device-pairing-1",
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    workerHost: {
+      enabled: true as const,
+      capacity: { total: 2, available: 2 },
+      capturedExecPolicy: true,
+      promptContext: 1,
+    },
+    commands: ["system.run"],
+  };
+
+  it("stops after requested placement acknowledgment before node readiness", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+      const harness = createHarness(database, store, { workspacePath: state.workspaceDir });
+      const readNodeReadiness = vi.fn(async () => ({ available: true, node: deviceNode }));
+      bindDeviceWorkerAvailability(harness.environments, readNodeReadiness);
+      let authorized = true;
+
+      await expect(
+        harness.service.dispatch(
+          {
+            ...REQUEST,
+            profileId: "device:device-1",
+            deviceId: deviceNode.nodeId,
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+          (placement) => {
+            if (placement.state === "requested") {
+              authorized = false;
+            }
+          },
+          () => {
+            if (!authorized) {
+              throw new Error("session creator authority closed after acknowledgment");
+            }
+          },
+        ),
+      ).rejects.toThrow("session creator authority closed after acknowledgment");
+
+      expect(readNodeReadiness).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed", turnClaim: null });
+    });
+  });
 
   it.each([
     { boundary: "readiness", completedEffects: 0 },
@@ -388,34 +440,19 @@ describe("worker placement dispatch authority", () => {
             ).not.toBeNull();
           }
         };
-        const node: NodeWorkerSupervisorNodeProof = {
-          nodeId: "device-1",
-          connId: "device-connection-1",
-          pairingIdentity: "device-identity-1",
-          pairingGeneration: "device-pairing-1",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          workerHost: {
-            enabled: true as const,
-            capacity: { total: 2, available: 2 },
-            capturedExecPolicy: true,
-          },
-          commands: ["system.run"],
-        };
         let readinessObserved = false;
         bindDeviceWorkerAvailability(harness.environments, async () => {
           if (!readinessObserved) {
             readinessObserved = true;
             revokeAt("readiness");
           }
-          return { available: true, node };
+          return { available: true, node: deviceNode };
         });
         const deviceIdentity = {
           providerId: "device",
           profileId: "device:device-1",
           profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: node.nodeId,
+          nodeDeviceId: deviceNode.nodeId,
           sshEndpoint: null,
           sharedHost: true,
         };
@@ -457,7 +494,7 @@ describe("worker placement dispatch authority", () => {
             {
               ...REQUEST,
               profileId: deviceIdentity.profileId,
-              deviceId: node.nodeId,
+              deviceId: deviceNode.nodeId,
               devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
               inheritedProfile: {
                 providerId: deviceIdentity.providerId,

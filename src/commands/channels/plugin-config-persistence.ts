@@ -10,7 +10,7 @@ export async function persistChannelPluginConfig(params: {
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
   runtime: RuntimeEnv;
-}): Promise<void> {
+}) {
   const committed = await commitConfigWithPendingPluginInstalls({
     sourceConfig: params.cfg,
     baseHash: params.baseHash,
@@ -19,8 +19,8 @@ export async function persistChannelPluginConfig(params: {
   if (committed.movedInstallRecords || params.pluginInstalled) {
     await refreshPluginRegistryAfterConfigMutation({
       reason: "source-changed",
-      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
       logger: { warn: (message) => params.runtime.log(message) },
     });
   }
+  return committed;
 }

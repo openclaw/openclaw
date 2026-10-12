@@ -38,9 +38,44 @@ export function getEventStreamCompletion(stream: object): Promise<unknown> | und
   return eventStreamCompletions.get(stream);
 }
 
+/** Bind consumer operations without mutating provider streams or losing producer settlement. */
+export function bindAssistantMessageEventStream(
+  source: AssistantMessageEventStreamContract,
+  run: <T>(operation: () => T) => T,
+  options?: { result?: () => Promise<AssistantMessage> },
+): AssistantMessageEventStreamContract {
+  const push = source.push.bind(source);
+  const end = source.end.bind(source);
+  const result = options?.result ?? source.result.bind(source);
+  const iterate = source[Symbol.asyncIterator].bind(source);
+  const bound: AssistantMessageEventStreamContract = {
+    push: (event) => run(() => push(event)),
+    end: (message) => run(() => end(message)),
+    result: () => run(result),
+    [Symbol.asyncIterator]: () => {
+      const iterator = run(iterate);
+      const finish = iterator.return?.bind(iterator);
+      const fail = iterator.throw?.bind(iterator);
+      return {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        next: (...args) => run(() => iterator.next(...args)),
+        ...(finish ? { return: (value?: unknown) => run(() => finish(value)) } : {}),
+        ...(fail ? { throw: (error?: unknown) => run(() => fail(error)) } : {}),
+      };
+    },
+  };
+  const completion = eventStreamCompletions.get(source);
+  if (completion) {
+    eventStreamCompletions.set(bound, completion);
+  }
+  return bound;
+}
+
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: (T | undefined)[] = [];
+  protected queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   protected done = false;
@@ -98,13 +133,10 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
         new Error("event stream ended without a terminal event or final result"),
       );
     }
-    while (this.waiting.length > 0) {
-      const waiter = this.waiting.shift();
-      if (!waiter) {
-        break;
-      }
-      waiter({ value: undefined as unknown, done: true });
+    for (const waiter of this.waiting) {
+      waiter({ value: undefined, done: true });
     }
+    this.waiting = [];
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<T> {
@@ -148,6 +180,19 @@ export class AssistantMessageEventStream
   private activeThinkingBlocks?: Set<ThinkingContent>;
 
   override push(event: AssistantMessageEvent): void {
+    if (!this.done && event.type === "text_delta" && !event.partial) {
+      const previous = this.queue[this.queue.length - 1];
+      if (
+        previous?.type === "text_delta" &&
+        !previous.partial &&
+        previous.contentIndex === event.contentIndex
+      ) {
+        // Partialless deltas are appends. Only unread neighbors can merge;
+        // snapshots may replace text, and delivered events belong to the consumer.
+        this.queue[this.queue.length - 1] = { ...event, delta: previous.delta + event.delta };
+        return;
+      }
+    }
     if (event.type === "thinking_delta" || event.type === "thinking_end") {
       const block = event.partial.content[event.contentIndex];
       if (block?.type === "thinking") {

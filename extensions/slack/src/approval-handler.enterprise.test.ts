@@ -9,7 +9,7 @@ vi.mock("./send.js", () => ({
 
 const { slackApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
 
-describe("Slack Enterprise Grid approval delivery", () => {
+describe("Slack approval delivery", () => {
   beforeEach(() => {
     sendMessageSlackMock.mockReset().mockResolvedValue({
       channelId: "C123",
@@ -64,6 +64,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
       },
       accountId: "default",
       context,
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: { to: "team:T123:channel:C123" },
+      },
       preparedTarget: {
         to: "channel:C123",
         teamId: "T123",
@@ -121,6 +126,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
           enterprise: { enterpriseId: "E123" },
           ...(resolveClient ? { resolveClient } : {}),
         },
+        plannedTarget: {
+          surface: "origin",
+          reason: "preferred",
+          target: { to: "team:T123:channel:C123" },
+        },
         preparedTarget: {
           to: "channel:C123",
           teamId: "T123",
@@ -147,6 +157,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
         enterprise: { enterpriseId: "E123" },
         resolveClient: () => teamClient,
       },
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: { to: "team:T123:user:U123" },
+      },
       preparedTarget: {
         to: "user:U123",
         teamId: "T123",
@@ -162,5 +177,53 @@ describe("Slack Enterprise Grid approval delivery", () => {
         eventScope: expect.objectContaining({ teamId: "T123" }),
       }),
     );
+  });
+
+  it("uses the authenticated workspace client for a reviewer DM in that workspace", async () => {
+    const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
+    const client = { chat: { update: vi.fn() }, conversations: { open } };
+    const context = {
+      app: { client },
+      config: {},
+      workspaceTeamId: "T123",
+    };
+
+    await slackApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context,
+      approvalKind: "exec",
+      plannedTarget: {
+        surface: "approver-dm",
+        reason: "preferred",
+        target: { to: "team:T123:user:U123" },
+      },
+      preparedTarget: { to: "user:U123", teamId: "T123" },
+      pendingPayload: { text: "approve", blocks: [] },
+    } as never);
+
+    expect(open).toHaveBeenCalledWith({ users: "U123", return_im: true });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "channel:D123",
+      "approve",
+      expect.objectContaining({ client, eventScope: expect.objectContaining({ teamId: "T123" }) }),
+    );
+
+    await expect(
+      slackApprovalNativeRuntime.transport.deliverPending({
+        cfg: {} as never,
+        accountId: "default",
+        context,
+        approvalKind: "exec",
+        plannedTarget: {
+          surface: "approver-dm",
+          reason: "preferred",
+          target: { to: "team:T999:user:U123" },
+        },
+        preparedTarget: { to: "user:U123", teamId: "T999" },
+        pendingPayload: { text: "approve", blocks: [] },
+      } as never),
+    ).rejects.toThrow("Slack approval workspace does not match the authenticated installation");
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

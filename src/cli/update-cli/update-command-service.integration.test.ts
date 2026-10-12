@@ -18,6 +18,7 @@ import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-wor
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -27,13 +28,17 @@ import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
   readyRecoveryHealth,
+  serviceUpdateResult,
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { registerPackageRootRollbackTests } from "./update-command-service-rollback.test-support.js";
 import {
   preservedActivationCases,
@@ -43,7 +48,6 @@ import {
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +103,10 @@ vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
   isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
 }));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated manager's Gateway PID has no native cgroup on the test host.
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+}));
 vi.mock("../../daemon/launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdRestartHandoff: mocks.handoff,
 }));
@@ -113,6 +121,11 @@ vi.mock("../../daemon/launchd-system.js", async (importOriginal) => ({
 vi.mock("../../infra/restart-stale-pids.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-stale-pids.js")>()),
   cleanStaleGatewayProcessesSync: () => [],
+  // Simulated service platforms must not read the host's native ancestry.
+  inspectSelfAndAncestorPidsSync: () => ({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  }),
   terminateStaleGatewayPids: mocks.terminateStale,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({
@@ -168,11 +181,7 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
     ...actual,
     runUpdatedInstallGatewayCommand: (
       ...[params, action]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
-    ) =>
-      actual.runUpdatedInstallGatewayCommand(
-        { ...params, opts: { json: params.opts.json } },
-        action,
-      ),
+    ) => actual.runUpdatedInstallGatewayCommand({ ...params, opts: {} }, action),
   };
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {
@@ -229,7 +238,8 @@ vi.mock("./update-command-config-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-config-snapshot.js")>()),
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: {
     log: mocks.log,
     error: mocks.error,
@@ -267,6 +277,7 @@ afterAll(() => inspectionWorkers.close());
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.exit.mockReset();
+  stubNodeRuntime();
   mockProcessPlatform("linux");
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
   const runEnv = { ...process.env };
@@ -314,14 +325,9 @@ beforeEach(async () => {
     }
     mocks.events.push("fresh CLI restart");
     mocks.running = true;
-    return {
-      code: 0,
+    return commandResult({
       stdout: JSON.stringify({ action: "restart", ok: true, result: "restarted" }),
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    });
   });
   mocks.health.mockImplementation(async ({ port }) => readyRecoveryHealth(port, mocks.running));
   mocks.configSnapshot
@@ -344,6 +350,7 @@ describe("preserved update activation with real version guards", () => {
   it.each(preservedActivationCases)(
     "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
     async ({ mode, denial, outcome, json, phase }) => {
+      const definitionRecovery: UpdateServiceDefinitionRecovery = {};
       let nowMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
@@ -386,23 +393,22 @@ describe("preserved update activation with real version guards", () => {
               programArguments: ["/foreign/openclaw", "gateway"],
             });
           }
-          return {
+          return commandResult({
             code: 1,
             stdout:
-              outcome === "json denial"
+              outcome === "json denial" || outcome === "clean refusal"
                 ? JSON.stringify({
                     ok: false,
                     error: `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
                   })
                 : "",
             stderr:
-              outcome === "json denial"
-                ? "runtime warning"
-                : `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+              outcome === "clean refusal"
+                ? ""
+                : outcome === "json denial"
+                  ? "runtime warning"
+                  : `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
+          });
         }
         if (mocks.running) {
           await servingOwner.publish();
@@ -410,14 +416,9 @@ describe("preserved update activation with real version guards", () => {
         const program = new Command().exitOverride();
         addGatewayServiceCommands(program.command("gateway"));
         await program.parseAsync(args.slice(2), { from: "user" });
-        return {
-          code: 0,
+        return commandResult({
           stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
       const commandBefore = await mocks.command(process.env);
       mocks.ports.mockImplementation(async (port) => ({
@@ -447,6 +448,7 @@ describe("preserved update activation with real version guards", () => {
         retried ||= stale;
         if (stale) {
           return {
+            outcome: "failed",
             healthy: false,
             staleGatewayPids: [4242],
             runtime: { status: "running" },
@@ -457,17 +459,14 @@ describe("preserved update activation with real version guards", () => {
       });
       const activated = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
+        result: serviceUpdateResult(root, {
           mode,
-          root,
-          steps: [],
-          durationMs: 0,
           before: { version: "2026.1.1" },
           after: { version: VERSION, buildId: "new-build" },
-        },
+        }),
         opts: { json, run },
         refreshServiceEnv: late,
+        ...(outcome === "clean refusal" ? { definitionRecovery } : {}),
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
@@ -478,6 +477,11 @@ describe("preserved update activation with real version guards", () => {
       const allowed = !["uninspectable", "foreign"].includes(outcome);
       const buildMismatch = ["stale build", "missing build"].includes(outcome);
       expect(activated).toBe(!allowed ? "failed" : buildMismatch ? "restart-health-failed" : "ok");
+      if (outcome === "clean refusal") {
+        expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+        expect(mocks.running).toBe(true);
+        expect(mocks.events).toContain("native restart");
+      }
       const restarts = mocks.child.mock.calls.filter(([args]) => args.includes("restart"));
       expect(restarts).toHaveLength(allowed ? (retried ? 2 : 1) : 0);
       for (const [args, options] of restarts) {
@@ -569,26 +573,26 @@ describe("preserved update activation with real version guards", () => {
         });
       try {
         await program.parseAsync(args.slice(2), { from: "user" });
-        return { code: 0, stdout: "", stderr, signal: null, killed: false, termination: "exit" };
+        return commandResult({
+          stderr,
+        });
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("unknown option")) {
           throw error;
         }
-        return { code: 1, stdout: "", stderr, signal: null, killed: false, termination: "exit" };
+        return commandResult({
+          code: 1,
+          stderr,
+        });
       } finally {
         snapshot.restore();
       }
     });
     const activated = await maybeRestartService({
       shouldRestart: true,
-      result: {
-        status: "ok",
-        mode: "npm",
-        root,
-        steps: [],
-        durationMs: 0,
+      result: serviceUpdateResult(root, {
         after: { version: VERSION },
-      },
+      }),
       opts: { json: true, run },
       refreshServiceEnv: false,
       serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -816,10 +820,6 @@ describe("preserved update activation with real version guards", () => {
     if (loaded) {
       await servingOwner.publish("launchd");
     }
-    mocks.handoff.mockImplementation(() => ({
-      ok: true,
-      value: servingOwner.restart().then(() => true),
-    }));
     mocks.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         if (scenario === "bootstrap denied" || scenario === "parent recovery refusal") {
@@ -838,13 +838,14 @@ describe("preserved update activation with real version guards", () => {
       const state = nativeRunning ? "running" : "stopped";
       return {
         code: 0,
-        stdout: args[0] === "print" ? `state = ${state}\n` : "",
+        stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = ${state}\n}` : "",
         stderr: "",
         termination: "exit",
       };
     });
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: nativeRunning ? "ready" : "failed",
         healthy: nativeRunning,
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
@@ -853,6 +854,7 @@ describe("preserved update activation with real version guards", () => {
     }
     if (scenario === "stale retry") {
       mocks.health.mockResolvedValueOnce({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [4242],
         runtime: { status: "stopped" },
@@ -880,16 +882,15 @@ describe("preserved update activation with real version guards", () => {
           : { kind: "unresolved" as const, root, fingerprint: "fixture" };
       if (lateDenial) {
         expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
-        mocks.child.mockResolvedValueOnce({
-          code: 1,
-          stdout: "",
-          stderr: `SERVICE_DEFINITION_${scenario.endsWith("sealed") ? "SEALED" : "UNKNOWN"}: late denial`,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
+        mocks.child.mockResolvedValueOnce(
+          commandResult({
+            code: 1,
+            stderr: `SERVICE_DEFINITION_${scenario.endsWith("sealed") ? "SEALED" : "UNKNOWN"}: late denial`,
+          }),
+        );
       }
       mocks.health.mockImplementation(async ({ port }) => ({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids: [],
         runtime: { status: "stopped" },
@@ -897,14 +898,9 @@ describe("preserved update activation with real version guards", () => {
       }));
       result = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          root,
-          steps: [],
-          durationMs: 0,
+        result: serviceUpdateResult(root, {
           after: { version: VERSION },
-        },
+        }),
         opts: { json: true, run },
         refreshServiceEnv: lateDenial,
         serviceUpdateVerdict: verdict,
@@ -963,6 +959,8 @@ describe("preserved update activation with real version guards", () => {
       expect(mocks.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
     } else if (scenario === "handoff") {
       expect(mocks.handoff).toHaveBeenCalledWith(expect.objectContaining({ mode: "kickstart" }));
+      // The detached restart follows command completion; join it before fixture cleanup.
+      await servingOwner.restart();
     } else {
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "kickstart")).toBe(true);
       expect(mocks.launchctl.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(

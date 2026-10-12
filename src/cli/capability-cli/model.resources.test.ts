@@ -45,7 +45,9 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
       if (response.writableEnded || response.destroyed) {
         return;
       }
-      response.writeHead(200, { "content-type": "text/event-stream" });
+      if (!response.headersSent) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+      }
       response.end(
         `data: ${JSON.stringify({
           id: "cli-response",
@@ -223,7 +225,9 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
               finish(requests[0]!, 0);
               await Promise.race([callbackStarted.promise, first]);
             } else if (mode === "cancel-drain") {
-              finish(requests[0]!, 0);
+              // Keep the accepted body open so prefetch cannot settle it before cancellation.
+              requests[0]!.writeHead(200, { "content-type": "text/event-stream" });
+              requests[0]!.flushHeaders();
               await Promise.race([cancelStarted.promise, first]);
               await expect(first).rejects.toThrow("CLI failed");
               drainage = parent.drain().then(() => {

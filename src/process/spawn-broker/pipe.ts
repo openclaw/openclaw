@@ -5,6 +5,12 @@ type HeldPipe = { read: Socket["read"]; resumed: boolean; onResume: () => void }
 const readers = new WeakMap<Socket, HeldPipe>();
 const holdReadable = () => {};
 
+/** Command brokerage requires Node's transferable POSIX pipe handles. */
+export function supportsSpawnBrokerCommandTransport(): boolean {
+  // Native-resource brokerage uses its own socket transport and is independent of this selection.
+  return process.platform !== "win32" && !process.versions.bun;
+}
+
 /** Defer consumption and EOF until the transferred socket is ready for its caller. */
 export function holdPipe(socket: Socket): void {
   const held: HeldPipe = {
@@ -80,13 +86,6 @@ export function takePipePrefix(socket: Socket): Buffer {
     throw new Error("Spawn broker pipe must contain bytes");
   }
   return buffered;
-}
-
-/** Restore the pre-transfer buffer ahead of bytes read from the received handle. */
-export function restorePipePrefix(socket: Socket, prefix: Buffer): void {
-  if (prefix.length > 0) {
-    socket.unshift(prefix);
-  }
 }
 
 /** Publish stream data and EOF after the caller's readiness continuation. */

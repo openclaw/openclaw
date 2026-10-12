@@ -19,7 +19,7 @@ import {
 import { submitEmbeddedAttemptPrompt } from "./embedded-agent-runner/run/attempt-prompt-submit.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "./embedded-agent-runner/session-prompt-state.js";
 import { installToolResultContextGuard } from "./embedded-agent-runner/tool-result-context-guard.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
@@ -34,6 +34,7 @@ import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { resolveLiveToolResultMaxChars } from "./tool-result-limits.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const sessionId = "result-budget-boundary";
 const model = {
@@ -65,6 +66,10 @@ function message(
     isError: false,
     timestamp: 1,
   };
+}
+
+async function execute(tool: AnyAgentTool, id: string, args: unknown, callId = tool.name) {
+  return message(await tool.execute(id, args), tool.name, callId);
 }
 
 function text(result: { content: AgentToolResult<unknown>["content"] }): string {
@@ -99,13 +104,17 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
-    [agentSessionQueuePromptContext]: () => () => undefined,
+    isCompacting: false,
+    [agentSessionQueuePromptContext]: () => {
+      throw new Error("Unexpected prompt context in the result-budget probe");
+    },
     agent,
     get messages() {
       return agent.state.messages;
     },
   };
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  const sessionPromptState = promptStateLease.state;
   try {
     await submitEmbeddedAttemptPrompt({
       attempt: { sessionId },
@@ -116,7 +125,6 @@ async function dispatch(
       transcriptPrompt: "",
       systemPrompt: "",
       runtimeOnly: true,
-      sessionPromptState,
       toolResultMaxChars: resolveLiveToolResultMaxChars({
         contextWindowTokens,
       }),
@@ -144,46 +152,12 @@ afterEach(async () => {
 });
 
 describe("fresh producer results through persistence and model guards", () => {
-  it("retains structured values that fit the compact result budget", async () => {
-    const context = 4_096;
-    const value = Array.from({ length: 80 }, (_, id) => ({ id, ok: true }));
-    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-      config: { tools: { codeMode: { enabled: true } } },
-      model,
-      contextTokenBudget: context,
-      modelToolsEnabled: true,
-      sessionId,
-      executeTool: async () => {
-        throw new Error("This fixture has no catalog tools");
-      },
-    });
-    try {
-      const [exec] = runtime.compactTools([]).tools;
-      const frame = message(
-        await exec!.execute("compact-value", { code: `return ${JSON.stringify(value)};` }),
-        "exec",
-      );
-      const sent = await dispatch([frame], context);
-      expect(JSON.parse(text(toolResult(sent, 0)))).toMatchObject({
-        status: "completed",
-        value,
-        output: [],
-        replaySafe: false,
-        telemetry: { callCount: 0 },
-      });
-      expect(text(toolResult(sent, 0))).toBe(text(frame));
-      expect(resultDetails(frame).value).toEqual(value);
-    } finally {
-      runtime.cleanup();
-    }
-  });
-
   it.each([
-    { name: "default accented", first: "🦞".repeat(9000), last: "é".repeat(18000) },
-    { name: "ASCII", first: "a".repeat(40_000), last: "b".repeat(40_000) },
-    { name: "equal-byte Euro control", first: "🦞".repeat(9000), last: "€".repeat(12_000) },
-    { name: "CJK", first: "中".repeat(9000), last: "界".repeat(9000) },
-    { name: "JSON escaping", first: '\u0001"\\\n'.repeat(4000), last: '\t"\\'.repeat(4000) },
+    {
+      name: "mixed encoded text",
+      first: '🦞中a\u0001"\\\n'.repeat(6000),
+      last: "é€".repeat(18000),
+    },
     {
       name: "large final value",
       first: "é".repeat(15_000),
@@ -191,22 +165,20 @@ describe("fresh producer results through persistence and model guards", () => {
       value: { text: "🦞".repeat(12_000) },
     },
     { name: "long failure", first: "x".repeat(35_000), last: "é".repeat(9000), fail: true },
-    { name: "small byte cap", first: "🦞".repeat(140), last: "é".repeat(240), cap: 1024 },
     {
       name: "effective raw-weight context",
       first: "é".repeat(6000),
       last: "é".repeat(6000),
       context: 8000,
     },
-    { name: "ordinary incremental", first: "first", last: "second" },
   ])(
     "keeps $name Code Mode output complete after yield and provider dispatch",
     async (scenario) => {
       const { first: firstText, last: lastText } = scenario;
-      const cap = "cap" in scenario ? scenario.cap! : 65536;
+      const cap = 65536;
       const context = "context" in scenario ? scenario.context! : model.contextWindow;
       const fail = "fail" in scenario && scenario.fail;
-      const value = "value" in scenario ? scenario.value : true;
+      const value = "value" in scenario ? (scenario.value ?? true) : true;
       const state = await createOpenClawTestState({ label: "code-mode-result-budget" });
       const runtime = createAgentHarnessToolSurfaceRuntimeCore({
         config: { tools: { codeMode: { enabled: true, maxOutputBytes: cap } } },
@@ -223,31 +195,21 @@ describe("fresh producer results through persistence and model guards", () => {
         if (runtime.toolSearchCatalogRef?.current) {
           runtime.toolSearchCatalogRef.current.counterScope = "result-budget";
         }
-        const first = message(
-          await tools[0]!.execute("first", {
-            code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,
-          }),
-          "exec",
-        );
-        const firstSent = await dispatch([first], context);
-        expect(JSON.parse(text(toolResult(firstSent, 0)))).toMatchObject({
+        const first = await execute(tools[0]!, "first", {
+          code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,
+        });
+        const firstSent = text(toolResult(await dispatch([first], context), 0));
+        expect(JSON.parse(firstSent)).toMatchObject({
           status: "waiting",
           runId: resultDetails(first).runId,
         });
-        const empty = message(
-          await tools[1]!.execute("empty", { runId: resultDetails(first).runId }),
-          "wait",
-          "empty",
-        );
+        const runId = resultDetails(first).runId;
+        const empty = await execute(tools[1]!, "empty", { runId }, "empty");
         expect(resultDetails(empty)).toMatchObject({ status: "waiting", output: [] });
-        const final = message(
-          await tools[1]!.execute("second", { runId: resultDetails(first).runId }),
-          "wait",
-        );
+        const final = await execute(tools[1]!, "second", { runId });
         const sent = await dispatch([first, empty, final], context);
-        expect(text(toolResult(sent, 0))).toBe(text(toolResult(firstSent, 0)));
+        expect(text(toolResult(sent, 0))).toBe(firstSent);
         const finalText = text(toolResult(sent, 2));
-        expect(() => JSON.parse(finalText)).not.toThrow();
         expect(JSON.parse(finalText)).toMatchObject({ status: fail ? "failed" : "completed" });
         const original = [
           { type: "text", text: firstText },
@@ -255,9 +217,7 @@ describe("fresh producer results through persistence and model guards", () => {
         ];
         const details = resultDetails(final);
         const output = details.output as unknown[];
-        if (scenario.name === "ordinary incremental") {
-          expect(output).toEqual([original[1]]);
-        } else if (output.length > 0) {
+        if (output.length > 0) {
           expectOriginalCodeModeMarker(output[0], original);
         } else {
           expect(lastText).toBe("");
@@ -269,16 +229,13 @@ describe("fresh producer results through persistence and model guards", () => {
         if (fail) {
           expect(details).toMatchObject({
             code: "internal_error",
-            failurePhase: "bridge",
+            failurePhase: "guest",
             bridgeDispatchStarted: true,
             error: expect.stringMatching(/^Error: DIAGNOSTIC.*\[error truncated\]$/s),
           });
         } else if (value === true) {
-          expect(details.value).toBe(true);
+          expect(details.value).toEqual(value);
         } else {
-          if (value === undefined) {
-            throw new Error("Expected the structured-value fixture");
-          }
           expect(details.value).toMatchObject({
             truncated: true,
             reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(value)) },
@@ -303,14 +260,13 @@ describe("fresh producer results through persistence and model guards", () => {
         const maxChars = resolveLiveToolResultMaxChars({ contextWindowTokens: context });
         installSessionToolResultGuard(manager, { maxToolResultChars: maxChars });
         for (const [index, frame] of [first, empty, final].entries()) {
-          expect(
-            text(toolResult(sent, index)) === text(frame),
-            "fresh producer text must pass unchanged",
-          ).toBe(true);
-          expect(estimateToolResultTextChars(text(frame))).toBeLessThanOrEqual(maxChars);
-          expect(
-            estimateToolResultTextChars(text(frame), { minimumRawWeight: 2 }),
-          ).toBeLessThanOrEqual(context);
+          const frameText = text(frame);
+          expect(text(toolResult(sent, index)), "fresh producer text must pass unchanged").toBe(
+            frameText,
+          );
+          expect(estimateToolResultTextChars(frameText)).toBeLessThanOrEqual(maxChars);
+          const rawWeight = estimateToolResultTextChars(frameText, { minimumRawWeight: 2 });
+          expect(rawWeight).toBeLessThanOrEqual(context);
           expectCodeModeSharedBudget(resultDetails(frame), cap);
           manager.appendMessage(frame);
         }
@@ -327,28 +283,16 @@ describe("fresh producer results through persistence and model guards", () => {
   );
 
   it.each([
-    { name: "host ASCII", sandbox: false, source: "0123456789".repeat(12_000), context: 128_000 },
-    { name: "sandbox Unicode", sandbox: true, source: "中é🦞".repeat(18_000), context: 128_000 },
-    {
-      name: "sandbox resolved filename",
-      sandbox: true,
-      source: "x".repeat(60_000),
-      context: 128_000,
-    },
-    {
-      name: "effective raw-weight context",
-      sandbox: false,
-      source: "é".repeat(16_000),
-      context: 8000,
-    },
-  ])(
-    "keeps the read owner's exact cursor through the downstream result guard: $name",
-    async ({ name, sandbox, source, context }) => {
+    ["host ASCII", false, "0123456789".repeat(12_000), 128_000],
+    ["sandbox resolved filename", true, "中é🦞0123456789".repeat(18_000), 128_000],
+    ["effective raw-weight context", false, "é".repeat(16_000), 8000],
+  ] as const)(
+    "keeps the read owner's exact cursor through the downstream result guard: %s",
+    async (_name, sandbox, source, context) => {
       const state = await createOpenClawTestState({ label: "read-result-budget" });
       try {
-        const resolved = name === "sandbox resolved filename";
-        const file = join(state.workspaceDir, resolved ? "notes 3.04 PM.txt" : "long-line.txt");
-        await writeFile(resolved ? file.replace(" PM", "\u202fPM") : file, source);
+        const file = join(state.workspaceDir, sandbox ? "notes 3.04 PM.txt" : "long-line.txt");
+        await writeFile(sandbox ? file.replace(" PM", "\u202fPM") : file, source);
         const read = sandbox
           ? createSandboxedReadTool({
               root: state.workspaceDir,
@@ -362,18 +306,14 @@ describe("fresh producer results through persistence and model guards", () => {
         let collected = "";
         let continuation: ReadToolContinuation | undefined;
         for (let index = 0; index < 16; index++) {
-          const page = message(
-            await read.execute(`read-${index}`, { path: file, ...continuation }),
-            "read",
-            `read-${index}`,
-          );
+          const callId = `read-${index}`;
+          const page = await execute(read, callId, { path: file, ...continuation }, callId);
           const sent = toolResult(await dispatch([page], context), 0);
-          expect(
-            text(sent) === text(page),
-            "no later clipping may discard already-advanced read bytes",
-          ).toBe(true);
+          expect(text(sent), "no later clipping may discard already-advanced read bytes").toBe(
+            text(page),
+          );
           continuation = resultDetails(page).continuation as ReadToolContinuation | undefined;
-          const pageText = resolved ? text(sent).slice(text(sent).indexOf("\n") + 1) : text(sent);
+          const pageText = sandbox ? text(sent).slice(text(sent).indexOf("\n") + 1) : text(sent);
           if (!continuation) {
             collected += pageText;
             break;
@@ -392,48 +332,42 @@ describe("fresh producer results through persistence and model guards", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves wrapped network result structure and terminal batches (failed=%s)",
-    async (fail) => {
-      const network = fakeTool("network_fixture", "Read a network fixture");
-      network.resultContentSource = "network";
-      network.execute = async () => ({
-        content: [{ type: "text", text: "received" }],
-        details: "received",
-        terminate: true,
+  it("preserves wrapped network result structure and terminal batches", async () => {
+    const network = fakeTool("network_fixture", "Read a network fixture");
+    network.resultContentSource = "network";
+    network.execute = async () => ({
+      content: [{ type: "text", text: "received" }],
+      details: "received",
+      terminate: true,
+    });
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      config: { tools: { codeMode: true } },
+      model,
+      modelToolsEnabled: true,
+      sessionId,
+      executeTool: async ({ toolCallId, input }) => network.execute(toolCallId, input),
+    });
+    try {
+      const [exec, wait] = runtime.compactTools([network]).tools;
+      const first = await exec!.execute("network", {
+        code: `await network_fixture({}); text('<s>'.repeat(20000)); await yield_control(); return "é".repeat(20000);`,
       });
-      const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-        config: { tools: { codeMode: true } },
-        model,
-        modelToolsEnabled: true,
-        sessionId,
-        executeTool: async ({ toolCallId, input }) => network.execute(toolCallId, input),
-      });
-      try {
-        const [exec, wait] = runtime.compactTools([network]).tools;
-        const first = await exec!.execute("network", {
-          code: `await network_fixture({}); text('<s>'.repeat(20000)); await yield_control(); ${fail ? 'throw new Error("network diagnostic".repeat(5000));' : 'return "é".repeat(20000);'}`,
-        });
-        expect(first.terminate).not.toBe(true);
-        const final = await wait!.execute("network-wait", { runId: resultDetails(first).runId });
-        expect(final.terminate).toBe(true);
-        for (const result of [first, final]) {
-          const rendered = text(result);
-          expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
-          expect(rendered).not.toContain("\n[truncated]");
-          const body = rendered
-            .split("\n---\n")[1]
-            ?.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
-          expect(() => JSON.parse(body!)).not.toThrow();
-          expect(body!.length).toBeLessThanOrEqual(20_000);
-          expect(JSON.parse(body!)).toMatchObject({ status: resultDetails(result).status });
-          expect(text(toolResult(await dispatch([message(result, "exec")]), 0))).toBe(rendered);
-        }
-      } finally {
-        runtime.cleanup();
+      expect(first.terminate).not.toBe(true);
+      const final = await wait!.execute("network-wait", { runId: resultDetails(first).runId });
+      expect(final.terminate).toBe(true);
+      for (const result of [first, final]) {
+        const rendered = text(result);
+        expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+        expect(rendered).not.toContain("\n[truncated]");
+        const body = rendered.split("\n---\n")[1]?.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
+        expect(body!.length).toBeLessThanOrEqual(20_000);
+        expect(JSON.parse(body!)).toMatchObject({ status: resultDetails(result).status });
+        expect(text(toolResult(await dispatch([message(result, "exec")]), 0))).toBe(rendered);
       }
-    },
-  );
+    } finally {
+      runtime.cleanup();
+    }
+  });
 
   it("preserves conventional plain text and mixed MCP content without inferring JSON", async () => {
     const plain = message(

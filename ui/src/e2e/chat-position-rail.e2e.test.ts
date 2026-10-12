@@ -392,6 +392,7 @@ suite.define(() => {
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
+          await expect.poll(visibilityMatchesViewport).toBe(true);
           const strokeColors = () =>
             markers.evaluateAll((items) =>
               items.map(
@@ -400,22 +401,25 @@ suite.define(() => {
                     .backgroundColor,
               ),
             );
-          const restingColors = await strokeColors();
+          // The tick animates its background after visibility changes. Capture
+          // each marker's target color, not a transient animation frame.
+          const restingColors = await markers.evaluateAll((items) =>
+            items.map((item) => getComputedStyle(item).color),
+          );
           await markerForIndex(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
-          await expect
-            .poll(() =>
-              markers.evaluateAll((items) =>
-                items
-                  .slice(0, 9)
-                  .map((item) =>
-                    Number.parseFloat(
-                      getComputedStyle(item.querySelector(".chat-position-rail__tick")!).width,
-                    ),
+          const waveWidths = () =>
+            markers.evaluateAll((items) =>
+              items
+                .slice(0, 9)
+                .map((item) =>
+                  Number.parseFloat(
+                    getComputedStyle(item.querySelector(".chat-position-rail__tick")!).width,
                   ),
-              ),
-            )
-            .toEqual([8, 12, 16, 24, 32, 24, 16, 12, 8]);
+                ),
+            );
+          const expectedWave = [8, 12, 16, 24, 32, 24, 16, 12, 8];
+          await expect.poll(waveWidths).toEqual(expectedWave);
           await expect
             .poll(strokeColors)
             .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));
@@ -430,8 +434,13 @@ suite.define(() => {
           );
           expect(await preview.textContent()).toContain("Transcript checkpoint 4");
           await captureUiProof(suite, page, "chat-position-rail", "hover-reading.png");
+          await expect.poll(waveWidths).toEqual(expectedWave);
+          await expect
+            .poll(strokeColors)
+            .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));
           await page.keyboard.press("Escape");
           await expect.poll(() => preview.count()).toBe(0);
+          await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
           expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
             true,
           );

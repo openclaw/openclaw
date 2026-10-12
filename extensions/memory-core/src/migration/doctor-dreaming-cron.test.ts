@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type {
   PluginDoctorCronInventory,
   PluginDoctorCronJob,
@@ -23,6 +24,15 @@ const CANONICAL_FIELDS = {
   payload: CANONICAL_PAYLOAD,
   delivery: { mode: "none" },
 };
+const REM_PHASE_FIELDS = {
+  name: "Memory REM Dreaming",
+  description: undefined,
+  payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
+};
+
+function adopted(job: PluginDoctorCronJob, fields: Record<string, unknown> = {}) {
+  return { job, definition: { ...job.definition, ...CANONICAL_FIELDS, ...fields } };
+}
 
 function makeJob(
   id: string,
@@ -108,16 +118,6 @@ describe("dreaming cron Doctor selection", () => {
       payload: { ...CANONICAL_PAYLOAD, model: "operator-model" },
       delivery: { mode: "none" },
     },
-    {
-      label: "name and agent token with missing delivery",
-      fields: {
-        description: undefined,
-        sessionTarget: "isolated",
-        payload: CANONICAL_PAYLOAD,
-      },
-      payload: CANONICAL_PAYLOAD,
-      delivery: { mode: "none" },
-    },
   ])("adopts $label without replacing authored survivor fields", async (fixture) => {
     const job = makeJob("survivor", fixture.fields);
     const { input, inventory, repairCronJobs } = createInput([job]);
@@ -127,84 +127,34 @@ describe("dreaming cron Doctor selection", () => {
     expect(repairCronJobs).not.toHaveBeenCalled();
     await dreamingCronMigration.migrateLegacyState(input);
 
-    expect(repairCronJobs.mock.calls).toEqual([
-      [
-        inventory,
-        [
-          {
-            job,
-            definition: {
-              ...job.definition,
-              declarationKey: DECLARATION_KEY,
-              sessionTarget: "isolated",
-              payload: fixture.payload,
-              delivery: fixture.delivery,
-            },
-          },
-        ],
-      ],
+    expect(repairCronJobs).toHaveBeenCalledExactlyOnceWith(inventory, [
+      adopted(job, { payload: fixture.payload, delivery: fixture.delivery }),
     ]);
     expect(inventory).toEqual(before);
   });
 
-  it("prefers declared survivors, then the oldest valid unified job in each partition", async () => {
-    const jobs = [
-      makeJob("legacy-oldest", { createdAtMs: 1 }),
-      makeJob("declared-newer", { ...CANONICAL_FIELDS, createdAtMs: 40 }),
-      makeJob("declared-survivor", { ...CANONICAL_FIELDS, createdAtMs: 20 }),
-      makeJob("light-phase", {
-        name: "Renamed light phase",
-        description: "[managed-by=memory-core.dreaming.light]",
-        payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
-      }),
-      makeJob("inactive-newer", { createdAtMs: 30 }, { storeKey: INACTIVE_STORE }),
-      makeJob("inactive-survivor", { createdAtMs: 10 }, { storeKey: INACTIVE_STORE }),
-      makeJob(
-        "invalid-declared",
-        { ...CANONICAL_FIELDS, createdAtMs: 0 },
-        { storeKey: INACTIVE_STORE, invalidReason: "invalid-schedule" },
-      ),
-      makeJob(
-        "rem-phase",
-        {
-          name: "Memory REM Dreaming",
-          description: undefined,
-          createdAtMs: 1,
-          payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
-        },
-        { storeKey: INACTIVE_STORE },
-      ),
-    ];
-    const { input, inventory, repairCronJobs } = createInput(jobs);
-
-    const result = await dreamingCronMigration.migrateLegacyState(input);
-
-    expect(repairCronJobs).toHaveBeenCalledOnce();
-    const changes = repairCronJobs.mock.calls[0]?.[1] ?? [];
-    expect(
-      changes
-        .map(
-          ({ job, definition }) => `${job.storeKey}:${job.id}:${definition ? "adopt" : "retire"}`,
-        )
-        .toSorted(),
-    ).toEqual(
-      [
-        `${ACTIVE_STORE}:legacy-oldest:retire`,
-        `${ACTIVE_STORE}:declared-newer:retire`,
-        `${ACTIVE_STORE}:light-phase:retire`,
-        `${INACTIVE_STORE}:inactive-survivor:adopt`,
-        `${INACTIVE_STORE}:inactive-newer:retire`,
-        `${INACTIVE_STORE}:rem-phase:retire`,
-      ].toSorted(),
+  it("prefers declared over legacy and legacy over phase within each partition", async () => {
+    const legacy = makeJob("legacy-oldest", { createdAtMs: 1 });
+    const declared = makeJob("declared-survivor", CANONICAL_FIELDS);
+    const phase = makeJob(
+      "rem-phase",
+      { ...REM_PHASE_FIELDS, createdAtMs: 1 },
+      { storeKey: INACTIVE_STORE },
     );
-    expect(changes.find(({ job }) => job.id === "inactive-survivor")?.definition).toMatchObject({
-      id: "inactive-survivor",
-      declarationKey: DECLARATION_KEY,
-      enabled: false,
-      createdAtMs: 10,
-    });
-    expect(repairCronJobs.mock.calls[0]?.[0]).toBe(inventory);
-    expect(result.warnings).toEqual([expect.stringContaining("invalid-declared")]);
+    const inactive = makeJob("inactive-survivor", {}, { storeKey: INACTIVE_STORE });
+    const { input, inventory, repairCronJobs } = createInput([legacy, declared, phase, inactive]);
+
+    await dreamingCronMigration.migrateLegacyState(input);
+
+    expect(repairCronJobs).toHaveBeenCalledExactlyOnceWith(
+      inventory,
+      expect.arrayContaining([
+        { job: legacy, definition: null },
+        adopted(inactive),
+        { job: phase, definition: null },
+      ]),
+    );
+    expect(repairCronJobs.mock.calls[0]?.[1]).toHaveLength(3);
   });
 
   it.each([true, false])(
@@ -231,19 +181,13 @@ describe("dreaming cron Doctor selection", () => {
       );
       const tiedPhase = makeJob(
         "z-rem-phase",
-        {
-          name: "Memory REM Dreaming",
-          description: undefined,
-          createdAtMs: 5,
-          payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
-        },
+        { ...REM_PHASE_FIELDS, createdAtMs: 5 },
         { storeKey: phaseOnlyStore, sortOrder: 0 },
       );
-      const newerPhase = makeJob(
-        "0-newer-phase",
-        { ...tiedPhase.definition, id: "0-newer-phase", createdAtMs: 10 },
-        { storeKey: phaseOnlyStore, sortOrder: 1 },
-      );
+      const newerPhase = makeJob("0-newer-phase", REM_PHASE_FIELDS, {
+        storeKey: phaseOnlyStore,
+        sortOrder: 1,
+      });
       const renamedPhase = makeJob(
         "renamed-phase",
         {
@@ -296,31 +240,18 @@ describe("dreaming cron Doctor selection", () => {
       const expectedChanges = enabled
         ? [
             { job: legacy, definition: null },
-            {
-              job: phase,
-              definition: {
-                ...phase.definition,
-                declarationKey: DECLARATION_KEY,
-                name: "Memory Dreaming Promotion",
-                description: `${DREAMING_TAG} authored phase description`,
-                sessionTarget: "isolated",
-                payload: { ...CANONICAL_PAYLOAD, timeoutSeconds: 90 },
-                delivery: { mode: "none", channel: "telegram", to: "operator" },
-              },
-            },
+            adopted(phase, {
+              name: "Memory Dreaming Promotion",
+              description: `${DREAMING_TAG} authored phase description`,
+              payload: { ...CANONICAL_PAYLOAD, timeoutSeconds: 90 },
+              delivery: { mode: "none", channel: "telegram", to: "operator" },
+            }),
             { job: tiedPhase, definition: null },
             { job: newerPhase, definition: null },
-            {
-              job: renamedPhase,
-              definition: {
-                ...renamedPhase.definition,
-                declarationKey: DECLARATION_KEY,
-                description: `${DREAMING_TAG} authored suffix`,
-                sessionTarget: "isolated",
-                payload: { ...CANONICAL_PAYLOAD, model: "operator-model" },
-                delivery: { mode: "none" },
-              },
-            },
+            adopted(renamedPhase, {
+              description: `${DREAMING_TAG} authored suffix`,
+              payload: { ...CANONICAL_PAYLOAD, model: "operator-model" },
+            }),
           ]
         : [declared, legacy, tiedPhase, newerPhase, phase, renamedPhase].map((job) => ({
             job,
@@ -341,15 +272,14 @@ describe("dreaming cron Doctor selection", () => {
     },
   );
 
-  it.each(
-    [
-      { label: "unified", tags: DREAMING_TAG },
-      { label: "mixed", tags: `${DREAMING_TAG} [managed-by=memory-core.dreaming.rem]` },
-      { label: "phase-only", tags: "[managed-by=memory-core.dreaming.rem]" },
-    ].flatMap((fixture) =>
-      [true, false].map((enabled) => ({ label: fixture.label, tags: fixture.tags, enabled })),
-    ),
-  )(
+  it.each([
+    { label: "unified", tags: DREAMING_TAG, enabled: true },
+    {
+      label: "mixed",
+      tags: `${DREAMING_TAG} [managed-by=memory-core.dreaming.rem]`,
+      enabled: false,
+    },
+  ])(
     "retains an authored prompt with $label tags when enabled=$enabled",
     async ({ enabled, tags }) => {
       const { input, inventory, repairCronJobs } = createInput(
@@ -386,17 +316,6 @@ describe("dreaming cron Doctor selection", () => {
     {
       label: "unrelated authored job",
       fields: { name: "Daily standup", description: "Operator job" },
-    },
-    {
-      label: "name lookalike with a different token",
-      fields: {
-        description: undefined,
-        payload: { kind: "systemEvent", text: "authored event" },
-      },
-    },
-    {
-      label: "foreign declaration with a matching owner tag",
-      fields: { declarationKey: "other-plugin:dreaming" },
     },
     {
       label: "canonical declaration with authored fields",

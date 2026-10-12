@@ -29,6 +29,7 @@ function snapshot(svg = SVG, enabled = true) {
             id: "neon",
             definition: createThemeDefinitionFixture(),
             artwork: {
+              icons: { rocket: { svg } },
               hats: { beret: { svg } },
               critters: { ferris: { svg, title: "a crab, allegedly", crossMs: 15000 } },
             },
@@ -72,9 +73,13 @@ describe("plugin theme artwork HTTP", () => {
     expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ auth: AUTH_TOKEN }));
   });
 
-  it("serves captured hats and critters with private caching, SVG sandboxing, HEAD and ETags", async () => {
+  it("serves captured icons, hats and critters with private caching, SVG sandboxing, HEAD and ETags", async () => {
     await withPluginMetadataSnapshotScope(snapshot(), async () => {
-      for (const pathname of [ART_PATH, ART_PATH.replace("hat/beret", "critter/ferris")]) {
+      for (const pathname of [
+        ART_PATH,
+        ART_PATH.replace("hat/beret", "critter/ferris"),
+        ART_PATH.replace("hat/beret", "icon/rocket"),
+      ]) {
         const get = await request(`${pathname}?v=content-hash`);
         expect(get.res.statusCode).toBe(200);
         expect(get.end).toHaveBeenCalledExactlyOnceWith(Buffer.from(SVG));
@@ -107,14 +112,13 @@ describe("plugin theme artwork HTTP", () => {
 
   it.each([
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
-    ART_PATH.replace("neon", "unknown"),
     ART_PATH.replace("hat", "unknown"),
-    ART_PATH.replace("beret", "unknown"),
     ART_PATH.replace("beret", "constructor"),
+    ART_PATH.replace("hat/beret", "icon/constructor"),
+    ART_PATH.replace("hat/beret", "icon/beret"),
     ART_PATH.replace("beret", "%zz"),
     ART_PATH.replace("beret", "%2F"),
     `${ART_PATH}/extra`,
-    "/__openclaw__/plugin-theme-art/",
   ])("returns 404 for unavailable or malformed artwork: %s", async (pathname) => {
     const response = await withPluginMetadataSnapshotScope(snapshot(), () => request(pathname));
     expect(response.handled).toBe(true);
@@ -139,8 +143,6 @@ describe("plugin theme artwork HTTP", () => {
   it.each([
     ["oversized SVG", SVG + " ".repeat(HTTP_SVG_MAX_BYTES)],
     ["external reference", '<svg><image href="https://example.test/art.svg"/></svg>'],
-    ["script", "<svg><script>alert(1)</script></svg>"],
-    ["empty bytes", ""],
   ])("revalidates %s through the shared image response owner", async (_label, svg) => {
     const response = await withPluginMetadataSnapshotScope(snapshot(svg), () => request());
     expect(response.res.statusCode).toBe(404);

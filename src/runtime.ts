@@ -1,4 +1,3 @@
-// Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 import { loggingState } from "./logging/state.js";
@@ -12,7 +11,8 @@ export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   /**
-   * Exit the process after restoring terminal state.
+   * Unwind the command after restoring terminal state. Its executable owner
+   * records the exit code after awaited cleanup, then lets Node exit naturally.
    * Pass `resetStream` to route the ANSI reset sequence to a specific
    * stream (e.g. stderr) when structured output on stdout must stay clean.
    */
@@ -117,8 +117,9 @@ export const defaultRuntime: OutputRuntimeEnv = {
       resumeStdinIfPaused: false,
       ...(opts?.resetStream ? { resetStream: opts.resetStream } : {}),
     });
-    process.exit(code);
-    throw new Error("unreachable"); // satisfies tests when mocked
+    // Native process.exit skips finally cleanup and can deadlock V8 compiler
+    // workers waiting for main-thread GC: https://github.com/nodejs/node/issues/64274.
+    throw new ExitError(code);
   },
 };
 

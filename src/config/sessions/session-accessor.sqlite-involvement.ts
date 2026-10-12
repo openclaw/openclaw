@@ -3,40 +3,47 @@ import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { readUserProfileAliases } from "../../state/user-profiles.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { sessionMetadataExpectedEntryMatches } from "./session-accessor.sqlite-owner.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isNewerSessionMention, mergeSessionProfileInvolvement } from "./session-involvement.js";
-import type { SessionProfileInvolvement } from "./types.js";
+import type {
+  SessionInvolvementMutation,
+  SessionSharingWorkerOperations,
+} from "./session-sharing-store.types.js";
 
 /** One logical-node owner for explicit personal choices and committed mentions. */
-export function updateSessionProfileInvolvement(
+export function updatePreparedSessionProfileInvolvement(
   scope: SessionAccessScope,
-  params: {
-    expectedSessionId: string;
-    profileIds: readonly string[];
-    change:
-      | { kind: "visibility"; hidden: boolean }
-      | { kind: "mention"; source: NonNullable<SessionProfileInvolvement["lastMention"]> };
-    assertCurrent?: () => void;
-  },
-): boolean {
+  params: SessionInvolvementMutation & { assertCurrent?: () => void },
+  profiles: readonly { profileId: string; aliases: readonly string[] }[],
+): SessionSharingWorkerOperations["involvement"]["output"] {
   const resolved = resolveSqliteScope(scope);
   return runOpenClawAgentWriteTransaction(
     (database) => {
       params.assertCurrent?.();
       const current = readExactSessionEntryRow(database, resolved.sessionKey)?.entry;
       if (!current || current.sessionId !== params.expectedSessionId || current.incognito) {
-        return false;
+        return { accepted: false, changed: false };
+      }
+      if (
+        params.expectedEntry &&
+        !sessionMetadataExpectedEntryMatches(
+          database,
+          resolved.sessionKey,
+          params.expectedEntry,
+          toDatabaseOptions(resolved),
+        )
+      ) {
+        return { accepted: false, changed: false };
       }
       const involvement = { ...current.profileInvolvement?.profiles };
       let changed = false;
-      for (const profileId of new Set(params.profileIds)) {
-        const aliases = readUserProfileAliases(profileId, { env: scope.env });
+      for (const { profileId, aliases } of profiles) {
         const previous = mergeSessionProfileInvolvement(
           [...aliases].map((alias) => involvement[alias]),
         );
@@ -81,7 +88,7 @@ export function updateSessionProfileInvolvement(
           }),
         );
       }
-      return true;
+      return { accepted: true, changed };
     },
     toDatabaseOptions(resolved),
     { operationLabel: "sessions.involvement" },

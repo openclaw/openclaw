@@ -8,7 +8,8 @@ import {
   parseStrictPositiveInteger,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "@openclaw/retry";
 import { formatErrorMessage } from "../infra/errors.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -70,14 +71,11 @@ function resolveCleanupTimeoutDetails(
 }
 
 function truncateCleanupTimeoutDetails(value: string): string {
-  if (value.length <= CLEANUP_TIMEOUT_DETAILS_MAX_CHARS) {
-    return value;
-  }
-  const prefixLength = Math.max(
-    0,
-    CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
-  );
-  return `${truncateUtf16Safe(value, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
+  return truncateWithMarker(value, CLEANUP_TIMEOUT_DETAILS_MAX_CHARS, {
+    marker: CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX,
+    reserve: CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
+    trimEnd: false,
+  });
 }
 
 function resolveAgentCleanupStepTimeoutMs(params: {
@@ -160,12 +158,7 @@ type AgentCleanupStepOutcome = "done" | "timeout" | { error: unknown };
 async function settleAgentCleanupStep(
   params: AgentCleanupStepParams,
 ): Promise<AgentCleanupStepOutcome> {
-  const timeoutMs = resolveAgentCleanupStepTimeoutMs({
-    step: params.step,
-    timeoutMs: params.timeoutMs,
-    env: params.env,
-  });
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = resolveAgentCleanupStepTimeoutMs(params);
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
   const observedCleanupPromise = cleanupPromise
@@ -179,17 +172,15 @@ async function settleAgentCleanupStep(
       return { error };
     });
   void trackAsyncWork(() => observedCleanupPromise).catch(() => {});
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => {
+  const result = await raceWithTimeout(
+    observedCleanupPromise,
+    timeoutMs,
+    () => {
       timedOut = true;
-      resolve("timeout");
-    }, timeoutMs);
-    timeoutHandle.unref?.();
-  });
-  const result = await Promise.race([observedCleanupPromise, timeoutPromise]);
-  if (timeoutHandle) {
-    clearTimeout(timeoutHandle);
-  }
+      return "timeout" as const;
+    },
+    { ref: false },
+  );
   if (result === "timeout") {
     recordAgentCleanupFailure();
     const details = resolveCleanupTimeoutDetails(params.getTimeoutDetails);

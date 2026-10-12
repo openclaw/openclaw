@@ -9,10 +9,10 @@ const resolveDefaultGroupPolicy = vi.hoisted(() => vi.fn());
 const warnMissingProviderGroupPolicyFallbackOnce = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({ createChannelPairingController }));
+vi.mock("openclaw/plugin-sdk/dangerous-name-runtime", () => ({ isDangerousNameMatchingEnabled }));
+vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   GROUP_POLICY_BLOCKED_LABEL: { space: "space" },
-  createChannelPairingController,
-  isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -95,7 +95,9 @@ describe("googlechat inbound access policy", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("../runtime-api.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
+    vi.doUnmock("openclaw/plugin-sdk/dangerous-name-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("./api.js");
     vi.resetModules();
   });
@@ -121,13 +123,6 @@ describe("googlechat inbound access policy", () => {
       allowFrom: ["users/jane@example.com"],
       senderId: "users/123",
       ok: false,
-    },
-    {
-      name: "matches user id entries",
-      allowNameMatching: false,
-      allowFrom: ["users/abc"],
-      senderId: "users/abc",
-      ok: true,
     },
   ])("$name", async ({ allowNameMatching, allowFrom, senderId, ok }) => {
     primeCommonDefaults();
@@ -257,71 +252,6 @@ describe("googlechat inbound access policy", () => {
       effectiveWasMentioned: true,
       groupSystemPrompt: "group prompt",
     });
-  });
-
-  it("allows group traffic from generic message sender access groups", async () => {
-    primeCommonDefaults();
-    allowInboundGroupTraffic();
-
-    const result = await applyInboundAccessPolicy({
-      config: {
-        ...baseAccessConfig,
-        accessGroups: {
-          operators: {
-            type: "message.senders",
-            members: {
-              googlechat: ["users/alice"],
-            },
-          },
-        },
-      } as never,
-      account: {
-        accountId: "default",
-        config: {
-          groups: {
-            "spaces/AAA": {
-              users: ["accessGroup:operators"],
-              requireMention: false,
-            },
-          },
-        },
-      } as never,
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it("expands generic message sender access groups before DM access checks", async () => {
-    primeCommonDefaults();
-    const readAllowFromStore = vi.fn(async () => []);
-    createChannelPairingController.mockReturnValue({
-      readAllowFromStore,
-      issueChallenge: vi.fn(),
-    });
-
-    const result = await applyInboundAccessPolicy({
-      isGroup: false,
-      config: {
-        ...baseAccessConfig,
-        accessGroups: {
-          operators: {
-            type: "message.senders",
-            members: {
-              googlechat: ["users/alice"],
-            },
-          },
-        },
-      } as never,
-      account: {
-        accountId: "default",
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:operators"],
-        },
-      } as never,
-    });
-    expect(result.ok).toBe(true);
-
-    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {

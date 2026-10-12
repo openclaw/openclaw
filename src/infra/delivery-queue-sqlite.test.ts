@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../test/helpers/sqlite-parent-observer.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -10,20 +14,24 @@ import {
 import { promoteDeliveryQueueEntryPlatformSendInDatabase } from "./delivery-queue-sqlite-claim.kernel.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
+  captureDeliveryQueueStateContext,
   countFailedDeliveryQueueEntries,
   countPendingDeliveryQueueEntries,
-  deleteDeliveryQueueEntry,
-  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
+  deleteDeliveryQueueEntryInDatabase,
   getDeliveryQueueEntryOwnersInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   claimDeliveryQueueEntryForTest,
   renewDeliveryQueueEntryLeaseForTest,
@@ -80,13 +88,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       expect(loadDeliveryQueueEntry(QUEUE, "bad-1", stateDir)).toBeNull();
     });
 
-    it("returns the entry for valid JSON", () => {
-      enqueueValid("good-1");
-      const result = loadDeliveryQueueEntry(QUEUE, "good-1", stateDir);
-      expect(result).not.toBeNull();
-      expect(result!.id).toBe("good-1");
-    });
-
     it("returns null for a nonexistent entry", () => {
       expect(loadDeliveryQueueEntry(QUEUE, "nonexistent", stateDir)).toBeNull();
     });
@@ -101,24 +102,9 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
-
-    it("returns empty array when all rows are corrupt", () => {
-      insertCorruptRow("bad-1", "not json");
-      insertCorruptRow("bad-2", "{also broken");
-
-      expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toEqual([]);
-    });
-
-    it("returns all entries when all rows are valid", () => {
-      enqueueValid("v1");
-      enqueueValid("v2");
-      enqueueValid("v3");
-
-      expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
-    });
   });
 
-  it("counts pending rows across only the selected namespaces", () => {
+  it("counts current pending namespaces in its captured worker without caller SQLite", async () => {
     const database = openTestDatabase();
     enqueueValid("pending");
     seedDeliveryQueueEntry({
@@ -133,8 +119,30 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     });
     completeDeliveryQueueEntryInDatabase(database, QUEUE, "pending");
 
-    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
-    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+    const context = captureDeliveryQueueStateContext(stateDir);
+    const observer = observeParentSqlite();
+    try {
+      expect(
+        await countPendingDeliveryQueueEntries([QUEUE, "other-q"], "ignored-root", context),
+      ).toBe(1);
+      expect(await countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+
+      const foreign = openNodeSqliteDatabase(database.path);
+      try {
+        foreign
+          .prepare("UPDATE delivery_queue_entries SET status = 'pending' WHERE id = ?")
+          .run("pending");
+      } finally {
+        foreign.close();
+      }
+      expect(observer.counts.run).toBeGreaterThan(0);
+      observer.reset();
+      expect(await countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir, context)).toBe(2);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
   });
 
   it("reads ownership without materializing unrelated queue payloads", () => {
@@ -178,17 +186,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
   });
 
   describe("valid entry round-trips", () => {
-    it("upsert then load is identity", () => {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "rt-1", enqueuedAt: 1000, retryCount: 0 },
-        stateDir,
-      });
-
-      const loaded = loadDeliveryQueueEntry(QUEUE, "rt-1", stateDir);
-      expect(loaded).toMatchObject({ id: "rt-1", enqueuedAt: 1000, retryCount: 0 });
-    });
-
     it.each([
       {
         name: "outbound delivery",
@@ -360,7 +357,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         stateDir,
       });
 
-      deleteDeliveryQueueEntry(QUEUE, "rt-3", stateDir);
+      deleteDeliveryQueueEntryInDatabase(openTestDatabase(), QUEUE, "rt-3");
       expect(loadDeliveryQueueEntry(QUEUE, "rt-3", stateDir)).toBeNull();
     });
 

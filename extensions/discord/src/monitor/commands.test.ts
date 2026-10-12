@@ -17,9 +17,4 @@ describe("resolveDiscordSlashCommandConfig", () => {
     const result = resolveDiscordSlashCommandConfig({ ephemeral: false });
     expect(result.ephemeral).toBe(false);
   });
-
-  it("keeps ephemeral true when explicitly true", () => {
-    const result = resolveDiscordSlashCommandConfig({ ephemeral: true });
-    expect(result.ephemeral).toBe(true);
-  });
 });

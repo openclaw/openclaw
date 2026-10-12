@@ -1,3 +1,4 @@
+import type { NodeInvokeProgressParams as ProtocolNodeInvokeProgressParams } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -8,6 +9,7 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
@@ -17,6 +19,7 @@ export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
+  invocationDeliveryContext?: DeliveryContext;
   timeoutMs?: number | null;
 };
 
@@ -42,22 +45,14 @@ export type PendingInvoke = {
   isCompletionAuthorized?: () => boolean;
 };
 
-export type NodeInvokeProgressParams = {
-  invokeId: string;
-  nodeId: string;
+export type NodeInvokeProgressParams = ProtocolNodeInvokeProgressParams & {
   connId: string | undefined;
-  seq: number;
-  chunk: string;
 };
 
-export type NodeInvokeResultParams = {
+export type NodeInvokeResultParams = NodeInvokeResult & {
   id: string;
   nodeId: string;
   connId: string | undefined;
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
 };
 
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
@@ -302,13 +297,20 @@ export class NodeInvokeStreamController {
     ) {
       return undefined;
     }
-    // Recheck at settlement as handler loading may await after router admission.
-    // Some lifecycle owners assert by throwing; either form must fail closed.
+    // Recheck retained callbacks and completion frames without leaving a closed
+    // owner's invoke waiting for its deadline or delivering the node's payload.
     try {
-      return pending.isCompletionAuthorized?.() === false ? undefined : pending;
+      if (pending.isCompletionAuthorized?.() !== false) {
+        return pending;
+      }
     } catch {
-      return undefined;
+      // Lifecycle owners may assert by throwing; unreadable authority also fails closed.
     }
+    this.cancelPending(id, pending, {
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      message: "node invoke authority closed before settlement",
+    });
+    return undefined;
   }
 
   clearTimers(pending: PendingInvoke): void {
@@ -335,13 +337,9 @@ export class NodeInvokeStreamController {
       pending.idleTimer?.refresh() ??
       setTimeout(() => {
         runWithDiagnosticTraceContext(pending.idleTraceContext, () => {
-          if (!this.takePending(requestId, pending)) {
-            return;
-          }
-          this.options.sendCancel(requestId, pending);
-          pending.resolve({
-            ok: false,
-            error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+          this.settleTimeout(requestId, pending, {
+            code: "IDLE_TIMEOUT",
+            message: "node invoke produced no progress",
           });
         });
       }, pending.idleTimeoutMs);
@@ -355,15 +353,16 @@ export class NodeInvokeStreamController {
     return true;
   }
 
-  private settleTimeout(requestId: string, pending: PendingInvoke): void {
+  private settleTimeout(
+    requestId: string,
+    pending: PendingInvoke,
+    error = { code: "TIMEOUT", message: "node invoke timed out" },
+  ): void {
     if (!this.takePending(requestId, pending)) {
       return;
     }
     this.options.sendCancel(requestId, pending);
-    pending.resolve({
-      ok: false,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    });
+    pending.resolve({ ok: false, error });
   }
 
   private settleIfPolicyChanged(requestId: string, pending: PendingInvoke): boolean {

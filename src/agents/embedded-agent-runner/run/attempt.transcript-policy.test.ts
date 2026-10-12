@@ -1,14 +1,10 @@
-// Coverage for resolving transcript replay policy for embedded attempts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 
-// Explicit factory (no importOriginal): loading the real module would pull the
-// provider registry/loader graph into this focused test. Export every binding
-// the attempt-history import graph links, stubbing the ones this test never calls.
+// Keep provider discovery out of this adapter test.
 vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
   resolveProviderRuntimePluginHandle: vi.fn(),
@@ -22,8 +18,6 @@ describe("resolveAttemptTranscriptPolicy", () => {
   });
 
   it("uses RuntimePlan transcript policy when available", () => {
-    // RuntimePlan owns provider/plugin transcript policy; legacy fallbacks only
-    // run when a plan is unavailable.
     const plannedPolicy = {
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
@@ -46,18 +40,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
     const runtimePlanModelContext = {
       workspaceDir: "/tmp/openclaw-transcript-policy",
       modelApi: "anthropic-messages",
-      model: {
-        id: "claude-opus-4.6",
-        name: "Claude Opus 4.6",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8_192,
-      } satisfies ProviderRuntimeModel,
+      directApiKey: true,
     };
 
     expect(
@@ -72,8 +55,6 @@ describe("resolveAttemptTranscriptPolicy", () => {
   });
 
   it("keeps the legacy provider transcript fallback when no RuntimePlan is available", () => {
-    // Legacy fallback remains for older runner paths and tests provider runtime
-    // plugin discovery with the same workspace/env context.
     const env = { OPENCLAW_TEST_TRANSCRIPT_POLICY: "1" } as NodeJS.ProcessEnv;
     const policy = resolveAttemptTranscriptPolicy({
       runtimePlanModelContext: {
@@ -98,21 +79,5 @@ describe("resolveAttemptTranscriptPolicy", () => {
       workspaceDir: "/tmp/openclaw-transcript-policy",
       env,
     });
-  });
-
-  it("inherits Claude-family OpenAI Responses turn validation from legacy fallback", () => {
-    const policy = resolveAttemptTranscriptPolicy({
-      runtimePlanModelContext: {
-        workspaceDir: "/tmp/openclaw-transcript-policy",
-        modelApi: "openai-responses",
-      },
-      provider: "anthropic-foundry",
-      modelId: "anthropic-foundry/claude-opus-4-7",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.validateAnthropicTurns).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { abandonTaskSuggestionAcceptance } from "../task-suggestion-registry.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
@@ -36,7 +37,7 @@ describe("task suggestion owner recovery", () => {
   it.each(["worktree", "local", "cloud", "session"] as const)(
     "keeps %s suggestions retryable when their owner is temporarily unavailable",
     async (mode) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ root }) => {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
           { sessionId: "source-session", updatedAt: 1 },
@@ -51,6 +52,8 @@ describe("task suggestion owner recovery", () => {
           taskId,
           mode,
           ...(mode === "cloud" ? { cloudProfileId: "primary" } : {}),
+          // The source snapshot need not include Git metadata; own the worktree prerequisite.
+          ...(mode === "worktree" ? { cwd: await initializeRepository(root, "project") } : {}),
         };
         const createSession = vi
           .spyOn(sessionCreateHandlers, "sessions.create")
@@ -74,7 +77,7 @@ describe("task suggestion owner recovery", () => {
 
           config.agents = { entries: { main: {} } };
           const accepted = await call("taskSuggestions.accept", acceptParams, vi.fn(), { context });
-          expect(accepted.response?.[0]).toBe(true);
+          expect(accepted.response?.[0], JSON.stringify(accepted.response)).toBe(true);
           config.agents = { entries: { other: {} } };
           const replay = await call("taskSuggestions.accept", acceptParams, vi.fn(), { context });
           expect(replay.response).toEqual(accepted.response);

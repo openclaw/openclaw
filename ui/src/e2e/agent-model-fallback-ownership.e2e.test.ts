@@ -61,12 +61,14 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             workspace: "/tmp/agents",
             model: { primary: primaryModel, fallbacks: [inheritedFallback] },
           },
           entries: {
-            main: { default: true },
+            main: {},
             writer: model === undefined ? {} : { model },
           },
         },

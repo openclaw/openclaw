@@ -27,7 +27,7 @@ export async function expectSetupErrorStatus(
   expectStatusFields(status, fields);
 }
 
-export const requireRecord = createRequireRecord("object", "label-not-object");
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function requestCalls(
   request: CodexComputerUseRequest,
@@ -212,7 +212,7 @@ export function createComputerUseRequest(params: {
         threadId: `computer-use-probe-thread-${threadStartCalls}`,
         server: mcpServerName,
         tool,
-        arguments: tool === "js" ? { code: "await cua.getState();" } : {},
+        arguments: tool === "js" ? { code: "await cua.listApps();" } : {},
       });
       if (liveTestFailures > 0) {
         liveTestFailures -= 1;
@@ -232,7 +232,7 @@ export function createComputerUseRequest(params: {
   }) as CodexComputerUseRequest;
 }
 
-export function marketplaceEntry(marketplaceName: string, installed: boolean) {
+function marketplaceEntry(marketplaceName: string, installed: boolean) {
   return {
     name: marketplaceName,
     path: `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`,

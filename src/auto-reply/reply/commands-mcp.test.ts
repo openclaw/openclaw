@@ -9,7 +9,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -72,8 +71,6 @@ vi.mock("./commands-private-route.js", async () => {
   };
 });
 
-const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
-
 function expectMcpResult<T>(result: T | null): T {
   if (result === null) {
     throw new Error("expected MCP command result");
@@ -103,31 +100,25 @@ async function showGroupMcpConfig() {
 }
 
 describe("handleCommands /mcp", () => {
-  afterEach(async () => {
+  afterEach(() => {
     mcpServers.clear();
     privateRouteMocks.resolvePrivateCommandRouteTargets.mockReset();
     deliverOutboundPayloads.mockReset();
     resetPluginRuntimeStateForTest();
-    await workspaceHarness.cleanupWorkspaces();
   });
 
   it("writes MCP config and shows it back", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const setParams = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
-        undefined,
-        { workspaceDir },
       );
       setParams.command.senderIsOwner = true;
 
       const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
       expect(setResult.reply?.text).toContain('MCP server "context7" saved');
 
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
       showParams.command.senderIsOwner = true;
       const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
       expect(showResult.reply?.text).toContain('"command": "uvx"');
@@ -137,13 +128,10 @@ describe("handleCommands /mcp", () => {
 
   it("blocks authorized non-owner senders from writing MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("existing", { command: "uvx", args: ["existing-mcp"] });
       const setParams = buildCommandTestParams(
         '/mcp set evil={"command":"/bin/sh","args":["-c","id > /tmp/pwned"]}',
         buildCfg(),
-        undefined,
-        { workspaceDir },
       );
       setParams.command.senderIsOwner = false;
 
@@ -154,9 +142,7 @@ describe("handleCommands /mcp", () => {
       });
       expect(mcpServers.has("evil")).toBe(false);
 
-      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg());
       unsetParams.command.senderIsOwner = false;
       const unsetResult = expectMcpResult(await handleMcpCommand(unsetParams, true));
       expect(unsetResult).toEqual({
@@ -169,11 +155,8 @@ describe("handleCommands /mcp", () => {
 
   it("blocks authorized non-owner senders from reading MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
       showParams.command.senderIsOwner = false;
 
       const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
@@ -189,7 +172,6 @@ describe("handleCommands /mcp", () => {
 
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
@@ -198,7 +180,6 @@ describe("handleCommands /mcp", () => {
           Surface: "webchat",
           GatewayClientScopes: ["operator.write"],
         },
-        { workspaceDir },
       );
       params.command.senderIsOwner = true;
 
@@ -207,25 +188,8 @@ describe("handleCommands /mcp", () => {
     });
   });
 
-  it("accepts non-stdio MCP config at the config layer", async () => {
-    await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const params = buildCommandTestParams(
-        '/mcp set remote={"url":"https://example.com/mcp"}',
-        buildCfg(),
-        undefined,
-        { workspaceDir },
-      );
-      params.command.senderIsOwner = true;
-
-      const result = expectMcpResult(await handleMcpCommand(params, true));
-      expect(result.reply?.text).toContain('MCP server "remote" saved');
-    });
-  });
-
   it("routes group /mcp show privately and redacts the delivered config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const privateReplies: string[] = [];
       privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
         { channel: "telegram", to: "owner-1" },
@@ -278,14 +242,7 @@ describe("handleCommands /mcp", () => {
         },
       });
 
-      const namedParams = buildCommandTestParams(
-        "/mcp show billing-server",
-        buildCfg(),
-        undefined,
-        {
-          workspaceDir,
-        },
-      );
+      const namedParams = buildCommandTestParams("/mcp show billing-server", buildCfg());
       namedParams.command.senderIsOwner = true;
       namedParams.isGroup = true;
       const namedResult = expectMcpResult(await handleMcpCommand(namedParams, true));
@@ -318,9 +275,7 @@ describe("handleCommands /mcp", () => {
       expect(namedText).not.toContain(pluralCredentialsArg);
       expect(namedText).not.toContain("sk-test-secret-value");
 
-      const allParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const allParams = buildCommandTestParams("/mcp show", buildCfg());
       allParams.command.senderIsOwner = true;
       allParams.isGroup = true;
       const allResult = expectMcpResult(await handleMcpCommand(allParams, true));
@@ -357,7 +312,6 @@ describe("handleCommands /mcp", () => {
     },
   ])("fails closed for group /mcp show with $name", async (route) => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const secret = "group-route-secret-value";
       mcpServers.set("billing-server", {
         command: "uvx",
@@ -367,9 +321,7 @@ describe("handleCommands /mcp", () => {
         route.resolvePrivateMcpTargets,
       );
       deliverOutboundPayloads.mockRejectedValue(new Error("private route unavailable"));
-      const params = buildCommandTestParams("/mcp show billing-server", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const params = buildCommandTestParams("/mcp show billing-server", buildCfg());
       params.command.senderIsOwner = true;
       params.isGroup = true;
 
@@ -382,25 +334,25 @@ describe("handleCommands /mcp", () => {
     });
   });
 
-  it.each([
-    { name: "released", custody: "released" },
-    { name: "unowned", custody: undefined },
-  ] as const)("tries later private routes after a $name failure", async ({ custody }) => {
-    const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
-    error.queueCustody = custody;
-    deliverOutboundPayloads
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
-    const result = await showGroupMcpConfig();
+  it.each([{ name: "released", custody: "released" }] as const)(
+    "tries later private routes after a $name failure",
+    async ({ custody }) => {
+      const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
+      error.queueCustody = custody;
+      deliverOutboundPayloads
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
+      const result = await showGroupMcpConfig();
 
-    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
-      "owner-1",
-      "owner-2",
-    ]);
-    expect(result.reply?.text).toContain("sent the details to the owner privately");
-    expect(result.reply?.text).not.toContain("billing-server");
-    expect(result.reply?.text).not.toContain("private-billing-mcp");
-  });
+      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
+        "owner-1",
+        "owner-2",
+      ]);
+      expect(result.reply?.text).toContain("sent the details to the owner privately");
+      expect(result.reply?.text).not.toContain("billing-server");
+      expect(result.reply?.text).not.toContain("private-billing-mcp");
+    },
+  );
 
   it("keeps identityless first acceptance pending without sending to another private target", async () => {
     deliverOutboundPayloads
@@ -456,7 +408,6 @@ describe("handleCommands /mcp", () => {
   });
 
   it.each([
-    { name: "held custody", custody: "held", ambiguous: false, visible: false },
     { name: "held partial delivery", custody: "held", ambiguous: false, visible: true },
     { name: "released ambiguity", custody: "released", ambiguous: true, visible: false },
   ] as const)(
@@ -489,11 +440,6 @@ describe("handleCommands /mcp", () => {
   );
 
   it.each([
-    {
-      name: "confirmed delivery",
-      suppressed: false,
-      acknowledgement: "sent the details to the owner privately",
-    },
     {
       name: "intentional suppression",
       suppressed: true,

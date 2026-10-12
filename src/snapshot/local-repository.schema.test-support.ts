@@ -114,7 +114,7 @@ export function seedStateLease(databasePath: string): void {
   });
 }
 
-export function disableDefensiveModeForSchemaCorruption(database: object): void {
+function disableDefensiveModeForSchemaCorruption(database: object): void {
   (
     database as {
       enableDefensive?: (active: boolean) => void;

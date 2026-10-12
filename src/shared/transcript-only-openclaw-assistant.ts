@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
 // visible, so use the narrower delivery-mirror predicate when visibility matters.
@@ -5,6 +7,8 @@ export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
 export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
+/** Marker kind of a skill review notice; `skill-workshop-change-notice.ts` owns its shape. */
+export const SKILL_WORKSHOP_CHANGE_NOTICE_KIND = "skill-workshop-change" as const;
 const OPENCLAW_GATEWAY_INJECTED_MODEL = "gateway-injected" as const;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
@@ -16,13 +20,11 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "channel-final-suppressed",
   "message-tool-source-reply",
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
+  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const kind = (value as { kind?: unknown }).kind;
+  const kind = asOptionalRecord(value)?.kind;
   return typeof kind === "string" && OPENCLAW_DELIVERY_MIRROR_KINDS.has(kind);
 }
 
@@ -43,16 +45,8 @@ export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model:
  * rows whose provider/model provenance was stripped (#99470).
  */
 export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as {
-    role?: unknown;
-    provider?: unknown;
-    model?: unknown;
-    openclawDeliveryMirror?: unknown;
-  };
-  if (entry.role !== "assistant") {
+  const entry = asOptionalRecord(message);
+  if (entry?.role !== "assistant") {
     return false;
   }
   if (isTranscriptOnlyOpenClawAssistantModel(entry.provider, entry.model)) {
@@ -62,20 +56,14 @@ export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): bool
 }
 
 export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
-  return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
+  const entry = asOptionalRecord(message);
+  return entry?.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
 }
 
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as { role?: unknown; provider?: unknown; model?: unknown };
+  const entry = asOptionalRecord(message);
   return (
-    entry.role === "assistant" &&
+    entry?.role === "assistant" &&
     entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
     entry.model === OPENCLAW_DELIVERY_MIRROR_MODEL
   );

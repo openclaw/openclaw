@@ -1,19 +1,24 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
-import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  buildPendingGeneratedMediaSessionKeySet,
+  hasPendingGeneratedMediaTaskForSessionKey,
+} from "../agents/media-generation-activity.js";
+import { assertSubagentReadContext } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
-import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
 import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
@@ -68,10 +73,15 @@ export async function removeCronJobBaseSession(params: {
     agentId: params.agentId,
     sessionKey: `cron:${params.jobId}`,
   });
-  const existing = loadExactSessionEntryReadOnly({
+  const context = captureOpenClawStateWorkerContext();
+  const read = await readSessionEntriesFromStoreInWorker({
+    agentId: params.agentId,
     storePath: params.sessionStorePath,
-    sessionKey,
-  })?.entry;
+    sessionKeys: [sessionKey],
+    env: context.environment,
+  });
+  assertSubagentReadContext(context);
+  const existing = read.entries.find((row) => row.sessionKey === sessionKey)?.entry;
   if (!existing) {
     return false;
   }
@@ -86,6 +96,8 @@ export async function removeCronJobBaseSession(params: {
   }
   const result = await applySessionEntryLifecycleMutation({
     agentId: params.agentId,
+    env: context.environment,
+    commitGuard: () => assertSubagentReadContext(context),
     storePath: params.sessionStorePath,
     removals: [{ sessionKey, archiveRemovedTranscript: true, expectedEntry: existing }],
   });
@@ -132,6 +144,8 @@ export async function sweepCronRunSessions(params: {
   let pruned = 0;
   let transcriptCleanupError: unknown;
   try {
+    const context = captureOpenClawStateWorkerContext();
+    const assertCurrent = () => assertSubagentReadContext(context);
     if (params.isAgentAvailable?.(params.agentId) === false) {
       params.log.debug({ agentId: params.agentId }, "cron-reaper: skipped unavailable agent");
       return { swept: false, pruned: 0 };
@@ -141,16 +155,27 @@ export async function sweepCronRunSessions(params: {
     const removals: SessionEntryLifecycleRemoval[] = [];
     // Discovery validates the physical store in its reader worker and returns only full
     // expired candidates. Live continuation/admission checks remain with this owner.
-    for (const { sessionKey, entry } of await readExpiredCronRunEntriesInWorker({
+    const expiredEntries = await readExpiredCronRunEntriesInWorker({
       agentId: params.agentId,
       storePath,
+      env: context.environment,
       updatedBefore: cutoff,
-    })) {
+    });
+    assertCurrent();
+    const continuationKeys = expiredEntries.flatMap(({ sessionKey, entry }) =>
+      entry.cronRunContinuation ? [sessionKey] : [],
+    );
+    const descendants =
+      continuationKeys.length > 0
+        ? await prepareCronDescendantDeletion(continuationKeys)
+        : undefined;
+    assertCurrent();
+    for (const { sessionKey, entry } of expiredEntries) {
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
-        // Fresh rows and stores without continuations never touch the task registry.
+        // Fresh rows and stores without continuations never read media operation state.
         pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
-        if (pendingMediaSessionKeys.has(sessionKey) || hasDescendantRunAwaitingSettle(sessionKey)) {
+        if (pendingMediaSessionKeys.has(sessionKey) || descendants?.hasUnsettled(sessionKey)) {
           continue;
         }
       }
@@ -178,14 +203,18 @@ export async function sweepCronRunSessions(params: {
       const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         agentId: params.agentId,
+        env: context.environment,
         storePath,
         removals,
-        beforeCommitInTransaction: () => {
+        descendantRunBasis: descendants?.basis,
+        commitGuard: () => {
+          assertCurrent();
           // Descendants can acquire the continuation while deletion preparation awaits.
           for (const removal of removals) {
             if (
               removal.expectedEntry?.cronRunContinuation &&
-              hasDescendantRunAwaitingSettle(removal.sessionKey)
+              (descendants?.hasUnsettled(removal.sessionKey) ||
+                hasPendingGeneratedMediaTaskForSessionKey(removal.sessionKey))
             ) {
               throw new Error(
                 `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,

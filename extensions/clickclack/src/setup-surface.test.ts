@@ -36,15 +36,15 @@ import { clickClackSetupPlugin } from "./channel.setup.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
-const configuredAccount = {
-  channels: {
-    clickclack: {
-      baseUrl: "https://clickclack.example",
-      token: "ccb_test",
-      workspace: "default",
-    },
-  },
-} satisfies CoreConfig;
+function channelConfig(clickclack: NonNullable<NonNullable<CoreConfig["channels"]>["clickclack"]>) {
+  return { channels: { clickclack } };
+}
+
+const configuredAccount = channelConfig({
+  baseUrl: "https://clickclack.example",
+  token: "ccb_test",
+  workspace: "default",
+});
 
 function tokenCredential() {
   const credential = clickClackSetupWizard.credentials[0];
@@ -91,14 +91,7 @@ describe("ClickClack setup wizard", () => {
     vi.stubEnv("CLICKCLACK_BOT_TOKEN", "ccb_env");
     expect(
       credential.inspect({
-        cfg: {
-          channels: {
-            clickclack: {
-              baseUrl: "https://clickclack.example",
-              workspace: "default",
-            },
-          },
-        } as CoreConfig,
+        cfg: channelConfig({ baseUrl: "https://clickclack.example", workspace: "default" }),
         accountId: "default",
       }),
     ).toMatchObject({
@@ -113,15 +106,11 @@ describe("ClickClack setup wizard", () => {
       fs.writeFileSync(tokenFile, "ccb_file\n", "utf8");
       expect(
         credential.inspect({
-          cfg: {
-            channels: {
-              clickclack: {
-                baseUrl: "https://clickclack.example",
-                tokenFile,
-                workspace: "default",
-              },
-            },
-          } as CoreConfig,
+          cfg: channelConfig({
+            baseUrl: "https://clickclack.example",
+            tokenFile,
+            workspace: "default",
+          }),
           accountId: "default",
         }),
       ).toMatchObject({
@@ -131,15 +120,11 @@ describe("ClickClack setup wizard", () => {
       });
     });
 
-    const secretRefAccount = {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          token: { source: "file", provider: "vault", id: "/clickclack/token" },
-          workspace: "default",
-        },
-      },
-    } satisfies CoreConfig;
+    const secretRefAccount = channelConfig({
+      baseUrl: "https://clickclack.example",
+      token: { source: "file", provider: "vault", id: "/clickclack/token" },
+      workspace: "default",
+    });
     expect(await clickClackSetupWizard.status.resolveConfigured({ cfg: secretRefAccount })).toBe(
       true,
     );
@@ -165,16 +150,12 @@ describe("ClickClack setup wizard", () => {
   it("switches the default account to env auth before URL and workspace prompts", async () => {
     const credential = tokenCredential();
     const next = await credential.applyUseEnv?.({
-      cfg: {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            token: "ccb_stale",
-            tokenFile: "/run/secrets/stale",
-            workspace: "default",
-          },
-        },
-      } as CoreConfig,
+      cfg: channelConfig({
+        baseUrl: "https://clickclack.example",
+        token: "ccb_stale",
+        tokenFile: "/run/secrets/stale",
+        workspace: "default",
+      }),
       accountId: "default",
     });
 
@@ -229,15 +210,11 @@ describe("ClickClack setup wizard", () => {
   it("uses the resolved setup credential for live validation", async () => {
     await runSetupWizardFinalize({
       finalize: clickClackSetupWizard.finalize,
-      cfg: {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            token: { source: "file", provider: "vault", id: "/clickclack/token" },
-            workspace: "default",
-          },
-        },
-      } satisfies CoreConfig,
+      cfg: channelConfig({
+        baseUrl: "https://clickclack.example",
+        token: { source: "file", provider: "vault", id: "/clickclack/token" },
+        workspace: "default",
+      }),
       credentialValues: { token: "ccb_resolved" },
     });
 
@@ -272,14 +249,7 @@ describe("ClickClack setup wizard", () => {
     await expect(
       runSetupWizardFinalize({
         finalize: clickClackSetupWizard.finalize,
-        cfg: {
-          channels: {
-            clickclack: {
-              ...configuredAccount.channels.clickclack,
-              workspace: "wsp_missing",
-            },
-          },
-        },
+        cfg: channelConfig({ ...configuredAccount.channels.clickclack, workspace: "wsp_missing" }),
         prompter: createTestWizardPrompter({ note }),
       }),
     ).resolves.toBeUndefined();

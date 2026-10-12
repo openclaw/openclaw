@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -29,6 +30,44 @@ describe("before_agent_reply runner boundary", () => {
     hookRunner.runBeforeAgentReply.mockReset().mockResolvedValue(undefined);
   });
 
+  it("keeps authority through observer finalization and rejects revoked effects", async () => {
+    let current = true;
+    let finalAuthority: (() => void) | undefined;
+    const effect = vi.fn();
+    hookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
+    await expect(
+      withBeforeAgentReplyObserver(
+        {
+          beforeDispatch: async () => undefined,
+          afterDispatch: async (result) => {
+            finalAuthority = captureGuardedFetchRequestAuthority();
+            expect(finalAuthority).toBeTypeOf("function");
+            finalAuthority?.();
+            current = false;
+            await Promise.resolve();
+            finalAuthority?.();
+            effect();
+            return result;
+          },
+        },
+        () =>
+          runBeforeAgentReplyForTurn({
+            runId: "finalization-authority",
+            trigger: "cron",
+            event: { cleanedBody: "hello" },
+            context: { trigger: "cron" },
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("root reassigned");
+              }
+            },
+          }),
+      ),
+    ).rejects.toThrow("root reassigned");
+    expect(effect).not.toHaveBeenCalled();
+    expect(finalAuthority).toThrow("no longer active");
+  });
+
   it("preserves the complete reply payload", () => {
     const reply = {
       text: "claimed",
@@ -40,10 +79,9 @@ describe("before_agent_reply runner boundary", () => {
     expect(buildHandledBeforeAgentReplyPayloads(reply)).toEqual([reply]);
   });
 
-  it.each([
-    { runId: "missing", context: { runId: "missing" } },
-    { runId: "mismatch", context: { runId: "mismatch", trigger: "heartbeat" } },
-  ])("uses the validated turn trigger when context is $runId", async ({ runId, context }) => {
+  it("uses the validated turn trigger when context disagrees", async () => {
+    const runId = "mismatch";
+    const context = { runId, trigger: "heartbeat" };
     await runBeforeAgentReplyForTurn({
       runId,
       trigger: "user",
@@ -59,22 +97,20 @@ describe("before_agent_reply runner boundary", () => {
     );
   });
 
-  it.each(["manual", "memory", "overflow"] as const)(
-    "does not dispatch for the internal %s trigger",
-    async (trigger) => {
-      await expect(
-        runBeforeAgentReplyForTurn({
-          runId: trigger,
-          trigger,
-          event: { cleanedBody: trigger },
-          context: { runId: trigger, trigger },
-        }),
-      ).resolves.toBeUndefined();
+  it("does not dispatch for internal triggers", async () => {
+    const trigger = "manual";
+    await expect(
+      runBeforeAgentReplyForTurn({
+        runId: trigger,
+        trigger,
+        event: { cleanedBody: trigger },
+        context: { runId: trigger, trigger },
+      }),
+    ).resolves.toBeUndefined();
 
-      expect(hookRunner.hasHooks).not.toHaveBeenCalled();
-      expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
-    },
-  );
+    expect(hookRunner.hasHooks).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+  });
 
   it("keeps a nested run from checkpointing its parent admission", async () => {
     const beforeDispatch = vi.fn(async () => undefined);

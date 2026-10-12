@@ -3,13 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   SessionsCreateResultSchema,
   WorktreesBranchesResultSchema,
+  WorktreesGcResultSchema,
   WorktreesRemoveResultSchema,
   validateSessionsCreateParams,
   validateFsListDirParams,
   validateWorktreesBranchesParams,
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
+  validateWorktreesRecoverRemovalParams,
   validateWorktreesRemoveParams,
+  validateWorktreesRestoreParams,
+  validateWorktreesRetireSnapshotParams,
 } from "../index.js";
 
 describe("managed worktree protocol schemas", () => {
@@ -24,6 +28,7 @@ describe("managed worktree protocol schemas", () => {
     expect(validateSessionsCreateParams({ agentId: "main", thinkingLevel: "high" })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", fastMode: true })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", fastMode: "auto" })).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", fastMode: "ultrafast" })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", fastMode: "fast" })).toBe(false);
     expect(validateSessionsCreateParams({ agentId: "main", incognito: true })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", incognito: "true" })).toBe(false);
@@ -50,6 +55,71 @@ describe("managed worktree protocol schemas", () => {
       }),
     ).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", worktreeName: "Bad Name" })).toBe(false);
+  });
+
+  it("preserves exact-state custody and recovery data in owner-qualified payloads", () => {
+    const exactState = {
+      ownerKind: "manual",
+      createdAt: 1,
+      lastActiveAt: 2,
+      head: "a".repeat(40),
+      branchHead: "b".repeat(40),
+      indexSha256: "c".repeat(64),
+    };
+    expect(validateWorktreesRemoveParams({ id: "id", exactState, expectedOwnerId: "owner" })).toBe(
+      true,
+    );
+    expect(
+      validateWorktreesRestoreParams({
+        id: "id",
+        recoverExactState: exactState,
+        expectedOwnerId: "owner",
+      }),
+    ).toBe(true);
+    expect(
+      validateWorktreesRemoveParams({ id: "id", exactState: { ...exactState, head: "main" } }),
+    ).toBe(false);
+    expect(
+      validateWorktreesRecoverRemovalParams({
+        id: "id",
+        snapshot: "a".repeat(64),
+        expectedOwnerId: "owner",
+      }),
+    ).toBe(true);
+    expect(
+      validateWorktreesRetireSnapshotParams({
+        id: "id",
+        expectedSnapshotRef: "refs/openclaw/snapshots/id",
+        expectedSnapshotOid: "a".repeat(40),
+        expectedRemovedAt: 3,
+        retainedSourceRef: "refs/heads/main",
+        expectedRetainedSourceOid: "b".repeat(40),
+        expectedOwnerId: "owner",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesRemoveResultSchema, {
+        removed: true,
+        recoveryPath: "/state/worktrees/.openclaw-retiring-id",
+        recoveryRetainedUntil: 10,
+        cleanup: { outcome: "removed-lossless", at: 3 },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesGcResultSchema, {
+        removed: ["removed"],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        orphansRetired: 1,
+        retiredCheckoutPaths: ["/retired"],
+        outcome: "partial",
+        issues: [{ id: "retained", stage: "snapshots", outcome: "failed", reason: "unavailable" }],
+        issueCount: 1,
+        protectedCount: 1,
+        protectionReasons: { "branch-moved": 1 },
+        limitsSatisfied: null,
+      }),
+    ).toBe(true);
   });
 
   it("accepts branch listing payloads and snapshot errors", () => {

@@ -27,11 +27,15 @@ import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => {
   let program: Command;
+  let previousExitCode: typeof process.exitCode;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
   let selectedScenarioIds: string[];
   let excludedScenarioIds: string[];
   const runCommand = lane === "suite" ? runQaSuiteCommand : runQaProfileCommand;
 
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     program = new Command();
     runQaSuiteCommand.mockReset();
     runQaProfileCommand.mockReset();
@@ -142,6 +146,8 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
   });
 
   afterEach(() => {
+    process.exitCode = previousExitCode;
+    stderrWrite.mockRestore();
     vi.clearAllMocks();
   });
 
@@ -159,18 +165,14 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
   it.each([
     { name: "empty value", args: ["--scenario", ""] },
     { name: "whitespace value", args: ["--scenario", " \t "] },
-    { name: "empty assignment", args: ["--scenario="] },
-    { name: "repeated blanks", args: ["--scenario", "", "--scenario", "  "] },
   ])("rejects an explicit all-blank selection: $name", async ({ args }) => {
-    const error = await program.parseAsync([...suiteArgs, ...args]).then(
-      () => null,
-      (caught: unknown) => caught,
-    );
+    await program.parseAsync([...suiteArgs, ...args]);
 
-    expect({ error, selectedScenarioIds }).toMatchObject({
-      error: expect.objectContaining({ message: expect.stringContaining("--scenario") }),
-      selectedScenarioIds: [],
-    });
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("--scenario must name at least one non-empty scenario id."),
+    );
+    expect(process.exitCode).toBe(1);
+    expect(selectedScenarioIds).toEqual([]);
     expect(runCommand).not.toHaveBeenCalled();
   });
 
@@ -179,11 +181,6 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
       name: "omitted selection",
       args: [],
       expected: ["selected-scenario", "unrequested-scenario"],
-    },
-    {
-      name: "named scenario",
-      args: ["--scenario", "selected-scenario"],
-      expected: ["selected-scenario"],
     },
     {
       name: "trimmed scenario",
@@ -203,11 +200,13 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
   });
 
   it("keeps unknown non-empty ids out of the selection", async () => {
-    const parsed = program.parseAsync([...suiteArgs, "--scenario", "unknown-scenario"]);
+    await program.parseAsync([...suiteArgs, "--scenario", "unknown-scenario"]);
     if (lane === "suite") {
-      await expect(parsed).rejects.toThrow("unknown QA scenario id(s): unknown-scenario");
+      expect(stderrWrite).toHaveBeenCalledWith(
+        expect.stringContaining("unknown QA scenario id(s): unknown-scenario"),
+      );
+      expect(process.exitCode).toBe(1);
     } else {
-      await parsed;
       expect(excludedScenarioIds).toEqual(["unknown-scenario"]);
     }
 

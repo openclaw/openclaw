@@ -1,12 +1,12 @@
+import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { callGatewayFromCli } from "./core-api.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn<typeof callGatewayFromCli>(async () => ({ ok: true })),
 }));
 
-vi.mock("./core-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   callGatewayFromCli: gatewayMocks.callGatewayFromCli,
 }));
 

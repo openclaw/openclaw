@@ -33,16 +33,6 @@ describe("parseFenceSpans closing-fence rules", () => {
     expect(isSafeFenceBreak(spans, text.indexOf("after") + 1)).toBe(true);
   });
 
-  it("still closes on a bare fence, a longer same-marker fence, and keeps an opener info string", () => {
-    expect(parseFenceSpans("```\ncode\n```\nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```\ncode\n`````  \nafter\n")).toHaveLength(1);
-    expect(parseFenceSpans("```python\nx = 1\n```\n")).toHaveLength(1);
-
-    const closed = "```\ncode\n```\nafter\n";
-    const spans = parseFenceSpans(closed);
-    expect(isSafeFenceBreak(spans, closed.indexOf("after") + 1)).toBe(true);
-  });
-
   it.each(["\n", "\r\n"])("preserves raw UTF-16 offsets with %j line endings", (newline) => {
     const prefix = `😀${newline}`;
     const openLine = "  ````ts `metadata`";

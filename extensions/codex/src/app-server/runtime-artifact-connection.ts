@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import { codexAppServerStartOptionsKey } from "./config-runtime.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -120,17 +121,11 @@ function decodeConnectionId(id: string): CodexConfiguredConnectionDescriptor {
     Buffer.from(id.slice(CONNECTION_ID_PREFIX.length), "base64url").toString("utf8"),
   );
   if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !("kind" in value) ||
+    !isRecord(value) ||
     value.kind !== "configured-connection" ||
-    !("transport" in value) ||
     (value.transport !== "websocket" && value.transport !== "unix") ||
-    !("selectionFingerprint" in value) ||
     typeof value.selectionFingerprint !== "string" ||
     !/^[a-f0-9]{64}$/u.test(value.selectionFingerprint) ||
-    !("runtimeIdentityFingerprint" in value) ||
     typeof value.runtimeIdentityFingerprint !== "string" ||
     !/^[a-f0-9]{64}$/u.test(value.runtimeIdentityFingerprint)
   ) {

@@ -44,11 +44,11 @@ describe("Workboard SQLite facade cleanup", () => {
     const failure = new SqliteWorkerError("connection cleanup failed", "unavailable");
     const { execute, release, stores } = workerFixture();
     execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
       .mockImplementationOnce(() => lookupResult.promise)
       .mockImplementationOnce(() => firstClose.promise)
       .mockResolvedValueOnce({ ok: true, value: undefined });
-    await expect(stores.ready).resolves.toBe(4);
+    await expect(stores.ready).resolves.toBeUndefined();
     const lookup = stores.cards.lookup("missing");
     const closing = stores.close();
     const rejected = expect(closing).rejects.toBe(failure);
@@ -84,7 +84,7 @@ describe("Workboard SQLite facade cleanup", () => {
     const failure = new Error("broker cleanup failed");
     const { execute, release, stores } = workerFixture();
     execute
-      .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
       .mockResolvedValueOnce({ ok: true, value: undefined });
     release.mockRejectedValueOnce(failure);
     await stores.ready;
@@ -100,13 +100,9 @@ describe("Workboard SQLite facade cleanup", () => {
     ]);
   });
 
-  it.each(
-    (["closed", "unavailable", "outcome-unknown"] as const).flatMap((code) =>
-      (["current", "previous"] as const).map((graph) => ({ code, graph })),
-    ),
-  )(
-    "delegates terminal $code from the $graph module graph without replay",
-    async ({ code, graph }) => {
+  it.each(["closed", "unavailable", "outcome-unknown"])(
+    "delegates terminal %s from a previous module graph without replay",
+    async (code) => {
       const retired = createDeferred<void>();
       const cleanupFailure = new Error("broker retirement incomplete");
       class PreviousGraphSqliteWorkerError extends Error {
@@ -116,14 +112,11 @@ describe("Workboard SQLite facade cleanup", () => {
           this.code = failureCode;
         }
       }
-      const failure =
-        graph === "current"
-          ? new SqliteWorkerError("transport stopped", code)
-          : new PreviousGraphSqliteWorkerError(code);
-      expect(failure instanceof SqliteWorkerError).toBe(graph === "current");
+      const failure = new PreviousGraphSqliteWorkerError(code);
+      expect(failure).not.toBeInstanceOf(SqliteWorkerError);
       const { execute, release, stores } = workerFixture();
       execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
         .mockRejectedValueOnce(failure);
       release.mockRejectedValueOnce(cleanupFailure).mockImplementationOnce(() => retired.promise);
       await stores.ready;
@@ -144,13 +137,13 @@ describe("Workboard SQLite facade cleanup", () => {
     },
   );
 
-  it.each(["overloaded", "SQLITE_BUSY", undefined])(
+  it.each(["overloaded", undefined])(
     "retains nonterminal rejection %s for explicit retry",
     async (code) => {
       const failure = Object.assign(new Error("close refused"), { code });
       const { execute, release, stores } = workerFixture();
       execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
+        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
         .mockRejectedValueOnce(failure)
         .mockResolvedValueOnce({ ok: true, value: undefined });
       await stores.ready;

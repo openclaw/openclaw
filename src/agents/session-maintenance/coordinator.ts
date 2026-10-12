@@ -7,6 +7,7 @@ import {
 } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 type MaintenanceOwner = {
@@ -113,14 +114,8 @@ export function createSessionMaintenanceOwner(params: {
     getGatewayRestartDrainSignal(),
     ...(params.abortSignal ? [params.abortSignal] : []),
   ]);
-  let finish = () => {};
-  const done = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  let finishWrites = () => {};
-  const writesDone = new Promise<void>((resolve) => {
-    finishWrites = resolve;
-  });
+  const { promise: done, resolve: finish } = createDeferredCore();
+  const { promise: writesDone, resolve: finishWrites } = createDeferredCore();
   const releaseWrites = () => {
     owner.writesReleased = true;
     owner.predecessors = [];
@@ -156,10 +151,7 @@ export function createSessionMaintenanceOwner(params: {
       await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
       if (owner.preemptible) {
         while (session.foreground > 0) {
-          let wake = () => {};
-          const available = new Promise<void>((resolve) => {
-            wake = resolve;
-          });
+          const { promise: available, resolve: wake } = createDeferredCore();
           session.wake.add(wake);
           try {
             await racePromiseWithAbortSignal(available, signal);
@@ -214,9 +206,7 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
     recordPhase(key, owner, "foreground_preemption_requested");
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));
   }
-  await Promise.all(
-    existing.filter((owner) => owner.running || owner.preemptible).map((owner) => owner.done),
-  );
+  await Promise.all(existing.map((owner) => owner.done));
   return release;
 }
 

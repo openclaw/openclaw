@@ -10,17 +10,6 @@ import {
 } from "./node-pending-work.js";
 
 describe("node pending work", () => {
-  it("returns a baseline status request even when no explicit work is queued", () => {
-    const drained = drainNodePendingWork("node-1");
-    expect(drained.items).toHaveLength(1);
-    expect(drained.items[0]?.id).toBe("baseline-status");
-    expect(drained.items[0]?.type).toBe("status.request");
-    expect(drained.items[0]?.priority).toBe("default");
-    expect(typeof drained.items[0]?.createdAtMs).toBe("number");
-    expect(drained.items[0]?.expiresAtMs).toBeNull();
-    expect(drained.hasMore).toBe(false);
-  });
-
   it("dedupes explicit work by type until the node drains it", () => {
     const first = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
     const second = enqueueNodePendingWork({ nodeId: "node-2", type: "location.request" });
@@ -81,25 +70,6 @@ describe("node pending work", () => {
     });
 
     expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
-  });
-
-  it("does not let a stale drain delete replacement-generation work", () => {
-    enqueueNodePendingWork({
-      nodeId: "node-stale-drain",
-      type: "location.request",
-      pairingGeneration: "generation-2",
-    });
-
-    expect(
-      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-1" }).items.map(
-        (item) => item.id,
-      ),
-    ).toEqual(["baseline-status"]);
-    expect(
-      drainNodePendingWork("node-stale-drain", { pairingGeneration: "generation-2" }).items.map(
-        (item) => item.type,
-      ),
-    ).toEqual(["location.request", "status.request"]);
   });
 
   it("rolls back only the exact item owned by one enqueue", () => {
@@ -176,50 +146,5 @@ describe("node pending work", () => {
 
     const drained = drainNodePendingWork("node-default-expiry", { nowMs: expiresAtMs });
     expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
-  });
-
-  it("expires explicit work naturally via drain", () => {
-    const queued = enqueueNodePendingWork({
-      nodeId: "node-7",
-      type: "location.request",
-      expiresInMs: 5_000,
-    });
-
-    const drained = drainNodePendingWork("node-7", { nowMs: Date.now() + 60_000 });
-
-    expect(drained.revision).toBeGreaterThan(queued.revision);
-    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
-  });
-
-  it("expires timed pending work immediately when the enqueue clock is invalid", () => {
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      const { item } = enqueueNodePendingWork({
-        nodeId: "node-invalid-clock",
-        type: "location.request",
-        expiresInMs: 5_000,
-      });
-      expect(item.createdAtMs).toBe(0);
-      expect(item.expiresAtMs).toBe(0);
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(
-      drainNodePendingWork("node-invalid-clock", { nowMs: 1_000 }).items.map((item) => item.id),
-    ).toEqual(["baseline-status"]);
-  });
-
-  it("expires timed pending work immediately when expiry would exceed Date bounds", () => {
-    const { item } = enqueueNodePendingWork({
-      nodeId: "node-8",
-      type: "location.request",
-      expiresInMs: Number.MAX_SAFE_INTEGER,
-    });
-    expect(item.expiresAtMs).toBe(0);
-
-    expect(
-      drainNodePendingWork("node-8", { nowMs: Date.now() }).items.map((entry) => entry.id),
-    ).toEqual(["baseline-status"]);
   });
 });

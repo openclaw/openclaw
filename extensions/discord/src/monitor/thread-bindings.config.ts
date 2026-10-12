@@ -1,4 +1,3 @@
-// Discord helper module supports thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveThreadBindingIdleTimeoutMs,

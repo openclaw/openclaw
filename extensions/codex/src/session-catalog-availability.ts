@@ -13,6 +13,15 @@ export class CodexCatalogLoadingError extends Error {
   }
 }
 
+export function withCodexCatalogLoadingTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return withTimeout(
+    promise,
+    timeoutMs,
+    "Codex session catalog is still loading",
+    () => new CodexCatalogLoadingError(),
+  );
+}
+
 /** One generation promise wakes cold callers; native pages remain owned by the index. */
 export class CodexCatalogAvailability {
   complete = false;
@@ -52,12 +61,7 @@ export class CodexCatalogAvailability {
     if (remaining <= 0) {
       throw new CodexCatalogLoadingError();
     }
-    return await withTimeout(
-      promise,
-      remaining,
-      "Codex session catalog is still loading",
-      () => new CodexCatalogLoadingError(),
-    );
+    return await withCodexCatalogLoadingTimeout(promise, remaining);
   }
 
   async next(deadline: number): Promise<void> {

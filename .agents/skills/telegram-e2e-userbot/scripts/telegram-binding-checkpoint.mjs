@@ -502,31 +502,30 @@ async function main() {
       fail("CHILD_IDENTITY_CHANGED_DURING_READ");
     }
     stage = "phase-conditions";
-    const required =
-      phase === "spawn"
-        ? ["CHILD"]
-        : phase === "before"
-          ? ["CHILD", "BEFORE"]
-          : ["CHILD", "BEFORE", "AFTER"];
+    // The published baseline hands the topic to the spawned child. The candidate
+    // hides that legacy takeover, so later topic turns return to the parent.
+    const followups =
+      phase === "spawn" ? [] : phase === "before" ? ["BEFORE"] : ["BEFORE", "AFTER"];
     const phases = {};
-    for (const name of required) {
-      const matches = child.messages.flatMap((message, index) =>
+    function phaseTurn(session, messages, name) {
+      const owner = session.toUpperCase();
+      const matches = messages.flatMap((message, index) =>
         ordinaryUser(message) && hasMarker(message, `TELEGRAM_BINDING_${name}_${runId}`)
           ? [{ message, index }]
           : [],
       );
       if (matches.length > 1) {
-        fail("DUPLICATE_CHILD_PHASE_USER", { missingPhase: name });
+        fail(`DUPLICATE_${owner}_PHASE_USER`, { missingPhase: name });
       }
       if (!matches.length) {
         if (baseline?.phases?.[name]) {
-          fail("PRIOR_CHILD_PHASE_DISAPPEARED", { missingPhase: name });
+          fail(`PRIOR_${owner}_PHASE_DISAPPEARED`, { missingPhase: name });
         }
         missing.push(`${name}_TRANSCRIPT_USER`);
-        continue;
+        return;
       }
       const sent = matches[0];
-      const later = child.messages.slice(sent.index + 1);
+      const later = messages.slice(sent.index + 1);
       const end = later.findIndex(ordinaryUser);
       const turn = end < 0 ? later : later.slice(0, end);
       const replies = turn.filter(
@@ -535,30 +534,39 @@ async function main() {
           text(message).trim() === `TELEGRAM_BINDING_ACK_${name}_${runId}`,
       );
       if (replies.length > 1) {
-        fail("DUPLICATE_CHILD_PHASE_ACK", { missingPhase: name });
+        fail(`DUPLICATE_${owner}_PHASE_ACK`, { missingPhase: name });
       }
       if (!replies.length) {
         if (baseline?.phases?.[name]) {
-          fail("PRIOR_CHILD_ACK_DISAPPEARED", { missingPhase: name });
+          fail(`PRIOR_${owner}_ACK_DISAPPEARED`, { missingPhase: name });
         }
         missing.push(`${name}_TRANSCRIPT_ACK`);
-        continue;
+        return;
       }
-      phases[name] = { user: messageFact(sent.message), assistant: messageFact(replies[0]) };
+      phases[name] = {
+        session,
+        user: messageFact(sent.message),
+        assistant: messageFact(replies[0]),
+      };
     }
-    for (const early of phase === "spawn"
-      ? ["BEFORE", "AFTER"]
-      : phase === "before"
-        ? ["AFTER"]
-        : []) {
-      if (
-        child.messages.some(
-          (message) =>
-            ordinaryUser(message) && hasMarker(message, `TELEGRAM_BINDING_${early}_${runId}`),
-        )
-      ) {
-        fail("FOLLOWUP_PRECEDED_CHECKPOINT", { earlyPhase: early });
+    for (const name of ["BEFORE", "AFTER"]) {
+      const present = (message) =>
+        ordinaryUser(message) && hasMarker(message, `TELEGRAM_BINDING_${name}_${runId}`);
+      if (child.messages.some(present)) {
+        fail(
+          followups.includes(name) ? "FOLLOWUP_ROUTED_TO_CHILD" : "FOLLOWUP_PRECEDED_CHECKPOINT",
+          {
+            earlyPhase: name,
+          },
+        );
       }
+      if (!followups.includes(name) && parent.messages.some(present)) {
+        fail("FOLLOWUP_PRECEDED_CHECKPOINT", { earlyPhase: name });
+      }
+    }
+    phaseTurn("child", child.messages, "CHILD");
+    for (const name of followups) {
+      phaseTurn("parent", parent.messages, name);
     }
     return {
       missing,

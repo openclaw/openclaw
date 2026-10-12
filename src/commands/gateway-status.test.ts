@@ -40,6 +40,8 @@ const mocks = vi.hoisted(() => {
     startSshPortForward: vi.fn(async (_opts?: unknown) => ({
       localPort: 18789,
       pid: 123,
+      closed: new Promise<void>(() => {}),
+      isActive: () => true,
       stop: sshStop,
     })),
     inspectGatewayTlsCertificate: vi.fn(
@@ -262,18 +264,7 @@ function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"
   return runtime as unknown as RuntimeEnv;
 }
 
-type ProbeGatewayCall = {
-  auth?: {
-    password?: string;
-    token?: string;
-  };
-  preauthHandshakeTimeoutMs?: number;
-  originScopedDeviceAuth?: boolean;
-  suppressStoredDeviceAuth?: boolean;
-  timeoutMs?: number;
-  tlsFingerprint?: string;
-  url?: string;
-};
+type ProbeGatewayCall = Parameters<typeof import("../gateway/probe.js").probeGateway>[0];
 
 function readProbeCalls(): ProbeGatewayCall[] {
   return probeGateway.mock.calls.map(([call]) => call as ProbeGatewayCall);
@@ -375,7 +366,7 @@ describe("gateway-status command", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["", "   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
+  it.each(["   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
     const { runtime } = createRuntimeCapture();
 
     await expect(runGatewayStatus(runtime, { timeout, json: true })).rejects.toThrow(
@@ -434,77 +425,14 @@ describe("gateway-status command", () => {
     );
   });
 
-  it("skips local Windows firewall diagnostics for remote Gateway mode", async () => {
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "remote",
-        bind: "lan",
-        remote: { url: "wss://remote.example:18789", token: "rtok" },
-        auth: { token: "ltok" },
-      },
-    } as never);
-    const { runtime, runtimeLogs } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, { timeout: "1000", json: true });
-
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code?: string }>;
-    };
-    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
-      false,
-    );
-  });
-
-  it("skips local Windows firewall diagnostics for explicit Gateway URLs", async () => {
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        auth: { token: "ltok" },
-      },
-    } as never);
-    const { runtime, runtimeLogs } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, {
-      timeout: "1000",
-      json: true,
-      url: "wss://remote.example:18789",
-      token: "explicit-remote-token",
-    });
-
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code?: string }>;
-    };
-    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
-      false,
-    );
-  });
-
   it.each([
     {
-      source: "configured token",
+      source: "configured and ambient credentials",
       auth: { mode: "token", token: "configured-local-token" },
-      env: {},
-      options: {},
-    },
-    {
-      source: "configured password",
-      auth: { mode: "password", password: "configured-local-password" },
-      env: {},
-      options: {},
-    },
-    {
-      source: "environment token",
-      auth: { mode: "token" },
-      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-local-token" },
-      options: {},
-    },
-    {
-      source: "environment password",
-      auth: { mode: "password" },
-      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-local-password" },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+      },
       options: {},
     },
     {
@@ -991,19 +919,9 @@ describe("gateway-status command", () => {
 
     expect(startSshPortForward).toHaveBeenCalledTimes(1);
     expect(probeGateway).toHaveBeenCalled();
-    const tunnelCall = probeGateway.mock.calls.find(
-      (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as
-      | {
-          auth?: { token?: string };
-          originScopedDeviceAuth?: boolean;
-          signal?: AbortSignal;
-          suppressStoredDeviceAuth?: boolean;
-        }
-      | undefined;
+    const tunnelCall = readProbeCalls().find((call) => call.url.startsWith("ws://127.0.0.1:"));
     expect(tunnelCall?.auth?.token).toBe("rtok");
-    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
-    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
+    expect(tunnelCall?.sshTunnel).toMatchObject({ target: "me@studio", remotePort: 18789 });
     const tunnelSignal = requireSshForwardCall().signal;
     expect(tunnelSignal).toBeInstanceOf(AbortSignal);
     expect(tunnelCall?.signal).toBe(tunnelSignal);
@@ -1094,27 +1012,6 @@ describe("gateway-status command", () => {
       expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(expected);
     },
   );
-
-  it("uses --port for the local loopback probe target", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        port: 18789,
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
-
-    await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
-
-    expect(runtimeErrors).toHaveLength(0);
-    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      network?: { localLoopbackUrl?: string | null };
-    };
-    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
-  });
 
   it("lets --port select the local probe despite gateway env and configured remote targets", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();

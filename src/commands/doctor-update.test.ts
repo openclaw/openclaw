@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { withUpdateInProgressEnv } from "../cli/update-cli/update-command-service-env.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -20,6 +22,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const result = (status: UpdateRunResult["status"]): UpdateRunResult => ({
   status,
   mode: "git",
@@ -68,6 +71,33 @@ afterEach(() => {
 });
 
 describe("Doctor source update delegation", () => {
+  it.each([false, true])(
+    "reports a host-owned install before git discovery (noninteractive=%s)",
+    async (nonInteractive) => {
+      const root = tempDirs.make("openclaw-doctor-host-");
+      await fs.writeFile(
+        path.join(root, "openclaw-install-owner.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        }),
+      );
+
+      await expect(offer({ root, options: { nonInteractive } })).resolves.toEqual({
+        updated: false,
+      });
+
+      expect(mocks.git).not.toHaveBeenCalled();
+      expect(mocks.confirm).not.toHaveBeenCalled();
+      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+        "Update",
+      );
+    },
+  );
   it.each(["OPENCLAW_SUPERVISOR_MODE", "OPENCLAW_SERVICE_REPAIR_POLICY"])(
     "continues Doctor without offering self-update when %s is external",
     async (key) => {

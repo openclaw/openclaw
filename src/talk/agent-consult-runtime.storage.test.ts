@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -7,6 +8,7 @@ import { SessionManager } from "../agents/sessions/index.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import {
@@ -25,14 +27,74 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
-  it.each([
-    "talk-realtime-consult",
-    "talk-realtime-relay-consult",
-    "voice-realtime-consult:11111111-2222-4333-8444-123456789012",
-    "google-meet:meet_11111111-2222-4333-8444-123456789012",
-    "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012",
-    "teams-meetings:teams_meeting_11111111-2222-4333-8444-123456789012",
-  ])("preserves live run identity through transcript storage for %s", async (runIdPrefix) => {
+  it("refreshes consult policy and delivery after an in-process write", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+    };
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "Checked" }],
+      meta: { durationMs: 0 },
+    }));
+    const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };
+    const sessionKey = "agent:main:voice-preparation";
+    const storePath = state.statePath("consult", "sessions.sqlite");
+    const target = { agentId: "main", sessionKey, storePath };
+    const consult = () =>
+      consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: vi.fn() },
+        ...target,
+        messageProvider: "voice",
+        lane: "talk",
+        runIdPrefix: "policy-consult",
+        args: { question: "Check this" },
+        transcript: [],
+        surface: "test voice",
+        userLabel: "User",
+      });
+
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 1,
+      permissionMode: "workspace",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "chat:initial", accountId: "initial-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        permissionMode: "workspace",
+        messageProvider: "telegram",
+        messageTo: "chat:initial",
+        agentAccountId: "initial-account",
+      }),
+    );
+
+    await replaceSessionEntry(target, {
+      sessionId: "voice-session",
+      updatedAt: 2,
+      permissionMode: "guarded",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:updated", accountId: "updated-account" },
+      }),
+    });
+    await expect(consult()).resolves.toEqual({ text: "Checked" });
+    expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        permissionMode: "guarded",
+        messageProvider: "discord",
+        messageTo: "channel:updated",
+        agentAccountId: "updated-account",
+      }),
+    );
+  });
+
+  it("preserves live run identity through transcript storage and redaction", async () => {
+    const runIdPrefix = "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012";
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
     };
@@ -168,3 +230,71 @@ describe("voice consult concrete store ownership", () => {
     },
   );
 });
+
+it.each([
+  { chatType: "direct", senderIsOwner: true, contextMode: "fork", audience: "owner-private" },
+  // Meeting consults pass no ingress owner bit, so they never inherit owner-private memory.
+  { chatType: "direct", senderIsOwner: undefined, contextMode: "fork", audience: "conversation" },
+  { chatType: "group", senderIsOwner: true, contextMode: "isolated", audience: "conversation" },
+] as const)(
+  "consult children of a $chatType root (owner=$senderIsOwner, $contextMode) resolve $audience memory",
+  async ({ chatType, senderIsOwner, contextMode, audience }) => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+    };
+    const agentRuntime = {
+      ...createRuntimeAgent(),
+      runEmbeddedAgent: vi.fn(async () => ({
+        payloads: [{ text: "Checked" }],
+        meta: { durationMs: 0 },
+      })),
+    };
+    const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, {
+      agentId: "main",
+    });
+    const rootKey = chatType === "group" ? "agent:main:qa-channel:group:room" : "agent:main:main";
+    const root = {
+      sessionId: randomUUID(),
+      lifecycleRevision: randomUUID(),
+      chatType,
+      updatedAt: 1,
+    };
+    await replaceSessionEntry({ agentId: "main", sessionKey: rootKey, storePath }, root);
+    const sessionKey = "agent:main:subagent:meet:consult";
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: vi.fn() },
+        agentId: "main",
+        sessionKey,
+        spawnedBy: rootKey,
+        senderIsOwner,
+        contextMode,
+        messageProvider: "webchat",
+        lane: "talk",
+        runIdPrefix: "lineage-consult",
+        args: { question: "Check this" },
+        transcript: [],
+        surface: "test voice",
+        userLabel: "User",
+      }),
+    ).resolves.toEqual({ text: "Checked" });
+    const child = loadSessionEntry({ agentId: "main", sessionKey, storePath })!;
+    expect(child).toMatchObject({
+      spawnedBy: rootKey,
+      spawnedBySessionId: root.sessionId,
+      parentSessionLifecycleRevision: root.lifecycleRevision,
+      spawnedBySenderIsOwner: senderIsOwner === true,
+    });
+    // The consult child's own turn is never the owner; only its receipt can carry that bit.
+    const resolution = await resolveMemoryAudienceFromEntry(
+      { agentId: "main", sessionKey, sessionId: child.sessionId, senderIsOwner: false, storePath },
+      child,
+    );
+    expect(resolution).toMatchObject({ status: "granted", audience: { kind: audience } });
+    if (resolution.status === "granted") {
+      resolution.release();
+    }
+  },
+);

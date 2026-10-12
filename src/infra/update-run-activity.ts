@@ -1,4 +1,4 @@
-import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
+import { inspectSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   isExpiredLegacyUpdateRun,
@@ -47,14 +47,17 @@ function isCurrentUpdateRunContinuation(
     return false;
   }
   const drivers = recordedUpdateRunDrivers(record);
-  const ancestors = getSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  if (!ancestry.complete) {
+    return false;
+  }
   let ownsDriver = false;
   for (const driver of drivers) {
     const liveness = inspectUpdateRunDriver(driver);
     if (liveness === "dead") {
       continue;
     }
-    if (liveness !== "alive" || !ancestors.has(driver.pid)) {
+    if (liveness !== "alive" || !ancestry.pids.has(driver.pid)) {
       return false;
     }
     ownsDriver = true;
@@ -151,4 +154,38 @@ export function staleUpdateRunGuidance(record: UpdateRunRecord): string | undefi
   return isStaleIdentitylessUpdateRun(record)
     ? `no activity since ${new Date(updateRunLastActivity(record)).toISOString()}; if no update is running, run \`openclaw update repair\` or start a new \`openclaw update\``
     : undefined;
+}
+
+const POST_CORE_PHASES = new Set(["activating", "restarting", "verifying"]);
+
+export function needsPostCoreRepair(run: UpdateRunRecord): boolean {
+  // Reconciliation finishes phase steps but does not prove post-core convergence.
+  return (
+    POST_CORE_PHASES.has(run.phase) ||
+    run.steps.some(
+      (step) =>
+        POST_CORE_PHASES.has(step.step) ||
+        step.step === "post-update verification" ||
+        step.step.startsWith("finalize:"),
+    )
+  );
+}
+
+export function inspectNewerRecoveryHistory(
+  oldestRecovery: number | undefined,
+  history: UpdateRunRecord[],
+) {
+  if (oldestRecovery === undefined) {
+    return { postCoreRuns: [], incomplete: false };
+  }
+  const postCoreRuns = history.filter(
+    (run) =>
+      run.createdAtMs >= oldestRecovery &&
+      run.status === "failed" &&
+      !isAcknowledgedAbandonedUpdateRun(run) &&
+      needsPostCoreRepair(run),
+  );
+  // A bounded prefix cannot prove absence of interrupted work beyond its tail.
+  const incomplete = history.length === 100 && (history.at(-1)?.createdAtMs ?? 0) >= oldestRecovery;
+  return { postCoreRuns, incomplete };
 }

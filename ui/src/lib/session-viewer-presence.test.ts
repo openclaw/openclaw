@@ -40,6 +40,7 @@ function createGatewayHarness() {
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     subscribe: vi.fn((listener: (value: ApplicationGatewaySnapshot) => void) => {
       listeners.add(listener);
       return () => {

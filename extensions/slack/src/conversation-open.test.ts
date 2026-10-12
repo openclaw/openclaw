@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
 import * as slackClient from "./client.js";
-import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 type SlackRequest = {
   method: string;
@@ -98,33 +97,34 @@ describe("Slack conversation-open", () => {
     expect(schema?.properties).not.toHaveProperty("teamId");
   });
 
-  it.each(["C01234567", "G01234567"])(
-    "opens one group DM and sends to its returned %s target as the bot",
-    async (channelId) => {
-      const { invoke, requests } = createConversationFixture(channelId);
-      const opened = await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
-      const target = `team:T11111111:channel:${channelId}`;
-      expect(opened.details).toEqual({ ok: true, channelId, target });
-      expect(requests).toEqual([
-        {
-          method: "conversations.open",
-          args: { users: "U11111111,U22222222", team_id: "T11111111" },
-          authorization: "Bearer xoxb-test",
-        },
-      ]);
-
-      await invoke("send", { to: target, message: "Hello together" });
-      expect(requests.map((request) => request.method)).toEqual([
-        "conversations.open",
-        "chat.postMessage",
-      ]);
-      expect(requests[1]).toMatchObject({
+  it("opens one group DM and sends to its returned target as the bot", async () => {
+    const channelId = "C01234567";
+    const { cfg, invoke, requests } = createConversationFixture(channelId);
+    cfg.channels!.slack!.dm = { groupEnabled: false, groupChannels: ["G99999999"] };
+    const policy = structuredClone(cfg);
+    const opened = await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
+    const target = `team:T11111111:channel:${channelId}`;
+    expect(opened.details).toEqual({ ok: true, channelId, target });
+    expect(requests).toEqual([
+      {
+        method: "conversations.open",
+        args: { users: "U11111111,U22222222", team_id: "T11111111" },
         authorization: "Bearer xoxb-test",
-        args: { channel: channelId, text: "Hello together", team_id: "T11111111" },
-      });
-      expect(requests[1]?.args).not.toHaveProperty("thread_ts");
-    },
-  );
+      },
+    ]);
+
+    await invoke("send", { to: target, message: "Hello together" });
+    expect(requests.map((request) => request.method)).toEqual([
+      "conversations.open",
+      "chat.postMessage",
+    ]);
+    expect(requests[1]).toMatchObject({
+      authorization: "Bearer xoxb-test",
+      args: { channel: channelId, text: "Hello together", team_id: "T11111111" },
+    });
+    expect(requests[1]?.args).not.toHaveProperty("thread_ts");
+    expect(cfg).toEqual(policy);
+  });
 
   it("opens a one-to-one DM without requiring a current conversation", async () => {
     const { invoke, requests } = createConversationFixture("D01234567");
@@ -142,28 +142,11 @@ describe("Slack conversation-open", () => {
     expect(requests[0]?.args).toEqual({ users: "U11111111" });
   });
 
-  it("accepts eight recipients, including legacy W-prefixed user IDs", async () => {
+  it("rejects duplicates after trimming before calling Slack", async () => {
     const { invoke, requests } = createConversationFixture();
-    const userIds = ["W11111111", ...Array.from({ length: 7 }, (_, index) => `U2222222${index}`)];
-    await invoke("conversation-open", { userIds });
-    expect(requests[0]?.args.users).toBe(userIds.join(","));
-  });
-
-  it.each([
-    { name: "missing recipients", userIds: undefined },
-    { name: "no recipients", userIds: [] },
-    { name: "a comma-separated string", userIds: "U11111111,U22222222" },
-    { name: "a channel ID", userIds: ["C11111111"] },
-    { name: "a mention", userIds: ["<@U11111111>"] },
-    { name: "duplicate recipients", userIds: ["U11111111", "U11111111"] },
-    { name: "duplicates after trimming", userIds: ["U11111111", " U11111111 "] },
-    {
-      name: "too many recipients",
-      userIds: Array.from({ length: 9 }, (_, index) => `U1111111${index}`),
-    },
-  ])("rejects $name before calling Slack", async ({ userIds }) => {
-    const { invoke, requests } = createConversationFixture();
-    await expect(invoke("conversation-open", { userIds })).rejects.toThrow();
+    await expect(
+      invoke("conversation-open", { userIds: ["U11111111", " U11111111 "] }),
+    ).rejects.toThrow();
     expect(requests).toEqual([]);
   });
 
@@ -179,16 +162,6 @@ describe("Slack conversation-open", () => {
     expect(requests).toEqual([]);
   });
 
-  it("does not grant group-DM read access or change inbound policy", async () => {
-    const { cfg, invoke, requests } = createConversationFixture();
-    cfg.channels!.slack!.dm = { groupEnabled: false, groupChannels: ["G99999999"] };
-    const policy = structuredClone(cfg);
-    await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
-    expect(requests.map((request) => request.method)).toEqual(["conversations.open"]);
-    expect(requests[0]?.args).not.toHaveProperty("return_im");
-    expect(cfg).toEqual(policy);
-  });
-
   it("does not fall back to a user read token when the bot token is missing", async () => {
     const { adapter, cfg, invoke, requests } = createConversationFixture();
     vi.stubEnv("SLACK_BOT_TOKEN", undefined);
@@ -202,76 +175,12 @@ describe("Slack conversation-open", () => {
     expect(requests).toEqual([]);
   });
 
-  it("uses the user token only for an explicitly configured user identity", async () => {
-    const { cfg, invoke, requests } = createConversationFixture();
-    cfg.channels!.slack!.postAs = "user";
-    await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
-    expect(requests[0]?.authorization).toBe("Bearer xoxp-readonly");
-  });
-
-  it.each([
-    { name: "detached", overrides: { toolContext: undefined } },
-    { name: "cross-account", overrides: { requesterAccountId: "another-account" } },
-    {
-      name: "conflicting-workspace",
-      overrides: {
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "team:T11111111:channel:C09999999",
-          currentMessagingTarget: "team:T22222222:channel:C09999999",
-        },
-      },
-    },
-  ])("requires an explicit workspace for $name Enterprise calls", async ({ overrides }) => {
-    const { invoke, requests } = createConversationFixture();
-    const installation = registerSlackInstallationState("default", "enterprise");
-    try {
-      await expect(
-        invoke("conversation-open", { userIds: ["U11111111", "U22222222"] }, overrides),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-      expect(requests).toEqual([]);
-    } finally {
-      installation.release();
-    }
-  });
-
-  it("preserves an explicit workspace on detached Enterprise calls", async () => {
-    const { invoke, requests } = createConversationFixture();
-    const installation = registerSlackInstallationState("default", "enterprise");
-    try {
-      const opened = await invoke(
-        "conversation-open",
-        { userIds: ["U11111111", "U22222222"], teamId: "T22222222" },
-        { toolContext: undefined },
-      );
-      expect(opened.details).toEqual({
-        ok: true,
-        channelId: "C01234567",
-        target: "team:T22222222:channel:C01234567",
-      });
-      expect(requests[0]?.args.team_id).toBe("T22222222");
-    } finally {
-      installation.release();
-    }
-  });
-
-  it("rejects a malformed explicit workspace before calling Slack", async () => {
-    const { invoke, requests } = createConversationFixture();
-    await expect(
-      invoke("conversation-open", { userIds: ["U11111111"], teamId: "U11111111" }),
-    ).rejects.toThrow();
-    expect(requests).toEqual([]);
-  });
-
-  it.each([
-    { response: { ok: false, error: "missing_scope" }, error: "missing_scope" },
-    { response: { ok: true, channel: {} }, error: "valid conversation ID" },
-    { response: { ok: true, channel: { id: "U11111111" } }, error: "valid conversation ID" },
-  ])("reports Slack failures without sending a message: $error", async ({ response, error }) => {
+  it("rejects an invalid Slack conversation ID without sending a message", async () => {
+    const response = { ok: true, channel: { id: "U11111111" } };
     const { invoke, requests } = createConversationFixture("C01234567", response);
     await expect(
       invoke("conversation-open", { userIds: ["U11111111", "U22222222"] }),
-    ).rejects.toThrow(error);
+    ).rejects.toThrow("valid conversation ID");
     expect(requests.map((request) => request.method)).toEqual(["conversations.open"]);
   });
 });

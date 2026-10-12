@@ -1,9 +1,55 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
 import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 describe("wrapGuardedBodyStream", () => {
+  it("releases abandoned bodies before and after attaching their abort listener", async () => {
+    const signal = new AbortController().signal;
+    async function abandon(mode: "prefetched" | "unread" | "partial") {
+      const cleaned = createDeferredCore();
+      const cancel = vi.fn();
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+        cancel,
+      });
+      const wrapped = wrapGuardedBodyStream({
+        body: source,
+        cleanup: cleaned.resolve,
+        signal: mode === "prefetched" ? undefined : signal,
+      });
+      if (mode === "partial") {
+        const reader = wrapped.getReader();
+        expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+        reader.releaseLock();
+      }
+      return { reference: new WeakRef(wrapped), source, cancel, cleaned: cleaned.promise };
+    }
+    const abandoned = await Promise.all([
+      abandon("prefetched"),
+      abandon("unread"),
+      abandon("partial"),
+    ]);
+    const control = new WeakRef({});
+    // End the creation job before collecting; the signal and upstream bodies stay live.
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    for (const body of abandoned) {
+      expect(body.reference.deref()).toBeUndefined();
+    }
+    await Promise.all(abandoned.map((body) => body.cleaned));
+    for (const body of abandoned) {
+      expect(body.source.locked).toBe(false);
+      expect(body.cancel).toHaveBeenCalledOnce();
+    }
+    expect(signal.aborted).toBe(false);
+  });
+
   it("releases the source reader lock after downstream cancellation", async () => {
     const cancel = vi.fn();
     const cleanup = vi.fn();

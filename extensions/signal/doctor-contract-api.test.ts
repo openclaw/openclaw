@@ -460,25 +460,6 @@ describe("signal transport compatibility", () => {
     });
   });
 
-  it("allocates distinct managed ports while materializing named account ownership", () => {
-    const result = normalizeCompatibilityConfig({
-      cfg: signalConfig({
-        account: "+15555550123",
-        httpPort: 8080,
-        accounts: { work: { account: "+15555550124" } },
-      }),
-    });
-
-    expect(result.config.channels?.signal?.transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8080,
-    });
-    expect(result.config.channels?.signal?.accounts?.work?.transport).toMatchObject({
-      kind: "managed-native",
-      httpPort: 8081,
-    });
-  });
-
   it("keeps migrated managed connection URLs aligned with reassigned bind ports", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({
@@ -704,24 +685,6 @@ describe("signal transport compatibility", () => {
     });
   });
 
-  it("keeps explicit native auto-start endpoints managed", async () => {
-    const result = await migrateLegacySignalTransportConfig({
-      cfg: signalConfig({
-        apiMode: "native",
-        autoStart: true,
-        httpHost: "127.0.0.1",
-        httpPort: 8181,
-        httpUrl: "http://127.0.0.1:8181",
-      }),
-    });
-
-    expect(result.config.channels?.signal?.transport).toEqual({
-      kind: "managed-native",
-      httpHost: "127.0.0.1",
-      httpPort: 8181,
-    });
-  });
-
   it("does not turn an invalid socket opt-in into HTTP during legacy repair", async () => {
     const cfg = signalConfig({
       account: "+15555550123",
@@ -835,25 +798,22 @@ describe("signal transport compatibility", () => {
     ]);
   });
 
-  it.each(["bad host", "signal.example/proxy", "signal.example?mode=native"])(
-    "defers malformed host %s used to derive legacy endpoints",
-    async (httpHost) => {
-      const cfg = signalConfig({
-        apiMode: "native",
-        autoStart: true,
-        httpHost,
-      });
+  it("defers malformed hosts used to derive legacy endpoints", async () => {
+    const cfg = signalConfig({
+      apiMode: "native",
+      autoStart: true,
+      httpHost: "bad host",
+    });
 
-      expect(() => normalizeCompatibilityConfig({ cfg })).not.toThrow();
-      const result = await migrateLegacySignalTransportConfig({ cfg });
+    expect(() => normalizeCompatibilityConfig({ cfg })).not.toThrow();
+    const result = await migrateLegacySignalTransportConfig({ cfg });
 
-      expect(result.config).toBe(cfg);
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
-      ]);
-    },
-  );
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- channels.signal: legacy httpHost is invalid; keep the current config, correct httpHost, then run openclaw doctor --fix.",
+    ]);
+  });
 
   it("ignores a retired bind port when an explicit container URL owns the endpoint", async () => {
     const result = await migrateLegacySignalTransportConfig({

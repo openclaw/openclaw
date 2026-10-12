@@ -46,8 +46,13 @@ describe("Gateway connection transport", () => {
               return readyState;
             },
             bufferedAmount: 0,
-            send: (encoded, callback) => {
-              const frame = JSON.parse(encoded);
+            send: (
+              encoded: string | Buffer,
+              options?: { binary: false } | ((error?: Error) => void),
+              onSent?: (error?: Error) => void,
+            ) => {
+              const callback = typeof options === "function" ? options : onSent;
+              const frame = JSON.parse(encoded.toString());
               frames.push(frame);
               if (frame.payload?.type === "hello-ok") {
                 finishHello = callback;

@@ -18,9 +18,37 @@ vi.mock("../gateway-rpc.js", async () => {
 
 const { registerCronAddCommand } = await import("./register.cron-add.js");
 const { registerCronEditCommand } = await import("./register.cron-edit.js");
-const { readCronPayloadScript, readCronTriggerScript } = await import("./trigger-options.js");
+const { readCronPayloadScript, readCronTriggerScript, readCronScratchContent } =
+  await import("./trigger-options.js");
 
 describe("cron trigger CLI options", () => {
+  it.each([
+    ["Trigger script", readCronTriggerScript],
+    ["Script payload", readCronPayloadScript],
+    ["Cron scratch", readCronScratchContent],
+  ] as const)("rejects malformed UTF-8 for %s from files and stdin", async (label, read) => {
+    const file = path.join(fixtureRoot, "invalid.txt");
+    const bytes = Buffer.from([0x78, 0xff, 0x79]);
+    await fs.writeFile(file, bytes);
+    await expect(read(file)).rejects.toThrow(`${label} must be valid UTF-8`);
+    await expect(
+      read("-", {
+        stdin: (async function* () {
+          yield bytes;
+        })(),
+      }),
+    ).rejects.toThrow(`${label} must be valid UTF-8`);
+  });
+
+  it("preserves exact scratch BOM, Unicode and CRLF while scripts retain trimming", async () => {
+    const file = path.join(fixtureRoot, "valid.txt");
+    const text = "\uFEFF 中文 😀 \uFFFD\r\n";
+    await fs.writeFile(file, text, "utf8");
+    await expect(readCronScratchContent(file)).resolves.toBe(text);
+    await expect(readCronTriggerScript(file)).resolves.toBe("中文 😀 \uFFFD");
+    await expect(readCronPayloadScript(file)).resolves.toBe("中文 😀 \uFFFD");
+  });
+
   let fixtureRoot = "";
 
   beforeEach(async () => {

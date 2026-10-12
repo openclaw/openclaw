@@ -5,9 +5,11 @@ import type {
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -23,13 +25,11 @@ import {
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
   type CronAttentionJob,
   buildSidebarAttentionEntries,
-  compareSidebarAttentionEntries,
   cronOverdueAt,
 } from "./sidebar-attention-items.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -52,6 +52,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   private dismissalKey: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
+  private readonly reviewedOutbox = new Set<string>();
   private loadGeneration = 0;
   private cronRefresh: { generation: number; requested: boolean } | null = null;
   private cronRefreshNeeded = false;
@@ -86,6 +87,7 @@ export class SidebarAttentionStoreController implements StoreController {
       sources.overlays.subscribe(onChange),
       this.mentions.subscribe(onChange),
       subscribeStoredChatOutboxChanges(onChange),
+      subscribeChatOutboxAttentionChanges(onChange),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
@@ -107,7 +109,12 @@ export class SidebarAttentionStoreController implements StoreController {
 
   get entries(): readonly SidebarInboxEntry[] {
     return this.buildEntries().filter(
-      (entry) => !entry.dismissal || !isSidebarAttentionDismissed(this.dismissed, entry.dismissal),
+      (entry) =>
+        !entry.dismissal ||
+        (!isSidebarAttentionDismissed(this.dismissed, entry.dismissal) &&
+          !(
+            entry.dismissal.kind === "outbox" && this.reviewedOutbox.has(entry.dismissal.signature)
+          )),
     );
   }
 
@@ -140,7 +147,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.healthRefreshTimer = undefined;
     if (
       this.disposed ||
-      this.sources.gateway.snapshot.phase !== "connected" ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
       document.visibilityState === "hidden"
     ) {
       return;
@@ -206,7 +213,17 @@ export class SidebarAttentionStoreController implements StoreController {
           Object.assign(item, {
             type: "outbox" as const,
             category: "system" as const,
-            dismissal: null,
+            dismissal: {
+              kind: "outbox" as const,
+              signature: JSON.stringify([
+                gateway.client?.recoveryScope,
+                item.agentId,
+                item.sessionKey,
+                item.id,
+                item.unconfirmed,
+                item.command,
+              ]),
+            },
             requiresAction: true,
             severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
           }),
@@ -215,15 +232,7 @@ export class SidebarAttentionStoreController implements StoreController {
       return outbox;
     }
     const overlay = this.sources.overlays.snapshot;
-    const updateState = resolveSidebarUpdateAttention(this.sources);
-    const update = buildUpdateInboxEntry({
-      canDismiss: updateState.canUpdate,
-      dismissal: updateState.dismissal,
-      forced: updateState.forced,
-      requiresAction: updateState.forced || (updateState.canUpdate && updateState.actionable),
-      severity: overlay.updateStatusBanner?.tone === "danger" ? "error" : "warning",
-      visible: updateState.present,
-    });
+    const update = resolveSidebarUpdateAttention(this.sources);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
       scopes: gateway.hello?.auth?.scopes,
       state: this.sources.scopeUpgrade.state,
@@ -235,7 +244,7 @@ export class SidebarAttentionStoreController implements StoreController {
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
       now: Date.now(),
-    }).toSorted(compareSidebarAttentionEntries);
+    });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
       attention,
@@ -263,7 +272,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (gateway.phase !== "connected" || !client) {
+    if (!isGatewayAvailable(gateway) || !client) {
       return;
     }
     const owner = this.owner();
@@ -274,7 +283,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.loadedAgentScope = agentScope;
     const current = () =>
       generation === this.loadGeneration &&
-      this.sources.gateway.snapshot.phase === "connected" &&
+      isGatewayAvailable(this.sources.gateway.snapshot) &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
       this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
@@ -426,6 +435,12 @@ export class SidebarAttentionStoreController implements StoreController {
       this.onChange();
       return;
     }
+    if (!isGatewayAvailable(snapshot)) {
+      this.loadGeneration += 1;
+      this.loadedClient = null;
+      this.scheduleHealthRefresh();
+      return;
+    }
     const owner = this.owner();
     const agentScope = this.sources.agentSelection.state;
     const ownerChanged = this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner);
@@ -488,6 +503,11 @@ export class SidebarAttentionStoreController implements StoreController {
 
   dismiss(dismissal: SidebarAttentionDismissal): void {
     const run = this.sources.overlays.snapshot.updateRun;
+    if (dismissal.kind === "outbox") {
+      // Offline review has no authenticated storage key; retain it through reconnect.
+      this.reviewedOutbox.add(dismissal.signature);
+      this.onChange();
+    }
     if (
       dismissal.kind === "updateAvailable" &&
       run &&

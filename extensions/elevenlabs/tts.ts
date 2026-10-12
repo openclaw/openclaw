@@ -1,4 +1,3 @@
-// Elevenlabs plugin module implements tts behavior.
 import {
   MAX_AUDIO_BYTES,
   normalizeApplyTextNormalization,
@@ -120,35 +119,42 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   };
 }
 
-export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer> {
-  const { apiKey, timeoutMs } = params;
+async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: boolean) {
   const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
-    stream: false,
+    stream,
   });
-  const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
-    await import("openclaw/plugin-sdk/provider-http");
+  const { assertOkOrThrowProviderError } = await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
-
-  const { response, release } = await fetchWithSsrFGuard({
+  const result = await fetchWithSsrFGuard({
     url: url.toString(),
     init: {
       method: "POST",
       headers: {
-        "xi-api-key": apiKey,
+        "xi-api-key": params.apiKey,
         "Content-Type": "application/json",
         ...(acceptHeader ? { Accept: acceptHeader } : {}),
       },
       body,
     },
-    timeoutMs,
+    timeoutMs: params.timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts",
+    auditContext: stream ? "elevenlabs.tts.stream" : "elevenlabs.tts",
   });
   try {
-    await assertOkOrThrowProviderError(response, "ElevenLabs API error");
+    await assertOkOrThrowProviderError(result.response, "ElevenLabs API error");
+    return result;
+  } catch (error) {
+    await result.release();
+    throw error;
+  }
+}
 
+export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer> {
+  const { readProviderBinaryResponse } = await import("openclaw/plugin-sdk/provider-http");
+  const { response, release } = await requestElevenLabsTts(params, false);
+  try {
     return await readProviderBinaryResponse(response, "ElevenLabs API error", "audio");
   } finally {
     await release();
@@ -159,36 +165,12 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
   audioStream: ReadableStream<Uint8Array>;
   release: () => Promise<void>;
 }> {
-  const { apiKey, timeoutMs } = params;
-  const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
-    ...params,
-    stream: true,
-  });
   const { createBoundedProviderBinaryStream } =
     await import("openclaw/plugin-sdk/provider-binary-stream");
-  const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
-    await import("openclaw/plugin-sdk/provider-http");
-  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
-    await import("openclaw/plugin-sdk/ssrf-runtime");
-
-  const { response, release } = await fetchWithSsrFGuard({
-    url: url.toString(),
-    init: {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        ...(acceptHeader ? { Accept: acceptHeader } : {}),
-      },
-      body,
-    },
-    timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts.stream",
-  });
+  const { assertProviderBinaryResponseContent } = await import("openclaw/plugin-sdk/provider-http");
+  const { response, release } = await requestElevenLabsTts(params, true);
   let handedOff = false;
   try {
-    await assertOkOrThrowProviderError(response, "ElevenLabs API error");
     assertProviderBinaryResponseContent(response, "ElevenLabs API error", "audio");
     if (!response.body) {
       throw new Error("ElevenLabs API response missing audio stream");

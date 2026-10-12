@@ -118,14 +118,12 @@ async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCode
             continue;
           }
           const event: unknown = JSON.parse(line.slice(6));
-          if (
-            isRecord(event) &&
-            event.type === "log.synced" &&
-            event.aggregateID === threadId &&
-            Number.isSafeInteger(event.seq) &&
-            Number(event.seq) >= 0
-          ) {
-            return { threadId, seq: Number(event.seq) };
+          if (isRecord(event) && event.type === "log.synced" && event.aggregateID === threadId) {
+            // Released v2 omits seq when the captured log watermark is empty.
+            const seq = event.seq === undefined ? 0 : event.seq;
+            if (Number.isSafeInteger(seq) && Number(seq) >= 0) {
+              return { threadId, seq: Number(seq) };
+            }
           }
         }
         throw new Error("OpenCode returned invalid upstream indicators");

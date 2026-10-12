@@ -13,6 +13,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -81,6 +82,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
@@ -170,6 +172,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -245,6 +248,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
@@ -291,6 +295,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });

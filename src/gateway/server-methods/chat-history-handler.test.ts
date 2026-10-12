@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -23,6 +24,10 @@ import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import {
+  registerMetadataCallerCases,
+  registerMetadataRevocationCases,
+} from "./chat-metadata-ownership.test-support.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -92,50 +97,6 @@ function createPersonalMetadataFixture() {
 }
 
 describe("chat history model selection defaults", () => {
-  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {
-        session: { scope: "per-sender" },
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig;
-      await state.writeConfig(cfg);
-      for (const agentId of ["ops", "research"]) {
-        await upsertSessionEntryCore(
-          { agentId, sessionKey: "global" },
-          { sessionId: `global-${agentId}`, updatedAt: 1 },
-        );
-      }
-      await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: "agent:research:main" },
-        { sessionId: "main-research", updatedAt: 1 },
-      );
-      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-      const client = identifiedClient("literal-global-operator");
-      client.connect.scopes = ["operator.admin"];
-      for (const [sessionKey, sessionId] of [
-        ["global", "global-research"],
-        ["agent:research:main", "main-research"],
-      ]) {
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.history"],
-          "history handler",
-        )({
-          params: { sessionKey, agentId: "research" },
-          context,
-          req: { type: "req", id: "literal-global", method: "chat.history" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ sessionKey, sessionId }),
-        );
-      }
-    });
-  });
-
   it.each(["chat.history", "chat.startup"] as const)(
     "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
@@ -183,6 +144,61 @@ describe("chat history model selection defaults", () => {
 });
 
 describe("chat history sharing projection", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s projects unbound canonical ACP metadata without host ACP reads",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:acp:unbound-history";
+        seedCanonicalAcpSessionMeta({
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "unbound-history",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
+        const context = await createHistoryReadContext();
+        const client = identifiedClient("unbound-history-operator");
+        client.connect.scopes = ["operator.admin"];
+        const respond = vi.fn<RespondFn>();
+        const hostSql = observeHostDataSql();
+        try {
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: { sessionKey },
+            context,
+            client,
+            respond,
+            req: { type: "req", id: "unbound-history", method },
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                runtimeSelectionLocked: true,
+                agentRuntime: {
+                  id: "acpx",
+                  source: "session-key",
+                  cloudPlacementSupported: false,
+                  devicePlacementSupported: false,
+                },
+              }),
+            }),
+          );
+          expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+        } finally {
+          hostSql.restore();
+        }
+      });
+    },
+  );
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s carries current caller sharing controls on sessionInfo",
     async (method) => {
@@ -341,6 +357,9 @@ describe("chat history delta publication", () => {
         const initial = await call();
         const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
         expect(initialResponse[0]).toBe(true);
+        expect(initialResponse[1]).toMatchObject({
+          sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
+        });
         const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
         if (typeof cursor !== "string") {
           throw new Error("expected initial delta cursor");
@@ -387,6 +406,18 @@ describe("chat history delta publication", () => {
           expect.objectContaining({ code, ...(code === "UNAVAILABLE" ? { retryable: true } : {}) }),
         );
         expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
+        if (change === "reset") {
+          // A reset can retain the physical transcript ID while invalidating cached full messages.
+          expect(await call()).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sessionId: scope.sessionId,
+                lifecycleRevision: "after-reset",
+              }),
+            }),
+          );
+        }
       });
     },
   );
@@ -444,7 +475,6 @@ describe("chat history exact-entry snapshots", () => {
           updatedAt: now,
           parentSessionKey: scope.sessionKey,
           spawnedBy: scope.sessionKey,
-          status: "running",
           skillsSnapshot,
         });
         const context = await createHistoryReadContext();
@@ -706,89 +736,9 @@ describe("chat metadata ownership", () => {
     });
   });
 
-  it.each([
-    "foreign admin",
-    "unidentified admin",
-    "anonymous",
-    "synthetic owner",
-    "forged locator",
-  ] as const)(
-    "rejects a personal draft preview from %s before projecting credentials",
-    async (caller) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { owner, client, authProfileId, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        client.connect.scopes = ["operator.admin"];
-        let requestedProfile = authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("metadata-other@example.test");
-          client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "unidentified admin") {
-          delete client.authenticatedUserProfile;
-        } else if (caller === "synthetic owner") {
-          client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
-        }
+  registerMetadataCallerCases(createPersonalMetadataFixture);
 
-        const respond = await request(
-          { agentId: "main", authProfileId: requestedProfile },
-          caller === "anonymous" ? { client: null } : {},
-        );
-
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        expect(readChatMetadata).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rejects a personal draft preview after %s during the metadata read",
-    async (loss) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        const entered = createDeferred();
-        const release = createDeferred();
-        const abort = new AbortController();
-        readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return metadata;
-        });
-        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readChatMetadata).toHaveBeenCalledOnce();
-          if (loss === "disconnect") {
-            clients.delete(client);
-          } else if (loss === "role loss") {
-            config.gateway.roles.definitions.reader.scopes = [];
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-      });
-    },
-  );
+  registerMetadataRevocationCases(createPersonalMetadataFixture);
 
   it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

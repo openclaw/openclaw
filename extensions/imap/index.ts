@@ -1,7 +1,7 @@
 import {
   definePluginEntry,
   type OpenClawPluginApi,
-  type OpenClawPluginServiceContext,
+  type OpenClawPluginServiceContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveImapConfig } from "./src/config.js";
 import { createImapState } from "./src/state.js";
@@ -18,48 +18,39 @@ export default definePluginEntry({
     if (api.registrationMode !== "full") {
       return;
     }
-    let generation = 0;
     let watchers: ImapAccountWatcher[] = [];
     api.registerService({
       id: "imap-watch",
-      start(context: OpenClawPluginServiceContext) {
+      apiVersion: 2,
+      async start(context: OpenClawPluginServiceContextV2) {
         const previous = watchers;
-        const activeGeneration = ++generation;
         watchers = [];
-        const start = async () => {
-          await Promise.all(previous.map((watcher) => watcher.stop()));
-          if (activeGeneration !== generation) {
-            return;
-          }
-          const config = imapConfigSchema.parse(api.pluginConfig, (accountId) => {
-            context.logger.warn(
-              `imap: account=${accountId} unavailable; resolve its IMAP password and reload configuration`,
-            );
-          });
-          const accounts = Object.entries(config.accounts);
-          if (!accounts.length) {
-            context.logger.warn(
-              "imap: no accounts configured; add plugins.entries.imap.config.accounts",
-            );
-            return;
-          }
-          const state = createImapState(api.runtime);
-          watchers = accounts.map(
-            ([accountId, account]) =>
-              new ImapAccountWatcher({ accountId, account, runtime: api.runtime, state, context }),
+        await Promise.all(previous.map((watcher) => watcher.stop()));
+        if (context.scheduler.signal.aborted) {
+          return;
+        }
+        const config = imapConfigSchema.parse(api.pluginConfig, (accountId) => {
+          context.logger.warn(
+            `imap: account=${accountId} unavailable; resolve its IMAP password and reload configuration`,
           );
-          for (const watcher of watchers) {
-            watcher.start();
-          }
-        };
-        void start().catch((error: unknown) => {
-          if (activeGeneration === generation) {
-            context.serviceHealth?.reportFailure(error);
-          }
         });
+        const accounts = Object.entries(config.accounts);
+        if (!accounts.length) {
+          context.logger.warn(
+            "imap: no accounts configured; add plugins.entries.imap.config.accounts",
+          );
+          return;
+        }
+        const state = createImapState(api.runtime);
+        watchers = accounts.map(
+          ([accountId, account]) =>
+            new ImapAccountWatcher({ accountId, account, runtime: api.runtime, state, context }),
+        );
+        for (const watcher of watchers) {
+          watcher.start();
+        }
       },
       async stop() {
-        generation++;
         const active = watchers;
         watchers = [];
         await Promise.all(active.map((watcher) => watcher.stop()));

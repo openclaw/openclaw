@@ -1,4 +1,5 @@
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isJsonObject, type JsonObject, type CodexThread } from "./app-server/protocol.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
@@ -83,8 +84,9 @@ export function projectCodexCatalogNativeThread(
     row.path = null;
   }
   if (typeof thread.originator === "string") {
-    // Provenance tests exact native identity, unlike trimmed display metadata.
-    row.originator = detachCodexCatalogString(thread.originator.slice(0, 500));
+    // Provenance tests exact native identity, unlike trimmed display metadata;
+    // when truncation splits a surrogate pair, the whole pair is dropped.
+    row.originator = detachCodexCatalogString(truncateUtf16Safe(thread.originator, 500));
   }
   for (const field of ["createdAt", "updatedAt", "recencyAt"] as const) {
     const value = thread[field];
@@ -107,10 +109,7 @@ export function projectCodexCatalogNativeThread(
   } else if (rawPreview === null) {
     row.preview = null;
   }
-  const source =
-    typeof thread.source === "string"
-      ? detachCodexCatalogString(thread.source.slice(0, 500))
-      : undefined;
+  const source = thread.source;
   if (
     source === "cli" ||
     source === "vscode" ||

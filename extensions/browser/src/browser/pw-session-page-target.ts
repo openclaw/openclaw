@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 
@@ -30,7 +31,6 @@ export function isConnectionScopedTargetId(targetId: string | undefined): boolea
 
 async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   let session: CDPSession | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   let detachStarted = false;
   const detach = () => {
@@ -40,42 +40,36 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
     detachStarted = true;
     void session.detach().catch(() => {});
   };
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      detach();
-      resolve(null);
-    }, PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  const read = (async () => {
-    session = await page.context().newCDPSession(page);
-    if (timedOut) {
-      detach();
-      return null;
-    }
-    try {
-      const { targetInfo } = await session.send("Target.getTargetInfo");
-      const targetId = normalizeOptionalString(targetInfo.targetId) ?? "";
-      if (!targetId) {
+  return await raceWithTimeout(
+    async () => {
+      session = await page.context().newCDPSession(page);
+      if (timedOut) {
+        detach();
         return null;
       }
-      const namespace = connectionNamespaces.get(page.context());
-      return {
-        targetId: namespace ? `connection:${namespace}:${targetId}` : targetId,
-        title: targetInfo.title,
-      };
-    } finally {
+      try {
+        const { targetInfo } = await session.send("Target.getTargetInfo");
+        const targetId = normalizeOptionalString(targetInfo.targetId) ?? "";
+        if (!targetId) {
+          return null;
+        }
+        const namespace = connectionNamespaces.get(page.context());
+        return {
+          targetId: namespace ? `connection:${namespace}:${targetId}` : targetId,
+          title: targetInfo.title,
+        };
+      } finally {
+        detach();
+      }
+    },
+    PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS,
+    () => {
+      timedOut = true;
       detach();
-    }
-  })();
-  try {
-    return await Promise.race([read, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+      return null;
+    },
+    { ref: false },
+  );
 }
 
 export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {

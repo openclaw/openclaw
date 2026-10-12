@@ -24,7 +24,10 @@ it.each([
 ])("returns complete non-incognito entries for $name", async ({ options, expectedKeys }) => {
   await withOpenClawTestState({ label: "plugin-transcript-projection" }, async () => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, research: {} } },
+      agents: {
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, research: {} },
+      },
     };
     const skillsSnapshot = {
       prompt: "Saved plugin skill instructions",

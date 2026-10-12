@@ -3,7 +3,9 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   loadTranscriptEventsFromDatabase,
@@ -15,7 +17,8 @@ import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
 const TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE = 900;
@@ -24,6 +27,7 @@ type TranscriptMirrorFacts = {
   anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
   existingIdempotencyKeys: Set<string>;
   messagesByIdempotencyKey: Map<string, unknown>;
+  sourceEvents?: TranscriptEvent[];
 };
 
 /** Returns raw events only when the transcript identity projection is not current. */
@@ -64,11 +68,115 @@ export function readTranscriptMirrorFacts(
   resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];
+    sourceRunId?: string;
   },
 ): TranscriptMirrorFacts {
   return runSqliteDeferredTransactionSync(
     database.db,
-    () => readTranscriptMirrorFactsInSnapshot(database, resolved, params),
+    () => {
+      assertSessionTranscriptHot(database.db, resolved.sessionId);
+      const idempotencyKeys = [...new Set(params.idempotencyKeys)];
+      const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
+      if (fallbackEvents !== undefined) {
+        return readMirrorFactsFromEvents(
+          fallbackEvents,
+          new Set(idempotencyKeys),
+          params.sourceRunId,
+        );
+      }
+
+      const db = getSessionKysely(database.db);
+      const facts: TranscriptMirrorFacts = {
+        anchorsByIdempotencyKey: new Map(),
+        existingIdempotencyKeys: new Set(),
+        messagesByIdempotencyKey: new Map(),
+      };
+      const batches = chunkItems(idempotencyKeys, TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE);
+      if (params.sourceRunId) {
+        facts.sourceEvents = [];
+        if (batches.length === 0) {
+          batches.push([]);
+        }
+      }
+      let anchorsReady: boolean | undefined;
+      for (const batch of batches) {
+        const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
+        const rows = executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("transcript_events as event")
+            .leftJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "event.session_id")
+                .onRef("identity.seq", "=", "event.seq"),
+            )
+            .leftJoin("session_transcript_active_events as active", (join) =>
+              join
+                .onRef("active.session_id", "=", "event.session_id")
+                .onRef("active.event_seq", "=", "event.seq"),
+            )
+            .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+              join.onRef("rewrite.session_id", "=", "event.session_id"),
+            )
+            .select([
+              "identity.event_id",
+              "identity.message_idempotency_key",
+              "event.seq",
+              "identity.parent_id",
+              transcriptEventJsonSql(database.db, "event").as("event_json"),
+              "active.message_position",
+              "rewrite.generation",
+            ])
+            .where("event.session_id", "=", resolved.sessionId)
+            .where((eb) => {
+              const matchesKey = eb("identity.message_idempotency_key", "in", batch);
+              return sourceRunId
+                ? eb.or([
+                    matchesKey,
+                    eb.and([
+                      eb("active.event_seq", "is not", null),
+                      eb(transcriptEventRunIdSql("event"), "=", sourceRunId),
+                    ]),
+                  ])
+                : matchesKey;
+            })
+            .orderBy("event.seq", "asc"),
+        ).rows;
+        for (const row of rows) {
+          // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
+          const event = JSON.parse(row.event_json) as TranscriptEvent;
+          const message = readTranscriptEventMessage(event);
+          if (
+            sourceRunId &&
+            row.message_position !== null &&
+            readSessionTranscriptRunId(message) === sourceRunId
+          ) {
+            facts.sourceEvents?.push(event);
+          }
+          const idempotencyKey = row.message_idempotency_key;
+          if (!idempotencyKey || !row.event_id || !batch.includes(idempotencyKey)) {
+            continue;
+          }
+          facts.existingIdempotencyKeys.add(idempotencyKey);
+          anchorsReady ??= !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
+          const anchor = anchorsReady
+            ? createTranscriptEntryAnchor({
+                database,
+                resolved,
+                entryId: row.event_id,
+                row,
+              })
+            : undefined;
+          if (anchor) {
+            facts.anchorsByIdempotencyKey.set(idempotencyKey, anchor);
+          }
+          if (message !== undefined) {
+            facts.messagesByIdempotencyKey.set(idempotencyKey, message);
+          }
+        }
+      }
+      return facts;
+    },
     {
       databaseLabel: database.path,
       operationLabel: "session.transcript.mirror-facts",
@@ -76,101 +184,22 @@ export function readTranscriptMirrorFacts(
   );
 }
 
-/** Reads mirror facts after the caller has established one SQLite snapshot. */
-function readTranscriptMirrorFactsInSnapshot(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  params: {
-    idempotencyKeys: readonly string[];
-  },
-): TranscriptMirrorFacts {
-  assertSessionTranscriptHot(database.db, resolved.sessionId);
-  const idempotencyKeys = [...new Set(params.idempotencyKeys)];
-  const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
-  if (fallbackEvents !== undefined) {
-    return readMirrorFactsFromEvents(fallbackEvents, new Set(idempotencyKeys));
-  }
-
-  const db = getSessionKysely(database.db);
-  const facts: TranscriptMirrorFacts = {
-    anchorsByIdempotencyKey: new Map(),
-    existingIdempotencyKeys: new Set(),
-    messagesByIdempotencyKey: new Map(),
-  };
-  let anchorsReady: boolean | undefined;
-  for (
-    let offset = 0;
-    offset < idempotencyKeys.length;
-    offset += TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE
-  ) {
-    const batch = idempotencyKeys.slice(offset, offset + TRANSCRIPT_MIRROR_KEY_QUERY_BATCH_SIZE);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
-        )
-        .leftJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
-          join.onRef("rewrite.session_id", "=", "identity.session_id"),
-        )
-        .select([
-          "identity.event_id",
-          "identity.message_idempotency_key",
-          "identity.seq",
-          "identity.parent_id",
-          transcriptEventJsonSql(database.db, "event").as("event_json"),
-          "active.message_position",
-          "rewrite.generation",
-        ])
-        .where("identity.session_id", "=", resolved.sessionId)
-        .where("identity.message_idempotency_key", "in", batch)
-        .orderBy("identity.seq", "asc"),
-    ).rows;
-    for (const row of rows) {
-      const idempotencyKey = row.message_idempotency_key;
-      if (!idempotencyKey) {
-        continue;
-      }
-      facts.existingIdempotencyKeys.add(idempotencyKey);
-      anchorsReady ??= !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
-      const anchor = anchorsReady
-        ? createTranscriptEntryAnchor({
-            database,
-            resolved,
-            entryId: row.event_id,
-            row,
-          })
-        : undefined;
-      if (anchor) {
-        facts.anchorsByIdempotencyKey.set(idempotencyKey, anchor);
-      }
-      const message = readTranscriptEventMessage(JSON.parse(row.event_json) as TranscriptEvent);
-      if (message !== undefined) {
-        facts.messagesByIdempotencyKey.set(idempotencyKey, message);
-      }
-    }
-  }
-  return facts;
-}
-
 /** Extracts supplied mirror identities from authoritative transcript events. */
 function readMirrorFactsFromEvents(
   events: readonly TranscriptEvent[],
   candidateKeys: ReadonlySet<string>,
+  sourceRunId?: string,
 ): TranscriptMirrorFacts {
   const facts: TranscriptMirrorFacts = {
     anchorsByIdempotencyKey: new Map(),
     existingIdempotencyKeys: new Set(),
     messagesByIdempotencyKey: new Map(),
   };
+  if (sourceRunId) {
+    facts.sourceEvents = selectVisibleTranscriptEvents(events).filter(
+      (event) => readSessionTranscriptRunId(readTranscriptEventMessage(event)) === sourceRunId,
+    );
+  }
   for (const event of events) {
     const message = readTranscriptEventMessage(event);
     const idempotencyKey = readMessageIdempotencyKey(message);

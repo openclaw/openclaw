@@ -47,7 +47,7 @@ export async function acquireGitSource(params: {
       error:
         details.action === "resolve ref"
           ? `failed to resolve ref ${ref} in ${label}`
-          : `failed to ${details.action}${details.action === "checkout" ? ` ${params.ref}` : ""} ${label}: ${detail}`,
+          : `failed to ${details.action}${details.action === "checkout" ? ` ${ref}` : ""} ${label}: ${detail}`,
     };
   };
 
