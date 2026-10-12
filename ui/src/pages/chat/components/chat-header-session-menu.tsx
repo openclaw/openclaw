@@ -143,7 +143,9 @@ function ChatHeaderSessionMenuContent(
   });
   const handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
     const value = event.detail.item.value;
-    if (!value) return;
+    if (!value) {
+      return;
+    }
     if (value.startsWith("board-widget:")) {
       props.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
       return;
@@ -153,9 +155,11 @@ function ChatHeaderSessionMenuContent(
     if (nextView) {
       event.preventDefault();
       setCompactView(nextView);
-      if (managementView === "icon") view.appearance.prepare();
-      else if (nextView === "sharing" && !props.sharing?.openDisabledReason)
+      if (managementView === "icon") {
+        view.appearance.prepare();
+      } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
         props.sharing?.onOpen();
+      }
       onSettled(() => actions.focusCurrentView());
       return;
     }
@@ -172,22 +176,26 @@ function ChatHeaderSessionMenuContent(
             ? props.sessionActions
             : props.layoutActions;
       const action = entries.find((candidate) => candidate.id === id);
-      if (action && action.kind !== "status" && !action.disabled) action.onActivate();
+      if (action && action.kind !== "status" && !action.disabled) {
+        action.onActivate();
+      }
       return;
     }
     if (value.startsWith("view:")) {
       event.preventDefault();
-      if (props.onboarding) return;
+      if (props.onboarding) {
+        return;
+      }
       const setting = value.slice("view:".length);
-      if (setting === "reasoning")
+      if (setting === "reasoning") {
         props.onSettingsChange({ chatShowThinking: !props.settings.chatShowThinking });
-      else if (setting === "tool-calls")
+      } else if (setting === "tool-calls") {
         props.onSettingsChange({ chatShowToolCalls: !props.settings.chatShowToolCalls });
-      else if (setting === "commentary")
+      } else if (setting === "commentary") {
         props.onSettingsChange({
           chatPersistCommentary: props.settings.chatPersistCommentary === false,
         });
-      else if (
+      } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&
         props.session.target?.key
@@ -208,7 +216,9 @@ function ChatHeaderSessionMenuContent(
       value.startsWith("member:") ||
       value.startsWith("public:")
     ) {
-      if (props.sharing) selectChatSessionSharingItem(props.sharing, value);
+      if (props.sharing) {
+        selectChatSessionSharingItem(props.sharing, value);
+      }
       return;
     }
     if (actions.handleSelect(value)) {
@@ -462,7 +472,9 @@ function ChatHeaderSessionMenuContent(
       placement="bottom-end"
       aria-label={menuLabel()}
       onKeyDown={(event) => {
-        if (!actions.handleKeydown(event, view.appearance)) activateMenuShortcut(host, event);
+        if (!actions.handleKeydown(event, view.appearance)) {
+          activateMenuShortcut(host, event);
+        }
       }}
       onWa-show={() => {
         setCompactView("root");
