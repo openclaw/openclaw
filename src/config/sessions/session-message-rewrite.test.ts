@@ -23,6 +23,7 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { createSessionWorkerOperationContext } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import {
   applySessionMessageRewrite,
@@ -94,10 +95,12 @@ it("returns the exact committed rewrite generation without selecting it again", 
     try {
       const result = applySessionMessageRewrite(
         { ...selection, expected, message: { role: "user", content: "rewritten" } },
-        {
-          writeTransaction: (_operation, _label, run) =>
-            runOpenClawAgentWriteTransaction(run, { agentId: "main", path: f.database.path }),
-        },
+        createSessionWorkerOperationContext(
+          f.database,
+          { agentId: "main", path: f.database.path },
+          { admit() {} },
+          "Rewrite fixture",
+        ),
         (_database, candidate) => candidate,
       );
       committedGeneration = result.result?.generation;
@@ -111,7 +114,9 @@ it("returns the exact committed rewrite generation without selecting it again", 
         .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
         .get(f.scope.sessionId)?.generation,
     ).toBe(committedGeneration);
-    expect(JSON.parse(f.rows()[0].eventJson).message.content).toBe("rewritten");
+    const rewritten = f.rows()[0];
+    assert(rewritten);
+    expect(JSON.parse(rewritten.eventJson).message.content).toBe("rewritten");
   });
 });
 
