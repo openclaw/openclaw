@@ -14,3 +14,9 @@ export type SessionActorMemoryCorpusReads = {
     output: SessionResetRecallCutoff;
   };
 };
+export type SessionActorMemoryCorpusQuery = {
+  [Key in keyof SessionActorMemoryCorpusReads]: {
+    type: Key;
+    input: SessionActorMemoryCorpusReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryCorpusReads];
