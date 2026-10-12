@@ -19,10 +19,11 @@ import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import type { Skill } from "../skills/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import {
   createSandboxedReadTool,
   createSkillInstructionDeliveryCache,
@@ -40,6 +41,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createSyntheticSourceInfo } from "./sessions/source-info.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import {
   expectReadWriteEditTools,
@@ -663,6 +665,82 @@ describe("createOpenClawCodingTools", () => {
       }),
     ).rejects.toThrow(/Path escapes sandbox root/i);
     await expect(fs.readFile(boundFile, "utf8")).resolves.toBe('{"ready":true}\n');
+  });
+
+  it("serves sandboxed skill instructions through the sandbox bridge, never host-retained content", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-skill-read-");
+    const hostSkillFile = path.join(workspaceDir, ".agents", "skills", "sandboxed", "SKILL.md");
+    await fs.mkdir(path.dirname(hostSkillFile), { recursive: true });
+    // The bridge-served tree deliberately diverges from the host-retained
+    // discovery bytes: a wrapper that serves the cached content would both
+    // bypass the guarded sandbox reader and attribute the read to the host
+    // bundle's stamp.
+    await fs.writeFile(hostSkillFile, "BRIDGE-SERVED instructions\n", "utf8");
+    const containerSkillPath = "/workspace/.agents/skills/sandboxed/SKILL.md";
+
+    const sandbox = createAgentToolsSandboxContext({ workspaceDir });
+    sandbox.fsBridge = createSandboxFsBridgeFromResolver((filePath) => {
+      const relativePath = path.posix.relative("/workspace", filePath);
+      return {
+        hostPath: path.join(workspaceDir, relativePath),
+        relativePath,
+        containerPath: filePath,
+      };
+    });
+
+    const skill: Skill = {
+      name: "sandboxed",
+      description: "Sandboxed fixture skill",
+      // Remapped sandbox entries carry container paths with no host file
+      // authority; retained discovery content and stamps are host-domain facts.
+      filePath: containerSkillPath,
+      baseDir: path.posix.dirname(containerSkillPath),
+      fileHost: "gateway",
+      sourceInfo: createSyntheticSourceInfo(containerSkillPath, { source: "gateway" }),
+      disableModelInvocation: false,
+      source: "gateway",
+      readContent: "HOST-RETAINED instructions\n",
+      bundleFingerprint: "fp-host-retained-stamp",
+    };
+    const markers = createSkillInstructionDeliveryMarkers();
+    const acquirer = vi.fn(async () => "fp-acquired-host-tree");
+    const acquirers = new WeakMap<
+      object,
+      (deliveredText: string | undefined, cohort?: number) => Promise<string | undefined>
+    >([[skill, acquirer]]);
+
+    const tools = createOpenClawCodingToolsInternal(
+      {
+        workspaceDir,
+        sandbox,
+        skillInstructionDeliveryMarkers: markers,
+        skillDeliveredIdentityAcquirers: acquirers,
+      },
+      [skill],
+    );
+    const readTool = tools.find((tool) => tool.name === "read");
+    if (!readTool) {
+      throw new Error("missing read tool");
+    }
+    // Container-path form: the instruction read routes through the guarded
+    // bridge and serves the sandbox tree's own bytes.
+    const result = await readTool.execute("read-sandboxed-skill", {
+      path: containerSkillPath,
+    });
+    const text = extractToolText(result);
+    expect(text).toContain("BRIDGE-SERVED");
+    expect(text).not.toContain("HOST-RETAINED");
+    // Host-path form: the guarded reader rejects the request instead of the
+    // wrapper satisfying it from the host-retained cache.
+    await expect(
+      readTool.execute("read-sandboxed-host-path", { path: hostSkillFile }),
+    ).rejects.toThrow();
+    // The host-tree acquisition walk never arms inside a sandbox: the entry's
+    // serving reader is the bridge, not the host tree.
+    expect(acquirer).not.toHaveBeenCalled();
+    // No delivery identity settles for bridge-served instructions, so the
+    // activation cannot borrow the host bundle's stamp.
+    expect(markers.takeInvocationFingerprint("read-sandboxed-skill")).toBeUndefined();
   });
 
   it("continues oversized data through the assembled shell-disabled read tool", async () => {

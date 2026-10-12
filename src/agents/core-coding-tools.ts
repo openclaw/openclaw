@@ -354,12 +354,27 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     base.push(
       wrapReadToolWithSkillContent(
         sandboxRoot ? wrapped : wrapWorkspaceSkillRead(wrapped, skillReadResources, options),
-        skillReadResources?.map((skill) => ({
-          filePath: resolveSkillReadPath(skill),
-          readContent: skill.readContent,
-          bundleFingerprint: skill.bundleFingerprint,
-          acquireDeliveredFingerprint: options.skillDeliveredIdentityAcquirers?.get(skill),
-        })),
+        // A sandboxed run serves filesystem paths through its guarded bridge.
+        // Host-retained content and host-tree stamps describe host bytes:
+        // carrying either into the sandboxed wrapper would serve pre-sandbox
+        // instructions without consulting the bridge, or attribute
+        // bridge-served bytes to a host bundle. Drop both so filesystem reads
+        // use the bridge and carry no delivery identity — the activation then
+        // omits a fingerprint rather than borrowing a host stamp. node://
+        // entries have no filesystem path — retained content is their only
+        // serving route — so they keep their bytes and producer-stamped
+        // identity on every run.
+        skillReadResources?.map((skill) => {
+          const retainHostContent = !sandboxRoot || skill.filePath.startsWith("node://");
+          return {
+            filePath: resolveSkillReadPath(skill),
+            readContent: retainHostContent ? skill.readContent : undefined,
+            bundleFingerprint: retainHostContent ? skill.bundleFingerprint : undefined,
+            acquireDeliveredFingerprint: retainHostContent
+              ? options.skillDeliveredIdentityAcquirers?.get(skill)
+              : undefined,
+          };
+        }),
         {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
