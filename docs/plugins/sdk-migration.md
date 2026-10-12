@@ -112,6 +112,20 @@ legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
 operations; final tool, disclosure, and mutation authority checks retain their
 current owner and timing.
 
+### Durable-send destination history
+
+Remove `mirror` from calls to `sendDurableMessageBatch` and
+`withDurableMessageSendContext` in `openclaw/plugin-sdk/channel-outbound`.
+Confirmed sends now record their delivered content automatically in the resolved
+destination conversation. The caller's own conversation is not recorded twice.
+
+The `mirror` parameter and `DeliveryMirror` type remain source-compatible with
+the 2026.10.1 SDK until the next Plugin SDK major, when removal requires explicit
+breaking-release approval. Legacy calls emit one deprecation warning per plugin
+and process. The old field does not select a different history destination or
+override delivered text or media; a mismatched `mirror.sessionKey` creates no
+extra conversation row.
+
 ### Session reset freshness
 
 Channel runtime consumers should await
