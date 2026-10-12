@@ -48,7 +48,7 @@ struct CameraPTZRuntimeTests {
         command: OpenClawCameraCommand,
         params: some Encodable) async throws -> BridgeInvokeResponse
     {
-        let paramsJSON = try String(decoding: JSONEncoder().encode(params), as: UTF8.self)
+        let paramsJSON = try #require(String(bytes: JSONEncoder().encode(params), encoding: .utf8))
         return await runtime.handleInvoke(BridgeInvokeRequest(
             id: "ptz-request",
             command: command.rawValue,
@@ -68,7 +68,7 @@ struct CameraPTZRuntimeTests {
                 params: OpenClawCameraPTZStatusParams(deviceId: "camera-id"))
 
             #expect(!response.ok)
-            #expect(response.error?.details == .init(capabilities: ["camera"], state: .disabledInOpenClaw))
+            #expect(response.error?.details == .init(capabilities: ["cameraEnabled"], state: .disabledInOpenClaw))
             #expect(await service.statusDeviceId == nil)
         }
     }

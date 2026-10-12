@@ -10,6 +10,7 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case microphone
     case speechRecognition
     case camera
+    case cameraEnabled
     case location
     case eventPosting
     case computerControl

@@ -58,6 +58,17 @@ struct MacNodePermissionTests {
         #expect(PermissionManager.accessibilityMissingState(.granted, requestAttempted: true) == nil)
     }
 
+    @Test(arguments: [false, true])
+    func `camera toggle remediation follows OpenClaw consent without an OS settings destination`(enabled: Bool) async {
+        await TestIsolation.withUserDefaultsValues([cameraEnabledKey: enabled]) {
+            let missing = await PermissionManager.missingPermissions([.cameraEnabled])
+            #expect(missing?.details == (enabled ? nil : .init(
+                capabilities: ["cameraEnabled"], state: .disabledInOpenClaw)))
+            #expect(await PermissionManager.ensure([.cameraEnabled], interactive: false) == [.cameraEnabled: enabled])
+            #expect(SystemSettingsURLSupport.settingsCandidates(for: .cameraEnabled).isEmpty)
+        }
+    }
+
     @Test func `an unsuccessful Event Posting request offers relaunch recovery`() {
         #expect(PermissionManager.eventPostingMissingState(granted: false, requestAttempted: false) == .notDetermined)
         #expect(PermissionManager.eventPostingMissingState(granted: false, requestAttempted: true) == .restartRequired)

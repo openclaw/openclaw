@@ -3983,6 +3983,7 @@ export const en: TranslationMap & {
         microphone: "Microphone",
         speechRecognition: "Speech Recognition",
         camera: "Camera",
+        cameraEnabled: "Camera in OpenClaw",
         location: "Location",
         computerControl: "Computer Control",
         canvas: "Canvas",

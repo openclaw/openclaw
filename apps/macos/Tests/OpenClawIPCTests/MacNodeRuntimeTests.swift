@@ -508,15 +508,29 @@ struct MacNodeRuntimeTests {
         #expect(!overlay.model.isVisible)
     }
 
-    @Test func `handle invoke camera list requires enabled camera`() async {
+    @Test func `camera enumeration requires only the OpenClaw toggle`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
-            let services = await MainActor.run { MainActorServicesProbe() }
+            let services = await MainActor.run {
+                let services = MainActorServicesProbe()
+                services.permissionStates = [.camera: .denied]
+                return services
+            }
             let runtime = await MacNodeRuntime(
                 desktopAvailability: services.desktopAvailability,
                 makeMainActorServices: { services })
             let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
-            #expect(response.error?.details == .init(capabilities: ["camera"], state: .disabledInOpenClaw))
+            #expect(response.error?.details == .init(capabilities: ["cameraEnabled"], state: .disabledInOpenClaw))
+            let disabledCapture = await self.invoke(runtime, "req-camera-disabled", OpenClawCameraCommand.snap.rawValue)
+            #expect(disabledCapture.error?.details == .init(
+                capabilities: ["cameraEnabled", "camera"], state: .disabledInOpenClaw))
+
+            await MainActor.run { AppDefaults.standard.set(true, forKey: cameraEnabledKey) }
+            let enabled = await self.invoke(runtime, "req-camera-list-enabled", OpenClawCameraCommand.list.rawValue)
+            #expect(enabled.ok)
+            #expect(enabled.error == nil)
+            let capture = await self.invoke(runtime, "req-camera-denied", OpenClawCameraCommand.snap.rawValue)
+            #expect(capture.error?.details == .init(capabilities: ["camera"], state: .denied))
         }
     }
 

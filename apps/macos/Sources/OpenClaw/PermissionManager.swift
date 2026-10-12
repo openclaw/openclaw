@@ -91,6 +91,8 @@ enum PermissionManager {
                 await self.ensureSpeechRecognition(interactive: interactive, isCurrent: isCurrent)
             case .camera:
                 await self.ensureCapture(.video, capability: .camera, interactive: interactive, isCurrent: isCurrent)
+            case .cameraEnabled:
+                AppDefaults.standard.bool(forKey: cameraEnabledKey)
             case .location:
                 await self.ensureLocation(interactive: interactive, isCurrent: isCurrent)
             case .eventPosting:

@@ -47,6 +47,11 @@ The structured error carries `capabilities` and one remediation `state`:
 `disabled-in-openclaw`. These describe native authorization or an OpenClaw
 capability switch, independently of the agent's tool approvals.
 
+Camera discovery (`camera.list`) requires the OpenClaw camera switch
+(`cameraEnabled`), but does not request macOS camera access. Taking a photo,
+recording video, or controlling camera movement also requires the separate
+macOS Camera grant (`camera`).
+
 Screen Recording and Accessibility show **Not granted** until access is confirmed;
 macOS's binary checks do not distinguish a first request from a denial. Click
 **Grant** to request access before looking for OpenClaw in System Settings.

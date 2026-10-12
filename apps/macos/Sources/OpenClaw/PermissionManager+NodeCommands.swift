@@ -93,10 +93,8 @@ extension PermissionManager {
             let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
             return self.isNotificationAuthorized(status: status)
                 ? nil : status == .notDetermined ? .notDetermined : .denied
-        case .computerControl:
-            return isComputerControlEnabled() ? nil : .disabledInOpenClaw
-        case .canvas:
-            return AppStateStore.shared.canvasEnabled ? nil : .disabledInOpenClaw
+        case .cameraEnabled, .computerControl, .canvas:
+            return await self.ensure([capability], interactive: false)[capability] == true ? nil : .disabledInOpenClaw
         }
     }
 

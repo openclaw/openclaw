@@ -460,10 +460,11 @@ extension MacNodeRuntime {
         let includeAudio = req.command == OpenClawCameraCommand.clip.rawValue &&
             ((try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON).includeAudio) ?? true)
         let cameraEnabled = Self.cameraEnabled()
-        let capabilities: [Capability] = req.command == OpenClawCameraCommand.list.rawValue && cameraEnabled
-            ? [] : includeAudio ? [.camera, .microphone] : [.camera]
+        // Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
+        let capabilities: [Capability] = req.command == OpenClawCameraCommand.list.rawValue
+            ? [.cameraEnabled] : includeAudio ? [.cameraEnabled, .camera, .microphone] : [.cameraEnabled, .camera]
         if let error = await services.missingPermissions(
-            capabilities, disabled: cameraEnabled ? [] : [.camera])
+            capabilities, disabled: cameraEnabled ? [] : [.cameraEnabled])
         {
             throw error
         }

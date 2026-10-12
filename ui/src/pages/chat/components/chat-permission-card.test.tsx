@@ -27,9 +27,9 @@ function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"
   snapshot.device.nodeId = "node-mac";
   snapshot.revision = 1;
   snapshot.permissions.entries = ids
-    .filter((id) => id !== "computerControl")
+    .filter((id) => id !== "computerControl" && id !== "cameraEnabled")
     .map((id) => ({
-      // SAFETY: scenarios use native permission ids; computerControl is a capability toggle.
+      // SAFETY: capability toggles are excluded; the remaining scenarios use native permission ids.
       id: id as "screenRecording" | "accessibility" | "camera" | "location",
       status:
         state === "not-determined" ? "notDetermined" : state === "denied" ? "denied" : "granted",
@@ -129,7 +129,7 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
 });
 
 it("does not treat camera and location OS grants as enabling their OpenClaw toggles", () => {
-  const f = fixture("disabled-in-openclaw", ["camera", "location"]);
+  const f = fixture("disabled-in-openclaw", ["cameraEnabled", "camera", "location"]);
   f.snapshot.permissions.entries = [
     { id: "camera", status: "granted" },
     { id: "location", status: "granted" },
@@ -139,6 +139,25 @@ it("does not treat camera and location OS grants as enabling their OpenClaw togg
   f.publish();
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
 });
+
+it.each([false, true])(
+  "separates camera enumeration enablement from capture authorization (capture=%s)",
+  (capture) => {
+    const f = fixture("disabled-in-openclaw", ["cameraEnabled", ...(capture ? ["camera"] : [])]);
+    f.snapshot.capabilities.cameraEnabled = false;
+    f.snapshot.permissions.entries = [{ id: "camera", status: "notDetermined" }];
+    f.publish();
+    expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
+    f.snapshot.capabilities.cameraEnabled = true;
+    f.publish();
+    expect(Boolean(f.view.queryByRole("button", { name: "Try again" }))).toBe(!capture);
+    if (capture) {
+      f.snapshot.permissions.entries = [{ id: "camera", status: "granted" }];
+      f.publish();
+      expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
+    }
+  },
+);
 
 it("shows app guidance for another node and rejects a stale local node action", async () => {
   const f = fixture("denied");

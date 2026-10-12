@@ -33,8 +33,8 @@ export function ChatPermissionCard(props: {
       if (id === "canvas") {
         return snapshot?.capabilities?.canvasEnabled !== true;
       }
-      if (id === "camera" && snapshot?.capabilities?.cameraEnabled === false) {
-        return true;
+      if (id === "cameraEnabled") {
+        return snapshot?.capabilities?.cameraEnabled !== true;
       }
       if (id === "location" && snapshot?.permissions.location?.mode === "off") {
         return true;
@@ -50,7 +50,7 @@ export function ChatPermissionCard(props: {
       if (
         remaining().includes("computerControl") ||
         remaining().includes("canvas") ||
-        (remaining().includes("camera") && snapshot?.capabilities?.cameraEnabled === false) ||
+        remaining().includes("cameraEnabled") ||
         (remaining().includes("location") && snapshot?.permissions.location?.mode === "off")
       ) {
         return "disabled-in-openclaw";

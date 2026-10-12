@@ -124,7 +124,7 @@ extension DashboardWindowController {
         let setting: (DeviceSettingKey, DeviceSettingValue)? = switch capability {
         case .computerControl where !isComputerControlEnabled(): (.computerControlEnabled, .boolean(true))
         case .canvas where !AppStateStore.shared.canvasEnabled: (.canvasEnabled, .boolean(true))
-        case .camera where !AppDefaults.standard.bool(forKey: cameraEnabledKey): (.cameraEnabled, .boolean(true))
+        case .cameraEnabled where !AppDefaults.standard.bool(forKey: cameraEnabledKey): (.cameraEnabled, .boolean(true))
         case .location where AppDefaults.standard.string(forKey: locationModeKey) == nil ||
             AppDefaults.standard.string(forKey: locationModeKey) == OpenClawLocationMode.off.rawValue:
             (.locationMode, .string(OpenClawLocationMode.whileUsing.rawValue))
@@ -136,7 +136,7 @@ extension DashboardWindowController {
         return switch capability {
         case .computerControl: isComputerControlEnabled()
         case .canvas: AppStateStore.shared.canvasEnabled
-        case .camera: AppDefaults.standard.bool(forKey: cameraEnabledKey)
+        case .cameraEnabled: AppDefaults.standard.bool(forKey: cameraEnabledKey)
         case .location: AppDefaults.standard.string(forKey: locationModeKey) != OpenClawLocationMode.off.rawValue
         default: true
         }
