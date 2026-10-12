@@ -125,13 +125,13 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
-  it.each(["rotation", "missing resume"] as const)(
+  it.each(["rotation", "missing resume", "missing preflight"] as const)(
     "routes the final native provider after %s without reusing the injected URL as upstream",
     async (recovery) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
-        persistedThreads: ["old-thread"],
+        persistedThreads: recovery === "missing preflight" ? [] : ["old-thread"],
         respond: async (method) => {
           if (method === "account/read") {
             return { account: { type: "apiKey" } };
@@ -175,12 +175,19 @@ describe("Codex native configuration lifecycle", () => {
         expect(route?.upstream).toBe("https://api.openai.com/v1");
         const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
         expect(start).toMatchObject({ config: { openai_base_url: route?.baseUrl } });
-        if (recovery === "missing resume") {
+        if (recovery !== "rotation") {
           expect(start).toHaveProperty("modelProvider", "openai");
         } else {
           expect(start).not.toHaveProperty("modelProvider");
         }
         expect(config).toEqual({ openai_base_url: "https://api.openai.com/v1" });
+        expect(binding.threadId).toBe("new-thread");
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "new-thread",
+        });
+        expect(
+          fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
+        ).toHaveLength(1);
         expect(
           fixture.request.mock.calls.filter(([method]) => method === "thread/resume"),
         ).toHaveLength(recovery === "missing resume" ? 1 : 0);
@@ -453,6 +460,7 @@ describe("Codex native configuration lifecycle", () => {
 
 it("reuses isolated retained threads until native skills change", async () => {
   vi.stubEnv("HOME", tempDir);
+  vi.stubEnv("CODEX_HOME", "");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
   const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
   const workspaceDir = path.join(tempDir, "warm-isolated-workspace");

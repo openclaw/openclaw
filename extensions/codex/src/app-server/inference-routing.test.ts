@@ -92,6 +92,82 @@ async function prepare(
 }
 
 describe("managed inference route ownership", () => {
+  it.each(["missing", "wrong-thread", "wrong-code", "revoked", "aborted"] as const)(
+    "preserves lifecycle recovery after native cleanup without admitting %s ownership",
+    async (condition) => {
+      let active = true;
+      const controller = new AbortController();
+      const h = harness({
+        onWrite(line, send) {
+          const request = JSON.parse(line);
+          if (request.method === "account/read") {
+            send({ id: request.id, result: { account: { type: "apiKey" } } });
+            return;
+          }
+          expect(request.method).toBe("thread/read");
+          expect(request.params).toEqual({ threadId: "abandoned", includeTurns: false });
+          if (condition === "revoked") {
+            active = false;
+          }
+          if (condition === "aborted") {
+            controller.abort(new Error("caller aborted"));
+          }
+          send({
+            id: request.id,
+            error: {
+              code: condition === "wrong-code" ? -32_603 : -32_600,
+              message: `thread not loaded: ${condition === "wrong-thread" ? "another" : "abandoned"}`,
+            },
+          });
+        },
+      });
+      ownCodexInferenceClient(h.client);
+      const original = await prepareThread(h.client, { config: {}, origins: {} });
+      expect(original).toBeDefined();
+      bindCodexInferenceThread(h.client, "abandoned", original!.route);
+      // A failed first turn leaves a binding, but idle native cleanup closes the
+      // empty thread and revokes its route while retaining the physical client.
+      h.send({ method: "thread/closed", params: { threadId: "abandoned" } });
+      expect(getCodexInferenceThread(h.client, "abandoned")).toBeUndefined();
+      const binding = {
+        threadId: "abandoned",
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+      };
+      const pending = prepareCodexInferenceThreadConfig({
+        client: h.client,
+        binding,
+        signal: controller.signal,
+        clientId: binding.clientId,
+        cwd: "/workspace",
+        effectiveConfig: { config: {}, origins: {} },
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller revoked");
+          }
+        },
+      });
+      if (condition === "missing") {
+        await expect(pending).resolves.toMatchObject({ route: original!.route });
+      } else {
+        await expect(pending).rejects.toThrow(
+          condition === "revoked"
+            ? "caller revoked"
+            : condition === "aborted"
+              ? "caller aborted"
+              : "thread not loaded:",
+        );
+      }
+      // Preparation does not rotate the binding or claim the missing native thread.
+      expect(binding).toEqual({
+        threadId: "abandoned",
+        clientId: "fixture-native-client",
+        cwd: "/workspace",
+      });
+      expect(getCodexInferenceThread(h.client, "abandoned")).toBeUndefined();
+    },
+  );
+
   it.each([false, true])(
     "admits only config/account writes and route publications (prepared config=%s)",
     async (preparedConfig) => {
