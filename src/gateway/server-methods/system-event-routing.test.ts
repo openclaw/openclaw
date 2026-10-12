@@ -45,12 +45,6 @@ vi.mock("../../cron/proactive-job-receipt.js", () => ({
   readDefaultProactiveJobReceiptsAsync: mocks.readReceipts,
 }));
 
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    mocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
-}));
-
 import { systemHandlers } from "./system.js";
 
 const systemEvent = expectDefined(systemHandlers["system-event"], "system-event handler");
