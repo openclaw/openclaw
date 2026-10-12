@@ -9,7 +9,10 @@ import {
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import {
+  runWithSqliteMutationWorkerCoordination,
+  type SqliteMutationWorkerCoordination,
+} from "./session-accessor.sqlite-worker-coordination.js";
 import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
@@ -353,7 +356,11 @@ serveWorkerTasks(
         ) {
           throw new Error("Transcript worker shared-state owner changed");
         }
-        await run(input, port, coordination, sourceIdentity);
+        await runWithSqliteMutationWorkerCoordination(
+          coordination,
+          { env: resolveLeaseEnvironment(input) },
+          () => run(input, port, coordination, sourceIdentity),
+        );
       }
     } finally {
       value.port.close();
