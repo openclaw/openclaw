@@ -306,7 +306,7 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows while invalidating foreign pairing changes", async () => {
+test("reconnect receipts ignore pending rows and leave sibling pairing changes to their own receipts", async () => {
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
@@ -326,9 +326,6 @@ test("reconnect receipts ignore pending rows while invalidating foreign pairing 
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
     ).resolves.toBe(true);
-    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
-      "requires a current worker publication",
-    );
     const tokenParams = {
       deviceId: "paired-rich",
       role: "operator",
