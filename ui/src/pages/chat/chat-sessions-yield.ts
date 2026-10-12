@@ -202,7 +202,11 @@ function scanSessionsYieldItems(
     status.slot[status.slot.indexOf(status.item)] = {
       ...status.item,
       startedAt: Math.min(status.item.startedAt, status.askedAt),
-      request: { askedAt: status.askedAt, runIds: handoffRunIds },
+      request: {
+        askedAt: status.askedAt,
+        // Usage consumers add the status run itself, including while it waits.
+        runIds: handoffRunIds.filter((runId) => runId !== status.item.runId),
+      },
     };
   }
   return { items: projected.toReversed().flat(), pending };

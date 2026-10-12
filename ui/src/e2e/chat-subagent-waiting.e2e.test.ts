@@ -404,6 +404,7 @@ suite.define(() => {
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
         await indicator.waitFor();
+        await expect.poll(workingTokens).toBe("4.1k output tokens");
         expect(await waitLine.count()).toBe(0);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
