@@ -591,6 +591,11 @@ export async function mountSidebarContext(
   const provider = createApplicationContextProvider(context);
   const sidebar = await createSidebarElement();
   const element = sidebar.hostElement;
+  const syncMode = () => {
+    sidebar.sidebarAgentsMode = context.theme.settings.sidebarAgentsMode ?? "chip";
+  };
+  syncMode();
+  onTestFinished(context.theme.subscribe(syncMode));
   seedSidebarEveryonePreference(context.gateway);
   if (activeRouteId) {
     sidebar.activeRouteId = activeRouteId;

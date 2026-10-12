@@ -29,10 +29,11 @@ import {
 } from "../session-row-badge-presentation.ts";
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { SessionRunVisibilityController } from "../session-run-visibility-controller.ts";
-import { ChannelAvatarContent } from "./channel-avatar.tsx";
+import { ChannelAvatar } from "./channel-avatar.tsx";
 import { Icon } from "./icon.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
-import "../session-owner-chip.ts";
+import { SessionOwnerChip } from "./session-owner-chip.tsx";
+import { ViewerAvatar } from "./viewer-facepile.tsx";
 import "../tooltip.ts";
 
 export type SessionRunVisibility = (element: Element) => void;
@@ -229,13 +230,13 @@ export function renderSessionOwnerChip(
   participantCount?: number,
 ): JSX.Element {
   return owner?.id ? (
-    <openclaw-session-owner-chip
-      prop:owner={owner}
+    <SessionOwnerChip
+      owner={owner}
       size={size}
       attribution={attribution}
-      prop:viewingNow={viewingNow}
-      prop:participants={participants ?? []}
-      prop:participantCount={participantCount ?? participants?.length ?? 0}
+      viewingNow={viewingNow}
+      participants={participants ?? []}
+      participantCount={participantCount ?? participants?.length ?? 0}
     />
   ) : undefined;
 }
@@ -258,15 +259,15 @@ export function renderSessionOwnerAvatar(
     );
   }
   return (
-    <openclaw-viewer-avatar
-      prop:identity={owner.identity}
-      prop:user={{
+    <ViewerAvatar
+      identity={owner.identity}
+      user={{
         id: owner.id,
         name: owner.label,
         avatarUrl: owner.avatarUrl,
         watchedSessions: [],
       }}
-      prop:markAsViewer={false}
+      markAsViewer={false}
       variant="session"
       aria-hidden="true"
     />
@@ -479,7 +480,7 @@ export function renderSessionLeadingState(
       ),
     };
   }
-  const ownerChip =
+  const ownerChip = () =>
     !child && ownerActor?.id?.trim()
       ? renderSessionOwnerChip(
           ownerActor,
@@ -496,13 +497,13 @@ export function renderSessionLeadingState(
       leadingIndicator: (
         <SessionGlyph
           content={
-            <ChannelAvatarContent
+            <ChannelAvatar
               routeUrl={session.channelAvatarUrl}
               authTokens={avatarAuth?.authTokens ?? []}
               authReady={avatarAuth?.authReady ?? false}
             >
-              {ownerChip}
-            </ChannelAvatarContent>
+              {ownerChip()}
+            </ChannelAvatar>
           }
           {...runState}
           badge={
@@ -513,7 +514,7 @@ export function renderSessionLeadingState(
       ),
     };
   }
-  if (ownerChip) {
+  if (!child && ownerActor?.id?.trim()) {
     const stackedParticipants = participantCount ?? participants?.length ?? 0;
     const identities = [
       ownerActor?.identity,
@@ -532,7 +533,7 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: (
         <SessionGlyph
-          content={ownerChip}
+          content={ownerChip()}
           {...runState}
           badge={
             session.unread && !running && !trailingState ? renderSessionUnreadBadge() : undefined

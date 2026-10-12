@@ -14,7 +14,7 @@ import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./tooltip.ts";
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 export function visibleSessionChildren(params: {

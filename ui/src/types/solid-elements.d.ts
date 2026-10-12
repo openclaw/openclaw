@@ -9,7 +9,9 @@ import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/ta
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { WaTabShowEvent } from "@awesome.me/webawesome/dist/events/tab-show.js";
 import type { JSX } from "@solidjs/web";
+import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { MascotMood } from "../components/mascot-pose.ts";
+import type { MessageActionDetails } from "../pages/chat/components/chat-message-markdown.types.ts";
 export type { JSX } from "@solidjs/web";
 
 // Keep ambient tag contracts independent of renderer modules: SDK declarations include this file.
@@ -19,7 +21,20 @@ type ElementProperties<T> = { [Key in keyof T as `prop:${string & Key}`]?: T[Key
 
 declare module "@solidjs/web" {
   namespace JSX {
+    interface ExplicitProperties {
+      messageActions: MessageActionDetails | null | undefined;
+    }
     interface IntrinsicElements {
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
+        compact?: boolean;
+        placement?: "bottom-start" | "bottom-end";
+        "prop:activeEmoji"?: ReadonlySet<string>;
+        "prop:onSelect"?: (emoji: string, remove: boolean) => void;
+      };
+      "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
+        "prop:recommendation"?: ClawHubRecommendation;
+        "prop:agentId"?: string;
+      };
       "resizable-divider": Omit<HTMLAttributes<HTMLElement>, "onResize"> & {
         "prop:orientation": "horizontal" | "vertical";
         "prop:label": string;
@@ -37,6 +52,7 @@ declare module "@solidjs/web" {
         "prop:delay"?: number;
         "prop:closeDelay"?: number;
         "prop:hoverDismissDelay"?: number;
+        "prop:openOnClick"?: boolean;
         "prop:describe"?: boolean;
         placement?: HTMLElementTagNameMap["openclaw-tooltip"]["placement"];
         "open-on-click"?: boolean;

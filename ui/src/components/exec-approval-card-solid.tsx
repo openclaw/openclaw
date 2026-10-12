@@ -74,7 +74,7 @@ function useApprovalClock(onTick?: (nowMs: number) => void) {
   return now;
 }
 
-export const ApprovalCountdown = defineSolidBridge<{ expiresAtMs: number; compact: boolean }>(
+defineSolidBridge<{ expiresAtMs: number; compact: boolean }>(
   "openclaw-approval-countdown",
   (props, host) => {
     host.style.display = "contents";

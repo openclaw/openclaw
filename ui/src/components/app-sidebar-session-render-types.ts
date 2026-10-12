@@ -14,10 +14,6 @@ import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type {
-  ControlUiPluginView,
-  ControlUiPluginContributions,
-} from "../plugins/control-ui-view.runtime.ts";
-import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
   SidebarSessionCatalog,
@@ -32,10 +28,8 @@ import type {
   SidebarToolActivity,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { CatalogSessionMenu } from "./catalog-session-menu.ts";
 import "./mcp-app-catalog.tsx";
 import "./menu-surface.ts";
-import type { RelativeTime } from "./relative-time.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
@@ -44,7 +38,6 @@ import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
 import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import type { SessionOwnerChipProps } from "./solid/session-owner-chip.tsx";
 import type { ViewerAvatarProps, ViewerFacepileProps } from "./solid/viewer-facepile.tsx";
-import type { ThemeModeToggle } from "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 
 export interface SessionListHost {
@@ -242,10 +235,12 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-agent-avatar": BridgeAttributes<AgentAvatarProps>;
-      "openclaw-catalog-session-menu": HTMLAttributes<CatalogSessionMenu> &
-        Properties<CatalogSessionMenu> & {
-          "prop:onAction"?: CatalogSessionMenu["onAction"];
-          "prop:onClose"?: CatalogSessionMenu["onClose"];
+      "openclaw-catalog-session-menu": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-catalog-session-menu"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-catalog-session-menu"]> & {
+          "prop:onAction"?: HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onAction"];
+          "prop:onClose"?: HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onClose"];
         };
       "openclaw-channel-avatar": BridgeAttributes<ChannelAvatarProps>;
       "openclaw-mcp-app-catalog": HTMLAttributes<
@@ -255,23 +250,26 @@ declare module "@solidjs/web" {
         Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
       "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
         Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
-      "openclaw-plugin-contributions": HTMLAttributes<ControlUiPluginContributions> &
-        Properties<ControlUiPluginContributions> & {
-          "prop:agentId"?: ControlUiPluginContributions["agentId"];
-          "prop:navigationMenus"?: ControlUiPluginContributions["navigationMenus"];
+      "openclaw-plugin-contributions": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-plugin-contributions"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-plugin-contributions"]> & {
+          "prop:agentId"?: HTMLElementTagNameMap["openclaw-plugin-contributions"]["agentId"];
+          "prop:navigationMenus"?: HTMLElementTagNameMap["openclaw-plugin-contributions"]["navigationMenus"];
         };
-      "openclaw-plugin-view": HTMLAttributes<ControlUiPluginView> &
-        Properties<ControlUiPluginView> & {
-          "prop:props"?: ControlUiPluginView["props"];
-          "prop:defaultView"?: ControlUiPluginView["defaultView"];
-          "prop:mountDefaultView"?: ControlUiPluginView["mountDefaultView"];
-          "prop:replacementCompanion"?: ControlUiPluginView["replacementCompanion"];
-          "prop:defaultHost"?: ControlUiPluginView["defaultHost"];
+      "openclaw-plugin-view": HTMLAttributes<HTMLElementTagNameMap["openclaw-plugin-view"]> &
+        Properties<HTMLElementTagNameMap["openclaw-plugin-view"]> & {
+          "prop:props"?: HTMLElementTagNameMap["openclaw-plugin-view"]["props"];
+          "prop:defaultView"?: HTMLElementTagNameMap["openclaw-plugin-view"]["defaultView"];
+          "prop:replacementCompanion"?: HTMLElementTagNameMap["openclaw-plugin-view"]["replacementCompanion"];
+          "prop:defaultHost"?: HTMLElementTagNameMap["openclaw-plugin-view"]["defaultHost"];
         };
-      "openclaw-relative-time": HTMLAttributes<RelativeTime> & Properties<RelativeTime>;
       "openclaw-session-owner-chip": BridgeAttributes<SessionOwnerChipProps> &
         Partial<Pick<SessionOwnerChipProps, "size" | "attribution">>;
-      "openclaw-theme-mode-toggle": HTMLAttributes<ThemeModeToggle> & Properties<ThemeModeToggle>;
+      "openclaw-theme-mode-toggle": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-theme-mode-toggle"]
+      > &
+        Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]>;
       "openclaw-viewer-avatar": BridgeAttributes<ViewerAvatarProps> &
         Pick<ViewerAvatarProps, "variant">;
       "openclaw-viewer-facepile": BridgeAttributes<ViewerFacepileProps> &

@@ -176,6 +176,8 @@ export class OutboundDeliveryError extends Error {
       cause: unknown;
       results?: readonly OutboundDeliveryResult[];
       payloadOutcomes?: readonly OutboundPayloadDeliveryOutcome[];
+      /** Durable evidence from an earlier attempt of the same intent. */
+      sentBeforeError?: boolean;
       stage?: OutboundDeliveryFailureStage;
     },
   ) {
@@ -184,6 +186,7 @@ export class OutboundDeliveryError extends Error {
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
     this.sentBeforeError =
+      options.sentBeforeError === true ||
       this.results.length > 0 ||
       this.payloadOutcomes.some((outcome) =>
         outcome.status === "failed"

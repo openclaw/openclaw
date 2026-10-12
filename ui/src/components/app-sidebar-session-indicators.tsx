@@ -18,7 +18,7 @@ import {
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(

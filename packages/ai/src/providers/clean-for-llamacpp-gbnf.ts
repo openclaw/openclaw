@@ -1,4 +1,5 @@
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { inheritToolSchemaTruncation, truncateToolSchemaDepth } from "./tool-schema-depth.js";
 import { SCHEMA_MAP_KEYS } from "./tool-schema-refs.js";
 
 /** llama.cpp rejects grammar repetitions whose expanded rule count reaches 2000. */
@@ -23,11 +24,16 @@ const SCHEMA_CHILD_KEYS = new Set([
 ]);
 
 /** Removes JSON Schema constraints that llama.cpp cannot compile into GBNF. */
-export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
+export function cleanSchemaForLlamacppGbnf(schema: unknown, toolName?: string): unknown {
+  const bounded = truncateToolSchemaDepth(schema, toolName);
+  return inheritToolSchemaTruncation(bounded, cleanSchema(bounded));
+}
+
+function cleanSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const entries = schema.map((entry) => {
-      const next = cleanSchemaForLlamacppGbnf(entry);
+      const next = cleanSchema(entry);
       changed ||= next !== entry;
       return next;
     });
@@ -58,7 +64,7 @@ export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
       let mapChanged = false;
       next = Object.fromEntries(
         Object.entries(value).map(([childKey, childValue]) => {
-          const cleanedChild = cleanSchemaForLlamacppGbnf(childValue);
+          const cleanedChild = cleanSchema(childValue);
           mapChanged ||= cleanedChild !== childValue;
           return [childKey, cleanedChild];
         }),
@@ -67,7 +73,7 @@ export function cleanSchemaForLlamacppGbnf(schema: unknown): unknown {
         next = value;
       }
     } else if (SCHEMA_CHILD_KEYS.has(key)) {
-      next = cleanSchemaForLlamacppGbnf(value);
+      next = cleanSchema(value);
     }
     cleaned[key] = next;
     changed ||= next !== value;
@@ -108,6 +114,6 @@ function collectSchemaViolations(node: unknown, path: string, violations: string
 /** Reports schema paths that llama.cpp cannot compile into GBNF. */
 export function findLlamacppGbnfSchemaViolations(schema: unknown, path: string): string[] {
   const violations: string[] = [];
-  collectSchemaViolations(schema, path, violations);
+  collectSchemaViolations(truncateToolSchemaDepth(schema), path, violations);
   return violations;
 }

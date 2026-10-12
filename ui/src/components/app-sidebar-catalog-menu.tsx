@@ -11,8 +11,10 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
-import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
-import "./catalog-session-menu.ts";
+import {
+  CatalogSessionMenu,
+  type CatalogSessionMenuAction,
+} from "./catalog-session-menu-solid.tsx";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-types.ts";
@@ -243,16 +245,16 @@ export class SidebarCatalogMenuController {
     return (
       <Show when={this.state} keyed>
         {(menu) => (
-          <openclaw-catalog-session-menu
-            prop:x={menu.x}
-            prop:y={menu.y}
-            prop:trigger={this.trigger}
-            prop:lastActive={menu.meta}
-            prop:canDelete={menu.canDelete}
-            prop:canImport={this.canImport()}
-            prop:terminalDisabled={!menu.canOpenTerminal || !this.host.terminalAvailable}
-            prop:onAction={(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
-            prop:onClose={() => this.close()}
+          <CatalogSessionMenu
+            x={menu.x}
+            y={menu.y}
+            trigger={this.trigger}
+            lastActive={menu.meta}
+            canDelete={menu.canDelete}
+            canImport={this.canImport()}
+            terminalDisabled={!menu.canOpenTerminal || !this.host.terminalAvailable}
+            onAction={(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
+            onClose={() => this.close()}
           />
         )}
       </Show>

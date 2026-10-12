@@ -552,6 +552,16 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
+## Speech bubbles
+
+**Settings → Labs → Speech bubbles** controls
+`gateway.controlUi.experimental.chatBubbles` (off by default). Enabling it makes
+Home use bubbles by default and exposes the per-conversation View menu toggle.
+Browser-local on/off choices take precedence over the Home default. Turning the
+lab off hides the toggle and restores the standard view everywhere, without
+clearing those choices; turning it back on restores them. Changes apply in open
+Control UI pages without restarting the Gateway.
+
 ## Custom plugin UI
 
 Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
@@ -744,7 +754,8 @@ authorized response arrives and starts the reader from its first page, whether
 downloaded remain yours.
 
 Configure capture in **Settings → Communications → Meeting capture**, which also
-links back to the library. Administrators can change the existing
+links back to the library. When opened from Meetings, **Back to app** returns to
+the same meeting and library filters. Administrators can change the existing
 `transcripts.enabled` setting and add, edit, or remove `transcripts.autoStart`
 sources. Edits preserve account and source locators, titles, and custom session
 IDs through the shared config draft. Form changes auto-save through the standard

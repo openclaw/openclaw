@@ -15,7 +15,7 @@ import {
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 

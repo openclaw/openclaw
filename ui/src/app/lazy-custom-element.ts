@@ -245,7 +245,7 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   get label() {
     return t("shortcutsOverlay.title");
   },
-  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.tsx"),
 } satisfies OptionalCustomElement;
 
 const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
@@ -305,7 +305,7 @@ export const LINK_READER_PANEL_ELEMENT = {
 export const DASHBOARD_DOCUMENT_ELEMENT = {
   tagName: "openclaw-board-document",
   label: "dashboard document",
-  loadModule: () => import("../components/board/board-document.ts"),
+  loadModule: () => import("../components/board/board-document.tsx"),
 } satisfies OptionalCustomElement;
 
 // Loaded only for approval document URLs: the approval page pulls the protocol

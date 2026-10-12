@@ -84,7 +84,7 @@ export function countSidebarSessionFilters(host: SessionFilterHost) {
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-export function renderSidebarSessionFilter(
+function renderSidebarSessionFilter(
   host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
   className: string,
 ) {

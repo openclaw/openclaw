@@ -471,6 +471,7 @@ export function collapseCompletedTurnWork(
   opts: {
     sessionKey: string;
     runWorking: boolean;
+    bubbleMode?: boolean;
     searchActive?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
@@ -486,7 +487,9 @@ export function collapseCompletedTurnWork(
     extraParts.length === 0;
   // Channel sessions can also be opened in the Control UI, but their full
   // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
+  // Bubble mode keeps commentary in place and lets contiguous tool activity
+  // use the existing activity disclosure instead of folding narration into work.
+  if (!isDashboardSession || opts.searchActive || opts.bubbleMode) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];

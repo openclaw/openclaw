@@ -1,8 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { RelativeTime } from "./relative-time.tsx";
 import { Icon } from "./solid/icon.tsx";
-import "./relative-time.ts";
 
 export function SidebarDismissButton(props: {
   itemLabel: string;
@@ -71,10 +71,7 @@ export function SidebarNotificationCard(props: {
             {props.timestampMs == null ? null : (
               <>
                 <span aria-hidden="true">·</span>
-                <openclaw-relative-time
-                  class="sidebar-issues-panel__age"
-                  prop:timestampMs={props.timestampMs}
-                />
+                <RelativeTime class="sidebar-issues-panel__age" timestampMs={props.timestampMs} />
               </>
             )}
           </span>

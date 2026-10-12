@@ -540,6 +540,23 @@ export function runSqliteImmediateTransactionSync<T>(
   );
 }
 
+/**
+ * Execute one complete statement, then publish its receipts. Prepare inputs before
+ * calling; the callback must not do fallible work after the native statement.
+ * Existing transactions retain their savepoint and outer publication owner.
+ */
+export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T {
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () => {
+    if (db.isTransaction) {
+      return runSqliteTransactionSync(db, statement, "immediate");
+    }
+    const result = runSqliteReadOperationSync(db, statement);
+    assertSyncTransactionResult(result);
+    return result;
+  });
+}
+
 /** Obtain host admission before taking the writer lock; revalidate before physical commit. */
 export function runSqliteWorkerTransactionSync<T>(
   context: SqliteWorkerDatabaseContext,

@@ -53,11 +53,12 @@ beforeEach(() => {
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of disposers.splice(0)) {
     dispose();
   }
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalWebkit) {
@@ -455,8 +456,11 @@ describe("SidebarUpdateCard", () => {
     expect(time?.textContent?.trim()).toBe("6m ago");
 
     element.dispose();
+    await Promise.resolve();
+    expect(element.element.isConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(timersBefore);
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(vi.getTimerCount()).toBe(timersBefore);
     expect(time?.textContent?.trim()).toBe("6m ago");
   });
 
