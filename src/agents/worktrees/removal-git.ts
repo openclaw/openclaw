@@ -172,7 +172,7 @@ export async function removeManagedCheckout(
               throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
             }
           })
-          .catch((error) =>
+          .catch((error: unknown) =>
             log.warn(`Retired checkout cleanup failed at ${retired}: ${String(error)}`),
           );
       }),
