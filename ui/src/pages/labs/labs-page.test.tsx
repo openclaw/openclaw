@@ -357,9 +357,11 @@ describe("LabsPage", () => {
     });
   });
 
-  it("opens the Advisor plugin settings page from Configure", async () => {
-    const { page, context } = await mountPage({}, "/ui");
-    const link = labRow(page, "Settings").querySelector<HTMLAnchorElement>("a");
+  it("opens Advisor settings from Configure without toggling the lab", async () => {
+    const { page, context, runtimeConfig } = await mountPage({}, "/ui");
+    const link = labRow(page, "Advisor").querySelector<HTMLAnchorElement>(
+      '.settings-row__control a[aria-label="Configure Advisor"]',
+    );
     expect(link?.textContent?.trim()).toBe("Configure");
     expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
 
@@ -370,6 +372,9 @@ describe("LabsPage", () => {
       search: "?view=settings",
       hash: "",
     });
+    // The row toggles on plain clicks; its own links must not flip the switch.
+    expect(labToggle(page, "Advisor").checked).toBe(false);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
   it("shows default provenance", async () => {

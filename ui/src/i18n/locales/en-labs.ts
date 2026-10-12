@@ -3,8 +3,8 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
-    pluginSettings: "Settings",
     configure: "Configure",
+    configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
       description:
@@ -33,8 +33,6 @@ const enLabs = {
       title: "Advisor",
       description:
         "Every few turns or minutes of agent work, an advisor model reads the conversation's recent work and, if it spots avoidable work (drifting from the request, repeated or stalled tool calls), gives the agent one short correction on its next turn. Adds model calls.",
-      settingsDescription:
-        "Choose the advisor model, how often it reviews, and its model permissions on the plugin's settings page.",
     },
     chatBubbles: {
       title: "Speech bubbles",

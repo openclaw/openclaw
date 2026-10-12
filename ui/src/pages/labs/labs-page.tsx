@@ -186,32 +186,26 @@ function LabsPageContent() {
           : null;
     return executor === "quickjs" ? "quickjs" : "node";
   }
-  function PluginSettingsRow(props: { featureId: string; pluginId: string }) {
+  function PluginSettingsLink(props: { pluginId: string; featureTitle: string }) {
     const location = () =>
       pluginDetailLocation(
         { pathname: pathForPluginSettings(props.pluginId, context.basePath), search: "" },
         true,
       );
     return (
-      <SettingsRow
-        nested
-        title={t("labsPage.pluginSettings")}
-        description={t(`labsPage.${props.featureId}.settingsDescription`)}
-        control={
-          <a
-            class="btn btn--sm"
-            href={`${location().pathname}${location().search}`}
-            onClick={(event: MouseEvent) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                context.navigate("plugin-settings", location());
-              }
-            }}
-          >
-            {t("labsPage.configure")}
-          </a>
-        }
-      />
+      <a
+        class="btn btn--sm oc-action oc-action-ghost"
+        href={`${location().pathname}${location().search}`}
+        aria-label={t("labsPage.configureFeature", { name: props.featureTitle })}
+        onClick={(event: MouseEvent) => {
+          if (shouldHandleNavigationClick(event)) {
+            event.preventDefault();
+            context.navigate("plugin-settings", location());
+          }
+        }}
+      >
+        {t("labsPage.configure")}
+      </a>
     );
   }
   function FeatureRow(props: { feature: LabFeature }) {
@@ -254,6 +248,14 @@ function LabsPageContent() {
             checked={checked()}
             disabled={!canToggle()}
             onChange={(enabled) => setFeatureEnabled(props.feature, enabled)}
+            actions={
+              props.feature.settingsPluginId ? (
+                <PluginSettingsLink
+                  pluginId={props.feature.settingsPluginId}
+                  featureTitle={props.feature.title()}
+                />
+              ) : undefined
+            }
             description={
               <>
                 {props.feature.description()}
@@ -305,12 +307,6 @@ function LabsPageContent() {
                 </option>
               </select>
             }
-          />
-        ) : null}
-        {props.feature.settingsPluginId ? (
-          <PluginSettingsRow
-            featureId={props.feature.id}
-            pluginId={props.feature.settingsPluginId}
           />
         ) : null}
       </>

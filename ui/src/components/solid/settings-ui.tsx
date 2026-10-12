@@ -292,6 +292,8 @@ export function SettingsToggleRow(
     title: JSX.Element;
     ariaLabel?: JSX.Element;
     description?: JSX.Element;
+    /** Secondary actions beside the switch, such as opening related settings. */
+    actions?: JSX.Element;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -303,6 +305,7 @@ export function SettingsToggleRow(
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
+        {props.actions}
         <ToggleControl
           checked={props.checked}
           disabled={props.disabled}
