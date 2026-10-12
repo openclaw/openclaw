@@ -1214,9 +1214,65 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     // Reset detaches the old lane immediately. Admitted operations retain its
     // cleanup custody until they settle; the successor owns an independent lane.
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
+    if (await this.prepareDurablePersistedFreshSession(input, resource)) {
+      return;
+    }
     this.generationRegistry.prepareFresh(resource);
     // The validated reset retires this startup record before metadata is cleared.
     this.legacyBareSessionKeys.delete(resource);
+  }
+
+  /**
+   * A persisted locator has no live handle. Ask acpx to mark that exact record
+   * reset_on_next_ensure so a later process cannot session/resume it. In-memory
+   * markFresh is not enough, and synthesizing the marker here would skip acpx's
+   * physical-record fence.
+   */
+  private async prepareDurablePersistedFreshSession(
+    input: {
+      sessionKey: string;
+      agentId?: string;
+      persistedHandle?: {
+        sessionKey: string;
+        agentId?: string;
+        backend: string;
+        runtimeSessionName: string;
+        cwd?: string;
+        acpxRecordId?: string;
+        backendSessionId?: string;
+        agentSessionId?: string;
+      };
+    },
+    resource: string,
+  ): Promise<boolean> {
+    const persisted = input.persistedHandle;
+    if (!persisted) {
+      return false;
+    }
+    const decoded = decodeAcpxRuntimeHandleState(persisted.runtimeSessionName);
+    if (decoded?.mode !== "persistent") {
+      return false;
+    }
+    // Owner checks already reject a locator whose encoded record id disagrees.
+    const recordId = persisted.acpxRecordId?.trim() || decoded.acpxRecordId?.trim() || resource;
+    const existing = await this.sessionStore.loadForClose(recordId);
+    if (!existing || existing.acpxRecordId !== recordId) {
+      return false;
+    }
+    await this.closeSession(
+      {
+        handle: {
+          ...persisted,
+          sessionKey: input.sessionKey,
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+          acpxRecordId: existing.acpxRecordId,
+          ...(persisted.backendSessionId ? { backendSessionId: persisted.backendSessionId } : {}),
+        },
+        reason: "prepare-fresh",
+      },
+      "prepare-fresh",
+    );
+    return true;
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
