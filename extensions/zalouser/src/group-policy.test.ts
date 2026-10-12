@@ -24,6 +24,7 @@ describe("zalouser group policy helpers", () => {
         groupId: "123",
         groupName: "Team Alpha",
         includeGroupIdAlias: true,
+        allowNameMatching: true,
       }),
     );
     expect(entry).toEqual({ enabled: true });
