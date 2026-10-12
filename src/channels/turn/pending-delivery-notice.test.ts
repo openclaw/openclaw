@@ -211,4 +211,136 @@ describe("pending delivery notice", () => {
     await attempt;
     expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toEqual(replacement);
   });
+
+  describe("while the durable queue still owns the noticed final", () => {
+    const pendingFinalDelivery = {
+      kind: "replayable" as const,
+      text: "the final answer",
+      createdAt: Date.now(),
+      context: { channel: "telegram", to: "chat-1", accountId: "default", threadId: 42 },
+      intentId: "intent-1",
+      deliveries: [{ id: "delivery-1", state: "unknown" as const }],
+    };
+
+    beforeEach(async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry({ sessionKey, storePath }, { ...entry, pendingFinalDelivery });
+    });
+
+    // The dispatch-time "unknown" claim owes the notice before platform I/O; a
+    // message arriving during that send must not announce a loss that has not
+    // happened yet (openclaw/openclaw#154416).
+    it.each([{ status: "pending" }, { status: "failed", settlementPending: true }])(
+      "defers the notice while the queued send is unsettled (%o)",
+      async (owner) => {
+        findDeliveryIntentOwner.mockImplementation((id: string) =>
+          id === "delivery-1" ? owner : null,
+        );
+
+        await deliverPendingDeliveryNotice(sessionKey, storePath);
+
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+          intentId: "intent-1",
+          state: "owed",
+        });
+      },
+    );
+
+    it.each([null, { status: "failed" }, { status: "completed" }])(
+      "announces once the queue has settled the send (%o)",
+      async (owner) => {
+        findDeliveryIntentOwner.mockImplementation((id: string) =>
+          id === "delivery-1" ? owner : null,
+        );
+
+        await deliverPendingDeliveryNotice(sessionKey, storePath);
+
+        expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+        expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+          intentId: "intent-1",
+          state: "acknowledged",
+        });
+      },
+    );
+
+    it("does not defer behind a later intent's queued send", async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingFinalDelivery: {
+            ...pendingFinalDelivery,
+            intentId: "intent-2",
+            deliveries: [{ id: "delivery-2", state: "queued" }],
+          },
+        },
+      );
+      findDeliveryIntentOwner.mockReturnValue({ status: "pending" });
+
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+        intentId: "intent-1",
+        state: "acknowledged",
+      });
+    });
+  });
+
+  describe("when the owed notice is older than the announce window", () => {
+    // On a channel/account where platform delivery confirmation is
+    // structurally unreliable, every turn can owe its own fresh notice and
+    // turn a once-per-restart courtesy message into a standing failure mode
+    // that silently replaces real replies turn after turn
+    // (openclaw/openclaw#162554). Once stale, stop contesting the current
+    // turn's own answer instead of announcing a loss that may be long since
+    // irrelevant.
+    it("lapses the debt as unresolved without announcing", async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingDeliveryNotice: {
+            ...entry.pendingDeliveryNotice!,
+            createdAt: Date.now() - 11 * 60 * 1000,
+          },
+        },
+      );
+
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+        intentId: "intent-1",
+        state: "unresolved",
+      });
+    });
+
+    it("still announces a notice within the window", async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath })!;
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...entry,
+          pendingDeliveryNotice: {
+            ...entry.pendingDeliveryNotice!,
+            createdAt: Date.now() - 9 * 60 * 1000,
+          },
+        },
+      );
+
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice).toMatchObject({
+        intentId: "intent-1",
+        state: "acknowledged",
+      });
+    });
+  });
 });
