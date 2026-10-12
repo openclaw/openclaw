@@ -84,7 +84,9 @@ function observedRecoveryResult(
 ): Exclude<CronRunRecoveryResult, { kind: "repaired" }> | undefined {
   const receipt = observed.receipt;
   if (!receipt) {
-    return undefined;
+    return proposal.queuedAtMs === undefined && proposal.runningAtMs === undefined
+      ? { kind: "superseded" }
+      : undefined;
   }
   if (!proposal.receipt || !exactCronRunReceiptMatches(receipt, proposal.receipt)) {
     return { kind: "superseded", receipt };

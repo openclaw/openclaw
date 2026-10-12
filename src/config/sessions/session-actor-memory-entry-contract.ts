@@ -1,24 +1,36 @@
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleResult,
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
+import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
 import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
+import type { SessionEntryPatchCommit } from "./session-entry-patch.types.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionActorMemoryEntryReads = {
+  "session.entry.creation": {
+    input: { label?: string };
+    output: SessionEntryCreateWithTranscriptContext;
+  };
   "session.entry.read": {
-    input: { projection?: SessionEntryProjection };
+    input: { sessionKey?: string; projection?: SessionEntryProjection };
     output: SessionEntry | undefined;
   };
   "session.entry.readById": {
-    input: { sessionId: string; projection?: SessionEntryProjection };
+    input: { sessionId: string; projection?: SessionEntryProjection; currentOnly?: boolean };
     output: { sessionKey: string; entry: SessionEntry } | undefined;
   };
   "session.entries.read": {
-    input: { projection?: SessionEntryProjection };
+    input: {
+      projection?: SessionEntryProjection;
+      sessionKeys?: readonly string[];
+      includeSessionWindowOwner?: string;
+      includeLabelOwners?: string;
+    };
     output: Array<{ sessionKey: string; entry: SessionEntry }>;
   };
 };
@@ -28,12 +40,18 @@ type SessionActorMemoryEntryReplacement = {
   sessionKey: string;
   expected: SessionEntry | undefined;
   entry: SessionEntry | undefined;
+  routeContext?: ConversationRouteContext | null;
+  label?: string;
+  owner?: SessionOwnerAssignment;
+  transcriptEvents?: readonly unknown[];
 };
 
 export type SessionActorMemoryEntryWrites = {
   "session.entry.create": {
     input: {
       entry: SessionEntry;
+      routeContext?: ConversationRouteContext | null;
+      expected?: SessionEntry;
       label?: string;
       owner?: SessionOwnerAssignment;
       cwd?: string;
@@ -46,6 +64,15 @@ export type SessionActorMemoryEntryWrites = {
       operation: SessionEntryPatchOperation;
       fallbackEntry?: SessionEntry;
       preserveActivity?: boolean;
+      replaceEntry?: boolean;
+      providerReviewMutation?: boolean;
+      consumePendingReset?: boolean;
+      prepareIf?: { kind: "live-model-switch-pending" };
+      expected?: { entry: SessionEntry | undefined };
+      guards?: Pick<
+        SessionEntryPatchCommit,
+        "shouldCommitIf" | "cliHistory" | "conversation" | "sources"
+      >;
     };
     output: SessionEntry | undefined;
   };
@@ -61,6 +88,7 @@ export type SessionActorMemoryEntryWrites = {
     input: {
       expected: SessionEntry | undefined;
       nextEntry: SessionEntry;
+      routeContext?: ConversationRouteContext | null;
       resetBoundary?: SessionResetBoundaryWrite;
     };
     output: ResetSessionEntryLifecycleResult & { progressCardReset: boolean };

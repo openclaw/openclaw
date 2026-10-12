@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type {
+  SessionActor,
+  SessionActorAuthority,
   SessionActorStorage,
-  SessionActorStorageOutcome,
-} from "./session-actor-storage-contract.js";
+} from "./session-actor-contract.js";
+import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const parentKey = "agent:main:dashboard:incognito-fork-parent";
@@ -205,7 +206,7 @@ describe("memory actor fork and cut", () => {
     if (rewind.status !== "created") {
       throw new Error("Rewind failed");
     }
-    await expect(
+    await expect(async () =>
       storage(parent).read({ type: "session.entry.read", input: {} }, authority),
     ).rejects.toThrow(/closed/);
     const active = await acquire();

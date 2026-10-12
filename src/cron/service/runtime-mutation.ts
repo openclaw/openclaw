@@ -4,7 +4,6 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import type { CronRunReceipt } from "../store/run-receipt.types.js";
 import type {
   CronRuntimeMutationContracts,
   CronReceiptRevisionRefusal,
@@ -21,7 +20,6 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   assertCurrent: () => void;
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
-  onRolledBackConflict?: (receipt: CronRunReceipt) => void;
   onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
   onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
 };
@@ -60,9 +58,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           return;
         }
         settled = "not-committed";
-        if ("conflict" in result && params.onRolledBackConflict) {
-          params.onRolledBackConflict(result.conflict);
-        } else if ("receiptRevision" in result && params.onRolledBackReceiptRevision) {
+        if ("receiptRevision" in result && params.onRolledBackReceiptRevision) {
           params.onRolledBackReceiptRevision(result.receiptRevision);
         } else if ("mutationRefusal" in result && params.onRolledBackMutation) {
           params.onRolledBackMutation(result.mutationRefusal);

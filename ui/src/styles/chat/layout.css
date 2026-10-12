@@ -828,8 +828,7 @@ openclaw-pending-session-create {
     transform var(--duration-slow) var(--ease-in-out),
     opacity var(--duration-slow) var(--ease-in-out),
     background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    visibility 0s linear var(--duration-slow);
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .chat-scroll-to-bottom[data-visible="true"] {

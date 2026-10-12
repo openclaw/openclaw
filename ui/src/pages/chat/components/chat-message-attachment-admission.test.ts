@@ -172,6 +172,7 @@ describe("nonimage attachment source admission", () => {
 
     const current = observations.at(-1);
     render(null, view.container);
+    await settle();
     current?.show();
     await settle();
     expect(fetchMock).not.toHaveBeenCalled();

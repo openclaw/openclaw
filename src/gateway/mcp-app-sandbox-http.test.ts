@@ -1,16 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
-} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -69,7 +64,6 @@ function publicResourceRegistry(
     validateSource() {},
     composeDocument: () => "",
   });
-  markPluginRegistryActive(registry);
   return registry;
 }
 
@@ -178,52 +172,6 @@ describe("MCP App sandbox HTTP origin", () => {
       () => registry,
     );
   });
-
-  it("rebuilds public routes when the same registry is reactivated", async () => {
-    const registry = publicResourceRegistry(async () => ({
-      body: Buffer.from("old renderer"),
-      contentType: "application/javascript",
-    }));
-    await withSandboxHost(
-      async (origin) => {
-        const url = `${origin}/__openclaw__/renderer/app.js`;
-        expect((await fetch(url)).status).toBe(200);
-        markPluginRegistryRetired(registry);
-        registry.boardWidgetContentKinds.clear();
-        markPluginRegistryActive(registry);
-        expect((await fetch(url)).status).toBe(404);
-      },
-      () => registry,
-    );
-  });
-
-  it.each(["replacement", "retirement"] as const)(
-    "rejects an awaited public asset after registry %s",
-    async (change) => {
-      const started = createDeferred();
-      const result = createDeferred<{ body: Uint8Array; contentType: string }>();
-      let registry = publicResourceRegistry(async () => {
-        started.resolve();
-        return await result.promise;
-      });
-      await withSandboxHost(
-        async (origin) => {
-          const response = fetch(`${origin}/__openclaw__/renderer/app.js`);
-          await started.promise;
-          if (change === "replacement") {
-            registry = publicResourceRegistry(async () => undefined);
-          } else {
-            markPluginRegistryRetired(registry);
-          }
-          result.resolve({ body: Buffer.from("stale"), contentType: "application/javascript" });
-          const denied = await response;
-          expect(denied.status).toBe(404);
-          expect(await denied.text()).not.toContain("stale");
-        },
-        () => registry,
-      );
-    },
-  );
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
     const head = request(buildMcpAppSandboxPath(), "HEAD");

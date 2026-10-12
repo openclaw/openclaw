@@ -19,7 +19,6 @@ import {
   initialTranscriptRect,
   measureConnectedTranscriptRows,
   measureTranscriptRow,
-  resolveTranscriptScrollMargin,
   PositionRailGutterController,
 } from "./chat-transcript-geometry.ts";
 import { reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
@@ -105,7 +104,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   // Keep one ref per root and row so redraws do not repeat attachment work.
   readonly scrollElementRef = (element?: Element) => {
-    this.threadInnerElement = element instanceof HTMLDivElement ? element : null;
+    const next = element instanceof HTMLDivElement ? element : null;
+    this.threadInnerElement = next;
     // A retained root can move to another host without changing its identity.
     this.queueScrollElementAttach();
   };
@@ -371,8 +371,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   };
 
   disconnect(): void {
-    // A same-task pane move reconnects before this runs and keeps its rendered rows.
-    queueMicrotask(() => !this.connected && this.renderer.dispose());
+    this.renderer.disconnect(() => this.connected);
     this.layout.disconnect();
     this.endAnchor.disconnect();
     this.entryAnimations.disconnect();
@@ -428,12 +427,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.renderedScrollState = this.offsetState.renderState(
       this.scrollElement !== null && this.endAnchor.atEnd,
     );
-    const virtualizer = this.virtualizer;
     // Keep old geometry during the gesture, while still virtualizing that old
     // row model as the reader moves. Only the history insertion is held back.
     if (
       this.prependAnchor.hasPrepend &&
-      (this.offsetState.touchActive || virtualizer.isScrolling) &&
+      (this.offsetState.touchActive || this.virtualizer.isScrolling) &&
       !this.offsetState.scrollCommand &&
       !this.offsetState.pendingScrollOffset &&
       this.renderPreviousRows
@@ -504,7 +502,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
         } else {
           this.appliedHeaderHeight = reconcileTranscriptHeaderMargin(
             virtualizer,
-            this.scrollElement,
             this.headerHeight,
             this.appliedHeaderHeight,
           );
@@ -729,6 +726,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     // The header margin must land in the same setOptions as the key change:
     // the edge-key re-anchor uses absolute offsets, so a prepend that also
     // removes the header (exhausted history) compensates in one adjustment.
+    const scrollMargin =
+      virtualizer.options.scrollMargin + this.headerHeight - this.appliedHeaderHeight;
     this.appliedHeaderHeight = this.headerHeight;
     virtualizer.setOptions({
       ...virtualizer.options,
@@ -736,7 +735,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, rowIndexesByKey, this.focusedRowKey),
-      scrollMargin: resolveTranscriptScrollMargin(this.scrollElement, this.headerHeight),
+      scrollMargin,
     });
   }
 

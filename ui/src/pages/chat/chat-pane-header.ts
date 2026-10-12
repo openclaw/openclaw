@@ -40,7 +40,7 @@ import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-p
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
-import { isChatRunWorking } from "./components/chat-composer.ts";
+import { isChatRunWorking } from "./components/chat-composer.tsx";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,

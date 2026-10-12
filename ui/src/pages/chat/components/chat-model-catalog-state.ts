@@ -1,115 +1,29 @@
-import { html, nothing } from "lit";
-import { icons } from "../../../components/icons.ts";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
-import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
+import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
-registerModelControlsEnglish();
-
-export function renderChatModelCatalogRefresh(state: ChatModelCatalogState | undefined) {
-  if (
-    !state ||
-    (state.status !== "loading" && !(state.status === "ready" && state.pendingProviders?.length))
-  ) {
-    return nothing;
-  }
-  const providers = state.pendingProviders?.map(providerDisplayLabel).join(", ");
-  const label = providers
-    ? t("chat.modelControls.refreshingProviderModels", { providers })
-    : t("chat.modelControls.refreshingModels");
-  return html`
-    <span class="chat-controls__model-refresh" data-chat-model-refresh role="status">
-      <openclaw-tooltip .content=${label} .describe=${false} open-on-click>
-        <button class="chat-controls__model-refresh-details" type="button" aria-label=${label}>
-          <span class="btn__spinner" aria-hidden="true"></span>
-          <span>${label}</span>
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
+export function renderChatModelCatalogRefresh(state: ModelCatalogState | undefined) {
+  return solidTemplate(ChatModelCatalogRefresh, { state });
 }
 
 export function renderChatModelCatalogState(
-  state: ChatModelCatalogState | undefined,
+  state: ModelCatalogState | undefined,
   hasOptions: boolean,
   hasSelectableOptions: boolean,
   onModelSetup?: () => void,
   errorLabel = t("chat.modelControls.modelsUnavailable"),
-  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown },
+  retryTarget?: ChatModelCatalogStateProps["retryTarget"],
   emptyLabel?: string,
 ) {
-  if (!state) {
-    return nothing;
-  }
-  const { status } = state;
-  const checking = Boolean(state.pendingProviders?.length);
-  // A usable catalog refreshes in the search field, without moving the model rows.
-  // Keep blocking empty, offline, and failed states explicit below the search.
-  if (
-    (status === "ready" && hasSelectableOptions && !checking) ||
-    (hasOptions && (status === "loading" || (status === "ready" && checking)))
-  ) {
-    return nothing;
-  }
-  const label =
-    status === "offline"
-      ? t("common.offline")
-      : status === "error"
-        ? hasOptions
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : errorLabel
-        : status === "ready" && !checking
-          ? (emptyLabel ??
-            t(
-              state.modelSelectionPolicy?.restricted
-                ? "chat.modelControls.noPermittedModels"
-                : "chat.modelControls.noModelsAvailable",
-            ))
-          : t("chat.modelControls.loadingModels");
-  const renderAction = (action: "retry" | "setup") => html`<button
-    class="chat-controls__model-catalog-action"
-    data-chat-model-target-retry=${action === "retry" ? retryTarget?.groupId : nothing}
-    data-chat-model-setup=${action === "setup" ? "true" : nothing}
-    type="button"
-    ?disabled=${action === "retry" && retryTarget?.disabled}
-    @click=${(event: MouseEvent) => {
-      event.stopPropagation();
-      if (action === "retry") {
-        retryTarget?.onRetry(retryTarget.groupId);
-      } else {
-        onModelSetup?.();
-      }
-    }}
-  >
-    ${t(action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
-  </button>`;
-  return html`
-    <div
-      class="chat-controls__model-catalog-state ${
-        hasOptions ? "" : "chat-controls__model-catalog-state--empty"
-      }"
-      data-chat-model-catalog-state=${status}
-      role="status"
-      aria-live="polite"
-    >
-      <span class="chat-controls__model-catalog-state-label">
-        ${
-          status === "error"
-            ? icons.alertTriangle
-            : status === "loading" || status === "idle" || (status === "ready" && checking)
-              ? html`<span class="btn__spinner" aria-hidden="true"></span>`
-              : nothing
-        }
-        <span>${label}</span>
-      </span>
-      ${status === "error" && retryTarget ? renderAction("retry") : nothing}
-      ${
-        status === "ready" && !hasSelectableOptions && onModelSetup
-          ? renderAction("setup")
-          : nothing
-      }
-    </div>
-  `;
+  return solidTemplate(ChatModelCatalogState, {
+    state,
+    hasOptions,
+    hasSelectableOptions,
+    onModelSetup,
+    errorLabel,
+    retryTarget,
+    emptyLabel,
+  });
 }
