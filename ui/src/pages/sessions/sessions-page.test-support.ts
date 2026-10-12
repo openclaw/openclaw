@@ -21,6 +21,7 @@ import type {
 } from "../../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { SessionsPageArchive } from "./archive-actions.ts";
@@ -158,7 +159,9 @@ type MutableGateway = {
   setSessionKey: ReturnType<typeof vi.fn>;
 };
 
-export function createGateway(client: GatewayBrowserClient): MutableGateway {
+export function createGateway(
+  client: GatewayBrowserClient = createTestGatewayClient(async () => ({ profiles: [] })),
+): MutableGateway {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",

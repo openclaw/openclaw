@@ -24,6 +24,56 @@ import {
   withGatewaySessionEntryReadOnly,
 } from "./session-utils-read-lifetime.js";
 
+it("reads committed durable rows without host SQL and checks caller authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const key = "agent:main:saved";
+    const scope = { agentId: "main", sessionKey: key, env: state.env };
+    const params = { cfg, key, env: state.env };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "durable-session",
+      updatedAt: 1,
+      displayName: "Before write",
+    });
+    const read = () => withGatewaySessionEntryReadOnly(params, async (loaded) => loaded.entry);
+    await read();
+    const expectRead = async (displayName: string) => {
+      const sql = observeHostDataSql();
+      try {
+        expect(await read()).toMatchObject({ sessionId: "durable-session", displayName });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    };
+    await expectRead("Before write");
+    await patchSessionEntryCore(scope, () => ({ displayName: "After write" }), {
+      requireWriteSuccess: true,
+    });
+    await expectRead("After write");
+
+    const revoked = new Error("Caller no longer authorized");
+    let active = true;
+    let consumed = false;
+    const pending = withGatewaySessionEntryReadOnly(
+      {
+        ...params,
+        assertActive() {
+          if (!active) {
+            throw revoked;
+          }
+        },
+      },
+      async () => {
+        consumed = true;
+      },
+    );
+    active = false;
+    await expect(pending).rejects.toBe(revoked);
+    expect(consumed).toBe(false);
+  });
+});
+
 it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
   "rejects a retained metadata read after %s",
   async (change) => {

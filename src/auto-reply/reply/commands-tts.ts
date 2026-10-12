@@ -18,7 +18,7 @@ import {
   isTtsProviderConfiguredAsync,
   listTtsPersonas,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setLastTtsAttempt,
   setSummarizationEnabled,
   setTtsEnabled,
@@ -289,7 +289,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       channelId: params.command.channel,
       accountId,
     });
-    const prefsPath = resolveTtsPrefsPath(config);
+    const prefsPath = await resolveTtsPrefsPathAsync(config);
     const { action, args } = parsed;
 
     if (action === "help") {

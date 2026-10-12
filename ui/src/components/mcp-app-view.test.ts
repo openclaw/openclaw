@@ -1,5 +1,4 @@
 import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
-import type { LitElement } from "lit";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -769,8 +768,11 @@ describe("mcp-app-view localization", () => {
     });
     const appClient = createTestGatewayClient(request);
     client.request = appClient.request.bind(appClient);
-    const apps = document.createElement("openclaw-apps-page") as LitElement & { appSearch: string };
-    apps.appSearch = "?server=parts&tool=library";
+    // SAFETY: the registered Apps page exposes these properties to its rendering callers.
+    const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
+      readonly updateComplete: Promise<boolean>;
+    };
+    Object.assign(apps, { appSearch: "?server=parts&tool=library" });
     const provider = createApplicationContextProvider(fixture.context);
     const initialized = deferred();
     provider.addEventListener(MCP_APP_CONTEXT_EVENT, () => initialized.resolve(), { once: true });
@@ -791,18 +793,15 @@ describe("mcp-app-view localization", () => {
       await pane.updateComplete;
       expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
       await initialized.promise;
-      const strip = pane.querySelector<HTMLElement>("openclaw-mcp-app-context-strip")!;
+      const strip = pane.querySelector("openclaw-mcp-app-context-strip")!;
       expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
       expect(strip).not.toBeNull();
+      const itemSelector = ".mcp-app-context__item";
       const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
       await bridge.updateModelContextHandler!({ content: first.content });
-      await waitForSolid(() =>
-        expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2),
-      );
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(2));
       await bridge.updateModelContextHandler!({ content: second.content });
-      await waitForSolid(() =>
-        expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3),
-      );
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(3));
       expect(
         request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
       ).toHaveLength(2);

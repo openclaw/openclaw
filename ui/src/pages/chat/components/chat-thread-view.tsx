@@ -98,7 +98,7 @@ export function ChatThread(input: {
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: <LitContent value={renderChatHistoryBoundary(input.props.historyPagination)} />,
+          template: renderChatHistoryBoundary(input.props.historyPagination),
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;
@@ -112,7 +112,9 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.template : undefined}
+          {isEmpty() && !showLoadingSkeleton() ? (
+            <LitContent value={historyHeader()?.template} />
+          ) : undefined}
           {showLoadingSkeleton() ? (
             <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
           ) : undefined}

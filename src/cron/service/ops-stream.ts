@@ -111,7 +111,7 @@ async function mutateExternalState(
         if (change.kind === "failure") {
           for (const notification of committed.notifications) {
             source.assertCurrent();
-            runPostPersistCronNotifications(state, [notification]);
+            await runPostPersistCronNotifications(state, [notification]);
           }
           source.assertCurrent();
           armTimer(state);

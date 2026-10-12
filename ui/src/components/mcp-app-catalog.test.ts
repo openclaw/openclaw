@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -254,7 +253,10 @@ describe("app launch catalog", () => {
       const describeSession = vi.fn(async () => ({
         session: exists ? { key: "agent:main:main" } : null,
       }));
-      const element = document.createElement("openclaw-apps-page") as LitElement;
+      // SAFETY: the registered Apps page exposes its render-completion promise.
+      const element = document.createElement("openclaw-apps-page") as HTMLElement & {
+        readonly updateComplete: Promise<boolean>;
+      };
       const provider = createApplicationContextProvider({
         gateway: {
           snapshot: {

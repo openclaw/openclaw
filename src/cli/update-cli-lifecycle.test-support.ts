@@ -19,6 +19,7 @@ import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -482,6 +483,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   afterAll(async () => {
     fixtureEnvSnapshot.restore();
+    // Direct command fixtures also own the native broker started from their checkout.
+    await closeDefaultRetainedNativeWorkerSource();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
