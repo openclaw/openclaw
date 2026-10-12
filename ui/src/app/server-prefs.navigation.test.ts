@@ -395,7 +395,7 @@ describe("personal navigation preference boundary", () => {
     expect(
       JSON.parse(
         localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a")!,
-      ).sidebarEntries,
+      ).railShortcuts,
     ).toEqual(["route:usage", "route:plugins"]);
     flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true, afterCommit: committed });
     await vi.dynamicImportSettled();
