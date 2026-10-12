@@ -5,6 +5,7 @@ import {
   listMemoryFiles,
   runWithConcurrency,
   type MemoryFileEntry,
+  type MemoryEntryProvenance,
   type MemorySource,
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -14,15 +15,21 @@ import {
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
+type MemoryOriginClass = MemoryEntryProvenance["originClass"];
+
 export type MemorySourceFileStateRow = {
   path: string;
   hash: string;
   mtime?: number;
   size?: number;
+  origin?: MemoryOriginClass | null;
+  hasChunks?: boolean;
 };
 
 type MemorySourceDatabase = {
   memory_index_sources: MemorySourceFileStateRow & { source: MemorySource };
+  memory_index_chunks: { id: string; path: string; source: MemorySource };
+  memory_index_chunk_provenance: { chunk_id: string; origin_class: MemoryOriginClass };
 };
 
 type MemorySourceInspection = {
@@ -97,15 +104,55 @@ export function loadMemorySourceFileState(params: {
   db: DatabaseSync;
   source: MemorySource;
   paths?: readonly string[];
+  includeOrigin?: boolean;
 }): MemorySourceFileStateRow[] {
   let query = getNodeSqliteKysely<MemorySourceDatabase>(params.db)
-    .selectFrom("memory_index_sources")
-    .select(["path", "hash", "mtime", "size"])
-    .where("source", "=", params.source);
+    .selectFrom("memory_index_sources as file")
+    .select(["file.path", "file.hash", "file.mtime", "file.size"])
+    .where("file.source", "=", params.source);
   if (params.paths) {
-    query = query.where("path", "in", sqliteStringSet(params.paths));
+    query = query.where("file.path", "in", sqliteStringSet(params.paths));
   }
-  return executeSqliteQuerySync(params.db, query).rows;
+  if (!params.includeOrigin || params.source !== "memory") {
+    return executeSqliteQuerySync(params.db, query).rows;
+  }
+  // Memory-file chunks share their source's origin. Point reads avoid scanning
+  // every chunk of an unchanged document; sessions retain per-line provenance.
+  const rows = executeSqliteQuerySync(
+    params.db,
+    query
+      .select((eb) =>
+        eb
+          .selectFrom("memory_index_chunks as chunk")
+          .select("chunk.id")
+          .whereRef("chunk.path", "=", "file.path")
+          .whereRef("chunk.source", "=", "file.source")
+          .limit(1)
+          .as("chunkId"),
+      )
+      .select((eb) =>
+        eb
+          .selectFrom("memory_index_chunks as chunk")
+          .leftJoin(
+            "memory_index_chunk_provenance as provenance",
+            "provenance.chunk_id",
+            "chunk.id",
+          )
+          .select("provenance.origin_class")
+          .whereRef("chunk.path", "=", "file.path")
+          .whereRef("chunk.source", "=", "file.source")
+          .limit(1)
+          .as("origin"),
+      ),
+  ).rows;
+  return rows.map((row) => ({
+    path: row.path,
+    hash: row.hash,
+    mtime: row.mtime,
+    size: row.size,
+    origin: row.origin,
+    hasChunks: row.chunkId !== null,
+  }));
 }
 
 export function refreshMemorySessionSourceState(

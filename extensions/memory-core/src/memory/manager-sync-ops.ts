@@ -354,7 +354,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return;
         }
 
-        const shouldSyncMemory = this.sources.has("memory") && (this.dirty || isSearchBootstrap);
+        // Explicit indexing must discover changes without a running watcher.
+        const shouldSyncMemory =
+          this.sources.has("memory") &&
+          (params?.reason === "cli" || this.dirty || isSearchBootstrap);
         const shouldSyncSessions = this.shouldSyncSessions(params, needsFullSessionReindex);
         recoveringSessionFullRetry = this.sessionsFullRetryDirty && shouldSyncSessions;
 

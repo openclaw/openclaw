@@ -12,8 +12,6 @@ import {
   openSqliteWorkerStore,
   openNodeSqliteDatabase,
   openOpenClawAgentSqliteWorkerStoreV2,
-  runSqliteWorkerStoreWrite,
-  type OpenClawAgentSqliteWorkerStore,
   type OpenClawAgentDatabaseExecution,
   type SqliteWorkerStore,
   runQueuedStoreWrite,
@@ -39,10 +37,12 @@ import type {
 } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
 import {
+  bindShadowPublicationWorker,
   initializePublishedMemory,
   publishMemoryEmbeddingCache,
   publishMemorySource,
   retryMemoryPublication,
+  type PublicationWorker,
 } from "./manager-publication.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
@@ -55,14 +55,6 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 const log = createSubsystemLogger("memory");
-type PublicationWorker = {
-  store: Pick<
-    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
-    "execute" | "run" | "close"
-  >;
-  busyTimeoutMs: number;
-};
-
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
@@ -408,31 +400,15 @@ export class MemoryIndexDatabase {
     store: SqliteWorkerStore<MemoryPublicationOperations>,
     busyTimeoutMs: number,
   ): PublicationWorker {
-    const run = <T>(
-      operation: (scope: PublicationScope) => Promise<T>,
-      assertCurrent: () => void,
-    ) =>
-      runSqliteWorkerStoreWrite(
-        store,
-        operation,
-        () => {
-          if (this.closed || !this.db.isOpen) {
-            throw new Error("Memory shadow owner closed");
-          }
-          this.assertShadowPath();
-          assertCurrent();
-        },
-        [this.shadow!.path],
-      );
-    return {
-      store: {
-        run,
-        execute: (command, assertCurrent, options) =>
-          run((scope) => scope.execute(command, options), assertCurrent),
-        close: () => store.close(),
+    return bindShadowPublicationWorker(store, busyTimeoutMs, {
+      assertCurrent: () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory shadow owner closed");
+        }
+        this.assertShadowPath();
       },
-      busyTimeoutMs,
-    };
+      getPath: () => this.shadow!.path,
+    });
   }
 
   private withPublicationWorker<T>(
@@ -627,6 +603,24 @@ export class MemoryIndexDatabase {
     return this.withSourceMutation(() =>
       this.runPublication(
         (scope) => this.retryPublication(() => scope.execute({ type: "source.refresh", input })),
+        assertCurrent,
+      ),
+    );
+  }
+
+  refreshSourceOrigin(
+    input: MemoryPublicationOperations["source.refreshOrigin"]["input"],
+    assertCurrent: () => void,
+    prepare: () => Promise<boolean>,
+  ) {
+    return this.withSourceMutation(() =>
+      this.runPublication(
+        (scope) =>
+          // Read live provenance after the writer FIFO admits this refresh.
+          this.retryPublication(
+            () => scope.execute({ type: "source.refreshOrigin", input }),
+            prepare,
+          ),
         assertCurrent,
       ),
     );

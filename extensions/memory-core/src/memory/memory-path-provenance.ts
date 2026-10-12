@@ -5,7 +5,10 @@ import type {
   MemoryEntryProvenance,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  readMemoryArtifactProvenance,
+  type MemoryArtifactProvenance,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 type MemoryPathClassification = {
   curatedRoot: boolean;
@@ -17,6 +20,7 @@ export async function resolveMemoryPathClassification(params: {
   source: MemorySource;
   workspaceDir: string;
   readSource?: { canonicalRelativePath?: string };
+  artifactProvenance?: ReadonlyMap<string, MemoryArtifactProvenance>;
 }): Promise<MemoryPathClassification> {
   if (params.source !== "memory") {
     return { curatedRoot: false, originClass: "untrusted" };
@@ -69,10 +73,12 @@ export async function resolveMemoryPathClassification(params: {
     /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(relativePath) ||
     (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
   const recorded = isWorkspaceMemory
-    ? await readMemoryArtifactProvenance({
-        workspaceDir: params.workspaceDir,
-        relativePath,
-      })
+    ? params.artifactProvenance
+      ? params.artifactProvenance.get(relativePath)
+      : await readMemoryArtifactProvenance({
+          workspaceDir: params.workspaceDir,
+          relativePath,
+        })
     : undefined;
   if (recorded) {
     return { curatedRoot, originClass: recorded.originClass };
