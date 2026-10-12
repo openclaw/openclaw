@@ -458,6 +458,36 @@ describe("buildAgentSystemPrompt", () => {
       ["## Skills", "<name>demo</name>", "read exact <location>"],
     ],
   ])("%s", expectPromptCase);
+
+  it.each<PromptCase>([
+    [
+      "allows loading another applicable skill when the active workflow requires it",
+      { skillsPrompt: SKILLS, toolNames: ["read"] },
+      [
+        "Up-front max one; read another applicable skill when the active workflow requires it. Never invent paths.",
+        "Several: most specific",
+      ],
+      // The old wording closed the door on later skill reads after up-front selection.
+      ["Up-front max one. Never invent paths."],
+    ],
+    [
+      "lets execution bias pause for workflow-required decisions, not only generic blockers",
+      { skillsPrompt: SKILLS, toolNames: ["read"] },
+      [
+        "## Execution Bias",
+        "- Non-final turn: advance with tools, or ask one decision the applicable workflow requires (a blocking decision always qualifies).",
+      ],
+      ["ask one blocking decision."],
+    ],
+    [
+      "makes applicable skill workflow gates override generic execution bias while preserving user-supplied decisions and authorization",
+      { skillsPrompt: SKILLS, toolNames: ["read"] },
+      [
+        "- Applicable skill workflow gates (prerequisites, required decisions, ordering) override generic Execution Bias; decisions or authorization the user already supplied, safety rules, and tool policy stay authoritative.",
+        "- Continue to done/real blocker; no plan-only finish when tools can act.",
+      ],
+    ],
+  ])("%s", expectPromptCase);
   it("removes shipped heartbeat prompt quotes from workspace context without dropping user guidance", () => {
     const heartbeatPrompts = [
       "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
