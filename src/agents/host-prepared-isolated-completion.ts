@@ -35,6 +35,7 @@ export async function runHostPreparedIsolatedCompletion(
       signal,
     },
   });
+  signal.throwIfAborted();
   params.assertCurrent?.();
   return { assistant };
 }

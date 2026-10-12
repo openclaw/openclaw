@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import type { Mock } from "vitest";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentRunResultView } from "../../agents/agent-run-result.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
@@ -36,8 +36,9 @@ async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<
 type RunnerParams = {
   agentDir?: string;
   agentHarnessRuntimeOverride?: string;
+  onRequestComplete?: (durationMs: number) => void;
+  thinkLevel?: string;
   authProfileId?: string;
-  authProfileIdSource?: string;
   config?: OpenClawConfig;
   preparedModelRuntimeMode?: string;
 };
@@ -69,12 +70,15 @@ async function withProbeRuntime(
     probe: typeof probeModule;
     runner: ReturnType<typeof createRunner>;
     upsert: ReturnType<typeof createUpsert>;
+    readCatalog: Mock<() => Promise<Array<{ provider: string; id: string }>>>;
   }) => Promise<void>,
 ) {
   const runner = createRunner();
   const upsert = createUpsert();
+  const readCatalog = vi.fn(async () => [{ provider: "openai", id: "gpt-5.5" }]);
   const profileIds = credential === "marker" ? [] : ["openai:profile"];
-  vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runner }));
+  // mock-isolation: The probe fixture controls request completion without starting inference.
+  vi.doMock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
   vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
     externalCliDiscoveryScoped: () => undefined,
@@ -115,17 +119,18 @@ async function withProbeRuntime(
         }
       : {}),
   }));
+  // mock-isolation: Catalog candidates are fixture-owned and must not discover installed providers.
   vi.doMock("../../agents/prepared-model-catalog.js", () => ({
-    readPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    readPreparedModelCatalog: readCatalog,
   }));
   try {
     const probe = await importFreshModule<typeof probeModule>(
       import.meta.url,
       `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
     );
-    await run({ probe, runner, upsert });
+    await run({ probe, runner, upsert, readCatalog });
   } finally {
-    vi.doUnmock("../../agents/embedded-agent.js");
+    vi.doUnmock("../../agents/isolated-completion.js");
     vi.doUnmock("../../agents/auth-profiles.js");
     vi.doUnmock("../../agents/model-auth.js");
     vi.doUnmock("../../agents/prepared-model-catalog.js");
@@ -133,9 +138,10 @@ async function withProbeRuntime(
 }
 
 function createRunner() {
-  return vi.fn(async (_params: RunnerParams): Promise<AgentRunResultView> => ({
-    payloads: [{ text: "OK" }],
-  }));
+  return vi.fn(async (params: RunnerParams) => {
+    params.onRequestComplete?.(13);
+    return { text: "OK" };
+  });
 }
 function createUpsert() {
   return vi.fn(async (params: { profileId: string; credential: unknown }) => ({
@@ -146,8 +152,9 @@ function createUpsert() {
 
 describe("mapFailoverReasonToProbeStatus", () => {
   beforeAll(async () => {
-    vi.doMock("../../agents/embedded-agent.js", () => {
-      throw new Error("embedded-agent should stay lazy for probe imports");
+    // mock-isolation: Assert the listing path never loads the inference runtime.
+    vi.doMock("../../agents/isolated-completion.js", () => {
+      throw new Error("isolated-completion should stay lazy for probe imports");
     });
     try {
       probeModule = await importFreshModule<typeof import("./list.probe.js")>(
@@ -155,7 +162,7 @@ describe("mapFailoverReasonToProbeStatus", () => {
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
     } finally {
-      vi.doUnmock("../../agents/embedded-agent.js");
+      vi.doUnmock("../../agents/isolated-completion.js");
     }
   });
 
@@ -204,14 +211,23 @@ describe("runAuthProbes", () => {
     });
   });
 
-  it("runs Codex-pinned auth probes through raw OpenClaw model-run mode", async () => {
-    await withProbeRuntime("profile", async ({ probe, runner }) => {
-      runner.mockImplementation(async (params) => {
-        if (params.agentHarnessRuntimeOverride !== "openclaw") {
-          throw new Error("Codex cannot reproduce authored request transport overrides");
-        }
-        return { payloads: [{ text: "OK" }] };
+  it("uses the configured model without catalog preparation and reports only request time", async () => {
+    await withProbeRuntime("profile", async ({ probe, runner, readCatalog }) => {
+      readCatalog.mockRejectedValue(new Error("Catalog unavailable"));
+      const input = probeInput({ options: { profileIds: ["openai:profile"] } });
+      expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({
+        status: "ok",
+        latencyMs: 13,
       });
+      runner.mockRejectedValueOnce(new Error("Credential preparation failed"));
+      const failed = (await probe.runAuthProbes(input)).results[0];
+      expect(failed?.status).not.toBe("ok");
+      expect(failed?.latencyMs).toBeUndefined();
+    });
+  });
+
+  it("checks the selected credential through its configured runtime", async () => {
+    await withProbeRuntime("profile", async ({ probe, runner }) => {
       const input = probeInput({
         cfg: {
           models: {
@@ -229,30 +245,26 @@ describe("runAuthProbes", () => {
       expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
       expect(runner).toHaveBeenCalledWith(
         expect.objectContaining({
-          agentHarnessRuntimeOverride: "openclaw",
-          modelRun: true,
-          disableTools: true,
-          modelFallbacksOverride: [],
           authProfileId: "openai:profile",
-          authProfileIdSource: "user",
+          outputTextPolicy: "strict-visible",
         }),
       );
+      expect(runner.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBeUndefined();
       expect(runner.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
-      runner.mockResolvedValueOnce({
-        payloads: [{ text: "LLM request timed out.", isError: true }],
-        meta: { livenessState: "abandoned" },
-      });
+      expect(runner.mock.calls[0]?.[0].thinkLevel).toBeUndefined();
+      runner.mockRejectedValueOnce(new Error("LLM request timed out."));
       expect((await probe.runAuthProbes(input)).results[0]).toMatchObject({ status: "timeout" });
     });
   });
 
-  it("preserves provider config while suppressing profiles for a config-key target", async () => {
+  it("uses raw OpenClaw for Codex-pinned config keys even with auth: oauth", async () => {
     await withProbeRuntime("literal", async ({ probe, runner, upsert }) => {
       const providerConfig = {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses" as const,
         apiKey: "test",
         auth: "oauth" as const,
+        agentRuntime: { id: "codex" },
         models: [],
       };
       await probe.runAuthProbes(
@@ -266,7 +278,8 @@ describe("runAuthProbes", () => {
       )?.[0];
       assert(call?.agentDir);
       expect(call.agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(call.authProfileIdSource).toBe("user");
+      expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
+      expect(call.onRequestComplete).toBeTypeOf("function");
       expect(call.preparedModelRuntimeMode).toBe("isolated-read-only");
       expect(call.config).toMatchObject({
         models: { providers: { openai: providerConfig } },

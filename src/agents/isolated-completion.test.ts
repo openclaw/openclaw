@@ -150,6 +150,48 @@ it.each([false, true])(
 
 describe("runIsolatedCompletion", () => {
   it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
+    "reports only %s request time, including a failed request",
+    async (route) => {
+      let clock = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const onRequestComplete = vi.fn();
+      const failure = new Error("401 invalid API key");
+      const dispatch = vi.fn(async () => {
+        clock += 13;
+        throw failure;
+      });
+      mocks.ensureSelectedAgentHarnessPlugin.mockImplementationOnce(async () => {
+        clock += 8_000;
+      });
+      if (route === "cli") {
+        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+        mocks.runCliAgent.mockImplementationOnce(async (params) => {
+          clock += 2_000;
+          params.onRequestComplete?.(13);
+          await dispatch();
+        });
+      } else {
+        registerIsolatedHarness({
+          authBootstrap: route === "harness-v2" ? "harness" : undefined,
+          ...(route === "v1"
+            ? { runIsolatedCompletion: dispatch }
+            : { runIsolatedCompletionV2: dispatch }),
+        });
+      }
+      try {
+        await expect(
+          runIsolatedCompletion({ ...isolatedRequest(), onRequestComplete }),
+        ).rejects.toThrow("401 invalid API key");
+        expect(dispatch).toHaveBeenCalledOnce();
+        expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(13);
+        expect(clock).toBe(route === "cli" ? 10_013 : 8_013);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
     "blocks required worker policy before isolated %s execution using the admitted config",
     async (route) => {
       const dispatch = vi.fn(async () => ({
@@ -324,10 +366,10 @@ describe("runIsolatedCompletion", () => {
       );
       expect(error).toMatchObject({
         code: "output-rejected",
-        message: expect.stringContaining(`stop reason ${assistant.stopReason}`),
+        message: assistant.errorMessage,
       });
       if (kind === "terminal") {
-        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "unknown" });
+        expect(resolveModelFallbackError(error)).toMatchObject({ kind: "terminal" });
       }
       expect(dispatch).toHaveBeenCalledOnce();
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();

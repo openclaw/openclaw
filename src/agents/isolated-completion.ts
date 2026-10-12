@@ -56,7 +56,10 @@ import {
 } from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -94,6 +97,10 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Private credential directories must remain outside the configured Gateway owner. */
+  preparedModelRuntimeMode?: "isolated-read-only";
+  /** Duration of dispatch through the selected runtime, excluding model/auth preparation. */
+  onRequestComplete?: (durationMs: number) => void;
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
@@ -138,6 +145,21 @@ function resolveIsolatedStreamParams(
     ...streamParams,
     maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
   };
+}
+
+async function runCompletionRequest<T>(
+  request: Pick<RunIsolatedCompletionParams, "onRequestComplete">,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!request.onRequestComplete) {
+    return run();
+  }
+  const startedAt = performance.now();
+  try {
+    return await run();
+  } finally {
+    request.onRequestComplete?.(performance.now() - startedAt);
+  }
 }
 
 async function runCliIsolatedCompletion(
@@ -218,6 +240,7 @@ async function runCliIsolatedCompletion(
           isolatedCompletion: true,
           isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
           outputTextPolicy: request.outputTextPolicy,
+          onRequestComplete: request.onRequestComplete,
         });
         if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(
@@ -378,7 +401,11 @@ async function runIsolatedCompletionOwned(
     return resolved;
   };
   assertCurrent();
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  const isolatedReadOnly = input.preparedModelRuntimeMode === "isolated-read-only";
+  const acquireRuntime = isolatedReadOnly
+    ? acquireReadOnlyPreparedModelRuntime
+    : acquireAgentRunPreparedModelRuntime;
+  const lease = await acquireRuntime(
     {
       config: requestConfig,
       agentId,
@@ -386,6 +413,7 @@ async function runIsolatedCompletionOwned(
       workspaceDir: requestedWorkspaceDir,
       preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
       runtimePluginPurpose: "isolated-completion",
+      ...(isolatedReadOnly ? { loadRuntimePlugins: true } : {}),
     },
     {
       catalogMode: "static",
@@ -497,7 +525,8 @@ async function runIsolatedCompletionOwned(
         return { owner: "host", ...prepared };
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
-      if (harness.runIsolatedCompletionV2) {
+      const runIsolatedCompletionV2 = harness.runIsolatedCompletionV2;
+      if (runIsolatedCompletionV2) {
         let harnessAuth:
           | {
               model: Model;
@@ -662,16 +691,18 @@ async function runIsolatedCompletionOwned(
             assertCurrent();
             deadline ??= Date.now() + request.timeoutMs;
             const execution = modelAuthority.bind(modelForAuthorization);
-            const pending = harness.runIsolatedCompletionV2({
-              ...commonParams,
-              ...execution,
-              timeoutMs: remainingTimeoutMs(),
-              authorization:
-                authorization.owner === "host"
-                  ? prepareIsolatedHostAuthorization(harness, authorization)
-                  : authorization,
-              streamParams: resolveIsolatedStreamParams(request, completionModel),
-            });
+            const pending = runCompletionRequest(request, () =>
+              runIsolatedCompletionV2.call(harness, {
+                ...commonParams,
+                ...execution,
+                timeoutMs: remainingTimeoutMs(),
+                authorization:
+                  authorization.owner === "host"
+                    ? prepareIsolatedHostAuthorization(harness, authorization)
+                    : authorization,
+                streamParams: resolveIsolatedStreamParams(request, completionModel),
+              }),
+            );
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
             execution.assertCurrent?.();
@@ -705,8 +736,10 @@ async function runIsolatedCompletionOwned(
         };
         assertCurrent();
         const execution = modelAuthority.bind(modelForAuthorization);
-        result = await harness.runIsolatedCompletion!(
-          prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
+        result = await runCompletionRequest(request, () =>
+          harness.runIsolatedCompletion!(
+            prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
+          ),
         );
         execution.assertCurrent?.();
       }
