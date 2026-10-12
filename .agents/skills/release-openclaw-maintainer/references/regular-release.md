@@ -144,8 +144,10 @@ Its exact npm/OCI descriptors must belong to that SHA and satisfy the selected
 release profile's required gates. No second commit or validation run is needed
 solely to name a Release SHA.
 
-If notes change after Code qualification, use `$openclaw-changelog-update`
-with current main for the canonical PR history and commit the selected
+If notes change after Code qualification, including the single refresh that
+credits validation-recovery backports once the final Code SHA is green, use
+`$openclaw-changelog-update` with current main for the canonical PR history and
+commit the selected
 `CHANGELOG/YYYY.M.PATCH.md`, with any matching record and root index updates.
 The complete Code-to-Release delta must include that entry and only those
 paths, without renames or deletions, to optionally use
