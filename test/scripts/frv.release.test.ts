@@ -99,6 +99,16 @@ describe("FRV protected gh evidence reads", () => {
       }),
     ).rejects.toBe(notFound);
     expect(pageSizes).toEqual([100, 50, 30, 100]);
+  it("reads the mutable release tip freshly even when watcher reads are cached", () => {
+    const result = runProtectedFrv(
+      "getRef",
+      ["refs/heads/release/candidate"],
+      "git/ref/heads/release/candidate",
+      "none",
+      true,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toHaveLength(1);
   });
 
   it.each(["403", "429"] as const)(
@@ -175,6 +185,7 @@ function runProtectedFrv(
     | "large-page-502"
     | "403"
     | "429" = "none",
+  cachedReads = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), "frv-protected-"));
   const gh = join(root, "gh");
@@ -234,7 +245,7 @@ if (${endpoint.includes("/jobs?")}) {
         };
       }
       try {
-        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)})[${JSON.stringify(method)}](...${JSON.stringify(args)})));
+        console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)}, { cachedReads: ${cachedReads} })[${JSON.stringify(method)}](...${JSON.stringify(args)})));
       } catch (error) {
         console.error(throttled ? JSON.stringify({ retryAt: releaseGhRateLimitRetryAt(error), classification: classifyReleaseGhTransportError(error) }) : error.message);
         process.exitCode = typeof error.code === "number" ? error.code : 1;
@@ -529,7 +540,10 @@ async function runPublicationCli(
   responses[endpoint("actions/runs/77/jobs?filter=all&per_page=100")] = {
     jobs: [{ ...job("Diagnostic Drain"), run_attempt: fixture.root.run_attempt }],
   };
-  responses[endpoint("git/ref/heads/release/2026.9.9")] = { object: { sha: TARGET_SHA } };
+  responses[endpoint("git/ref/heads/release/2026.9.9")] = {
+    ref: "refs/heads/release/2026.9.9",
+    object: { type: "commit", sha: TARGET_SHA },
+  };
   await amend(responses, artifact);
   writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));
   writeFileSync(join(directory, "legacy-plan.json"), JSON.stringify(fixture.executionPlan));
@@ -1646,7 +1660,10 @@ describe("publication status real CLI", () => {
         (responses) => {
           responses[`repos/${REPOSITORY}/git/ref/heads/release/2026.9.9`] =
             tipState === "superseded"
-              ? { object: { sha: "d".repeat(40) } }
+              ? {
+                  ref: "refs/heads/release/2026.9.9",
+                  object: { type: "commit", sha: "d".repeat(40) },
+                }
               : { failure: "HTTP 403 Resource not accessible by integration" };
         },
       );

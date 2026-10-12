@@ -30,6 +30,7 @@ import {
   runFor,
   rootRun,
 } from "./frv.test-support.js";
+import { sourceFact } from "./full-release-validation-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -1757,7 +1758,202 @@ describe("FRV child rerun", () => {
   });
 });
 
+const unsealedWatcherReads = {
+  getReleaseEvidenceClient: () => createReleaseEvidenceClient(REPOSITORY),
+  getRef: async () => {
+    throw new Error("a candidate context was not sealed");
+  },
+  getAttemptJobs: async () => [],
+  getJobLog: async () => {
+    throw new Error("no dispatch log is needed");
+  },
+};
+
 describe("FRV watch", () => {
+  it("resumes a missing or retired watcher with the immutable candidate, fresh tip, and no duplicate terminal notification", async () => {
+    const statePath = path.join(tempDirs.make("frv-candidate-watch-"), "state.json");
+    const immutable = executionPlanArtifact();
+    const source = sourceFact();
+    Object.assign(immutable, {
+      sourceAdmissionContract: "1",
+      sourceAdmission: sourceFact({
+        workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
+        coverage: { ...source.coverage, release_profile: "beta" },
+      }),
+    });
+    immutable.sha256 = releaseExecutionPlanSha256(immutable);
+    let tip = TARGET_SHA;
+    let conclusion: string | null = null;
+    const events: {
+      message: string;
+      candidate?: { sha: string | null; state: string; tipSha: string | null };
+    }[] = [];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async () => rootRun(1, conclusion),
+      getParentJobs: async () => [{ ...job("Seal release execution plan"), run_attempt: 1 }],
+      getReleaseEvidenceClient: () => ({
+        ...createReleaseEvidenceClient(REPOSITORY),
+        loadExecutionPlanEvidence: () => ({ artifact: {}, plan: immutable }),
+      }),
+      getRef: async () => ({
+        ref: "refs/heads/release/2026.9.9",
+        object: { type: "commit", sha: tip },
+      }),
+    };
+    const resume = () =>
+      watchRelease("77", client, {
+        statePath,
+        once: true,
+        emit: (event: (typeof events)[number]) => events.push(event),
+      });
+    await resume();
+    expect(events.at(-1)?.candidate).toMatchObject({
+      sha: TARGET_SHA,
+      state: "current",
+      tipSha: TARGET_SHA,
+    });
+    tip = "c".repeat(40);
+    await resume();
+    expect(events.at(-1)?.candidate).toMatchObject({
+      sha: TARGET_SHA,
+      state: "superseded",
+      tipSha: tip,
+    });
+    expect(events.at(-1)?.message).toContain("does not qualify the current tip");
+    const superseded = events.length;
+    tip = TARGET_SHA;
+    await resume();
+    expect(events).toHaveLength(superseded + 1);
+    expect(events.at(-1)?.candidate?.state).toBe("current");
+    conclusion = "success";
+    await expect(resume()).resolves.toMatchObject({ complete: true });
+    const settled = [...events];
+    await expect(resume()).resolves.toMatchObject({ complete: true });
+    expect(events).toEqual(settled);
+  });
+
+  it.each([
+    ["Acquire full release candidate", "full-release-artifacts.yml", "artifact:candidate"],
+    ["Prepare exact plugin npm artifacts", "plugin-npm-release.yml", "artifact:plugin-npm"],
+  ])("waits for the independently dispatched %s producer", async (name, workflow, key) => {
+    const statePath = path.join(tempDirs.make("frv-producer-watch-"), "state.json");
+    let conclusion: string | null = null;
+    const messages: string[] = [];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "success") : runFor(child("normalCi", "808"), 1, conclusion),
+      getParentJobs: async () => [{ ...job(name), id: 5, run_attempt: 1 }],
+      getJobLog: async () =>
+        `Dispatched ${workflow}: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
+      getAttemptJobs: async () => [job("producer")],
+    };
+    const poll = () =>
+      watchRelease("77", client, {
+        statePath,
+        once: true,
+        emit: (event) => messages.push(event.message),
+      });
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    expect(messages).toContainEqual(expect.stringContaining(`${key} dispatched`));
+    conclusion = "success";
+    await expect(poll()).resolves.toMatchObject({ complete: true });
+  });
+
+  it.each([
+    "execution plan",
+    "invalid plan schema",
+    "invalid plan digest",
+    "wrong plan parent",
+    "wrong plan workflow",
+    "candidate tip",
+    "rate-limited candidate tip",
+  ])(
+    "completes a terminal tree when optional %s observation is unavailable",
+    async (unavailable) => {
+      const statePath = path.join(tempDirs.make("frv-unknown-candidate-"), "state.json");
+      const parentRunId = unavailable === "wrong plan parent" ? "78" : "77";
+      const immutable = executionPlanArtifact();
+      const source = sourceFact();
+      Object.assign(immutable, {
+        sourceAdmissionContract: "1",
+        sourceAdmission: sourceFact({
+          workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
+          coverage: { ...source.coverage, release_profile: "beta" },
+        }),
+      });
+      immutable.sha256 = releaseExecutionPlanSha256(immutable);
+      if (unavailable === "invalid plan schema") {
+        immutable.schemaVersion = 999;
+      } else if (unavailable === "invalid plan digest") {
+        immutable.sha256 = "0".repeat(64);
+      }
+      const events: { message: string; candidate?: { state: string } }[] = [];
+      let unavailableNow = unavailable !== "rate-limited candidate tip";
+      const client = {
+        ...unsealedWatcherReads,
+        repository: REPOSITORY,
+        getRun: async (runId: string) =>
+          runId === parentRunId
+            ? {
+                ...rootRun(1, "success"),
+                head_sha: unavailable === "wrong plan workflow" ? "d".repeat(40) : SHA,
+              }
+            : runFor(child("normalCi", "101"), 1, "success"),
+        getParentJobs: async () => [
+          { ...job("Seal release execution plan"), run_attempt: 1 },
+          { ...job("Run normal full CI"), id: 5, run_attempt: 1 },
+        ],
+        getJobLog: async () =>
+          `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+        getAttemptJobs: async () => [job("checks")],
+        getReleaseEvidenceClient: () => ({
+          ...createReleaseEvidenceClient(REPOSITORY),
+          loadExecutionPlanEvidence: () => {
+            if (unavailable === "execution plan") {
+              throw new Error("publication execution plan artifact identity mismatch");
+            }
+            return { artifact: {}, plan: immutable };
+          },
+        }),
+        getRef: async () => {
+          if (!unavailableNow) {
+            return {
+              ref: "refs/heads/release/2026.9.9",
+              object: { type: "commit", sha: TARGET_SHA },
+            };
+          }
+          if (unavailable === "rate-limited candidate tip") {
+            throw Object.assign(new Error("gh: API rate limit exceeded (HTTP 403)"), {
+              stdout: "HTTP/2.0 403 Forbidden\r\nRetry-After: 120\r\n\r\n{}",
+            });
+          }
+          throw new Error("gh: Not Found (HTTP 404)");
+        },
+      };
+      if (!unavailableNow) {
+        await watchRelease(parentRunId, client, { statePath, once: true, emit: () => undefined });
+        unavailableNow = true;
+      }
+      await expect(
+        watchRelease(parentRunId, client, {
+          statePath,
+          once: true,
+          emit: (event) => events.push(event),
+        }),
+      ).resolves.toMatchObject({ complete: true });
+      expect(events).toContainEqual(
+        expect.objectContaining({ candidate: expect.objectContaining({ state: "unknown" }) }),
+      );
+      if (unavailable !== "rate-limited candidate tip") {
+        expect(events.at(-1)?.message).toContain("every dispatched child are terminal");
+      }
+    },
+  );
+
   it.each([
     ["retry-after", "Retry-After: 120", 120_000],
     ["primary reset", "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1791500120", 120_000],
@@ -1777,6 +1973,7 @@ describe("FRV watch", () => {
         )
         .mockResolvedValue(rootRun(1, "success"));
       const client = {
+        ...unsealedWatcherReads,
         repository: REPOSITORY,
         getRun,
         getParentJobs: async () => [{ ...job("Resolve target ref"), run_attempt: 1 }],
@@ -1818,6 +2015,7 @@ describe("FRV watch", () => {
       watchRelease(
         "77",
         {
+          ...unsealedWatcherReads,
           getRun: async () => {
             throw new Error("gh: Resource not accessible by integration (HTTP 403)");
           },
@@ -1847,6 +2045,7 @@ describe("FRV watch", () => {
         `2026-09-29T22:00:00.1Z Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)\n`,
     );
     const client = {
+      ...unsealedWatcherReads,
       repository: REPOSITORY,
       getRun: async (runId: string) => {
         if (runId === "77") {
@@ -1895,6 +2094,7 @@ describe("FRV watch", () => {
     expect(messages.splice(0)).toEqual([
       "parent 77 attempt 1 in_progress",
       "normalCi dispatched ci.yml run 101 (attempt 1)",
+      "candidate identity: tip observation unknown; no current-tip qualification claim",
       "GitHub reads failed (normalCi run); retrying next poll",
     ]);
     await poll();
@@ -1920,6 +2120,7 @@ describe("FRV watch completion", () => {
     const ci = child("normalCi", "101");
     let snapshot: "in_progress" | "completed" = "in_progress";
     const client = {
+      ...unsealedWatcherReads,
       repository: REPOSITORY,
       getRun: async (runId: string) =>
         runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
