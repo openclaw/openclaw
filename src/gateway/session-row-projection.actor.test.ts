@@ -4,6 +4,7 @@ import { appendSessionManagerActor } from "../agents/sessions/session-manager-ac
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
@@ -187,7 +188,10 @@ it("publishes user and assistant actor previews without background reads or losi
             append: {
               kind: "message",
               input: {
-                scope: { ...scope, sessionId: entry.sessionId },
+                scope: bindSessionTranscriptStoreScope(
+                  { ...scope, sessionId: entry.sessionId },
+                  cfg,
+                ),
                 cwd: "/synthetic",
                 messageJson: JSON.stringify({
                   role: "assistant",
