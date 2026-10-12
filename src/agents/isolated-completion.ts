@@ -510,8 +510,7 @@ async function runIsolatedCompletionOwned(
         return { owner: "host", ...prepared };
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
-      const runIsolatedCompletionV2 = harness.runIsolatedCompletionV2;
-      if (runIsolatedCompletionV2) {
+      if (harness.runIsolatedCompletionV2) {
         let harnessAuth:
           | {
               model: Model;
@@ -676,7 +675,7 @@ async function runIsolatedCompletionOwned(
             assertCurrent();
             deadline ??= Date.now() + request.timeoutMs;
             const execution = modelAuthority.bind(modelForAuthorization);
-            const pending = runIsolatedCompletionV2.call(harness, {
+            const pending = harness.runIsolatedCompletionV2({
               ...commonParams,
               ...execution,
               timeoutMs: remainingTimeoutMs(),

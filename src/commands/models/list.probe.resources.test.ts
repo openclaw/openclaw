@@ -73,7 +73,7 @@ it.each([
     let refreshPeerFenced = false;
     const refreshServer = createServer((_req, res) => {
       refreshCount++;
-      const owner = loadPersistedSharedAuthProfileStore()?.profiles[profileId];
+      const owner = loadPersistedSharedAuthProfileStore(state.env)?.profiles[profileId];
       const peer = loadPersistedAuthProfileStore(state.agentDir("historical"))?.profiles[profileId];
       refreshOwnerFenced = owner?.type === "oauth" && isPendingOAuthRefreshFence(owner);
       refreshPeerFenced = peer?.type === "oauth" && isPendingOAuthRefreshFence(peer);
@@ -176,7 +176,7 @@ it.each([
       );
     }
     const authBefore = oauth
-      ? loadPersistedSharedAuthProfileStore()
+      ? loadPersistedSharedAuthProfileStore(state.env)
       : loadPersistedAuthProfileStore(state.agentDir());
     await state.writeConfig(cfg);
     const builder = createPluginRegistry({
@@ -276,7 +276,7 @@ it.each([
         expect(result.results[0]?.error).not.toContain("sk-synthetic-private");
       }
       const authAfter = oauth
-        ? loadPersistedSharedAuthProfileStore()
+        ? loadPersistedSharedAuthProfileStore(state.env)
         : loadPersistedAuthProfileStore(state.agentDir());
       if (oauth === "expired") {
         expect(refreshCount).toBe(1);
@@ -312,12 +312,12 @@ it.each([
       credentialWrites.mockRestore();
       stateWrites.mockRestore();
       await source.release();
-      resetPreparedModelRuntimeSnapshotsForTest();
+      await resetPreparedModelRuntimeSnapshotsForTest();
       clearPluginMetadataLifecycleCaches();
       resetPluginRuntimeStateForTest();
-      await new Promise<void>((resolve, reject) =>
-        refreshServer.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        refreshServer.close((error) => (error ? reject(error) : resolve()));
+      });
       await state.cleanup();
     }
   },
