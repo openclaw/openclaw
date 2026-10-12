@@ -8,9 +8,10 @@ const worker = vi.hoisted(() => ({
   lifecycle: vi.fn(),
 }));
 
-vi.mock("../state/openclaw-state-db.js", () => ({
-  registerOpenClawStateDatabaseLifecycleListener: worker.lifecycle,
-}));
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  return { ...actual, registerOpenClawStateDatabaseLifecycleListener: worker.lifecycle };
+});
 
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: worker.read,

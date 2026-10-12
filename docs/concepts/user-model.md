@@ -335,7 +335,7 @@ Profile theme and theme mode preferences override their gateway-wide `ui.prefs` 
 ## Personal navigation preferences
 
 For an authenticated profile with write access, the Control UI stores sidebar
-shortcut references and their order in the existing
+shortcut references and their order under `ui.railShortcuts` in the existing
 `user_preferences` table. These preferences follow that profile across devices without rearranging another
 person's navigation. They are independent of a session's shared metadata and do
 not grant access to a referenced session, dashboard, plugin, or person.
@@ -343,7 +343,9 @@ not grant access to a referenced session, dashboard, plugin, or person.
 The browser retains device-specific geometry and transient presentation. A profile
 without saved shortcuts starts with an empty rail. Reading preferences never
 imports shared navigation or pinned sessions, and only a user edit writes the
-shortcut preference. Existing saved shortcuts remain unchanged.
+shortcut preference. After upgrading, older sidebar order and pins are ignored
+and the rail starts empty. Old values remain stored; shortcuts saved under the
+new preference remain unchanged.
 Navigation changes on read-only connections or connections without a durable
 profile stay browser-local rather than writing shared server configuration. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
 

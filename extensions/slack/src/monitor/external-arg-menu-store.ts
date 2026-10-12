@@ -1,4 +1,3 @@
-import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 
@@ -38,16 +37,11 @@ export function createSlackExternalArgMenuStore() {
     ): string {
       pruneExpiredMapEntries(store, now);
       const token = createSlackExternalArgMenuToken(store);
-      const expiresAt = resolveExpiresAtMsFromDurationMs(SLACK_EXTERNAL_ARG_MENU_TTL_MS, {
-        nowMs: now,
+      store.set(token, {
+        choices: params.choices,
+        userId: params.userId,
+        expiresAt: now + SLACK_EXTERNAL_ARG_MENU_TTL_MS,
       });
-      if (expiresAt !== undefined) {
-        store.set(token, {
-          choices: params.choices,
-          userId: params.userId,
-          expiresAt,
-        });
-      }
       return token;
     },
     readToken(raw: unknown): string | undefined {

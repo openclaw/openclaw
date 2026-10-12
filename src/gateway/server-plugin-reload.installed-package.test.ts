@@ -248,7 +248,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,

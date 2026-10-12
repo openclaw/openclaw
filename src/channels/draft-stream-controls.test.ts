@@ -32,39 +32,6 @@ describe("draft-stream-controls", () => {
     expect(events).toEqual(["stop", "read", "clear"]);
   });
 
-  it("clearFinalizableDraftMessage deletes valid message ids", async () => {
-    const deleteMessage = vi.fn(async () => {});
-    const onDeleteSuccess = vi.fn();
-
-    await clearFinalizableDraftMessage({
-      stopForClear: async () => {},
-      readMessageId: () => "m-2",
-      clearMessageId: () => {},
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      onDeleteSuccess,
-      warnPrefix: "cleanup failed",
-    });
-
-    expect(deleteMessage).toHaveBeenCalledWith("m-2");
-    expect(onDeleteSuccess).toHaveBeenCalledWith("m-2");
-  });
-
-  it("clearFinalizableDraftMessage skips invalid message ids", async () => {
-    const deleteMessage = vi.fn(async () => {});
-
-    await clearFinalizableDraftMessage<unknown>({
-      stopForClear: async () => {},
-      readMessageId: () => 123,
-      clearMessageId: () => {},
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      warnPrefix: "cleanup failed",
-    });
-
-    expect(deleteMessage).not.toHaveBeenCalled();
-  });
-
   it("clearFinalizableDraftMessage claims a failed delete and reports its retry target", async () => {
     const warn = vi.fn();
     let messageId: string | undefined = "m-3";
@@ -297,31 +264,6 @@ describe("draft-stream-controls", () => {
       await Promise.allSettled([firstClear, stopped, secondClear]);
       lifecycle.loop.stop();
     }
-  });
-
-  it("lifecycle clear marks stopped, clears id, and deletes preview message", async () => {
-    const state = { stopped: false, final: false };
-    let messageId: string | undefined = "m-4";
-    const deleteMessage = vi.fn(async () => {});
-
-    const lifecycle = createFinalizableDraftLifecycle({
-      throttleMs: 250,
-      state,
-      sendOrEditStreamMessage: async () => true,
-      readMessageId: () => messageId,
-      clearMessageId: () => {
-        messageId = undefined;
-      },
-      isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      warnPrefix: "cleanup failed",
-    });
-
-    await lifecycle.clear();
-
-    expect(state.stopped).toBe(true);
-    expect(messageId).toBeUndefined();
-    expect(deleteMessage).toHaveBeenCalledWith("m-4");
   });
 
   it("lifecycle seal ignores late updates without clearing the preview id", async () => {

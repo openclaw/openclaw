@@ -138,7 +138,7 @@ export async function createPluginReloadRecoveryFixture(
   const rollbackConfigEffects = vi.fn(async () => {});
   const candidates: ReturnType<typeof createBuilder>[] = [];
   const recoveries: ReturnType<typeof createBuilder>[] = [];
-  const preparePlugins = ({
+  const preparePlugins = async ({
     cfg,
     replacePluginIds = new Set<string>(),
     loadModules = true,

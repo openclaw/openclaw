@@ -34,7 +34,6 @@ vi.mock("./route.js", () => ({
   },
 }));
 vi.mock("../infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("../entry.esm-resolve-fast-path.js", () => ({ installDistEsmResolveFastPath() {} }));
 vi.mock("../entry.version-fast-path.js", () => ({ tryHandleRootVersionFastPath: () => false }));
 vi.mock("../entry.compile-cache.js", () => ({
   resolveEntryInstallRoot: () => process.cwd(),

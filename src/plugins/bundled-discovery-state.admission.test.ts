@@ -19,12 +19,16 @@ const reads = vi.hoisted(() => ({
   metadata: vi.fn(),
 }));
 
-vi.mock("../state/openclaw-state-db-readonly.js", () => ({
-  getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
-  isArtifactPreservingStateRead: () => true,
-  executeExistingOpenClawStateRead: reads.metadata,
-  withArtifactPreservingStateReads: (read: () => unknown) => read(),
-}));
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
+  return {
+    ...actual,
+    getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
+    isArtifactPreservingStateRead: () => true,
+    executeExistingOpenClawStateRead: reads.metadata,
+    withArtifactPreservingStateReads: (read: () => unknown) => read(),
+  };
+});
 vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: reads.mode }));
 
 const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };

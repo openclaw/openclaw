@@ -130,7 +130,7 @@ export function createStateDatabaseWalOwner(
           const { runOpenClawStateWorkerOperation } =
             await import("./openclaw-state-worker-store.js");
           assertCurrent();
-          const result = await runOpenClawStateWorkerOperation(
+          return await runOpenClawStateWorkerOperation(
             context,
             (worker) =>
               worker.execute(
@@ -154,8 +154,6 @@ export function createStateDatabaseWalOwner(
               }),
             },
           );
-          assertCurrent();
-          return result;
         } catch (error) {
           if (
             !operationStarted &&

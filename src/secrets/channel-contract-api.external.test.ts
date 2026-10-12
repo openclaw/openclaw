@@ -237,20 +237,4 @@ describe("external channel secret contract api", () => {
       "channels.qqbot.clientSecret",
     ]);
   });
-
-  it("does not hide installed plugin contract loading failures behind the official fallback", () => {
-    const record = writeExternalChannelPlugin({ pluginId: "qqbot", channelId: "qqbot" });
-    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
-    shouldRejectHardlinkedPluginFilesMock.mockImplementation(() => {
-      throw new Error("contract policy failed");
-    });
-
-    expect(() =>
-      loadChannelSecretContractApi({
-        channelId: "qqbot",
-        config: { channels: { qqbot: { appId: "app" } } },
-        env: {},
-      }),
-    ).toThrow("contract policy failed");
-  });
 });

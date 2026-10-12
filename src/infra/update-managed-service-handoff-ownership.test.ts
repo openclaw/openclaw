@@ -610,34 +610,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
     );
   });
 
-  it("writes a fallback update failure when no restart sentinel row exists", async () => {
-    const { result, env } = await runOwnershipHelper({
-      handoffId: "handoff-123",
-      metaHandoffId: "handoff-123",
-    });
-
-    expect(result).toEqual({ code: 1, signal: null });
-    expect(readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db)).toMatchObject({
-      kind: "valid",
-      sentinel: {
-        version: 1,
-        payload: {
-          kind: "update",
-          status: "error",
-          sessionKey: "agent:test:webchat:dm:user-123",
-          stats: {
-            handoffId: "handoff-123",
-            reason: "managed-service-handoff-failed",
-          },
-        },
-      },
-    });
-    if (process.platform !== "win32") {
-      const mode = (await fs.stat(resolveOpenClawStateSqlitePath(env))).mode & 0o777;
-      expect(mode).toBe(0o600);
-    }
-  });
-
   it.each(
     process.platform === "win32"
       ? (["closed-gate"] as const)
@@ -750,6 +722,20 @@ describe("managed service update handoff state ownership and sentinel persistenc
     await lockReleased;
 
     expect(result).toEqual({ code: 1, signal: null });
+    expect(readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db)).toMatchObject({
+      kind: "valid",
+      sentinel: {
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "error",
+          sessionKey: "agent:test:webchat:dm:user-123",
+        },
+      },
+    });
+    if (process.platform !== "win32") {
+      expect((await fs.stat(resolveOpenClawStateSqlitePath(env))).mode & 0o777).toBe(0o600);
+    }
     expect(readRestartSentinelPayload(env)).toMatchObject({
       version: 1,
       payload: {
