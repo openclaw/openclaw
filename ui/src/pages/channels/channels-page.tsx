@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+  untrack,
+} from "solid-js";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -660,6 +668,7 @@ class ChannelsPageController {
 }
 
 export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationContext }) {
+  const owner = getOwner();
   const application = untrack(() => props.context) ? undefined : useApplication();
   const host = untrack(() => props.host);
   const context = () => props.context ?? application!;
@@ -669,7 +678,7 @@ export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationCo
     host,
     () => setRevision((value) => value + 1),
   );
-  createEffect(context, (value) => controller.bindContext(value));
+  createEffect(context, (value) => runWithOwner(owner, () => controller.bindContext(value)));
   onCleanup(() => controller.dispose());
   createEffect(revision, () => controller.afterRender());
   const viewProps = createMemo(() => {

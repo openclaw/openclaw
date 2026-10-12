@@ -311,18 +311,18 @@ async function runDoctorHealthFlowWithResult(
         const { normalizeAgentId } = await import("../routing/session-key.js");
         const samePath = createOpenClawAgentDatabasePathMatcher();
         const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-        const databaseTargets = discovery?.targets.filter(
-          (database) =>
+        const databaseTargets = discovery?.schemaTargets.filter(
+          ({ agentId, path: databasePath, realPath }) =>
             !schemas.agentRefusals?.some(
               (refusal) =>
-                normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
-                refusal.paths.some((pathname) => samePath(pathname, database.path)),
+                normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
+                refusal.paths.some((pathname) => samePath(pathname, databasePath)),
             ) &&
             !schemas.indeterminate.some(
               (failure) =>
                 failure.kind === "agent" &&
-                (failure.path === database.path ||
-                  discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
+                (failure.path === databasePath ||
+                  discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
             ),
         );
         const backups = await backupDoctorMigrationDatabases({

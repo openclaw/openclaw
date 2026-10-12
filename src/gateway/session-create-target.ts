@@ -13,19 +13,61 @@ import {
 import { sessionEntryCommitGuardOptions } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  isSessionWorkAdmissionActive,
+} from "../sessions/session-lifecycle-admission.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
+  CreateGatewaySessionResult,
 } from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { resolveSessionCreateAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+
+/** Select and retain the agent's admission through creation, finalization, and rollback. */
+export async function withSessionCreateAdmission(
+  params: CreateGatewaySessionParams,
+  create: (
+    params: CreateGatewaySessionParams,
+    agentId: string,
+  ) => Promise<CreateGatewaySessionResult>,
+): Promise<CreateGatewaySessionResult> {
+  const selectedAgent = resolveSessionCreateAgentId(params.cfg, {
+    key: normalizeOptionalString(params.key),
+    agentId: params.agentId,
+    parentSessionKey: normalizeOptionalString(params.parentSessionKey),
+  });
+  if (!selectedAgent.ok) {
+    return selectedAgent;
+  }
+  const interrupted = new AbortController();
+  const assertCurrent = () => {
+    interrupted.signal.throwIfAborted();
+    params.commitGuard?.();
+  };
+  const admission = await beginSessionWorkAdmission({
+    agentId: selectedAgent.agentId,
+    scope: `agent:${selectedAgent.agentId}`,
+    identities: [params.key ?? selectedAgent.agentId],
+    assertAllowed: assertCurrent,
+    onInterrupt: (reason) => interrupted.abort(reason),
+  });
+  try {
+    return await admission.run(() =>
+      create({ ...params, commitGuard: assertCurrent }, selectedAgent.agentId),
+    );
+  } finally {
+    admission.release();
+  }
+}
 
 export async function validateSessionCreateIncognitoTarget(
   params: CreateGatewaySessionParams,
