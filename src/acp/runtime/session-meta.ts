@@ -1,3 +1,4 @@
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
@@ -116,7 +117,10 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  if (captureIncognitoSessionBinding(params)) {
+  if (
+    getSessionActorStorageBinding({ ...params, sessionKey }) ||
+    captureIncognitoSessionBinding(params)
+  ) {
     throw new IncognitoSessionSyncAccessError("readAcpSessionEntry", "readAcpSessionEntryAsync");
   }
   const storeEntry = readSessionEntryFromStore(params);

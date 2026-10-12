@@ -1,4 +1,10 @@
 import {
+  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import {
   captureIncognitoSessionBinding,
   withIncognitoSessionBinding,
 } from "../config/sessions/session-incognito-binding.js";
@@ -12,6 +18,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -75,6 +82,69 @@ export function captureAgentHarnessCompletionCustody(
     return Promise.resolve(undefined);
   }
   const root = retainGatewayRootWorkAdmissionContinuationScope();
+  const selected = getSessionActorStorageBinding({});
+  if (selected && isIncognitoSessionKey(scope.requesterSessionKey)) {
+    return context.trackExecution(async () => {
+      let handedOff = false;
+      let acquired: SessionActorStorageBinding | undefined;
+      const releaseRequester = () => {
+        if (acquired) {
+          void acquired.actor.release().catch((error: unknown) => {
+            context.logGateway.warn(
+              `Harness completion requester release failed: ${formatErrorMessage(error)}`,
+            );
+          });
+          acquired = undefined;
+        }
+      };
+      try {
+        let memory: SessionActorStorageBinding | undefined =
+          selected.actor.target.sessionKey === scope.requesterSessionKey ? selected : undefined;
+        if (!memory) {
+          const captured = captureSessionActorStorageOwner({
+            sessionKey: scope.requesterSessionKey,
+            agentId: scope.requesterAgentId,
+          });
+          if (!captured?.owner) {
+            return undefined;
+          }
+          const actor = await captured.owner.acquireExisting(scope.requesterSessionKey, {
+            assertCurrent: () => captured.authority.assertCurrent(),
+            assertReadable: () => captured.authority.assertCurrent(),
+          });
+          if (!actor) {
+            return undefined;
+          }
+          memory = acquired = {
+            actor,
+            authority: captured.authority,
+            agentId: captured.agentId,
+            path: captured.path,
+          };
+        }
+        const requester = memory;
+        const custody = await runWithSessionActorStorage(requester, () =>
+          captureAgentHarnessCompletionCustodyOwner(
+            scope,
+            () => {
+              if (!requester.actor.snapshot(requester.authority)?.entry) {
+                throw new Error("Harness completion requester was closed");
+              }
+            },
+            releaseRequester,
+            root,
+          ),
+        );
+        handedOff = custody !== undefined;
+        return custody;
+      } finally {
+        if (!handedOff) {
+          releaseRequester();
+          root?.release();
+        }
+      }
+    });
+  }
   const released = createDeferredCore();
   const ready = createDeferredCore<AgentHarnessCompletionCustody | undefined>();
   let handedOff = false;
@@ -152,12 +222,18 @@ async function captureAgentHarnessCompletionCustodyOwner(
   root: ReturnType<typeof retainGatewayRootWorkAdmissionContinuationScope>,
 ): Promise<AgentHarnessCompletionCustody | undefined> {
   const scope = assertAgentHarnessCompletionScope(scopeInput);
-  const requesterBinding = captureIncognitoSessionBinding({
+  const requesterTarget = {
     sessionKey: scope.requesterSessionKey,
     agentId: scope.requesterAgentId,
-  });
+  };
+  const memory = getSessionActorStorageBinding(requesterTarget);
+  const requesterBinding = memory ? undefined : captureIncognitoSessionBinding(requesterTarget);
   const runInRequester = <T>(run: () => T): T =>
-    requesterBinding ? withIncognitoSessionBinding(requesterBinding, run) : run();
+    memory
+      ? runWithSessionActorStorage(memory, run)
+      : requesterBinding
+        ? withIncognitoSessionBinding(requesterBinding, run)
+        : run();
   const resolver = getGatewayContextResolver(scope);
   const capture = () =>
     captureOperatorToolGatewayContinuationContext({

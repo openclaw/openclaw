@@ -122,7 +122,9 @@ Options:
 
 Check rows can come from auth profiles, env credentials, or `models.json`. Check status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
-Direct `models status --probe` runs create temporary internal sessions in the selected agent's database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before checking. Check results can be reported before slow cleanup finishes. Temporary auth directories, internal sessions, and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
+Checks make a fresh, prompt-only request through OpenClaw's provider transport without creating a normal agent session. OAuth profiles retain the normal persistent credential-refresh owner. Reported per-credential latency measures the request round-trip, excluding model and credential preparation; checks that fail before sending a request have no latency. The overall check can take longer when several credentials are tested.
+
+Direct `models status --probe` runs require exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before checking. Temporary auth directories and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
 
 Check detail/reason codes to expect when a check never reaches a model call:
 
@@ -361,9 +363,36 @@ restart. Input still comes from a protected terminal prompt or standard input.
 is not supported by the Gateway API: omit it to use the Gateway's API-key profile,
 or stop the Gateway and run the command offline.
 
+Replacing a saved API key here or in **Settings → Models → Set API key** clears
+that profile's previous cooldown and failure counters, so the next request can
+try the replacement immediately. Other profiles and usage history are preserved.
+
 If the running Gateway does not advertise owner-bound API-key writes, update and
 restart it, or stop it and retry offline. The CLI does not send the key to an older
 Gateway that lacks this support.
+
+`models auth login` and `models auth login-github-copilot` also delegate to the
+local Gateway that owns the selected state directory. The CLI renders the
+Gateway's wizard in your terminal, including browser URLs, device codes,
+protected inputs, and model-access choices. `--provider`, `--method`,
+`--device-code`, and `--agent` select the declared credential-only plugin flow.
+Omit the provider or method to choose from the available flows. An unavailable
+or ambiguous plugin method is not silently replaced with a different login.
+The menu reads the selected local configuration, including `plugins.load.paths`,
+and honors plugin disablement and allowlists.
+
+For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
+`--yes` are refused before starting sign-in because the Gateway login API does
+not represent those options. Stop the Gateway to use those options offline.
+The current default model stays unchanged. Plugin methods that require local
+CLI imports or are not declared as credential-only sign-in remain offline.
+
+The wizard stays on one authenticated connection. Ctrl-C cancels that session;
+disconnecting closes it rather than replaying the login on another connection.
+An OAuth loopback callback runs on the Gateway host, which is the same machine
+as this local CLI. Keep the command running while completing browser sign-in.
+An older Gateway without owner-bound login support receives no login request:
+update and restart it, or stop it and retry offline.
 
 Other `models auth` commands require exclusive offline ownership of the selected
 local state. Stop the Gateway through its service owner, wait for it to release
@@ -381,14 +410,14 @@ authentication on this path. If the write outcome is unknown, inspect the Models
 page before retrying.
 
 An explicitly configured loopback Gateway with `gateway.auth.mode: "none"` also
-supports this command without a token or device identity. The CLI still uses
-the discovered local state owner; this does not enable remote or arbitrary-URL
-authentication bypasses.
+supports these delegated auth commands without a token or device identity. The
+CLI still uses the discovered local state owner; this does not enable remote
+or arbitrary-URL authentication bypasses.
 
-Use the Gateway's **Models** page for supported online sign-in flows. CLI-only
-setup options, local provider CLI imports, and partial profile-order overrides
-remain offline operations. Personal `models accounts` commands continue to use
-the selected Gateway.
+The Gateway's **Models** page offers the same supported online sign-in flows.
+CLI-only setup options, local provider CLI imports, and partial profile-order
+overrides remain offline operations. Personal `models accounts` commands
+continue to use the selected Gateway.
 
 ```bash
 openclaw models auth add

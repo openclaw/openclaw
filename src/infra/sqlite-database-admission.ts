@@ -115,11 +115,8 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   const previous = state.registry.records.get(key);
   const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
   if (retainedPrevious) {
-    const retained = fs.fstatSync(retainedPrevious.descriptor, { bigint: true });
-    if (identity(retained) === key) {
-      return;
-    }
-    throw new Error("SQLite retained admission descriptor changed identity");
+    state.registry.observeLocation(location, key);
+    return;
   }
   // A worker's unmanaged descriptors close on exit and can release sibling SQLite POSIX locks.
   // Core workers borrow host custody through the existing exchange; raw workers keep native checks.
@@ -136,10 +133,18 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
 }
 
 function pathAdmission(location: string): Admission | undefined {
+  const retained = state.registry.forLocation(location);
+  if (retained) {
+    return retained;
+  }
   exchange(location);
+  const shared = state.registry.forLocation(location);
+  if (shared) {
+    return shared;
+  }
   try {
     retainSqliteDatabaseAdmissionLocation(location);
-    return state.registry.records.get(identity(fs.statSync(location, { bigint: true })));
+    return state.registry.forLocation(location);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -175,7 +180,12 @@ export function prepareSqliteDatabaseAdmission(
   }
   try {
     const file = fs.statSync(filename, { bigint: true });
-    return file.isFile() ? identity(file) : undefined;
+    if (!file.isFile()) {
+      return undefined;
+    }
+    const observed = identity(file);
+    state.registry.observeLocation(filename, observed);
+    return observed;
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       if (!create) {
@@ -236,8 +246,6 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
   }
   const record = state.registry.records.get(observed);
   if (record && !isRetired(record)) {
-    // Existing admission is checked with fstat before the new native connection borrows it.
-    retainSqliteDatabaseAdmissionLocation(location);
     state.connections.set(database, record);
   }
 }
@@ -649,6 +657,13 @@ export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boole
   return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
 }
 
+/** Admission owns the descriptor's immutable identity; callers do not re-stat its pathname. */
+export function getSqliteDatabaseAdmissionIdentityForPath(
+  location: string,
+): DatabaseFileIdentity | undefined {
+  return state.registry.forLocation(location)?.physicalIdentity;
+}
+
 /** Consume the already captured physical identity without another filesystem lookup. */
 export function hasSqliteDatabaseSchemaAdmissionForIdentity(
   physicalIdentity: DatabaseFileIdentity,
@@ -665,7 +680,7 @@ export function captureSqliteDatabaseAdmissions(
   }
   const identities = new Set(scope.admissions?.map((record) => record.identity));
   if (scope.location !== undefined) {
-    const observed = prepareSqliteDatabaseAdmission(scope.location);
+    const observed = state.registry.forLocation(scope.location)?.identity;
     if (observed) {
       identities.add(observed);
     }
