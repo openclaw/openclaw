@@ -34,6 +34,24 @@ describe("isProviderModelRerouted", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a provider-declared equivalent response model from producing a model-switch fact", () => {
+    const requested = { provider: "openai", model: "gpt-5.6" };
+    const effective = { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-sol" };
+    expect(isProviderModelRerouted(requested, effective)).toBe(false);
+  });
+
+  it.each([
+    { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-luna" },
+    { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
+  ])(
+    "retains a change the provider does not declare equivalent: $model with response $responseModel",
+    (effective) => {
+      expect(isProviderModelRerouted({ provider: "openai", model: "gpt-5.6" }, effective)).toBe(
+        true,
+      );
+    },
+  );
+
   it.each([
     {
       provider: "arcee",
