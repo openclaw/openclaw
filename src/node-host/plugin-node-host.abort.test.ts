@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type {
@@ -40,6 +41,15 @@ describe("non-duplex node-host plugin cancellation", () => {
       },
     );
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "ollama",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "ollama",

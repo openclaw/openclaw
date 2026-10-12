@@ -5,7 +5,6 @@ import {
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -215,10 +214,7 @@ import {
   createCodexConversationBindingData,
   legacyCodexConversationBindingId,
 } from "./conversation-binding-data.js";
-import {
-  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
-  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-} from "./conversation-binding-hooks.js";
+import { handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl } from "./conversation-binding-hooks.js";
 import { prepareCodexConversationBinding } from "./conversation-binding-preparation.js";
 import {
   conversationMessage,
