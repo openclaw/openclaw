@@ -49,7 +49,6 @@ it("force-runs a disabled job while scheduling is paused without consuming its p
     defaultAgentId: "main",
     log: logger,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     runCommandJob,
   });
@@ -133,7 +132,6 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       defaultAgentId: "main",
       log: logger,
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runCommandJob,
       runIsolatedAgentJob,
     });
@@ -293,7 +291,6 @@ it("retires a stale markerless receipt at startup so the job can run again", asy
     defaultAgentId: "main",
     log: logger,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     runCommandJob,
   });

@@ -2,10 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openContextEngineTurnOutboxWorkerStore } from "../../agents/harness/context-engine-turn-outbox-store.js";
 import { drainContextEngineTurnOutbox } from "../../agents/harness/context-engine-turn-outbox.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import {
-  claimHeartbeatOutcomeForRun,
-  persistHeartbeatOutcome,
-} from "../../infra/heartbeat-outcome-store.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
 import { createSqliteTrajectoryRuntimeSink } from "../../trajectory/runtime-store-writer.js";
 import {
@@ -19,7 +15,6 @@ import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 
@@ -133,45 +128,19 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 }
 
 describe("memory session side-data consumers", () => {
-  it("claims heartbeat context once per run, sees replacements, and keeps returned data detached", async () => {
-    const { scope, binding } = await fixture();
-    await runWithSessionActorStorage(binding, () =>
-      persistHeartbeatOutcome({
+  it("records message-tool outcomes through the memory actor without opening SQLite", async () => {
+    const { scope } = await fixture();
+    await expect(
+      recordMessageToolRunOutcome({
         ...scope,
-        runSessionKey: scope.sessionKey,
-        occurredAt: 1,
-        response: { outcome: "progress", notify: false, summary: "first" },
-        taskNames: ["task"],
+        runId: "run-two",
+        provider: "test",
+        model: "test",
+        outcome: "mute",
+        runStatus: "completed",
+        occurredAt: 2,
       }),
-    );
-    const [winner, other] = await Promise.all([
-      claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }),
-      claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }),
-    ]);
-    expect(winner?.summary).toBe("first");
-    expect(other).toBeUndefined();
-    winner!.taskNames.push("mutated");
-    expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }))?.taskNames).toEqual([
-      "task",
-    ]);
-    await persistHeartbeatOutcome({
-      ...scope,
-      runSessionKey: scope.sessionKey,
-      occurredAt: 2,
-      response: { outcome: "done", notify: false, summary: "replacement" },
-    });
-    expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }))?.summary).toBe(
-      "replacement",
-    );
-    await recordMessageToolRunOutcome({
-      ...scope,
-      runId: "run-two",
-      provider: "test",
-      model: "test",
-      outcome: "mute",
-      runStatus: "completed",
-      occurredAt: 2,
-    });
+    ).resolves.toBeUndefined();
   });
 
   it("recovers ordered accepted turns and allows plugin callbacks to await the same actor", async () => {
@@ -182,7 +151,7 @@ describe("memory session side-data consumers", () => {
       sessionId: scope.sessionId,
       sessionActor: binding,
     });
-    const filter = { engineId: "test", isHeartbeat: false };
+    const filter = { engineId: "test" };
     const abandoned = await turn("abandoned");
     await store.enqueueIntent({ ...filter, admission: abandoned.admission });
     expect(await store.prepareRun({ ...filter, sessionId: scope.sessionId })).toMatchObject({
@@ -310,7 +279,7 @@ describe("memory session side-data consumers", () => {
       sessionKey: scope.sessionKey,
       sessionActor: binding,
     });
-    const filter = { engineId: "test", isHeartbeat: false };
+    const filter = { engineId: "test" };
     await store.acceptIntent({ ...filter, boundary });
     await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 100_000 });
     const entered = Promise.withResolvers<void>();

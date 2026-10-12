@@ -522,10 +522,9 @@ describe("cron service timer regressions", () => {
 
     const runPromise = onTimer(state);
     try {
-      await runPromise;
       await awaitGateBeforeSettlement(
         queued.promise,
-        finished.promise,
+        runPromise,
         "Cron timer completed before ordinary session admission",
       );
       const runId = requireAdmittedRunId(storePath, job.id);
@@ -536,6 +535,7 @@ describe("cron service timer regressions", () => {
       expect(events.filter((event) => event.action === "finished")).toEqual([]);
 
       admitted.resolve();
+      await runPromise;
       await finished.promise;
       const persistedJob = requireJob({ store: await loadCronStore(storePath) }, job.id);
       expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(

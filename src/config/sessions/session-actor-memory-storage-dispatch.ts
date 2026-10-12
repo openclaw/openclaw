@@ -200,8 +200,6 @@ export function mutateSessionActorMemoryStorage(
     case "session.outbox.complete":
     case "session.outbox.recordFailure":
     case "session.outbox.discardIntent":
-    case "session.heartbeat.persist":
-    case "session.heartbeat.claim":
     case "session.messageToolOutcome.record":
     case "session.trajectory.append":
       return mutateSessionActorMemorySideEffects(context, command);

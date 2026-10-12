@@ -8,7 +8,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isCronJobActive } from "../cron/active-jobs.js";
+import { hasActiveCronJobsForAgent, isCronJobActive } from "../cron/active-jobs.js";
 import type { CronService } from "../cron/service.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { CRON_AGENT_SETUP_WATCHDOG_MS } from "../cron/service/agent-watchdog.js";
@@ -104,7 +104,7 @@ export function registerGatewayCronReceiptTests({
             const idle = originalIdlePolicy(...args);
             if (
               !idle &&
-              nativeState.runAdmission.active === 0 &&
+              !hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true }) &&
               nativeState.activeManualRunJobIds.size === 1
             ) {
               idlePolicyChecked.resolve();
@@ -190,7 +190,10 @@ export function registerGatewayCronReceiptTests({
         );
         stopObserving = onGatewayWorkMetricsChanged(() =>
           queueMicrotask(() => {
-            if (isCronJobActive(job.id) && nativeState.runAdmission.active === 0) {
+            if (
+              isCronJobActive(job.id) &&
+              !hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true })
+            ) {
               idleWait.resolve();
             }
           }),
@@ -227,7 +230,9 @@ export function registerGatewayCronReceiptTests({
         );
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);
         expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBeUndefined();
-        expect(nativeState.runAdmission.active).toBe(0);
+        expect(hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true })).toBe(
+          false,
+        );
         expect(isCronJobActive(job.id)).toBe(true);
         expect(getSuspensionVisibleCronTaskRunCount({ agentId: "main" })).toBeGreaterThan(0);
         expect(reserved).toHaveBeenCalledOnce();
@@ -248,7 +253,9 @@ export function registerGatewayCronReceiptTests({
           expect(callbackFinished).toBe(false);
           expect(payloadRunner).not.toHaveBeenCalled();
           expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBeUndefined();
-          expect(nativeState.runAdmission.active).toBe(0);
+          expect(hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true })).toBe(
+            false,
+          );
           expect(
             findActiveCronRunReceiptInDatabase({
               database: openOpenClawStateDatabase().db,
@@ -335,7 +342,6 @@ export function registerGatewayCronReceiptTests({
     const watched = [createWatchedRun(false), createWatchedRun(false)];
     const { spawn } = mockCronSupervisor(...watched);
     const state = loadCronService(createCronConfig("server-cron-two-idle-exits"));
-    const nativeState = getCronState(state);
     const cron = getConcreteCron(state);
     const bothWaiting = createDeferred();
     const firstStarted = createDeferred();
@@ -392,7 +398,7 @@ export function registerGatewayCronReceiptTests({
         queueMicrotask(() => {
           if (
             jobs.every((job) => isCronJobActive(job.id)) &&
-            nativeState.runAdmission.active === 0
+            !hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true })
           ) {
             bothWaiting.resolve();
           }
@@ -411,7 +417,9 @@ export function registerGatewayCronReceiptTests({
         signal,
       );
       expect(payloadRunner).not.toHaveBeenCalled();
-      expect(nativeState.runAdmission.active).toBe(0);
+      expect(hasActiveCronJobsForAgent("main", undefined, { excludeIdleWaiters: true })).toBe(
+        false,
+      );
       expect(getSuspensionVisibleCronTaskRunCount({ agentId: "main" })).toBe(2);
       foreground.complete();
       await withinTest(

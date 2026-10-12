@@ -2,8 +2,6 @@ import type {
   ContextEngineTurnOutboxPayload,
   ContextEngineTurnOutboxWorkerOperations,
 } from "../../agents/harness/context-engine-turn-outbox.js";
-import type { HeartbeatOutcomeRow } from "../../infra/heartbeat-outcome-store.kernel.js";
-import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import type { MessageToolRunOutcomeInsert } from "../../infra/message-tool-run-outcome-store.kernel.js";
 import type {
   SqliteTrajectoryRuntimeAppend,
@@ -41,8 +39,6 @@ export type SessionActorMemorySideEffectsWrites = Omit<
   OutboxOperations,
   keyof SessionActorMemorySideEffectsReads
 > & {
-  "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
-  "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
   "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
   "session.trajectory.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
 };
@@ -81,7 +77,6 @@ export type SessionActorMemoryTrajectoryRow = {
 /** These records belong to the logical session and survive transcript-window rotation. */
 export type SessionActorMemorySideEffectsState = {
   outbox: Map<string, SessionActorMemoryOutboxRow>;
-  heartbeatOutcome?: HeartbeatOutcomeRow;
   messageToolOutcomes: Array<MessageToolRunOutcomeInsert & { id: number }>;
   trajectory: Map<string, SessionActorMemoryTrajectoryRow[]>;
 };
@@ -96,7 +91,6 @@ export function cloneSessionActorMemorySideEffects(
 ): SessionActorMemorySideEffectsState {
   return {
     outbox: new Map(state.outbox),
-    heartbeatOutcome: state.heartbeatOutcome,
     messageToolOutcomes: [...state.messageToolOutcomes],
     trajectory: new Map(state.trajectory),
   };

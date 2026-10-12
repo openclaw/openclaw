@@ -60,7 +60,7 @@ export function createCronRegressionState(
     enqueueSystemEvent: vi.fn(),
     enqueueSessionEvent: vi.fn(),
     runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
-    ...stateParams,
+    ...deps,
   });
   fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
   return state;
