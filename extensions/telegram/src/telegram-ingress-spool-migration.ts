@@ -201,14 +201,16 @@ export const telegramIngressSpoolMigration = {
           entries.push(parseSource(source, backup.bytes));
         }
         const pending = entries.filter((entry) => entry.status === "pending");
-        const failed = entries.find((entry) => entry.status === "failed");
+        // Published failures suppress pending crash leftovers, including newly classified stale entries.
+        const failed =
+          entries.find((_, index) => sources[index]!.failed) ??
+          entries.find((entry) => entry.status === "failed");
         if (
           pending.some((entry) => !isDeepStrictEqual(entry, pending[0])) ||
           (failed && pending.some((entry) => entry.receivedAt !== failed.receivedAt))
         ) {
           throw new Error("pending, processing, and failed sources disagree");
         }
-        // A published failure tombstone suppresses pending crash leftovers; old process claims expire.
         const entry = failed ?? pending[0]!;
         for (const backup of backups) {
           backup.assertUnchanged();

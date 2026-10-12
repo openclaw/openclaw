@@ -192,7 +192,7 @@ describe("Telegram JSON spool Doctor import", () => {
             {
               version: 1,
               updateId: 43,
-              receivedAt: receivedAt + 43,
+              receivedAt: receivedAt - 120 * 86_400_000,
               failure: {
                 reason: "handler_timeout",
                 message: "synthetic timeout",
@@ -200,7 +200,7 @@ describe("Telegram JSON spool Doctor import", () => {
               },
             },
           ],
-          ["0000000000000043.json", pending(43)],
+          ["0000000000000043.json", { ...pending(43), receivedAt: receivedAt - 120 * 86_400_000 }],
         ] as const;
         const originals = new Map<string, string>();
         for (const [name, value] of fixtures) {
@@ -250,7 +250,7 @@ describe("Telegram JSON spool Doctor import", () => {
         expect(await queue.listFailed?.()).toEqual([
           expect.objectContaining({
             id: "0000000000000043",
-            receivedAt: receivedAt + 43,
+            receivedAt: receivedAt - 120 * 86_400_000,
             failedAt: receivedAt + 200,
             reason: "handler_timeout",
             message: "synthetic timeout",
