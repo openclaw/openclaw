@@ -328,13 +328,13 @@ async function migrateRecord(
     ),
   );
   if (candidates.length !== 1) {
-    throw new Error("exactly one current canonical owner claim is required");
+    throw new Error("exactly one current owner claim is required");
   }
   const claim = candidates[0]!;
   const resource = resolveAcpxSessionResource(claim);
   const oneshot = claim.meta.mode === "oneshot";
   if (oneshot !== (raw.name !== oldId)) {
-    throw new Error("canonical claim and backend record mode disagree");
+    throw new Error("current claim and backend record mode disagree");
   }
   // A preceding source repair can make its published destination current during
   // this pass. Its matching claim was verified above; never archive that resource.
@@ -460,7 +460,7 @@ async function migrateRecord(
           isDeepStrictEqual(item.binding, claim.binding),
       )
     ) {
-      throw new Error("canonical metadata verification failed; source retained for rerun");
+      throw new Error("stored metadata verification failed; source retained for rerun");
     }
     changes.push(
       `Migrated ACP backend history for ${claim.agentId}/${claim.sessionKey} to its owner-qualified resource.`,
@@ -556,7 +556,7 @@ export const acpxSessionOwnerMigration: PluginDoctorStateMigration = {
       try {
         const current = await input.context.inspectAcpSessionClaims();
         if (current.incomplete.length) {
-          throw new Error("canonical ownership evidence became incomplete");
+          throw new Error("current ownership evidence became incomplete");
         }
         await migrateRecord(input, directory, oldId, current.claims, changes, warnings);
       } catch (error) {

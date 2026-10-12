@@ -79,7 +79,7 @@ export async function startOrResumeThread(
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
         throw new Error(
-          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
+          "Saved Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
         );
       }
     }

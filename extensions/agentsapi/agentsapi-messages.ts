@@ -247,7 +247,7 @@ export class AgentsApiMessageProjection {
     }
     this.transcriptOrderingGapReported = true;
     embeddedAgentLog.warn(
-      "Agents API canonical transcript prefix is unavailable; host input and tool receipts retain their existing placement",
+      "Agents API saved transcript prefix is unavailable; host input and tool receipts retain their existing placement",
     );
   }
 

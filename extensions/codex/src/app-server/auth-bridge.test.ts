@@ -1748,7 +1748,7 @@ describe("Codex auth bridge", () => {
     expect(rejection).toMatchObject({
       code: "selected_auth_profile_unavailable",
       message:
-        'Codex app-server auth profile "openai:work" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
+        'Codex app-server auth profile "openai:work" must use the OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
     });
     expect(rejection).not.toHaveProperty("status");
     await expect(authCacheKey(profileParams(agentDir))).resolves.toBeUndefined();

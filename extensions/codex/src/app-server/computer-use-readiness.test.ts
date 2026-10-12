@@ -378,7 +378,7 @@ describe("Codex Computer Use readiness", () => {
       mcpServerAvailable: true,
     });
     expect(status.warnings).toContain(
-      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+      "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to block startup after a failed live test.",
     );
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",

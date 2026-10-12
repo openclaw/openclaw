@@ -490,7 +490,7 @@ async function inspectCodexComputerUseWithoutFence(
         ...(repair?.warnings ?? []),
         ...(compatibilityStartupAllowed
           ? [
-              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+              "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to block startup after a failed live test.",
             ]
           : []),
       ],

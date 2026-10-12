@@ -2853,8 +2853,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
         }),
       ).rejects.toThrow(
         returnedId
-          ? "canonical branch reused an existing thread"
-          : "canonical branch may have materialized without a safe thread id",
+          ? "supervised branch reused an existing thread"
+          : "supervised branch may have materialized without a safe thread id",
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "config/read",

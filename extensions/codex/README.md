@@ -26,7 +26,7 @@ Local discovery reads native provenance from plain or compressed rollouts. A fai
 
 With `appServer.remoteWorkspaceRoot`, OpenClaw maps workspace-relative paths to the remote root. Local filesystem-root workspaces, including `/` and Windows drive roots, follow the same mapping.
 
-A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also fail closed. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
+A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also block archive. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
 
 Disabling or uninstalling the plugin leaves supervised Chats locked and unavailable rather than rerouting them. Reinstall or re-enable the same plugin and restart the Gateway to resume those Chats.
 
@@ -36,7 +36,7 @@ Native Codex plugin catalogs are discoverable with `/codex plugins available`, i
 
 Catalog and app-inventory refreshes are best effort while settings, installed plugins, or desktop artifacts change. An in-flight read can publish its captured metadata; a later refresh, cache expiry, or restart picks up the change. Normal parallel refreshes retain unrelated apps, while authorization is checked separately when work executes. An app-server or desktop replacement during an operation may return an error instead of automatically replaying the operation.
 
-For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the canonical harness thread with exactly that returned pair. Codex persists the canonical thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
+For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the OpenClaw harness thread with exactly that returned pair. Codex persists the harness thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.
 

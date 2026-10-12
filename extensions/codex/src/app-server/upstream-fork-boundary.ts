@@ -312,7 +312,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                       currentThread.modelProvider !== thread.modelProvider ||
                       currentThread.status?.type === "active"
                     ) {
-                      throw new Error("The canonical Codex source changed during initialization");
+                      throw new Error("The Codex source thread changed during initialization");
                     }
                     const currentTurns = await listCodexUpstreamTurns(params.control, threadId);
                     const cut = turns.findIndex(
@@ -322,7 +322,7 @@ export async function resolveCodexUpstreamForkBoundary(params: {
                       !isDeepStrictEqual(currentTurns.slice(0, cut + 1), turns.slice(0, cut + 1))
                     ) {
                       throw new Error(
-                        "The canonical Codex fork boundary changed during initialization",
+                        "The selected Codex fork boundary changed during initialization",
                       );
                     }
                   },

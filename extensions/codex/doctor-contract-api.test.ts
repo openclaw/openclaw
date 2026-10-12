@@ -744,7 +744,7 @@ describe("codex doctor contract", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining(`canonical plugin state changed at ${sessionStateKey}`),
+      expect.stringContaining(`current plugin state changed at ${sessionStateKey}`),
     ]);
     await fs.access(fixture.sidecarPath);
     await expect(store.lookup(sessionStateKey)).resolves.toEqual(retired);
@@ -831,7 +831,7 @@ describe("codex doctor contract", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.stringContaining(`canonical plugin state is invalid at ${bindingKey}`),
+      expect.stringContaining(`current plugin state is invalid at ${bindingKey}`),
     ]);
     await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
     await expect(store.lookup(bindingKey)).resolves.toEqual(malformed);

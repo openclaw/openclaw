@@ -223,7 +223,7 @@ async function runOllamaWebSearch(params: {
       }
       if (response.status === 403) {
         throw new ProviderHttpError(
-          "Ollama web search is unavailable. Ensure cloud-backed web search is enabled on the Ollama host.",
+          "Ollama web search is unavailable. Check that cloud-backed web search is enabled on the Ollama host.",
           { status: response.status },
         );
       }
