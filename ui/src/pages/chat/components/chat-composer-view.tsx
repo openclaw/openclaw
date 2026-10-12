@@ -231,11 +231,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       </>
     ) : undefined,
   );
-  const offlineText = createMemo(() =>
-    props.offline && props.queuedOutboxCount
-      ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
-      : null,
-  );
   const composerError = createMemo(() => context.mentionError || context.state.dictationError);
   const primaryComposerStatus = createMemo(() =>
     props.disabledReason
@@ -254,9 +249,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         }
       : composerError()
         ? { text: composerError(), tone: "danger" as const, icon: <Icon name="alertTriangle" /> }
-        : offlineText()
-          ? { text: offlineText(), tone: "info" as const, icon: <Icon name="inbox" /> }
-          : null,
+        : null,
   );
   const composerStatus = createMemo(() => {
     if (!showComposerInput()) {
