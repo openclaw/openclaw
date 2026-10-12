@@ -31,7 +31,6 @@ import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from
 import {
   createAgentFixture,
   createCatalogFixture,
-  createFinderMetadataFixture,
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
@@ -190,7 +189,7 @@ describe("Git-backed SQLite snapshots", () => {
           await initializeGitBackupRepository({ repositoryPath, stateDir });
           const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
           await fs.mkdir(path.dirname(finderPath), { recursive: true });
-          await fs.writeFile(finderPath, createFinderMetadataFixture());
+          await fs.writeFile(finderPath, "filesystem metadata\n");
           const result = await backupGitCreateCommand(createTestRuntime(), {
             repository: repositoryPath,
             ...selection,
@@ -201,7 +200,7 @@ describe("Git-backed SQLite snapshots", () => {
 
           expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
           expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
-          await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture());
+          await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("filesystem metadata\n");
           expect(
             await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
           ).not.toContain(".DS_Store");
@@ -289,6 +288,20 @@ describe("Git-backed SQLite snapshots", () => {
               }),
             );
           }
+          const retainedArtifact = "agents/ops/tables/schema_meta.jsonl";
+          let stagedBlob: string | undefined;
+          if (condition !== "removed") {
+            await fs.writeFile(
+              path.join(repositoryPath, retainedArtifact),
+              "operator staged bytes\n",
+            );
+            await requireGit(repositoryPath, ["add", "--", retainedArtifact]);
+            stagedBlob = await requireGit(repositoryPath, ["rev-parse", `:${retainedArtifact}`]);
+            await fs.writeFile(
+              path.join(repositoryPath, retainedArtifact),
+              "operator unstaged bytes\n",
+            );
+          }
           const output = await create();
           const result = resultSchema.parse(JSON.parse(output.stdout));
           expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
@@ -302,6 +315,12 @@ describe("Git-backed SQLite snapshots", () => {
             return;
           }
           expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"])).toBe(opsTree);
+          expect(await requireGit(repositoryPath, ["rev-parse", `:${retainedArtifact}`])).toBe(
+            stagedBlob,
+          );
+          await expect(
+            fs.readFile(path.join(repositoryPath, retainedArtifact), "utf8"),
+          ).resolves.toBe("operator unstaged bytes\n");
           const reason = condition === "missing" ? /ENOENT/u : /uses schema version/u;
           expect(result.warnings).toEqual([expect.stringMatching(/agent ops.*degraded/iu)]);
           const warning = result.warnings?.[0];
@@ -339,7 +358,7 @@ describe("Git-backed SQLite snapshots", () => {
 
     await expect(
       createGitBackup({ repositoryPath, stateDir, databases: [database] }),
-    ).rejects.toThrow(/repository must be dedicated to OpenClaw backups/u);
+    ).resolves.toMatchObject({ noChanges: false });
     await expect(fs.readFile(operatorFile, "utf8")).resolves.toBe("operator-owned\n");
   });
 
@@ -356,7 +375,7 @@ describe("Git-backed SQLite snapshots", () => {
     await expect(fs.lstat(staleAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("aborts all-database cleanup before deleting an unowned agent scope", async () => {
+  it("prunes owned artifacts without deleting an unowned agent scope", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
     const repositoryPath = path.join(root, "repository");
@@ -369,11 +388,9 @@ describe("Git-backed SQLite snapshots", () => {
 
     await expect(
       createGitBackup({ repositoryPath, stateDir, databases: [database], all: true }),
-    ).rejects.toThrow(/repository must be dedicated to OpenClaw backups/u);
+    ).resolves.toMatchObject({ noChanges: false });
     await expect(fs.readFile(unownedFile, "utf8")).resolves.toBe("operator-owned\n");
-    await expect(
-      fs.readFile(path.join(ownedAgentPath, "manifest.json"), "utf8"),
-    ).resolves.toContain('"schemaVersion":1');
+    await expect(fs.stat(ownedAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.skipIf(process.platform === "win32")(
