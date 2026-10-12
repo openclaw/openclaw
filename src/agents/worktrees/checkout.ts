@@ -7,7 +7,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import type { WorktreeWaitBudget } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
-import { prepareWorktreePromptFiles, resolveWorktreeCheckoutKey } from "./checkout-inputs.js";
+import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
+import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -132,7 +133,6 @@ async function prepareTemplate(options: CheckoutOptions) {
     async (git) => {
       setWorktreePreparationTemplate("unavailable", { reason: "checkout-policy" });
       const contentKey = await resolveWorktreeCheckoutKey({
-        repoRoot: options.repoRoot,
         commonDir: options.commonDir,
         destination: options.destination,
         commit,
@@ -370,7 +370,9 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     return result.code === 0 ? added : result;
   };
   let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
-  const measurementKey = digest(`${options.commonDir}\n${options.worktreeRoot}`);
+  const measurementKey = createHash("sha256")
+    .update(`${options.commonDir}\n${options.worktreeRoot}`)
+    .digest("hex");
   let sampledGit: { gitMs?: number } | undefined;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
@@ -474,6 +476,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       return result;
     }
     if (!template) {
+      const started = performance.now();
       if (
         !options.deferGitCheckout &&
         options.onPromptReady &&
@@ -501,7 +504,6 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         await options.onPromptReady(commit);
         assertOwned(options);
       }
-      const started = performance.now();
       const result = options.deferGitCheckout ? added : await checkout();
       if (sampleGit && measurement && result.code === 0) {
         measurement.gitMs = performance.now() - started;
