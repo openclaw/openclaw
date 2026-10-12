@@ -7,7 +7,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseIncognitoIdentity,
@@ -202,7 +202,9 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
-  const detached = freezeJsonSnapshot(structuredClone(state));
+  const detached = isDeeplyFrozenPlainData(state)
+    ? state
+    : freezeJsonSnapshot(structuredClone(state));
   discard(cell);
   cell.snapshot = detached;
   cell.predicateColumns = detached.entry
@@ -508,7 +510,7 @@ export function createSessionActorReplica(
   };
 
   return {
-    /** Each borrower validates its current physical generation before disclosure. */
+    /** Borrow the immutable revision only after validating its current physical generation. */
     read(): SessionActorHotState | undefined {
       params.lifetime.assertReadable();
       if (closed || !owned.snapshot) {
@@ -525,7 +527,7 @@ export function createSessionActorReplica(
         return undefined;
       }
       touch(owned);
-      return structuredClone(owned.snapshot);
+      return owned.snapshot;
     },
     beginRead() {
       const settle = begin();

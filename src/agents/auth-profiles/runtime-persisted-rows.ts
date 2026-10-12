@@ -1,4 +1,4 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AuthProfileRowRead } from "./types.js";
 
@@ -29,7 +29,11 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
         async read() {
           reader.assertCurrent();
           const entry = entries.get(databasePath);
-          const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+          // Session-only writes leave auth rows intact; auth and unscoped writes still fence reuse.
+          const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
+            databasePath,
+            "auth-profiles",
+          );
           if (
             writeToken !== undefined &&
             entry?.identity === reader.identity &&
@@ -48,7 +52,7 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
             rows.state.status !== "unreadable" &&
             revisionAtPath(databasePath) === revision &&
             writeToken !== undefined &&
-            readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
+            readSqliteDatabaseScopedWriteTokenForPath(databasePath, "auth-profiles") === writeToken
           ) {
             freezeJsonSnapshot(rows);
             entries.set(databasePath, { identity: reader.identity, writeToken, revision, rows });

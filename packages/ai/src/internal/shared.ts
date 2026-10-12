@@ -1,5 +1,6 @@
 export { readAssistantThinkingAppend } from "@openclaw/llm-core/event-stream";
 export * from "../providers/simple-options.js";
+export { serializeModelRequestBody } from "../transports/model-request-body.js";
 export * from "../providers/tool-result-text.js";
 export { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 export * from "../providers/transform-messages.js";

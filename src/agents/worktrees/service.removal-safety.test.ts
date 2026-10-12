@@ -5,7 +5,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as gitExec from "../../infra/git-exec.js";
+import * as commandRunner from "../../process/exec-runner.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
@@ -90,6 +92,45 @@ describe("managed removal custody", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
+  it("releases the checkout name while retired file deletion is pending", async () => {
+    const created = await materialize("background-delete");
+    const run = commandRunner.runCommandWithTimeout;
+    const pending = createDeferred();
+    const started = createDeferred();
+    const completed = createDeferred();
+    let retired = "";
+    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      const target = argv.at(-1)!;
+      if (
+        !target.includes(".openclaw-removing-") ||
+        path.dirname(target) !== path.dirname(created.path)
+      ) {
+        return await run(argv, options);
+      }
+      retired = target;
+      started.resolve();
+      await pending.promise;
+      try {
+        return await run(argv, options);
+      } finally {
+        completed.resolve();
+      }
+    });
+    try {
+      const removed = await service.remove({ id: created.id, reason: "archive" });
+      await started.promise;
+      expect(await fs.readFile(path.join(retired, "README.md"), "utf8")).toBe("base\n");
+      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("base");
+    } finally {
+      pending.resolve();
+      await completed.promise;
+    }
+  });
+
   it("retains hidden dirty work instead of relying on status flags", async () => {
     const created = await materialize("hidden-dirty");
     await git(created.path, "update-index", "--assume-unchanged", "README.md");
@@ -104,7 +145,7 @@ describe("managed removal custody", () => {
     { missing: false, outcome: "archives" },
     { missing: true, outcome: "preserves" },
   ])(
-    "$outcome a clean partial worktree without rebuilding its tree (missing=$missing)",
+    "$outcome a clean partial worktree without building a snapshot index (missing=$missing)",
     async ({ missing }) => {
       const source = repo;
       await git(source, "config", "uploadpack.allowFilter", "true");
@@ -151,7 +192,11 @@ describe("managed removal custody", () => {
         const failure: unknown = await service
           .remove({ id: created.id, reason: "archive" })
           .catch((error: unknown) => error);
-        expect(commands.mock.calls.some(([, args]) => args.includes("write-tree"))).toBe(false);
+        expect(
+          commands.mock.calls.some(([, args]) =>
+            args.some((arg) => ["read-tree", "update-index", "write-tree"].includes(arg)),
+          ),
+        ).toBe(false);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).toMatchObject({
           message: expect.stringMatching(
@@ -167,7 +212,11 @@ describe("managed removal custody", () => {
         expect(await git(repo, "rev-parse", `${removed.snapshotRef}^`)).toBe(head);
         expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("base");
         await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(commands.mock.calls.some(([, args]) => args.includes("write-tree"))).toBe(false);
+        expect(
+          commands.mock.calls.some(([, args]) =>
+            args.some((arg) => ["read-tree", "update-index", "write-tree"].includes(arg)),
+          ),
+        ).toBe(false);
       }
     },
   );
@@ -300,13 +349,12 @@ describe("managed removal custody", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("does not overwrite a completed snapshot after a partial deletion timeout", async () => {
+  it("does not overwrite a completed snapshot after a registration removal timeout", async () => {
     const created = await materialize("partial");
     await fs.writeFile(path.join(created.path, "README.md"), "complete recovery content\n");
     const runGit = gitOwner.runGit;
     const fault = vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
       if (args[0] === "worktree" && args[1] === "remove") {
-        await fs.unlink(path.join(created.path, "README.md"));
         return {
           ...(await runGit(cwd, ["status", "--porcelain"], options)),
           code: 1,

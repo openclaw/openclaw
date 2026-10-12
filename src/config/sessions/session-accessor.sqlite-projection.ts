@@ -22,7 +22,6 @@ import {
   hasPreparedNativeSessionDeletion,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { prepareLifecycleIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { projectSessionEntryLifecycleMutation } from "./session-accessor.sqlite-lifecycle-state.js";
@@ -233,7 +232,6 @@ export async function applySessionEntryLifecycleMutation(
                         materializationFailed: removalArchiveMaterializationFailed,
                         allowCanonicalRepair: params.allowCanonicalRepair,
                         maintenance,
-                        descendantRunBasis: params.descendantRunBasis,
                       },
                     }),
                   );
@@ -255,7 +253,6 @@ export async function applySessionEntryLifecycleMutation(
                     agentId: resolved.agentId,
                     databaseOptions: reclamationOptions,
                     materializedPlans: materializedRemovalPlans,
-                    descendantRunBasis: params.descendantRunBasis,
                     input: {
                       projected,
                       materializationFailed: removalArchiveMaterializationFailed,
@@ -319,7 +316,6 @@ export async function applySessionEntryLifecycleMutation(
           params.commitGuard?.();
           params.beforeCommitInTransaction?.();
           assertSourceCurrent?.();
-          assertSessionSubagentRunsCurrent(params, resolved.env);
           if (params.onLifecycleCommitted) {
             deferOpenClawAgentPostCommitPublication(transactionDb, params.onLifecycleCommitted);
           }
@@ -346,7 +342,6 @@ export async function applySessionEntryLifecycleMutation(
           });
           params.commitGuard?.();
           assertSourceCurrent?.();
-          assertSessionSubagentRunsCurrent(params, resolved.env);
           return {
             ...result,
             publish: prepareLifecycleIdentityPublication({

@@ -21,6 +21,43 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 afterEach(() => vi.restoreAllMocks());
 
+it("transfers an ordinary patch candidate with its final authority grant", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const transfers: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (callback, attachment) =>
+        createAdmission((request, grant) => {
+          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+          if (
+            isRecord(publication) &&
+            typeof publication.kind === "string" &&
+            publication.kind.startsWith("session-entry-patch-") &&
+            publication.kind !== "session-entry-patch-validated"
+          ) {
+            transfers.push(publication.kind);
+            if (request.stage === "commit") {
+              expect(f.read().label).not.toBe("committed candidate");
+              expect(publication.transfer).toMatchObject({
+                frames: [{ recordDone: true }, { done: true }],
+              });
+            }
+          }
+          callback(request, grant);
+        }, attachment),
+    );
+    await expect(
+      patchInternalSessionEntry(f.scope, () => ({ label: "committed candidate" }), {
+        workerGuard: {},
+        skipMaintenance: true,
+      }),
+    ).resolves.toMatchObject({ label: "committed candidate" });
+    expect(f.read().label).toBe("committed candidate");
+    expect(transfers).toEqual(["session-entry-patch-committed"]);
+  });
+});
+
 it.each(["allowed", "transaction", "commit"] as const)(
   "checks inbound authority only at native mutation grants (%s)",
   async (revokedAt) => {
