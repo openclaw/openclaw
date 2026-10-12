@@ -19,6 +19,11 @@ import {
 import { buildGroupDisplayName } from "./group-display.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+type SessionMetaSource = Pick<
+  SessionEntry,
+  "delivery" | "subject" | "topicName" | "groupChannel" | "space"
+>;
+
 export type PreparedSessionMetaPatch = {
   group: {
     resolution: GroupKeyResolution;
@@ -95,7 +100,7 @@ export const mergeSessionOrigin = (
 
 function projectGroupSessionPatch(
   group: PreparedSessionMetaPatch["group"],
-  existing: SessionEntry | undefined,
+  existing: SessionMetaSource | undefined,
   sessionKey: string,
 ): Partial<SessionEntry> | null {
   if (!group) {
@@ -142,7 +147,7 @@ function projectGroupSessionPatch(
 export function projectSessionMetaPatch(params: {
   prepared: PreparedSessionMetaPatch;
   sessionKey: string;
-  existing?: SessionEntry;
+  existing?: SessionMetaSource;
   preserveExistingDeliveryRoute?: boolean;
 }): Partial<SessionEntry> | null {
   const { origin, internalTurn } = params.prepared;
@@ -283,7 +288,7 @@ export function projectLastRoutePatch(params: {
     context: mergeDeliveryContext(mergedInput, fallbackContext),
     origin: fallbackOrigin,
   });
-  const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
+  const nextEntry = { ...existing, delivery };
   const metaPatch = params.metadata
     ? projectSessionMetaPatch({
         prepared: params.metadata,
