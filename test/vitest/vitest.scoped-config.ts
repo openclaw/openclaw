@@ -194,6 +194,7 @@ export function createScopedVitestConfig(
     passWithNoTests?: boolean;
     excludeUnitFastTests?: boolean;
     setupFiles?: string[];
+    serverDepsInline?: Array<string | RegExp>;
     useNonIsolatedRunner?: boolean;
   },
   // Explicit nameable return type: inference otherwise reaches vite-internal
@@ -243,6 +244,17 @@ export function createScopedVitestConfig(
     test: {
       ...baseTest,
       ...(options?.deps ? { deps: options.deps } : {}),
+      ...(options?.serverDepsInline
+        ? {
+            server: {
+              ...baseTest.server,
+              deps: {
+                ...baseTest.server.deps,
+                inline: [...baseTest.server.deps.inline, ...options.serverDepsInline],
+              },
+            },
+          }
+        : {}),
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
       ...(options?.execArgv ? { execArgv: options.execArgv } : {}),

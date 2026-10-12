@@ -35,6 +35,10 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     isolate: false,
     name: "ui",
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
+    // Web Awesome otherwise stays on Node's loader and imports a second native Lit
+    // beside the optimized lit/** graph. The UI package runner must not opt in:
+    // it already prebundles these components.
+    serverDepsInline: ["@awesome.me/webawesome"],
     useNonIsolatedRunner: true,
   });
   return {
