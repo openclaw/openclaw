@@ -578,16 +578,23 @@ describe("session menu", () => {
       expect(blue?.getAttribute("aria-pressed")).toBe("true");
       expect(menu.querySelectorAll('.session-menu__colors [aria-pressed="true"]')).toHaveLength(1);
       const choices = iconChoices(menu);
-      expect(choices[0]?.getAttribute("role")).toBeNull();
-      expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
-      expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[0]]);
+      const [emojiGrid, glyphGrid] = menu.querySelectorAll(".session-menu__icon-grid");
+      const noIconChoices = [emojiGrid, glyphGrid].map((grid) =>
+        grid?.querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="No icon"]'),
+      );
+      expect(
+        noIconChoices.every((choice) => choice?.parentElement?.firstElementChild === choice),
+      ).toBe(true);
+      expect(choices[1]?.textContent?.trim()).toBe("🦞");
+      expect(choices[1]?.getAttribute("role")).toBeNull();
+      expect(choices[1]?.getAttribute("aria-pressed")).toBe("true");
+      expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[1]]);
       menu
         .querySelector<HTMLButtonElement>('.session-menu__color-choice[aria-label="Purple"]')
         ?.click();
-      iconChoices(menu)[1]?.click();
-      const noIcon = menu.querySelector<HTMLButtonElement>('[aria-label="No icon"]');
-      expect(noIcon).not.toBeNull();
-      noIcon?.click();
+      iconChoices(menu)[2]?.click();
+      noIconChoices[0]?.click();
+      noIconChoices[1]?.click();
       menu
         .querySelector<HTMLButtonElement>('.session-menu__color-choice[aria-label="No color"]')
         ?.click();
@@ -598,6 +605,7 @@ describe("session menu", () => {
       expect(onAction.mock.calls).toEqual([
         [{ kind: "set-color", color: "purple" }],
         [{ kind: "set-icon", icon: "🚀" }],
+        [{ kind: "set-icon", icon: null }],
         [{ kind: "set-icon", icon: null }],
         [{ kind: "set-color", color: null }],
         [{ kind: "reset-appearance" }],
@@ -613,6 +621,16 @@ describe("session menu", () => {
           .querySelector('.session-menu__color-choice[aria-pressed="true"]')
           ?.getAttribute("aria-label"),
       ).toBe("Purple");
+      menu.session = { ...menu.session, icon: null };
+      await menu.updateComplete;
+      const cleared = Array.from(
+        menu.querySelectorAll<HTMLButtonElement>('.session-menu__icon-choice[aria-pressed="true"]'),
+      );
+      expect(cleared.map((choice) => choice.getAttribute("aria-label"))).toEqual([
+        "No icon",
+        "No icon",
+      ]);
+      expect(cleared.map((choice) => choice.tabIndex)).toEqual([0, -1]);
     },
   );
 

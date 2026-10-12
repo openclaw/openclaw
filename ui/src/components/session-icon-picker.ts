@@ -112,13 +112,13 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
       : ([...SESSION_ICON_EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find(
           (icon) => icon === props.currentIcon,
         ) ?? SESSION_ICON_EMOJI_CHOICES[0]);
-  const renderChoice = (icon: string | null, glyph = false) => html`
+  const renderChoice = (icon: string | null, glyph = false, tabbable = true) => html`
     <button
       type="button"
       class=${`session-menu__icon-choice${glyph ? " session-menu__icon-choice--glyph" : ""}`}
       aria-label=${glyph ? (icon ?? t("sessionsView.noIcon")) : nothing}
       aria-pressed=${String(props.currentIcon === icon)}
-      tabindex=${icon === tabStop ? "0" : "-1"}
+      tabindex=${tabbable && icon === tabStop ? "0" : "-1"}
       ?disabled=${props.disabled}
       title=${props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : nothing)}
       @click=${(event: MouseEvent) => props.onSelect(event, icon)}
@@ -126,6 +126,8 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
       ${icon === null ? icons.circleX : glyph ? resolveSessionIconGraphic(icon) : icon}
     </button>
   `;
+  // Emoji and glyph share one icon slot; both sections lead with the same clear choice,
+  // but only the first one is a tab stop.
   return html`
     <div class="session-menu__icon-picker session-menu__icon-panel" data-mode=${props.mode}>
       <div
@@ -138,6 +140,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
       >
         <div class="session-menu__icon-section-label">${t("sessionsView.iconEmojiSection")}</div>
         <div class="session-menu__icon-grid">
+          ${props.clearable !== false ? renderChoice(null, true) : nothing}
           ${SESSION_ICON_EMOJI_CHOICES.map((icon) => renderChoice(icon))}
           <button
             type="button"
@@ -154,7 +157,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         </div>
         <div class="session-menu__icon-section-label">${t("sessionsView.iconGlyphSection")}</div>
         <div class="session-menu__icon-grid">
-          ${props.clearable !== false ? renderChoice(null, true) : nothing}
+          ${props.clearable !== false ? renderChoice(null, true, false) : nothing}
           ${SESSION_ICON_GLYPH_IDS.map((icon) => renderChoice(icon, true))}
         </div>
       </div>
