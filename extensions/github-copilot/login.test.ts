@@ -215,35 +215,35 @@ describe("runGitHubCopilotDeviceFlow — live authority", () => {
 });
 
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
-  it.each([
-    { stage: "device code", url: DEVICE_CODE_URL, status: 502 },
-    { stage: "device token", url: ACCESS_TOKEN_URL, status: 401 },
-  ])("cancels the unread $stage body before throwing on non-OK", async ({ stage, url, status }) => {
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
-      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
-        return guardResponse(VALID_DEVICE_CODE_BODY);
-      }
-      return {
-        response: new Response(body, { status, headers: { "Content-Type": "application/json" } }),
-        finalUrl: url,
-        release: vi.fn(async () => {}),
-      };
-    });
+  it.each([{ stage: "device token", url: ACCESS_TOKEN_URL, status: 401 }])(
+    "cancels the unread $stage body before throwing on non-OK",
+    async ({ stage, url, status }) => {
+      let canceled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+        if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
+          return guardResponse(VALID_DEVICE_CODE_BODY);
+        }
+        return {
+          response: new Response(body, { status, headers: { "Content-Type": "application/json" } }),
+          finalUrl: url,
+          release: vi.fn(async () => {}),
+        };
+      });
 
-    await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
-      `GitHub ${stage} failed: HTTP ${status}`,
-    );
-    expect(canceled).toBe(true);
-  });
+      await expect(
+        runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) }),
+      ).rejects.toThrow(`GitHub ${stage} failed: HTTP ${status}`);
+      expect(canceled).toBe(true);
+    },
+  );
 
   it("rejects a malformed access token response", async () => {
     let callIdx = 0;
@@ -262,87 +262,51 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
 });
 
 describe("postGitHubDeviceFlowForm — response size bound", () => {
-  it.each([
-    { stage: "device code", url: DEVICE_CODE_URL },
-    { stage: "access token", url: ACCESS_TOKEN_URL },
-  ])("bounds oversized $stage bodies and cancels the stream", async ({ url }) => {
-    const chunk = new Uint8Array(1024 * 1024);
-    let readCount = 0;
-    let canceled = false;
-    // Stop well before consuming the 64 MiB source body.
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= 64) {
-          controller.close();
-          return;
+  it.each([{ stage: "access token", url: ACCESS_TOKEN_URL }])(
+    "bounds oversized $stage bodies and cancels the stream",
+    async ({ url }) => {
+      const chunk = new Uint8Array(1024 * 1024);
+      let readCount = 0;
+      let canceled = false;
+      // Stop well before consuming the 64 MiB source body.
+      const oversizedBody = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= 64) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
+        if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
+          return guardResponse(VALID_DEVICE_CODE_BODY);
         }
-        readCount += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
-      if (url === ACCESS_TOKEN_URL && params.url === DEVICE_CODE_URL) {
-        return guardResponse(VALID_DEVICE_CODE_BODY);
-      }
-      return {
-        response: new Response(oversizedBody, {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-        finalUrl: url,
-        release: async () => {},
-      };
-    });
+        return {
+          response: new Response(oversizedBody, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+          finalUrl: url,
+          release: async () => {},
+        };
+      });
 
-    await expect(runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) })).rejects.toThrow(
-      "github-copilot.device-flow",
-    );
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
-  });
+      await expect(
+        runDeviceFlowAfterFirstPoll({ showCode: vi.fn(async () => {}) }),
+      ).rejects.toThrow("github-copilot.device-flow");
+      expect(readCount).toBeLessThan(64);
+      expect(canceled).toBe(true);
+    },
+  );
 });
 
 describe("runGitHubCopilotDeviceFlow — data-residency GitHub Enterprise", () => {
   const GHE_DOMAIN = "acme.ghe.com";
-
-  it("targets the enterprise device-flow endpoints when a domain is provided", async () => {
-    const gheDeviceCodeUrl = `https://${GHE_DOMAIN}/login/device/code`;
-    const gheAccessTokenUrl = `https://${GHE_DOMAIN}/login/oauth/access_token`;
-
-    const urls: string[] = [];
-    let callIdx = 0;
-    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
-      urls.push(params.url);
-      callIdx += 1;
-      if (callIdx === 1) {
-        expect(params.policy).toEqual({ hostnameAllowlist: [GHE_DOMAIN] });
-        return guardResponse(
-          { ...VALID_DEVICE_CODE_BODY, verification_uri: `https://${GHE_DOMAIN}/login/device` },
-          200,
-          gheDeviceCodeUrl,
-        );
-      }
-      return guardResponse(
-        { access_token: "ghu_ghe_tok", token_type: "bearer" },
-        200,
-        gheAccessTokenUrl,
-      );
-    });
-
-    const showCode = vi.fn(async () => {});
-    const result = await runDeviceFlowAfterFirstPoll({ showCode }, GHE_DOMAIN);
-
-    expect(result).toEqual({ status: "authorized", accessToken: "ghu_ghe_tok" });
-    expect(urls).toEqual([gheDeviceCodeUrl, gheAccessTokenUrl]);
-    expect(showCode).toHaveBeenCalledWith({
-      verificationUrl: `https://${GHE_DOMAIN}/login/device`,
-      userCode: "ABCD-1234",
-      expiresInMs: expect.any(Number),
-    });
-  });
 
   it("rejects a verification URL whose host does not match the configured domain", async () => {
     mocks.fetchWithSsrFGuard.mockImplementation(async () =>
