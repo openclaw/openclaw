@@ -3912,7 +3912,10 @@ recovery. Both transactions recheck the original caller at mutation and commit.
 Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unchanged.
 The writer retains the next expiry or rearm deadline per native connection. Calls
 before that deadline skip lifecycle SQL; create, cancel, fire, and failed
-transactions invalidate it. Reopening a connection reloads the deadline. Expiry
+transactions invalidate it. The same lifecycle fact records when no active intents
+remain, so matching skips the FTS query until a mutation invalidates that fact.
+A nonempty active set still uses the full matching query and eligibility filters.
+Reopening a connection reloads the deadline and active-intent fact. Expiry
 comparison and fired-row numeric validation retain their existing semantics.
 Session snapshot replacement skips absent-field deletion only when the complete
 previous and next field sets prove that nothing was removed. Explicit clearing

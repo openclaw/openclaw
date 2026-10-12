@@ -525,6 +525,7 @@ export async function maybeCompactCodexAppServerSession(
                     modelSource && !configurationQualification ? true : undefined,
                   onUnqualifiedModelCancelled: (reason) => modelCancellation.abort(reason),
                   requesterSessionKey: attempt.sessionKey,
+                  requesterTurnRunId: attempt.runId,
                   agentId: bindingIdentity.agentId,
                   assertCurrent: assertAdmissionCurrent,
                   retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),

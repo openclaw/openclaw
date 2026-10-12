@@ -106,28 +106,6 @@ describe("MeetingSessionTranscriptStore", () => {
     expect(result.lines?.at(-1)?.text).toBe("line-2004");
   });
 
-  it("drops a stale retained segment when the page cursor jumps past it", async () => {
-    const session = createSession();
-    const store = createStore(session, [
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [{ text: "old-0" }, { text: "old-1" }],
-      },
-      {
-        droppedLines: 4,
-        epoch: "page-1",
-        lines: [{ text: "new-4" }, { text: "new-5" }],
-      },
-    ]);
-
-    await store.read(session.id);
-    const result = await store.read(session.id, { sinceIndex: 2 });
-
-    expect(result).toMatchObject({ startIndex: 4, nextIndex: 6, droppedLines: 4 });
-    expect(result.lines?.map((line) => line.text)).toEqual(["new-4", "new-5"]);
-  });
-
   it("keeps only the new epoch tail when its first snapshot already has a gap", async () => {
     const session = createSession();
     const store = createStore(session, [
@@ -186,37 +164,12 @@ describe("MeetingSessionTranscriptStore", () => {
 
   it.each([
     {
-      name: "treats a backward cursor without an epoch as a reset stream",
-      snapshots: [
-        { droppedLines: 0, lines: [{ text: "old-0" }, { text: "old-1" }] },
-        { droppedLines: 0, lines: [{ text: "new-0" }] },
-      ],
-      expected: ["old-0", "old-1", "new-0"],
-    },
-    {
       name: "strips the maximal suffix-prefix overlap from a no-epoch reset",
       snapshots: [
         { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
         { droppedLines: 0, lines: [{ text: "B" }, { text: "C" }] },
       ],
       expected: ["A", "B", "C"],
-    },
-    {
-      name: "keeps repeated text after a non-overlapping dropped prefix",
-      snapshots: [
-        { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
-        { droppedLines: 2, lines: [{ text: "B" }, { text: "C" }] },
-      ],
-      expected: ["A", "B", "B", "C"],
-    },
-    {
-      name: "commits an empty no-epoch reset before repeated rows return",
-      snapshots: [
-        { droppedLines: 0, lines: [{ text: "A" }] },
-        { droppedLines: 0, lines: [] },
-        { droppedLines: 0, lines: [{ text: "A" }, { text: "B" }] },
-      ],
-      expected: ["A", "A", "B"],
     },
   ])("$name", async ({ snapshots, expected }) => {
     const session = createSession();

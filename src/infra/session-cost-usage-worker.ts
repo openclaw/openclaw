@@ -561,7 +561,8 @@ export async function executeUsageCostWorker(
       bytes.buffer,
     ]);
   }
-  if (!operation.sessionFiles) {
+  // An empty prune would materialize a cold database without changing any usage rows.
+  if (pruned && !operation.sessionFiles) {
     await host("prune", {});
   }
   const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;

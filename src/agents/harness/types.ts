@@ -478,6 +478,18 @@ type AgentHarnessModelCatalogSelectionAttempt =
       authBindingFingerprint?: string;
       attemptFingerprint: string;
     };
+export type AgentHarnessDescendantCancellationResult = {
+  killed: number;
+  /** Settlement failures do not erase already acknowledged sibling cancellations. */
+  errors?: readonly unknown[];
+  cancelledRequesters: Array<{
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    requesterTurnRunId: string;
+  }>;
+};
 
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
@@ -593,6 +605,17 @@ type AgentHarnessContract<
 
   /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Reserve descendants before parent Stop; cancel joins native terminal and delivery custody. */
+  withDescendantCancellation?<T>(
+    this: void,
+    params: Omit<AgentHarnessSessionDeletionParams, "initialization"> & {
+      requesterTurnRunId?: string;
+      acceptsRequest: (
+        custody: import("../../infra/exec-request-context.js").ExecRequestCustody | undefined,
+      ) => boolean;
+    },
+    run: (cancel: () => Promise<AgentHarnessDescendantCancellationResult>) => Promise<T>,
+  ): Promise<T>;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(
     this: void,

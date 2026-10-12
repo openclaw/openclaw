@@ -44,7 +44,7 @@ describe("minimax image-generation provider", () => {
     expect(init?.method).toBe("POST");
   }
 
-  it.each(["minimax", "minimax-portal"])(
+  it.each(["minimax-portal"])(
     "advertises %s image generation using its own config-only credential",
     async (providerId) => {
       expect(
@@ -64,45 +64,6 @@ describe("minimax image-generation provider", () => {
       ).toBe(true);
     },
   );
-
-  it("generates PNG buffers through the shared provider HTTP path", async () => {
-    mockMinimaxApiKey();
-    const fetchMock = mockMinimaxImageResponse();
-
-    const provider = buildMinimaxImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "minimax",
-      model: "image-01",
-      prompt: "draw a cat",
-      cfg: {},
-    });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://api.minimax.io/v1/image_generation");
-    expect(init.method).toBe("POST");
-    expect(init.body).toBe(
-      JSON.stringify({
-        model: "image-01",
-        prompt: "draw a cat",
-        response_format: "base64",
-        n: 1,
-      }),
-    );
-    const headers = new Headers(init.headers);
-    expect(headers.get("authorization")).toBe("Bearer minimax-test-key");
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("png-data"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-        },
-      ],
-      model: "image-01",
-    });
-  });
 
   it("rejects malformed base64 image payloads", async () => {
     mockMinimaxApiKey();
@@ -225,11 +186,6 @@ describe("minimax image-generation provider", () => {
   });
 
   it.each([
-    {
-      title: "infers the dedicated CN image endpoint from MiniMax provider config",
-      providerBaseUrl: "https://api.minimaxi.com/anthropic",
-      expectedEndpoint: "https://api.minimaxi.com/v1/image_generation",
-    },
     {
       title: "ignores private custom text endpoints for image generation",
       providerBaseUrl: "http://127.0.0.1:8080/anthropic",

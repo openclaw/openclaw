@@ -2,6 +2,7 @@ import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-h
 import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
+import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -83,5 +84,43 @@ export function createNativeSubagentAssignmentStore(params: {
     },
     record: mutate("record-native-subagent-assignment"),
     consume: mutate("consume-native-subagent-assignment"),
+  };
+}
+
+export function createNativeSubagentSubmissionStore(params: {
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
+  owner: CodexNativeSubagentHistoryOwner;
+  assertLifecycleCurrentAsync: () => Promise<void>;
+  authority?: CodexBindingAuthority;
+}): CodexNativeSubagentSubmissionStore {
+  const { bindingStore, identity, owner } = params;
+  const assertCurrent = () => {
+    const current = bindingStore.read(identity);
+    if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, owner)) {
+      throw new Error("Native submission binding is no longer current.");
+    }
+  };
+  return {
+    assertCurrent,
+    assertCurrentAsync: async () => {
+      await params.assertLifecycleCurrentAsync();
+      assertCurrent();
+    },
+    read: () => bindingStore.readNativeSubagentSubmissions(identity, owner),
+    record: (receipt, assertSourceCurrent) =>
+      bindingStore.mutate(
+        identity,
+        { kind: "record-native-subagent-submission", owner, receipt },
+        assertSourceCurrent,
+        params.authority,
+      ),
+    consume: (receipt, assertSourceCurrent) =>
+      bindingStore.mutate(
+        identity,
+        { kind: "consume-native-subagent-submission", owner, receipt },
+        assertSourceCurrent,
+        params.authority,
+      ),
   };
 }
