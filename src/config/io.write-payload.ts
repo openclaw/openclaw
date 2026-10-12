@@ -173,14 +173,13 @@ export function prepareConfigWritePayload(
     undefined,
     deps.homedir(),
   ) as OpenClawConfig; // SAFETY: validation established the root shape; tilde restoration only changes path strings.
-  const outputConfig = preserveDeferredPluginMigrationConfig({
-    sourceConfig: snapshot.parsed,
-    nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
-    pending: deferredPluginMigrations,
-    writeOptions: { unsetPaths: options.unsetPaths },
-  });
   const stampedOutputConfig = stampConfigWriteMetadata(
-    outputConfig,
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig: snapshot.parsed,
+      nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
+      pending: deferredPluginMigrations,
+      writeOptions: { unsetPaths: options.unsetPaths },
+    }),
     options.lastTouchedVersionOverride,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);
@@ -197,7 +196,6 @@ export function prepareConfigWritePayload(
   });
   const nextBytes = Buffer.byteLength(json, "utf-8");
   const hasMetaBefore = hasConfigMeta(snapshot.parsed);
-  const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
   const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
   const includeFileHashes: Record<string, string> = {};
   const includeFileTargets: Record<string, string> = {};
@@ -231,7 +229,6 @@ export function prepareConfigWritePayload(
     previousBytes,
     nextBytes,
     hasMetaBefore,
-    hasMetaAfter,
     gatewayModeBefore,
     gatewayModeAfter,
     includeFileHashes,

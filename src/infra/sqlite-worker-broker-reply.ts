@@ -12,8 +12,10 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -154,11 +156,18 @@ function prepareSqliteWorkerOperationAdmission(
       const assertAccess = () => {
         assertCurrentJob();
         job.maintenanceScope?.assertAdmission();
-        assertStateDatabaseAccessAllowed(databasePath, {
+        assertStateDatabaseReadAllowed(databasePath, {
           maintenanceScope: job.maintenanceScope,
           schemaLease,
         });
       };
+      // Retirement must drain even after ordinary database access is revoked.
+      if (job.request.type !== "close") {
+        assertStateDatabaseAccessAllowed(databasePath, {
+          maintenanceScope: job.maintenanceScope,
+          schemaLease,
+        });
+      }
       retained.admission.bindDatabaseAuthority({
         databasePath,
         assertRequest: assertDispatchable,
@@ -375,10 +384,22 @@ export function receiveSqliteWorkerReply(
       job.dispatchState.openNotEntered = true;
     }
     const error = decodeSqliteWorkerReplyError(reply.error);
-    if (job.request.type === "open" && reply.openNotEntered && !reply.retire) {
+    if (
+      job.request.type === "open" &&
+      (reply.openNotEntered || reply.openOutcome === "refused-before-agent-open") &&
+      !reply.retire
+    ) {
       slot.current = undefined;
       const refusal = job.operationAdmission?.admission.failure ?? error;
-      owner.finish(job, refusal, undefined, { kind: "not-entered", error: refusal });
+      if (job.dispatchState && reply.openOutcome === "refused-before-agent-open") {
+        job.dispatchState.openRefused = true;
+      }
+      owner.finish(
+        job,
+        refusal,
+        undefined,
+        reply.openNotEntered ? { kind: "not-entered", error: refusal } : { kind: "completed" },
+      );
       owner.dispatch();
       return;
     }
@@ -403,7 +424,9 @@ export function receiveSqliteWorkerReply(
   }
   let value: unknown;
   try {
-    const result = decodeSqliteWorkerReplyValue(job, reply);
+    const result = runWithMainThreadTask("worker:sqlite:reply-decode", () =>
+      decodeSqliteWorkerReplyValue(job, reply),
+    );
     if (result.type === "continue") {
       // Continuations retain the current job and its reserved transport credits through drain.
       slot.worker.postMessage(result.request, []);

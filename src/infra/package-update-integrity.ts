@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
+import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -29,6 +29,25 @@ export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identi
 type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
 // Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
+const settlementObservations = new WeakMap<
+  PackageIntegrityFingerprint,
+  Array<{ file: string; stat: BigIntStats }>
+>();
+
+/** Revalidate the remount proof at the synchronous durable-settlement boundary. */
+export function assertPackageIntegritySettlementUnchanged(
+  fingerprint: PackageIntegrityFingerprint,
+) {
+  const entries = settlementObservations.get(fingerprint);
+  if (!entries) {
+    throw new Error("Package settlement tree observations are unavailable.");
+  }
+  for (const { file, stat } of entries) {
+    if (!packageStatUnchanged(stat, lstatSync(file, { bigint: true }))) {
+      throw new Error("Package settlement tree changed after verification.");
+    }
+  }
+}
 
 export class PackageIntegrityMismatchError extends Error {
   constructor(
@@ -165,16 +184,17 @@ export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boo
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
 export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
-  const startedAtMonotonicMs = performance.now();
+  const now = () => performance.now();
+  const startedAtMonotonicMs = now();
   const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
-  const deadline = Date.now() + budget;
+  const deadlineAtMonotonicMs = startedAtMonotonicMs + budget;
   const timing = {
     readerId: `${process.pid}:${++readerSequence}`,
     timeOriginUnixMs: performance.timeOrigin,
     startedAtMonotonicMs,
     budgetMs: budget,
-    deadlineClock: "wall",
-    deadlineAtUnixMs: deadline,
+    deadlineClock: "monotonic",
+    deadlineAtMonotonicMs,
   };
   let timeoutObservedAtMonotonicMs: number | undefined;
   let pendingIo = 0;
@@ -221,7 +241,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
 
   async function read<T>(operation: () => Promise<T>, closeLate?: (value: T) => Promise<void>) {
     let pending: Promise<T> | undefined;
-    const value = await awaitWithinDeadline(() => (pending = trackIo(operation)), deadline);
+    const value = await awaitWithinDeadline(
+      () => (pending = trackIo(operation)),
+      deadlineAtMonotonicMs,
+      now,
+    );
     if (value === ABSOLUTE_DEADLINE_EXPIRED) {
       timeoutObservedAtMonotonicMs ??= performance.now();
       // An OS read cannot always be canceled. Close late descriptors and never
@@ -241,7 +265,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
 
   async function close(resource: { close: () => Promise<void> }) {
     const closing = trackIo(() => resource.close()).catch(() => {});
-    if ((await awaitWithinDeadline(() => closing, deadline)) === ABSOLUTE_DEADLINE_EXPIRED) {
+    if (
+      (await awaitWithinDeadline(() => closing, deadlineAtMonotonicMs, now)) ===
+      ABSOLUTE_DEADLINE_EXPIRED
+    ) {
       timeoutObservedAtMonotonicMs ??= performance.now();
     }
   }
@@ -317,7 +344,21 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     root: string,
     originalRoot = root,
     reuse?: PackageIntegrityFingerprint,
+    legacy = false,
+    historicalDevices?: ReadonlyMap<string, string>,
   ): Promise<PackageIntegrityFingerprint> {
+    // Projection affects digest encoding only. Hashing, reuse and stability checks
+    // always use the actual current stat identity, never historical device values.
+    const digestIdentity = (stat: BigIntStats) => {
+      if (!historicalDevices) {
+        return identity(stat);
+      }
+      const device = historicalDevices.get(String(stat.dev));
+      if (device === undefined) {
+        throw new Error("Package settlement tree has an unqualified device.");
+      }
+      return `${device}:${stat.ino}`;
+    };
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
@@ -344,7 +385,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let fileFailed = false;
     const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
       const retainedEntry = JSON.stringify([relative, retained]);
-      digest.update(retainedEntry);
+      if (!legacy) {
+        digest.update(retainedEntry);
+      }
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
     const settled = (entry: HashedEntry) => {
@@ -406,7 +449,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
       // Keep the observation so a mid-scan substitution still refuses recovery.
-      if (stat.isFile() && /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)) {
+      if (
+        !legacy &&
+        stat.isFile() &&
+        /(?:^|\/)node_modules\/\.package-lock\.json$/u.test(relative)
+      ) {
         return;
       }
       const info = metadata(stat);
@@ -414,7 +461,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       // npm bin repair chmods files; external hardlink removal changes nlink/ctime.
       // Keep inode, permissions and hashes strict; directory clocks/size also
       // change when npm replaces its hidden cache. Within-read checks stay strict.
-      const retained = [info["dev:ino"], info.mode, info.uid, info.gid];
+      const retained = [digestIdentity(stat), info.mode, info.uid, info.gid];
       if (!stat.isDirectory()) {
         retained.push(info.size, info.mtimeNs);
       }
@@ -531,8 +578,35 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           throw new Error("Package rollback tree changed during verification");
         }
       }
+      if (legacy) {
+        for (const { file, stat } of observed) {
+          const relative = path.relative(root, file).split(path.sep).join("/");
+          const fields = entriesObserved.get(relative)!.fields;
+          const info = Object.values({ ...metadata(stat), "dev:ino": digestIdentity(stat) });
+          if (!relative) {
+            info.pop();
+          }
+          digest.update(JSON.stringify([relative, info]));
+          const contents = fields.get("sha256");
+          if (contents !== undefined) {
+            const first =
+              stat.nlink > 1n
+                ? observed.find(
+                    ({ stat: other }) => other.dev === stat.dev && other.ino === stat.ino,
+                  )
+                : undefined;
+            const owner = first ? path.relative(root, first.file).split(path.sep).join("/") : null;
+            digest.update(JSON.stringify(["file", owner, contents]));
+          } else if (fields.has("target")) {
+            digest.update(JSON.stringify(["symlink", fields.get("target")]));
+          }
+        }
+      }
       const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
       observations.set(fingerprint, entriesObserved);
+      if (historicalDevices) {
+        settlementObservations.set(fingerprint, observed);
+      }
       return fingerprint;
     } finally {
       hasher.close();

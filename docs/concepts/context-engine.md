@@ -311,23 +311,19 @@ already crossed by a transcript cursor.
   The ordered messages to send to the model.
 </ParamField>
 <ParamField path="estimatedTokens" type="number" required>
-  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting.
+  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting, but not to decide whether to send a provider request.
 </ParamField>
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
-  Controls which token estimate the runner uses for preemptive overflow
-  prechecks. Defaults to `"assembled"`, which means only the assembled
-  prompt's estimate is checked for engines that do not own compaction.
-  Engines that set `ownsCompaction: true` manage their own prompt admission,
-  so OpenClaw skips the generic pre-prompt precheck by default. Set
-  `"preassembly_may_overflow"` only when your assembled view can hide overflow
-  risk in the underlying transcript; the runner then keeps the generic
-  precheck active and takes the maximum of the assembled estimate and the
-  pre-assembly (unwindowed) session-history estimate when deciding whether to
-  preemptively compact. Either way, the messages you return are still what the
-  model sees - `promptAuthority` only affects the precheck.
+  Controls the history included in host token-pressure diagnostics. Defaults to
+  `"assembled"`. Set `"preassembly_may_overflow"` when the assembled view can hide
+  pressure in the underlying transcript; diagnostics then report the maximum of
+  the host's assembled and pre-assembly (unwindowed) history estimates. That
+  diagnostic maximum does not block a fitting outgoing request. The returned
+  messages remain the model context, and this field does not disable host
+  request admission checks for engines that own compaction.
 </ParamField>
 <ParamField path="contextProjection" type="ContextEngineProjection">
   Optional projection lifecycle for hosts with persistent backend threads (for example Codex app-server). `mode: "thread_bootstrap"` with a stable `epoch` asks the host to inject the assembled context once per epoch and reuse the backend thread until the epoch changes, instead of re-projecting every turn. Omit this field for normal per-turn projection.
@@ -440,7 +436,16 @@ protects engines that would corrupt state if they ran in an unsupported host.
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction and generic pre-prompt overflow precheck for that run, and the engine's `compact()` implementation is responsible for `/compact`, provider overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw still runs the pre-prompt overflow safeguard when the engine returns `promptAuthority: "preassembly_may_overflow"` from `assemble()`.
+    The engine owns compaction behavior. OpenClaw disables the runtime's built-in auto-compaction, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`.
+
+    The embedded runtime still checks every outgoing provider request, including
+    the first, before sending it. When a request extends a matching measured
+    prefix from the current run, the host anchors its estimate to that provider
+    usage and counts the appended content. Otherwise, it estimates the actual system
+    prompt, messages, and tools afresh. Requests that exceed the host's prompt
+    budget enter recovery before reaching the provider. The engine's
+    `estimatedTokens` does not control this decision.
+
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
     OpenClaw runtime's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.

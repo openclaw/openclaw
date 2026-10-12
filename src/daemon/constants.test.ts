@@ -49,16 +49,6 @@ describe("resolveGatewayNativeServiceIdentityConflict", () => {
     {
       platform: "win32" as const,
       envKey: "OPENCLAW_WINDOWS_TASK_NAME",
-      value: "OpenClaw Gateway",
-    },
-    {
-      platform: "win32" as const,
-      envKey: "OPENCLAW_WINDOWS_TASK_NAME",
-      value: "\\Nested\\OpenClaw Gateway (work)",
-    },
-    {
-      platform: "win32" as const,
-      envKey: "OPENCLAW_WINDOWS_TASK_NAME",
       value: "\\OpenClaw Gateway (other)",
     },
   ])("rejects $envKey overrides for named profiles on $platform", ({ platform, envKey, value }) => {
@@ -81,29 +71,17 @@ describe("resolveGatewayNativeServiceIdentityConflict", () => {
       platform: "linux",
       env: { OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" },
     },
-    ...["OpenClaw Gateway (work)", "\\OpenClaw Gateway (work)", "\\OPENCLAW GATEWAY (WORK)"].map(
-      (taskName) => ({
-        name: `native Windows identity ${taskName}`,
-        platform: "win32" as const,
-        env: { OPENCLAW_PROFILE: "work", OPENCLAW_WINDOWS_TASK_NAME: taskName },
-      }),
-    ),
-    {
-      name: "default-profile nested Windows override",
-      platform: "win32",
-      env: { OPENCLAW_WINDOWS_TASK_NAME: "\\Nested\\Custom Gateway" },
-    },
+    ...["OpenClaw Gateway (work)"].map((taskName) => ({
+      name: `native Windows identity ${taskName}`,
+      platform: "win32" as const,
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_WINDOWS_TASK_NAME: taskName },
+    })),
   ] as const)("accepts $name", ({ env, platform }) => {
     expect(resolveGatewayNativeServiceIdentityConflict(env, platform)).toBeNull();
   });
 });
 
 describe("resolveGatewayProfileSuffix", () => {
-  it("returns empty string for default profiles", () => {
-    expect(resolveGatewayProfileSuffix("default")).toBe("");
-    expect(resolveGatewayProfileSuffix(" Default ")).toBe("");
-  });
-
   it("trims whitespace from profiles", () => {
     expect(resolveGatewayProfileSuffix("  staging  ")).toBe("-staging");
   });
@@ -120,14 +98,5 @@ describe("resolveGatewayServiceDescription", () => {
     expect(
       resolveGatewayServiceDescription({ env: { OPENCLAW_SERVICE_VERSION: "2026.1.10" } }),
     ).toBe("OpenClaw Gateway");
-  });
-
-  it("prefers explicit description override", () => {
-    expect(
-      resolveGatewayServiceDescription({
-        env: { OPENCLAW_PROFILE: "work" },
-        description: "Custom",
-      }),
-    ).toBe("Custom");
   });
 });

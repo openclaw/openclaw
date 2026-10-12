@@ -22,9 +22,6 @@ const fetchLmstudioModelsMock = vi.hoisted(() =>
     }>,
   })),
 );
-const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => undefined),
-);
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
@@ -70,7 +67,6 @@ vi.mock("./runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime.js")>();
   return {
     ...actual,
-    resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
     resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
   };
 });
@@ -112,7 +108,6 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
     createRemoteEmbeddingProviderMock.mockClear();
     embeddedModels.length = 0;
-    resolveLmstudioProviderHeadersMock.mockClear();
     resolveLmstudioRuntimeApiKeyMock.mockClear();
   });
 

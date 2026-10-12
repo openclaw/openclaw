@@ -10,7 +10,6 @@ import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
-  createLazyChannelApprovalNativeRuntimeAdapterAsync,
 } from "./approval-handler-adapter-runtime.js";
 import type {
   ApprovalRequest,
@@ -57,7 +56,6 @@ export type {
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
-  createLazyChannelApprovalNativeRuntimeAdapterAsync,
 };
 export type {
   ChannelApprovalCapabilityHandlerContext,
@@ -349,7 +347,7 @@ export function createChannelApprovalHandler<
 }
 
 /** Creates the shared approval handler runtime from channel-specific content and transport hooks. */
-export function createChannelApprovalHandlerAsync<
+function createChannelApprovalHandlerAsync<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,

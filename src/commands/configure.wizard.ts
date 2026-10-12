@@ -97,7 +97,7 @@ async function promptWebToolsConfig(
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    const codexRelevant = await isCodexNativeWebSearchRelevant({ config: nextConfig });
     let configureManagedProvider = true;
 
     if (codexRelevant) {
@@ -523,6 +523,12 @@ export async function runConfigureWizard(
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       },
+      memory: async () => {
+        const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+        nextConfig = await runMemorySetupFlow(nextConfig, prompter, {
+          agentDir: (await resolveSetupTarget()).agentDir,
+        });
+      },
       gateway: async () => {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -575,19 +581,13 @@ export async function runConfigureWizard(
 
       // Section flags retain their canonical setup order regardless of flag order;
       // the complete config is committed once before service or health effects.
-      for (const section of [
-        "workspace",
-        "model",
-        "web",
-        "gateway",
-        "channels",
-        "plugins",
-        "skills",
-      ] as const) {
-        if (selectedSections.includes(section)) {
-          await sectionActions[section]();
-          hasPendingConfig = true;
+      for (const { value: section } of CONFIGURE_SECTION_OPTIONS) {
+        if (section === "daemon" || section === "health" || !selectedSections.includes(section)) {
+          continue;
         }
+        const before = nextConfig;
+        await sectionActions[section]();
+        hasPendingConfig ||= section !== "memory" || nextConfig !== before;
       }
 
       await persistPendingConfig();
@@ -619,10 +619,11 @@ export async function runConfigureWizard(
         if (choice === "daemon" || choice === "health") {
           await persistPendingConfig();
         }
+        const before = nextConfig;
         await sectionActions[choice]();
         if (choice !== "daemon" && choice !== "health") {
           // Interactive setup commits each section before showing another prompt.
-          hasPendingConfig = true;
+          hasPendingConfig ||= choice !== "memory" || nextConfig !== before;
           await persistPendingConfig();
         }
       }

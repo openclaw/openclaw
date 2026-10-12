@@ -12,7 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
+import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -69,23 +69,17 @@ describe("context engine transcript cursor contract", () => {
       parentId: user!.messageId,
       now: 2_000,
     });
-    const prepare = transcriptHydration.prepareSessionTranscriptHydration;
+    const readAnchor = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
     const read = vi
-      .spyOn(transcriptHydration, "prepareSessionTranscriptHydration")
-      .mockImplementation((...args) => {
-        const reader = prepare(...args);
-        return {
-          ...reader,
-          readMaintenance: async (request) => {
-            const result = await reader.readMaintenance(request);
-            // Expose the split-read race using a real write, not a stale mock version.
-            await appendTranscriptMessage(target, {
-              message: { role: "assistant", content: "later reply" },
-              now: 3_000,
-            });
-            return result;
-          },
-        };
+      .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
+      .mockImplementation(async (...args) => {
+        const anchor = await readAnchor(...args);
+        // Append after the snapshot is read, before finalization consumes its terminal anchor.
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: "later reply" },
+          now: 3_000,
+        });
+        return anchor;
       });
     const record = vi.fn();
     const engine: ContextEngine = {
@@ -112,6 +106,7 @@ describe("context engine transcript cursor contract", () => {
         },
         warn: vi.fn(),
       });
+      expect(read).toHaveBeenCalledOnce();
       expect(record).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           boundary: expect.objectContaining({ terminal: terminal!.anchor }),

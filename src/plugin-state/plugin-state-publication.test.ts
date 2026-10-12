@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   capturePluginStateReadDependencies,
@@ -26,7 +27,6 @@ import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
 } from "./plugin-state-store.test-helpers.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
 type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribe>[0]>[0];
@@ -54,6 +54,39 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
+    await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
+      await store.register("key", { count: 1 });
+      const dispatch = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+      const read = async (expected: { count: number } | undefined) => {
+        dispatch.mockClear();
+        expect(await store.lookup("key")).toEqual(expected);
+        expect(await store.lookupMany(["key", "key"])).toEqual([
+          { ok: true, value: expected },
+          { ok: true, value: expected },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      };
+      await read({ count: 1 });
+      const first = await store.lookup("key");
+      first!.count = 99;
+      await read({ count: 1 });
+      native.register("key", { count: 2 });
+      await read({ count: 2 });
+      await store.register("key", { count: 3 });
+      await read({ count: 3 });
+      await store.delete("key");
+      await read(undefined);
+      native.register("key", { count: 4 });
+      await read({ count: 4 });
+      await store.clear();
+      await read(undefined);
+    });
+  });
+
   it("publishes fixture cleanup to warm observations and ownership reads", async () => {
     await withOpenClawTestState({ label: "plugin-state-clear-publication" }, async ({ env }) => {
       const store = createPluginStateKeyedStore("receipt-test", {
@@ -136,8 +169,8 @@ describe("plugin state committed facts", () => {
     );
   });
 
-  it("delivers empty sweep receipts at settlement and changed sweeps immediately", async () => {
-    await withOpenClawTestState({ label: "plugin-state-empty-sweep-delivery" }, async ({ env }) => {
+  it("delivers empty deletion receipts at settlement and changed deletions immediately", async () => {
+    await withOpenClawTestState({ label: "plugin-state-delete-receipts" }, async ({ env }) => {
       const database = openOpenClawStateDatabase({ env });
       for (const changed of [false, true]) {
         if (changed) {
@@ -170,13 +203,16 @@ describe("plugin state committed facts", () => {
         try {
           const result = admission.withSqliteWorkerOperationAdmission(owner, () =>
             executePluginStateCommand(
-              { type: "pluginState.sweep", input: undefined },
+              {
+                type: "pluginState.delete",
+                input: { pluginId: "receipt-test", namespace: "receipts", key: "expired" },
+              },
               { path: database.path, env },
               () => database,
               true,
             ),
           );
-          expect(result).toEqual({ ok: true, value: Number(changed) });
+          expect(result).toEqual({ ok: true, value: changed });
           expect(
             database.db.prepare("SELECT count(*) AS count FROM plugin_state_entries").get(),
           ).toEqual({ count: 0 });
@@ -390,7 +426,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("installs whole worker receipts before atomic operation replies, including sweep", async () => {
+  it("installs whole worker receipts before atomic operation replies and write-time expiry", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-facts" }, async ({ env }) => {
       const store = createPluginStateKeyedStore("receipt-test", {
         namespace: "receipts",
@@ -420,9 +456,8 @@ describe("plugin state committed facts", () => {
             expiresAt: 1,
           },
         ]);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env })).toBe(1);
-        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("a", true);
+        expect(seen.fact("expired")).toEqual({ kind: "absent" });
         await store.register("b", true);
         await store.clear();
         const clear = seen.changes.findLast((change) => change.kind === "committed");

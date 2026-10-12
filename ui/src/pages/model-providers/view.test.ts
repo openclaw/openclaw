@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
-import { card, mount, props, text } from "./view.test-support.ts";
-import { renderModelProviders } from "./view.ts";
+import { card, mount, props, text } from "./view.test-support.tsx";
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
   const onDecisionChange = vi.fn();
@@ -36,10 +34,7 @@ it("offers only decision models, even without a chat provider, and retains an un
   await choosePickerValue(picker, "");
   expect(onDecisionChange).toHaveBeenLastCalledWith(null);
 
-  render(
-    renderModelProviders({ ...viewProps, defaultsMutationBlockedReason: "Read only" }),
-    container,
-  );
+  mount({ ...viewProps, defaultsMutationBlockedReason: "Read only" }, container);
   await updatePickers(container);
   expect(
     container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!.disabled,
@@ -131,6 +126,9 @@ describe("renderModelProviders", () => {
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
+    expect(
+      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
+    ).toBe("A provider failed discovery.");
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );
@@ -191,15 +189,13 @@ describe("renderModelProviders", () => {
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
 
-    render(
-      renderModelProviders(
-        props({
-          thinkingLevel: undefined,
-          thinkingOverridden: false,
-          fastMode: undefined,
-          fastModeOverridden: false,
-        }),
-      ),
+    mount(
+      props({
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      }),
       container,
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
@@ -257,7 +253,7 @@ describe("renderModelProviders", () => {
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
-    render(renderModelProviders(viewProps), container);
+    mount(viewProps, container);
 
     expect(selectedSegment(thinking)).toBe("high");
     expect(selectedSegment(fastMode)).toBe("on");
@@ -475,20 +471,26 @@ describe("renderModelProviders", () => {
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
 
-  it("renders credential provenance and probe results", () => {
+  it("renders credential provenance and per-credential request timing without aggregate timing", () => {
     const container = mount(
       props({
         probeResults: {
           openai: {
             provider: "openai",
             status: "ok",
-            latencyMs: 145,
+            latencyMs: 9_145,
             results: [
               {
                 profileId: "openai:default",
                 label: "Default profile",
                 status: "ok",
                 latencyMs: 145,
+              },
+              {
+                profileId: "openai:secondary",
+                label: "Secondary profile",
+                status: "ok",
+                latencyMs: 320,
               },
             ],
           },
@@ -499,9 +501,18 @@ describe("renderModelProviders", () => {
     expect(text(provider)).toContain("Credentials for Writer");
     expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
-    expect(text(provider)).toContain("Connected");
-    expect(text(provider)).toContain("145 ms");
-    expect(text(provider)).toContain("Default profile");
+    expect(text(provider?.querySelector(".model-providers__probe-summary") ?? null)).toBe(
+      "Connected",
+    );
+    expect(
+      [...(provider?.querySelectorAll(".model-providers__probe-target") ?? [])].map((target) =>
+        [...target.querySelectorAll("span")].map(text),
+      ),
+    ).toEqual([
+      ["Default profile", "Connected · Request round-trip: 145 ms"],
+      ["Secondary profile", "Connected · Request round-trip: 320 ms"],
+    ]);
+    expect(text(provider)).not.toContain("9145");
   });
 
   it("puts model recovery first when credentials expose no selectable models", () => {
@@ -640,6 +651,9 @@ describe("renderModelProviders", () => {
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Update or remove it, then retry");
+    const targets = probe?.querySelectorAll(".model-providers__probe-target");
+    expect(text(targets?.[0] ?? null)).not.toContain("Request round-trip");
+    expect(text(targets?.[1] ?? null)).toContain("Request round-trip: 145 ms");
   });
 
   it("renders categorized probe errors", () => {
@@ -654,6 +668,7 @@ describe("renderModelProviders", () => {
               {
                 label: "API key",
                 status: "billing",
+                latencyMs: 280,
                 error: "Account has no credits",
               },
             ],
@@ -664,6 +679,9 @@ describe("renderModelProviders", () => {
     const probe = container.querySelector(".model-providers__probe--error");
     expect(text(probe)).toContain("Billing problem");
     expect(text(probe)).toContain("Account has no credits");
+    expect(text(probe?.querySelector(".model-providers__probe-target") ?? null)).toContain(
+      "Billing problem · Request round-trip: 280 ms",
+    );
   });
 
   it("presents no-model probe results as a setup state, not a connection failure", () => {
@@ -865,26 +883,36 @@ describe("renderModelProviders", () => {
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
 
-  it("uses the original config key for credential mutations", () => {
+  it("keeps the key editor focused while typing and uses the original config key for mutations", () => {
     const onSaveKey = vi.fn();
     const onRemoveKey = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            configKey: "OpenAI",
-            apiKey: { source: "config" },
-            hasConfigApiKey: true,
-          }),
-        ],
-        keyEditorProvider: "openai",
-        keyDraft: "replacement",
-        onSaveKey,
-        onRemoveKey,
-      }),
-    );
+    let viewProps = props({
+      cards: [card({ configKey: "OpenAI", apiKey: { source: "config" }, hasConfigApiKey: true })],
+      keyEditorProvider: "openai",
+      keyDraft: "replacement",
+      onSaveKey,
+      onRemoveKey,
+      onKeyDraftChange: (value) => {
+        viewProps = {
+          ...viewProps,
+          keyDraft: value,
+          cards: viewProps.cards.map((entry) => ({ ...entry })),
+        };
+        mount(viewProps, container);
+      },
+    });
+    const container = mount(viewProps);
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(provider).not.toBeNull();
+    const input = provider!.querySelector<HTMLInputElement>(".model-providers__inline-form input")!;
+    input.focus();
+    for (const value of ["replacement-1", "replacement-12"]) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(container.querySelector(".model-providers__inline-form input")).toBe(input);
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe(value);
+    }
     button(provider!, "Save")?.click();
     button(provider!, "Remove key")?.click();
     expect(onSaveKey).toHaveBeenCalledWith("openai", "OpenAI");
@@ -941,10 +969,14 @@ it("filters provider access without hiding global defaults and exposes an empty 
   expect(container.querySelector('[data-provider-id="anthropic"]')).not.toBeNull();
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();
   const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  document.body.append(container);
+  search.focus();
   search.value = "missing";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   expect(onProviderQueryChange).toHaveBeenCalledExactlyOnceWith("missing");
-  render(renderModelProviders({ ...viewProps, providerQuery: "missing" }), container);
+  mount({ ...viewProps, providerQuery: "missing" }, container);
+  expect(container.querySelector('input[type="search"]')).toBe(search);
+  expect(document.activeElement).toBe(search);
   expect(text(container)).toContain("No providers match your search.");
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(0);
   expect(container.querySelector("#settings-model-behavior")).not.toBeNull();

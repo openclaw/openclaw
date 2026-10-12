@@ -36,7 +36,6 @@ export function markInterruptedStartupRun(params: {
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
-  recoverInterruptedOneShot?: boolean;
   deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
@@ -86,13 +85,8 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
-  // Only startup recovery with durable evidence of no delivery handoff may replay
-  // a started one-shot; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
+  // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
+  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
   }
   finalizeCronFailureNotifications(params.state, {
@@ -101,6 +95,7 @@ export function markInterruptedStartupRun(params: {
     result: {
       status: "error",
       error: STARTUP_INTERRUPTED_ERROR,
+      errorClassification: { kind: "aborted" },
       startedAt: runningAtMs,
     },
     completionStatus: "failed",

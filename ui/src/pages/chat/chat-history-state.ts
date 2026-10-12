@@ -1,7 +1,6 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
@@ -64,7 +63,6 @@ type ChatHistoryPaneRequests = {
       agentId?: string;
     }
   >;
-  pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
   acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
   initialSnapshotHydration?: InitialChatSnapshotHydration;
@@ -89,7 +87,6 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       historyVersion: 0,
       branchVersion: 0,
       subscriptionGeneration: 0,
-      pendingSubscriptionReleases: new Set(),
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
     };

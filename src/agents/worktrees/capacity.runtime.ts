@@ -105,7 +105,8 @@ function allocatedBlobBytes(size: string): number {
 }
 
 // This projection belongs to the Git worker and disappears when that worker
-// idles out or the Gateway closes it. Hydration is reusable only by its live creation cohort.
+// idles out or the Gateway closes it. Default bases reuse hydration by immutable commit;
+// explicit refs without a preparation key still recheck object availability.
 const checkoutSizeFacts = new Map<string, { bytes: number; preparationKey?: string }>();
 const MAX_CHECKOUT_SIZE_FACTS = 32;
 

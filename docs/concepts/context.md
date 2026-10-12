@@ -34,13 +34,20 @@ match. A qualifying turn refreshes this value. Current model metadata and
 configured limits take precedence; generic fallback windows and removable caps
 are not saved as verified model budgets.
 
+Status, context reports, and session lists use the selected model's discovered
+capacity and configured limits. If neither current metadata nor a matching
+verified budget is available, the denominator is `?` (`null` in session-list
+JSON); reports do not substitute a generic window or another model's capacity.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
 it is an estimate, and crossing it can trigger tool-result reduction or compaction.
 After a model or context-cap change, the meter shows **Context window** until a
-new run supplies a matching estimate. Stale token totals remain approximate and
-do not trigger the context warning.
+new run supplies a matching estimate. If the selected model's capacity is unknown,
+the meter omits context usage instead of borrowing the agent's default model
+capacity; available provider plan usage remains visible. Stale token totals remain
+approximate and do not trigger the context warning.
 
 ## Example output
 

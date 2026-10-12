@@ -4,6 +4,7 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
 import { loadLatestAssistantText } from "./session-accessor.sqlite-read.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import {
   captureIncognitoSessionHistoryBinding,
@@ -17,6 +18,14 @@ import { withSessionTranscriptReadSource } from "./session-transcript-read-sourc
 export async function readLatestTranscriptAssistantTextAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<LatestTranscriptAssistantText | undefined> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    if (memory.missing) {
+      memory.assertCurrent();
+      return undefined;
+    }
+    return memory.read("session.history.latest-assistant", {});
+  }
   const source = captureIncognitoSessionSource(scope);
   if (source && "kind" in source) {
     source.assertCurrent();

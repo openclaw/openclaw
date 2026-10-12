@@ -159,6 +159,8 @@ closing the connection.
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
+    Expired values become unavailable immediately at their TTL deadline. Namespace mutations remove expired rows in bounded batches; the Gateway does not run a periodic keyed-state expiry sweep. An inactive namespace may retain expired rows on disk until a later mutation, without making those values readable or counting them toward live capacity.
+
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
 
     ```typescript
@@ -478,14 +480,19 @@ stored data, and retention are unchanged during this migration.
 ## Per-agent SQLite writes
 
 Bundled and official plugins that already use the private `sqlite-runtime`
-facade can import `withOpenClawAgentDatabaseWrite` from
-`openclaw/plugin-sdk/sqlite-runtime`. This remains an internal runtime facade,
-not a typed public SDK entrypoint for third-party plugins.
+facade use `openOpenClawAgentSqliteWorkerStoreV2` with required live authority.
+Send serializable domain commands to its paired backend, explicitly await
+`prepare()` when creation is required, and close the store after accepted work
+settles. `executeExisting` preserves absence. See the
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+This remains an internal runtime facade, not a typed public SDK entrypoint for
+third-party plugins.
 
-Call it from an asynchronous producer before entering synchronous SQLite. It
-shares the agent database's in-process write admission with session writers and
-off-thread reclamation, leaving the Gateway thread available to authorize a
-reclamation commit.
+The deprecated `withOpenClawAgentDatabaseWrite` and raw-handle exports retain
+their native callback ordering until the next Plugin SDK major. Awaiting their
+admission does not move callbacks off the host. Actual legacy use shares the
+per-plugin capability-family warning budget; explicit read-only inspection,
+offline maintenance, and worker kernels keep their scoped contracts.
 
 Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay

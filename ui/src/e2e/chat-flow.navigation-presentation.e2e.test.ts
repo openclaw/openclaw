@@ -751,7 +751,7 @@ suite.define(() => {
     await page.addInitScript(
       ({ storageKey, entry }) => {
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-        localStorage.setItem(storageKey, JSON.stringify({ ...settings, sidebarEntries: [entry] }));
+        localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
@@ -918,7 +918,8 @@ suite.define(() => {
         .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
-      expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
+      expect(await link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);
+      expect(await link.getByRole("img", { name: "Unread", exact: true }).count()).toBe(1);
       await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);

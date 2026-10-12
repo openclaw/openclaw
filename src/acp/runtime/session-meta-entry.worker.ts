@@ -1,4 +1,4 @@
-import { applySessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
+import { writeSessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
 import { readSessionEntrySelectionSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-state.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
@@ -30,7 +30,7 @@ export function mutateAcpSessionEntryInWorker(
         throw new Error("ACP entry mutation lost its canonical database owner");
       }
       admit("transaction");
-      const prepared = readSessionEntrySelectionSnapshot(database, input.sessionKey, true);
+      const prepared = readSessionEntrySelectionSnapshot(database, input.sessionKey, true, true);
       const existing = prepared[0]?.entry;
       assertAcpSessionMutationEntry(
         existing,
@@ -53,12 +53,8 @@ export function mutateAcpSessionEntryInWorker(
           ? mergeSessionEntry(base, { updatedAt: mutation.updatedAt })
           : structuredClone(base);
       delete next.acp;
-      const changed = applySessionEntryPatchInDatabase(database, {
-        operationLabel: "session-entry.patch",
-        validateCanonicalKeys: false,
-        readSnapshot: (current) =>
-          readSessionEntrySelectionSnapshot(current, input.sessionKey, true),
-        prepared,
+      const changed = writeSessionEntryPatchInDatabase(database, {
+        fresh: prepared,
         sessionKey: input.sessionKey,
         writeBase: base,
         next,
@@ -74,6 +70,7 @@ export function mutateAcpSessionEntryInWorker(
               membershipInvalidatedKeys: [],
             },
             database,
+            { postimages: changed.postimages },
           )
         : undefined;
       const result = { entry: changed.entry, ...(publication ? { publication } : {}) };

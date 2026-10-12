@@ -49,7 +49,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const status = await readGatewayServiceLingerStatus(env);
   if (!status) {
     await prompter.note(
-      "Unable to read loginctl linger status. Ensure systemd + loginctl are available.",
+      "Unable to read loginctl linger status. Check that systemd + loginctl are available.",
       title,
     );
     return;

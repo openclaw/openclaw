@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { adjustMaxTokensForThinking } from "@openclaw/ai/internal/shared";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 /**
@@ -48,14 +49,17 @@ import {
   resolveIsolatedCompletionProvider,
   resolveIsolatedCompletionRoute,
 } from "./isolated-completion-route.js";
-import { ensureAuthProfileStore } from "./model-auth.js";
+import { ensureAuthProfileStoreAsync } from "./model-auth.js";
 import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
 } from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -93,6 +97,10 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Private credential directories must remain outside the configured Gateway owner. */
+  preparedModelRuntimeMode?: "isolated-read-only";
+  /** Duration of dispatch through the selected runtime, excluding model/auth preparation. */
+  onRequestComplete?: (durationMs: number) => void;
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
@@ -101,6 +109,8 @@ type RunIsolatedCompletionParams = {
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
+  answerTokenBudget?: number;
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
@@ -119,14 +129,22 @@ type AgentHarnessIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarness["runIsolatedCompletion"]>
 >[0];
 
-function clampIsolatedStreamParams(
-  streamParams: RunIsolatedCompletionParams["streamParams"],
-  modelMaxTokens: number | undefined,
+function resolveIsolatedStreamParams(
+  { answerTokenBudget, streamParams }: RunIsolatedCompletionParams,
+  model?: Model,
 ): RunIsolatedCompletionParams["streamParams"] {
-  if (streamParams?.maxTokens === undefined || modelMaxTokens === undefined) {
+  let maxTokens = answerTokenBudget ?? streamParams?.maxTokens;
+  if (maxTokens === undefined) {
     return streamParams;
   }
-  return { ...streamParams, maxTokens: Math.min(streamParams.maxTokens, modelMaxTokens) };
+  const modelMaxTokens = model?.maxTokens ?? Number.POSITIVE_INFINITY;
+  if (answerTokenBudget !== undefined && model?.reasoning) {
+    maxTokens = adjustMaxTokensForThinking(answerTokenBudget, modelMaxTokens, "medium").maxTokens;
+  }
+  return {
+    ...streamParams,
+    maxTokens: Math.min(maxTokens, modelMaxTokens, streamParams?.maxTokens ?? maxTokens),
+  };
 }
 
 async function runCliIsolatedCompletion(
@@ -193,7 +211,7 @@ async function runCliIsolatedCompletion(
           model: request.model,
           authProfileId,
           thinkLevel: request.thinkLevel,
-          streamParams: request.streamParams,
+          streamParams: resolveIsolatedStreamParams(request),
           abortSignal: request.abortSignal,
           assertCurrent: request.assertCurrent,
           mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
@@ -367,7 +385,11 @@ async function runIsolatedCompletionOwned(
     return resolved;
   };
   assertCurrent();
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  const isolatedReadOnly = input.preparedModelRuntimeMode === "isolated-read-only";
+  const acquireRuntime = isolatedReadOnly
+    ? acquireReadOnlyPreparedModelRuntime
+    : acquireAgentRunPreparedModelRuntime;
+  const lease = await acquireRuntime(
     {
       config: requestConfig,
       agentId,
@@ -375,6 +397,7 @@ async function runIsolatedCompletionOwned(
       workspaceDir: requestedWorkspaceDir,
       preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
       runtimePluginPurpose: "isolated-completion",
+      ...(isolatedReadOnly ? { loadRuntimePlugins: true } : {}),
     },
     {
       catalogMode: "static",
@@ -422,7 +445,7 @@ async function runIsolatedCompletionOwned(
         pluginRegistry: lease.snapshot.pluginRegistry,
       });
       assertCurrent();
-      const { selection, cliOwner } = resolveIsolatedCompletionRoute({
+      const { selection, cliOwner } = await resolveIsolatedCompletionRoute({
         provider,
         model: request.model,
         authProfileId: request.authProfileId,
@@ -456,6 +479,7 @@ async function runIsolatedCompletionOwned(
         assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
+        onRequestComplete: request.onRequestComplete,
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
@@ -487,11 +511,10 @@ async function runIsolatedCompletionOwned(
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
       if (harness.runIsolatedCompletionV2) {
-        let modelMaxTokens: number | undefined;
         let harnessAuth:
           | {
               model: Model;
-              store: ReturnType<typeof ensureAuthProfileStore>;
+              store: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
               attempts: readonly PreparedAgentRuntimeAuthAttempt[];
             }
           | undefined;
@@ -521,7 +544,7 @@ async function runIsolatedCompletionOwned(
           }
           const runtimeModel = resolution.model;
           assertCurrent();
-          const authProfileStore = ensureAuthProfileStore(agentDir, {
+          const authProfileStore = await ensureAuthProfileStoreAsync(agentDir, {
             profileId: request.authProfileId,
             readOnly: true,
             allowKeychainPrompt: false,
@@ -597,6 +620,7 @@ async function runIsolatedCompletionOwned(
           }
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
+            let completionModel: Model | undefined;
             if (
               attempt &&
               harnessAuth &&
@@ -606,7 +630,7 @@ async function runIsolatedCompletionOwned(
               // Auth owns the resolved model tuple; a manifest alias remains only
               // on the caller's dispatch envelope, not on the materialization target.
               const { model: runtimeModel, store: authProfileStore } = harnessAuth;
-              const model = await materializePreparedRuntimeModel({
+              completionModel = await materializePreparedRuntimeModel({
                 plan,
                 provider: runtimeModel.provider,
                 modelId: runtimeModel.id,
@@ -634,7 +658,6 @@ async function runIsolatedCompletionOwned(
                   ),
               });
               assertCurrent();
-              modelMaxTokens = model?.maxTokens;
               authorization = {
                 owner: "harness",
                 plan,
@@ -644,7 +667,7 @@ async function runIsolatedCompletionOwned(
               authorization = await prepareHostAuthorization(
                 attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
               );
-              modelMaxTokens = authorization.model.maxTokens;
+              completionModel = authorization.model;
             }
             if (!hasAuthCandidate(attempt)) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
@@ -660,7 +683,7 @@ async function runIsolatedCompletionOwned(
                 authorization.owner === "host"
                   ? prepareIsolatedHostAuthorization(harness, authorization)
                   : authorization,
-              streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
+              streamParams: resolveIsolatedStreamParams(request, completionModel),
             });
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
@@ -680,24 +703,18 @@ async function runIsolatedCompletionOwned(
           }
         }
         if (!result) {
-          if (firstError instanceof Error) {
-            throw firstError;
-          }
-          throw new Error("No prepared auth attempt succeeded.", { cause: firstError });
+          throw firstError instanceof Error
+            ? firstError
+            : new Error("No prepared auth attempt succeeded.", { cause: firstError });
         }
       } else {
         const authorization = await prepareHostAuthorization(request.authProfileId);
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
-          streamParams: clampIsolatedStreamParams(
-            request.streamParams,
-            authorization.model.maxTokens,
-          ),
+          streamParams: resolveIsolatedStreamParams(request, authorization.model),
           model: authorization.model,
           auth: authorization.auth,
-          ...(authorization.sourceAuthFingerprint
-            ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
-            : {}),
+          sourceAuthFingerprint: authorization.sourceAuthFingerprint,
         };
         assertCurrent();
         const execution = modelAuthority.bind(modelForAuthorization);
@@ -705,9 +722,6 @@ async function runIsolatedCompletionOwned(
           prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
         );
         execution.assertCurrent?.();
-      }
-      if (!result) {
-        throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion failed.");
       }
       return {
         text: requireIsolatedAssistantText(result.assistant),

@@ -51,7 +51,7 @@ available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
 permissions. See [macOS signing](/platforms/mac/signing).
 
 Packaging builds the JavaScript runtime and Control UI, then stages the full
-canonical package with production dependencies under
+standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
 optional `sqlite-vec`; on-demand plugins excluded from that package remain
@@ -183,12 +183,12 @@ installed release.
 ### Shared Bun pin and repin gate
 
 The JSON schema has top-level `tag`, `commit`, `revision`, and `artifacts`.
-`artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, and
-`linux-x64`; each entry contains `asset`, `sha256`, `executable`, and
-`executableSha256`. These are a projection of the published fork release's
-`manifest.json`, not independently maintained app or CI pins. Windows Tauri
-retains its current runtime until a signed fork Windows build is published;
-unsigned dry-run artifacts are not shippable.
+`artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
+`windows-arm64`, and `windows-x64`; each entry contains `asset`, `sha256`,
+`executable`, and `executableSha256`. Windows entries also carry
+`authenticodeSigned: true` and `testOnly: false`. These are a projection of the
+published fork release's `manifest.json`, not independently maintained app or CI
+pins. Unsigned Windows dry-run artifacts are not shippable.
 
 Every repin requires both gates on the same published tag: CI's paired Bun-lane
 replay and Bun-only smoke, plus the macOS runtime checks and two-binary test set.
@@ -198,20 +198,23 @@ investigating; a published prerelease alone is not admission. Record the exact
 tag and gate evidence in the PR. See [CI runtime selection](/ci/pipeline#test-runtime-selection).
 
 After the gates pass, download `manifest.json` and `SHA256SUMS` from that exact
-release and verify the manifest checksum. Regenerate all four entries together:
+release and verify the manifest and asset checksums. Regenerate all six entries together:
 
 ```sh
 jq '{tag, commit: .bun.commit, revision: .bun.revision,
   artifacts: (.assets | map(
-    select(.target | IN("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")) |
-    {key: .target, value: {asset: .name, sha256,
-      executable: .executable.path, executableSha256: .executable.sha256}}
+    select(.target | IN("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-arm64", "windows-x64")) |
+    {key: .target, value: ({asset: .name, sha256,
+      executable: .executable.path, executableSha256: .executable.sha256} +
+      (if .os == "windows" then {authenticodeSigned: .executable.authenticodeSigned,
+        testOnly: .executable.testOnly} else {} end))}
   ) | from_entries)}' manifest.json > scripts/lib/openclaw-bun.json
 ```
 
-Repin one shared owner in one PR and run staging for all four targets; execute
-native proofs on matching hosts (Rosetta can verify Darwin x64). Do not advance
-an individual artifact or copy the pin into an app or workflow.
+Repin one shared owner in one PR and run the shared stager for all four Darwin/Linux
+targets; execute native proofs on matching hosts (Rosetta can verify Darwin x64).
+The signed Windows entries are available for Windows packaging integration. Do not advance an
+individual artifact or copy the pin into an app or workflow.
 
 ## 3. Install the CLI and Gateway
 
@@ -375,7 +378,7 @@ If versions don't match, update macOS/Xcode and re-run the build.
 
 On a beta-only Xcode toolchain (for example Xcode 27 with the macOS 27 SDK),
 only the `openclaw-mlx-tts` helper may fail while the main app builds fine. The
-mlx-swift Metal compilation errors non-deterministically (a different `.metal`
+mlx-swift Metal compilation fails unpredictably (a different `.metal`
 file each run, `Could not read serialized diagnostics file` then a nonzero
 `metal` exit), because the beta `metal` compiler and its separately downloaded
 Metal Toolchain are still unstable. This is an upstream toolchain issue, not an

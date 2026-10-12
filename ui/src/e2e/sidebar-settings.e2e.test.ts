@@ -321,7 +321,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       if (testCase.collapseSidebar) {
-        await page.locator(".sidebar-brand__collapse").click();
+        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await page.locator(".shell--nav-collapsed").waitFor();
       }
       const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
@@ -357,7 +357,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       const railInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
       await expect
         .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
@@ -433,7 +433,7 @@ suite.define(() => {
         .poll(() => page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count())
         .toBe(0);
 
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await page
         .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
         .waitFor();
@@ -459,7 +459,7 @@ suite.define(() => {
       await gateway.deferNext("cron.list");
       await gateway.deferNext("cron.status");
       await gateway.deferNext("models.authStatus");
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await expect
         .poll(() =>
           page

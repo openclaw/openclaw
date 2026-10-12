@@ -208,7 +208,7 @@ export function installEmbeddedAttemptStreamGuards(
       if (observation.broke) {
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-          "no tracked cache input change";
+          observation.dropCause;
         log.warn(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
@@ -442,22 +442,22 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
   }
   return {
+    /** Returns the measured predecessor that may anchor this exact request's pressure. */
     onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
       const request = cacheObserver.onModelRequest(...args);
-      if (request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({
-          context: args[1],
-          previousRequest:
-            previous?.requestIndex === request.requestIndex - 1 &&
-            request.prefixUnchanged &&
-            (request.changes ?? []).every(
-              ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
-            )
-              ? previous
-              : undefined,
-        });
+      const previousRequest =
+        previous?.requestIndex === request.requestIndex - 1 &&
+        request.prefixUnchanged &&
+        (request.changes ?? []).every(
+          ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
+        )
+          ? previous
+          : undefined;
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
+        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
       }
+      return previousRequest;
     },
     onModelUsage: (
       usage: NormalizedUsage | undefined,

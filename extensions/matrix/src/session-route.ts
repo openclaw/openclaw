@@ -5,7 +5,7 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
 import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
@@ -33,13 +33,13 @@ function resolveMatrixDmSessionScope(params: {
   );
 }
 
-function resolveMatrixCurrentDmRoomId(params: {
+async function resolveMatrixCurrentDmRoomId(params: {
   cfg: ChannelOutboundSessionRouteParams["cfg"];
   agentId: string;
   accountId: string;
   currentSessionKey?: string;
   targetUserId: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const sessionKey =
     parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
     params.currentSessionKey?.trim();
@@ -50,7 +50,7 @@ function resolveMatrixCurrentDmRoomId(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.agentId,
     });
-    const existing = getSessionEntry({
+    const existing = await getSessionEntryAsync({
       storePath,
       sessionKey,
     });
@@ -70,7 +70,7 @@ function resolveMatrixCurrentDmRoomId(params: {
   }
 }
 
-export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+export async function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const target =
     resolveMatrixTargetIdentity(params.resolvedTarget?.to ?? params.target) ??
     resolveMatrixTargetIdentity(params.target);
@@ -84,7 +84,7 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
   });
   const roomScopedDmId =
     target.kind === "user" && dmSessionScope === "per-room"
-      ? resolveMatrixCurrentDmRoomId({
+      ? await resolveMatrixCurrentDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
           accountId: effectiveAccountId,

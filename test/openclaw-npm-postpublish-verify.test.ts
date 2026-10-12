@@ -21,6 +21,7 @@ import {
   resolvePublishedInstallSourceVerification,
   resolveInstalledBinaryCommandInvocation,
   retryNpmRegistryProvenanceRead,
+  verifyAttestedReleasePublishWorkflow,
   verifyNpmProvenanceAttestation,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
@@ -239,6 +240,65 @@ describe("npm registry provenance verification", () => {
         }),
       }),
     ).rejects.toThrow("does not match");
+  });
+
+  it("derives attested release-publish tooling only after the trusted-source check", async () => {
+    const sha = "a".repeat(40);
+    const ref = `refs/tags/release-publish/${sha.slice(0, 12)}-123`;
+    const attestations = attestationsFor(buildProvenancePayload(version, ref, sha));
+    const verifyBundle = makeBundleVerifier();
+    const verifyDerivedWorkflow = vi.fn();
+
+    await expect(
+      verifyProvenance({ attestations, verifyBundle, verifyDerivedWorkflow }),
+    ).resolves.toBeUndefined();
+    expect(verifyDerivedWorkflow).toHaveBeenCalledExactlyOnceWith({ ref, sha });
+    expect(verifyBundle.mock.calls[0]?.[1]).toEqual(releaseIdentity(ref));
+
+    verifyBundle.mockClear();
+    await expect(
+      verifyProvenance({
+        attestations,
+        verifyBundle,
+        verifyDerivedWorkflow: () => {
+          throw new Error("protected release tooling tag is missing or unreadable.");
+        },
+      }),
+    ).rejects.toThrow("protected release tooling tag is missing or unreadable.");
+    expect(verifyBundle).not.toHaveBeenCalled();
+
+    // An attested commit that does not match the tag's SHA prefix is never derived.
+    await expect(
+      verifyProvenance({
+        attestations: attestationsFor(buildProvenancePayload(version, ref, "b".repeat(40))),
+        verifyDerivedWorkflow,
+      }),
+    ).rejects.toThrow("has no matching workflow revision to verify");
+
+    // A partial explicit override stays strict instead of falling back to derivation.
+    verifyDerivedWorkflow.mockClear();
+    await expect(
+      verifyProvenance({ attestations, expectedWorkflowRef: ref, verifyDerivedWorkflow }),
+    ).rejects.toThrow("does not match the approved workflow ref and SHA");
+    expect(verifyDerivedWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("trusts derived publish tooling only at the live exact tag on main", () => {
+    const sha = "a".repeat(40);
+    const tag = `release-publish/${sha.slice(0, 12)}-123`;
+    const runGh = (tagSha: string, mainStatus: string) => (args: string[]) =>
+      args[1]?.includes("/git/ref/tags/")
+        ? JSON.stringify({ ref: `refs/tags/${tag}`, object: { type: "commit", sha: tagSha } })
+        : JSON.stringify({ status: mainStatus });
+    const identity = { ref: `refs/tags/${tag}`, sha };
+
+    expect(() => verifyAttestedReleasePublishWorkflow(identity, runGh(sha, "ahead"))).not.toThrow();
+    expect(() =>
+      verifyAttestedReleasePublishWorkflow(identity, runGh("b".repeat(40), "ahead")),
+    ).toThrow("bound to the wrong SHA");
+    expect(() => verifyAttestedReleasePublishWorkflow(identity, runGh(sha, "diverged"))).toThrow(
+      "not reachable from current main",
+    );
   });
 
   it.each([

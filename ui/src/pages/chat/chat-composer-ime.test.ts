@@ -2,11 +2,12 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createComposerContainer,
   createComposerProps,
   renderComposerFixture,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(() => resetComposerFixture());
 
@@ -57,7 +58,7 @@ describe("chat composer IME composition", () => {
       const onSend = vi.fn();
       const onDraftChange = vi.fn();
       const props = createComposerProps({ onSend, onDraftChange, sendShortcut });
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       render(renderChatComposer(props), container);
       const textarea = getComposerTextarea(container);
       textarea.style.height = "42px";

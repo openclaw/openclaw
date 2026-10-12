@@ -59,7 +59,7 @@ export async function prepareCommandConversationContext(params: {
     const shared = ctx.ChatType === "group" || ctx.ChatType === "channel";
     const sourceContext = buildSourceConversationContext({
       sessionCtx: ctx,
-      sourceReplyDeliveryMode: resolveSessionStableReplyMode({
+      sourceReplyDeliveryMode: await resolveSessionStableReplyMode({
         cfg,
         ctx,
         sessionEntry,

@@ -57,6 +57,10 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
+  // The corpus README runs this generator by path; remove with that proof command.
+  "test/fixtures/lit-to-solid/compile.mts!",
+  // The codemod test spawns this runtime fixture; remove with that consumer.
+  "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
@@ -109,14 +113,16 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",
   // QA scenario YAML dispatches these scripts/tests by path rather than import.
   ...QA_SCENARIO_EXECUTION_ENTRIES,
-  // Invoked directly by the sandbox bind-conflict E2E verification script.
-  "scripts/e2e-sandbox-bind-conflict.mts!",
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
+  // The boundary test passes these files to Oxlint by path; remove with those cases.
+  "test/fixtures/forced-process-exit.test-support.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.cjs!",
+  "test/fixtures/oxlint-boundary-guards/forced-process-exit-violation.mjs!",
   // The ACP reset proof spawns this adapter by path from the proof driver.
   "test/fixtures/acp-reset-timeout-adapter.ts!",
 ] as const;
@@ -139,6 +145,13 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
+        // The presentation proof HTML selects these browser entries by renderer query param.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-lit.ts!",
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations

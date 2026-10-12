@@ -707,6 +707,9 @@ suite.define(() => {
             .allTextContents(),
         )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+      expect(
+        await viewDropdown.getByRole("menuitemcheckbox", { name: "Speech bubbles" }).count(),
+      ).toBe(0);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");

@@ -421,19 +421,17 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
+// mock-isolation: mutable fixtures must stay independent of the process config publication owner.
 vi.mock("../config/runtime-snapshot.js", async () => {
   const { hashRuntimeConfigValue } = await vi.importActual<
     typeof import("../config/runtime-snapshot.js")
   >("../config/runtime-snapshot.js");
-  return {
+  const { createMutableRuntimeSnapshotMock } =
+    await import("./agent-command.runtime-snapshot.test-support.js");
+  return createMutableRuntimeSnapshotMock({
     hashRuntimeConfigValue,
     getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    // No source snapshot: runtime-source projection no-ops and resolvers read the
-    // provided config directly, matching this suite's pre-projection world.
-    getRuntimeConfigSourceSnapshot: () => null,
-    registerRuntimeConfigSnapshotPreparer: vi.fn(),
-    setRuntimeConfigSnapshot: vi.fn(),
-  };
+  });
 });
 
 vi.mock("../config/sessions.js", () => ({
@@ -445,13 +443,6 @@ vi.mock("../config/sessions.js", () => ({
       return fn(store);
     },
   ),
-}));
-
-vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
-    sessionFile: params.sessionEntry?.sessionFile ?? "/tmp/session.jsonl",
-    sessionEntry: params.sessionEntry ?? { sessionId: "session-1", updatedAt: Date.now() },
-  }),
 }));
 
 vi.mock("./internal-session-effects.js", async (importOriginal) => ({
@@ -610,6 +601,7 @@ vi.mock("./auth-profiles.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
   };
 });
 
@@ -620,6 +612,11 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+    ensureAuthProfileStoreAsync: vi.fn(async () => state.authProfileStoreMock),
+    findPersistedAuthProfileCredentialAsync: vi.fn(
+      async ({ profileId }: { profileId: string }) =>
+        state.authProfileStoreMock.profiles[profileId],
+    ),
   };
 });
 
@@ -3855,8 +3852,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       await runBasicAgentCommand();
 
       expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
-      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
-      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+      const { ensureAuthProfileStoreAsync } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStoreAsync).toHaveBeenCalledWith(
         "/tmp/agent",
         expect.objectContaining({ profileId, allowKeychainPrompt: false }),
       );

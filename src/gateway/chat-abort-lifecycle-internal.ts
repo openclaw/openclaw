@@ -228,12 +228,12 @@ export async function waitForChatAbortControllerRemoval<
     projectSessionTerminalPending?: boolean;
     projectSessionTerminalPersistence?: Promise<void>;
   },
->(
-  params: {
-    entries: ReadonlyMap<string, TEntry>;
-    targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
-  } & ({ timeoutMs: number; signal?: never } | { timeoutMs: null; signal: AbortSignal }),
-): Promise<boolean> {
+>(params: {
+  entries: ReadonlyMap<string, TEntry>;
+  targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
+  timeoutMs: number | null;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const terminalOwnersSettled = () =>
     params.targets.every(({ entry }) => isChatAbortTerminalPersistenceSettled(entry));
   const registeredWaiters: Array<{ entry: TEntry; resolve: () => void }> = [];

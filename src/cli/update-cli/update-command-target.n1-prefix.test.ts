@@ -5,6 +5,8 @@ import {
   resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
 } from "../../daemon/runtime-paths.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
@@ -19,7 +21,9 @@ vi.mock("../../infra/update-global.js", async (original) => {
     createGlobalInstallEnv: async () => ({}),
   };
 });
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runCommandBuffered: async () => pkgQueryResult(),
   runCommandWithTimeout: async (argv: string[]) => {
     state.calls.push(argv);
     if (argv.includes("--version")) {
@@ -123,13 +127,15 @@ async function resolve(servicePlan: {
     typeof resolveUpdateCommandTarget
   >[1];
   const executor = { enter: vi.fn(async () => ({ assertCurrent: vi.fn() })) };
-  const target = await resolveUpdateCommandTarget(
-    { json: true, dryRun: true },
-    recovery,
-    undefined,
-    prepared,
-    executor,
-    1000,
+  const target = await withMockedPlatform("linux", () =>
+    resolveUpdateCommandTarget(
+      { json: true, dryRun: true },
+      recovery,
+      undefined,
+      prepared,
+      executor,
+      1000,
+    ),
   );
   if (!target) {
     throw new Error("Expected an admitted update target");

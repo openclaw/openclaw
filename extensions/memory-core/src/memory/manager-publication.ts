@@ -1,5 +1,11 @@
-import { randomUUID } from "node:crypto";
-import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
+import { setTimeout as delay } from "node:timers/promises";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import {
+  openOpenClawAgentSqliteWorkerStoreV2,
+  type SqliteWorkerStore,
+} from "openclaw/plugin-sdk/sqlite-runtime";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
@@ -21,6 +27,60 @@ type PublicationRetry = <T>(
   prepare: () => Promise<boolean>,
 ) => Promise<T | undefined>;
 
+export async function initializePublishedMemory(
+  options: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0],
+  schema: MemoryPublicationOperations["schema.admit"]["input"] | undefined,
+  assertCurrent: () => void,
+) {
+  const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryPublicationOperations>(
+    options,
+    { version: 2, assertCurrent },
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+      input: { kind: "agent" },
+    },
+  );
+  try {
+    await worker.prepare();
+    if (!schema) {
+      return undefined;
+    }
+    return await retryMemoryPublication({
+      run: () => worker.execute({ type: "schema.admit", input: schema }, assertCurrent),
+      busyTimeoutMs: 5_000,
+      prepare: async () => true,
+    });
+  } finally {
+    await worker.close();
+  }
+}
+
+export async function retryMemoryPublication<T>(params: {
+  run: () => Promise<MemoryPublicationResult<T>>;
+  prepare: () => Promise<boolean>;
+  busyTimeoutMs: number;
+}): Promise<Extract<MemoryPublicationResult<T>, { ok: true }> | undefined> {
+  const deadline = performance.now() + params.busyTimeoutMs;
+  while (await params.prepare()) {
+    const result = await params.run();
+    if (result.ok) {
+      return result;
+    }
+    const code = result.error.errcode === undefined ? undefined : result.error.errcode & 0xff;
+    if (result.entered || (code !== 5 && code !== 6) || performance.now() >= deadline) {
+      throw Object.assign(
+        result.error.name === "MemoryIndexRevisionConflictError"
+          ? new MemoryIndexRevisionConflictError(result.error.message)
+          : new Error(result.error.message),
+        result.error,
+        { entered: result.entered, committed: result.committed },
+      );
+    }
+    await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+  }
+  return undefined;
+}
+
 /** Small publications use one request; larger inputs retain their bounded transfer scope. */
 export async function publishMemorySource(params: {
   replacement: MemorySourceIndexReplacement;
@@ -40,20 +100,19 @@ export async function publishMemorySource(params: {
     );
   }
   return run(async (scope) => {
-    const operation = randomUUID();
-    const { header, rows } = memoryPublicationHeader(replacement);
-    await scope.execute({ type: "stage.start", input: { operation, header, rows } });
+    const header = memoryPublicationHeader(replacement);
+    await scope.execute({ type: "stage.start", input: { header } });
     for (const fragments of memoryPublicationBatches(replacement)) {
-      await scope.execute({ type: "stage.append", input: { operation, fragments } });
+      await scope.execute({ type: "stage.append", input: { fragments } });
     }
     const result = await retry(
-      () => scope.execute({ type: "source.replace", input: { operation, state: state() } }),
+      () => scope.execute({ type: "source.replace", input: { state: state() } }),
       prepare,
     );
     assertPublished?.();
     // Thrown failures close through the host owner; another command could hide the write outcome.
     if (result === undefined) {
-      await scope.execute({ type: "stage.discard", input: { operation } });
+      await scope.execute({ type: "stage.discard", input: undefined });
     }
     return result;
   });
@@ -102,20 +161,19 @@ export async function publishMemoryEmbeddingCache(params: {
     }
     return current;
   }
-  const operation = randomUUID();
   await scope.execute({
     type: "cache.stage.start",
-    input: { operation, header: mutation.header, rows: mutation.entries.length },
+    input: { header: mutation.header },
   });
   for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
-    await scope.execute({ type: "stage.append", input: { operation, fragments } });
+    await scope.execute({ type: "stage.append", input: { fragments } });
   }
   const current = await retry(
-    () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
+    () => scope.execute({ type: "cache.write", input: { expectedRevision } }),
     prepare,
   );
   if (current === undefined) {
-    await scope.execute({ type: "stage.discard", input: { operation } });
+    await scope.execute({ type: "stage.discard", input: undefined });
   }
   if (current === false) {
     // Publish generation invalidation before releasing this writer turn.

@@ -555,6 +555,7 @@ export const GitHubAuthorSchema = closedObject({
 });
 
 export const GitHubIdentityFactsSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   source: GitHubIdentitySourceSchema,
   credentialKind: Type.Union([
     Type.Literal("native"),

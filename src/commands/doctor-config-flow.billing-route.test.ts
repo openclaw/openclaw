@@ -106,7 +106,7 @@ describe("Doctor model billing route migration", () => {
               }
             : { main: {} },
         });
-        const ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
+        await using ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
           prepareDoctorContext(configPath),
         );
         await observeDoctorConfigStep("write-config-health", () =>
@@ -125,7 +125,7 @@ describe("Doctor model billing route migration", () => {
           runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
         );
         expect(ctx.updateWarnings).toHaveLength(2);
-        const repeated = await observeDoctorConfigStep(
+        await using repeated = await observeDoctorConfigStep(
           "repeat-prepare-context-outer-unmeasured",
           () => prepareDoctorContext(configPath),
         );
@@ -177,7 +177,7 @@ describe("Doctor deferred model retirement", () => {
             OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
           },
           async () => {
-            const swap = await prepareDoctorContext(f.configPath);
+            await using swap = await prepareDoctorContext(f.configPath);
             await runInitialConfigWriteHealth(swap);
             expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
             expect(f.receipt()).toMatchObject({ status: "skipped" });
@@ -194,7 +194,7 @@ describe("Doctor deferred model retirement", () => {
             }
 
             await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
-              const converged = await prepareDoctorContext(f.configPath);
+              await using converged = await prepareDoctorContext(f.configPath);
               expect(converged.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
               expect(
                 createModelAuthAvailabilityResolver({
@@ -223,7 +223,7 @@ describe("Doctor deferred model retirement", () => {
               );
 
               f.defer();
-              const repeated = await prepareDoctorContext(f.configPath);
+              await using repeated = await prepareDoctorContext(f.configPath);
               expect(repeated.configResult.shouldWriteConfig).toBe(false);
               await runInitialConfigWriteHealth(repeated);
               expect(f.receipt()).toMatchObject({ status: "completed" });
@@ -247,7 +247,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           await runInitialConfigWriteHealth(ctx);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
           expect(getUpdateRun(f.runId)).toEqual(before);
@@ -268,7 +268,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
           const before = await fs.readFile(f.configPath, "utf8");
           ctx.cfg.gateway = { ...ctx.cfg.gateway, port: -1 };

@@ -5,6 +5,7 @@ import type { ServerUiPrefs, SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   LAST_SEEN_KEY,
   parseStoredPrefs,
+  serializeStoredPrefs,
   readStorageState,
   writeStorage,
 } from "./server-prefs-storage.ts";
@@ -24,14 +25,9 @@ export function readConfirmedPrefs(owner: ConfirmationOwner, scope: string): Ser
   }
   const prefs = parseStoredPrefs(stored.value);
   if (prefs?.navigationConfirmation) {
-    const receipts = asRecord(prefs.navigationConfirmation);
-    prefs.navigationConfirmation = Object.fromEntries(
-      ["sidebarEntries", "navigationScope"].flatMap((key) =>
-        typeof receipts?.[key] === "string" && receipts[key].length <= 64
-          ? [[key, receipts[key]]]
-          : [],
-      ),
-    );
+    const receipt = asRecord(prefs.navigationConfirmation)?.sidebarEntries;
+    prefs.navigationConfirmation =
+      typeof receipt === "string" && receipt.length <= 64 ? { sidebarEntries: receipt } : {};
   }
   owner.confirmedPrefsFallback = { scope, raw: stored.value, prefs, dirty: false };
   return prefs;
@@ -45,22 +41,16 @@ export function publishConfirmedPrefs(
 ): void {
   const previous = readConfirmedPrefs(owner, scope);
   const navigationConfirmation = { ...previous?.navigationConfirmation };
-  const confirmedNavigation = confirmedKeys.filter(
-    (key) => key === "sidebarEntries" || key === "navigationScope",
-  );
-  const receipt = confirmedNavigation.length ? generateUUID() : undefined;
-  for (const key of ["sidebarEntries", "navigationScope"] as const) {
-    if (!Object.hasOwn(prefs, key)) {
-      delete navigationConfirmation[key];
-    } else if (confirmedNavigation.includes(key)) {
-      navigationConfirmation[key] = receipt;
-    }
+  if (!Object.hasOwn(prefs, "sidebarEntries")) {
+    delete navigationConfirmation.sidebarEntries;
+  } else if (confirmedKeys.includes("sidebarEntries")) {
+    navigationConfirmation.sidebarEntries = generateUUID();
   }
   const next: ServerUiPrefs = { ...prefs, navigationConfirmation };
   if (!Object.keys(navigationConfirmation).length) {
     delete next.navigationConfirmation;
   }
-  const raw = JSON.stringify(next);
+  const raw = serializeStoredPrefs(next);
   const persisted = writeStorage(LAST_SEEN_KEY, scope, raw);
   owner.confirmedPrefsFallback = {
     scope,

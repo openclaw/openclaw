@@ -24,8 +24,7 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 }
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
-  sidebarEntries: "ui.sidebarEntries",
-  navigationScope: "ui.navigationScope",
+  sidebarEntries: "ui.railShortcuts",
 } as const;
 
 export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {
@@ -115,12 +114,6 @@ export const SYNCED_PREFS = {
     local: (settings) => settings.sidebarEntries,
     write: (value) => ({ sidebarEntries: value ?? [...DEFAULT_SIDEBAR_ENTRIES] }),
   }),
-  navigationScope: prefSpec<"mine" | "all">({
-    configSync: false,
-    extract: (value) => (value === "mine" || value === "all" ? value : undefined),
-    local: (settings) => settings.navigationScope,
-    write: (value) => ({ navigationScope: value ?? "mine" }),
-  }),
 } as const;
 
 export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
@@ -142,7 +135,7 @@ export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | 
 export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
     /** Browser-only identities of the last confirmed navigation publications, never RPC entries. */
-    navigationConfirmation?: Partial<Record<"sidebarEntries" | "navigationScope", string>>;
+    navigationConfirmation?: Partial<Record<"sidebarEntries", string>>;
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */
@@ -184,5 +177,4 @@ export function prefValuesEqual(left: unknown, right: unknown): boolean {
 export type ServerUiPrefReadiness = {
   appearanceReady: boolean;
   navigationReady?: boolean;
-  sidebarEntriesReady?: boolean;
 };

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, it } from "vitest";
+import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
@@ -10,7 +11,6 @@ import { prepareSessionTranscriptHydration } from "../config/sessions/session-tr
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
-import { prepareSessionEntryPresenceRead } from "../config/sessions/session-transcript-worker-runtime.js";
 import {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,

@@ -44,10 +44,7 @@ import {
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  createTranscriptRawDeltaCursor,
-  readTranscriptRawDeltaFromProjection,
-} from "./session-accessor.sqlite-raw-delta-read.js";
+import { readTranscriptRawDeltaFromProjection } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
@@ -56,6 +53,7 @@ import {
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
+import { createTranscriptRawDeltaCursor } from "./session-transcript-raw-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
 

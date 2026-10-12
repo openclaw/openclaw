@@ -97,6 +97,15 @@ reply.
 
 ## Provider selection
 
+Use `openclaw configure --section memory` for optional interactive provider/model
+and credential setup. Local guided and classic onboarding offer the same step.
+The selected cloud or local HTTP route must return a valid vector for synthetic text before
+you can save it. Existing settings and per-agent overrides survive skipping or
+failed verification; SecretRefs stay references in the saved config. The check
+does not open the memory index, download a local model, or re-index your files.
+Ollama and LM Studio use their running servers and already-downloaded embedding
+models; see [interactive memory setup](/cli/configure#memory-section).
+
 | Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
 | ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
@@ -204,6 +213,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 <ParamField path="remote.headers" type="object">
   Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
 </ParamField>
+
+Header values must be strings. Environment references in memory headers are
+resolved during secret preparation; an unresolved reference stops indexing or
+search with an error naming the setting, before any embedding request is sent.
+Already-resolved values are used literally. LM Studio and generic OpenAI-compatible
+servers that do not require authentication still work without credentials,
+including on LAN hosts; configuring a broken reference is different from omitting
+authentication.
 
 ```json5
 {

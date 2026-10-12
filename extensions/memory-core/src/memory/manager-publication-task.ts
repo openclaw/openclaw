@@ -1,6 +1,7 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
-import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
 import type { MemorySourceIndexHeader } from "./manager-source-index-kernel.js";
 import type {
@@ -8,13 +9,13 @@ import type {
   refreshMemorySessionSourceState,
 } from "./manager-source-state.js";
 
-export type MemoryPublicationConnection = MemoryShadowConnection;
+export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
   extensionPath?: string;
 };
-export type MemoryPublicationFragment = { row: number; part: number; json: string; last: boolean };
+export type MemoryPublicationFragment = { json: string; last: boolean };
 export type MemoryEmbeddingCacheEntry = {
   hash: string;
   embedding: number[];
@@ -30,9 +31,20 @@ export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
   | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "connection.inspect": { input: undefined; output: MemoryShadowConnection };
+  "vector.ensure": {
+    input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
+    output: MemoryPublicationResult<void>;
+  };
+  "vector.prepare": {
+    input: { state: MemoryPublicationState };
+    output: MemoryPublicationResult<{ extensionPath: string; retiredLegacy: boolean }>;
+  };
+  "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
@@ -69,11 +81,11 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<boolean>;
   };
   "cache.stage.start": {
-    input: { operation: string; header: MemoryEmbeddingCacheHeader; rows: number };
+    input: { header: MemoryEmbeddingCacheHeader };
     output: void;
   };
   "cache.write": {
-    input: { operation: string; expectedRevision: number };
+    input: { expectedRevision: number };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.write.inline": {
@@ -89,16 +101,16 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<boolean>;
   };
   "stage.start": {
-    input: { operation: string; header: MemorySourceIndexHeader; rows: number };
+    input: { header: MemorySourceIndexHeader };
     output: void;
   };
   "stage.append": {
-    input: { operation: string; fragments: MemoryPublicationFragment[] };
+    input: { fragments: MemoryPublicationFragment[] };
     output: void;
   };
-  "stage.discard": { input: { operation: string }; output: void };
+  "stage.discard": { input: undefined; output: void };
   "source.replace": {
-    input: { operation: string; state: MemoryPublicationState };
+    input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<{
       beforeRevision: number;
       databaseRevision: number;
@@ -108,7 +120,6 @@ export type MemoryPublicationOperations = {
   "source.replace.inline": {
     input: {
       header: MemorySourceIndexHeader;
-      rows: number;
       fragments: MemoryPublicationFragment[];
       state: MemoryPublicationState;
     };

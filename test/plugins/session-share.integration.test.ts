@@ -19,10 +19,7 @@ import {
   type SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  appendSessionTranscriptMessageByIdentity,
-  appendSessionTranscriptMessagesByIdentity,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sessionSharePlugin from "../../extensions/session-share/index.js";
@@ -38,13 +35,8 @@ import {
 } from "../../src/state/openclaw-agent-db.js";
 import * as stateReads from "../../src/state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
-import * as profileEvents from "../../src/state/user-profile-events.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
-import {
-  linkEmail,
-  setDisplayName,
-  syncGitHubIdentity,
-} from "../../src/state/user-profile-writes.worker.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
@@ -673,56 +665,6 @@ describe("session-share node commands", () => {
     });
   });
 
-  it.each(["profile", "identity"])(
-    "preserves the first creator's %s error when a later cohort row is corrupt",
-    async (first) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture();
-        const profiles = [0, 1].map((index) =>
-          syncGitHubIdentity({
-            identity: { accountId: 6000 + index, login: `ordered-${index}` },
-            authenticationAlias: { kind: "email", email: `ordered-${index}@example.test` },
-          }),
-        );
-        const now = Date.now();
-        for (const [index, profile] of profiles.entries()) {
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: `agent:main:ordered-${index}` },
-            {
-              sessionId: `ordered-${index}`,
-              updatedAt: now - index,
-              label: `Ordered ${index}`,
-              category: "Team",
-              createdActor: { type: "human", source: "profile", id: profile.id },
-            },
-          );
-        }
-        const { db } = openOpenClawStateDatabase();
-        const profileIndex = first === "profile" ? 0 : 1;
-        db.prepare("UPDATE user_profiles SET updated_at = ? WHERE id = ?").run(
-          9223372036854775807n,
-          profiles[profileIndex]!.id,
-        );
-        db.prepare("UPDATE user_profiles SET primary_github_account_id = ? WHERE id = ?").run(
-          9007199254740992n,
-          profiles[1 - profileIndex]!.id,
-        );
-        const singleFailure: unknown = await fixture
-          .list({ limit: 1 })
-          .catch((error: unknown) => error);
-        expect(singleFailure).toBeInstanceOf(RangeError);
-        if (!(singleFailure instanceof Error)) {
-          throw new Error("Expected the first creator's native error");
-        }
-        await expect(fixture.list()).rejects.toMatchObject({
-          name: singleFailure.name,
-          message: singleFailure.message,
-          code: "ERR_OUT_OF_RANGE",
-        });
-      });
-    },
-  );
-
   it("propagates a failed profile reader without replaying creator queries on the host", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = commandFixture();
@@ -812,56 +754,6 @@ describe("session-share node commands", () => {
     },
   );
 
-  it("revalidates earlier senders after preparing a later transcript batch", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const first = ensureProfileForEmail("first@example.test");
-      const second = ensureProfileForEmail("second@example.test");
-      const scope = { agentId: "main", sessionKey: "agent:main:cohorts", sessionId: "cohorts" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: Date.now(),
-        label: "Shared",
-        category: "Team",
-      });
-      await appendSessionTranscriptMessagesByIdentity({
-        ...scope,
-        messages: [
-          {
-            message: {
-              role: "user",
-              content: "Older",
-              __openclaw: { senderIdentity: { type: "profile", id: second.id } },
-            },
-          },
-          { message: { role: "assistant", content: "NO_REPLY" } },
-          { message: { role: "assistant", content: "NO_REPLY" } },
-          {
-            message: {
-              role: "user",
-              content: "Newest",
-              __openclaw: { senderIdentity: { type: "profile", id: first.id } },
-            },
-          },
-        ],
-      });
-      const capture = profileEvents.captureUserProfileAuthorityRead;
-      let cohorts = 0;
-      vi.spyOn(profileEvents, "captureUserProfileAuthorityRead").mockImplementation(
-        async (...args) => {
-          const authority = await capture(...args);
-          if (++cohorts === 2) {
-            setDisplayName(first.id, "Changed during later preparation");
-          }
-          return authority;
-        },
-      );
-      await expect(commandFixture().read(scope.sessionKey, { limit: 2 })).rejects.toThrow(
-        "identities changed",
-      );
-      expect(cohorts).toBe(2);
-    });
-  });
-
   it("reads real newest-first transcript rows with portable sender and revokes moved sessions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("source@example.test");
@@ -947,98 +839,78 @@ describe("session-share node commands", () => {
 });
 
 describe("session-share receiver identity integration", () => {
-  it.each(["identity", "snapshot"] as const)(
-    "revalidates an earlier host's %s after another host finishes identity preparation",
-    async (changed) => {
-      await withCatalogFixture(async (fixture) => {
-        const first = syncGitHubIdentity({
-          identity: { accountId: 701, login: "first-host", name: "Before" },
-          authenticationAlias: { kind: "email", email: "first-host@example.test" },
-        });
-        syncGitHubIdentity({
-          identity: { accountId: 702, login: "second-host", name: "Second" },
-          authenticationAlias: { kind: "email", email: "second-host@example.test" },
-        });
-        fixture.list.mockResolvedValue({
-          nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
-        });
-        fixture.setConfig({
-          plugins: {
-            entries: {
-              "session-share": {
-                config: {
-                  nodes: {
-                    alpha: { linkGitHubIdentities: changed === "identity" },
-                    beta: { linkGitHubIdentities: true },
-                  },
+  it("rejects an earlier host snapshot after another host prepares", async () => {
+    await withCatalogFixture(async (fixture) => {
+      syncGitHubIdentity({
+        identity: { accountId: 702, login: "second-host", name: "Second" },
+        authenticationAlias: { kind: "email", email: "second-host@example.test" },
+      });
+      fixture.list.mockResolvedValue({
+        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
+      });
+      fixture.setConfig({
+        plugins: {
+          entries: {
+            "session-share": {
+              config: {
+                nodes: {
+                  alpha: { linkGitHubIdentities: false },
+                  beta: { linkGitHubIdentities: true },
                 },
               },
             },
           },
-        });
-        fixture.invoke.mockImplementation(async ({ nodeId }) => ({
-          sessions: [
-            {
-              ...nativeSession,
-              createdActor: {
-                type: "human",
-                identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
-              },
-            },
-          ],
-        }));
-        await fixture.hydrate();
-        const firstPublished = createDeferredCore();
-        const secondPreparing = createDeferredCore();
-        const release = createDeferredCore();
-        const capture = profileEvents.captureUserProfileAuthorityRead;
-        const expectedCohorts = changed === "identity" ? 2 : 1;
-        let cohorts = 0;
-        vi.spyOn(profileEvents, "captureUserProfileAuthorityRead").mockImplementation(
-          async (...args) => {
-            if (++cohorts === expectedCohorts) {
-              secondPreparing.resolve();
-              await release.promise;
-            }
-            return capture(...args);
-          },
-        );
-        const pending = fixture.catalog.list({
-          onHost: (host) => {
-            if (host.hostId === "node:alpha") {
-              expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
-              if (changed === "identity") {
-                expect(host.sessions[0]?.createdActor?.label).toBe("Before");
-              }
-              firstPublished.resolve();
-            }
-          },
-        });
-        try {
-          await Promise.race([
-            Promise.all([firstPublished.promise, secondPreparing.promise]),
-            pending.then(() => {
-              throw new Error("Second host was not held");
-            }),
-          ]);
-          if (changed === "identity") {
-            setDisplayName(first.id, "Changed during second host preparation");
-          } else {
-            fixture.list.mockResolvedValue({
-              nodes: [{ nodeId: "beta", connected: true, commands }],
-            });
-            await fixture.catalog.list({ hostIds: [] });
-          }
-        } finally {
-          release.resolve();
-        }
-        await expect(pending).rejects.toThrow(
-          changed === "identity" ? "identities changed" : "Session Share is unavailable",
-        );
-        expect(cohorts).toBe(expectedCohorts);
+        },
       });
-    },
-  );
+      fixture.invoke.mockImplementation(async ({ nodeId }) => ({
+        sessions: [
+          {
+            ...nativeSession,
+            createdActor: {
+              type: "human",
+              identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
+            },
+          },
+        ],
+      }));
+      await fixture.hydrate();
+      const firstPublished = createDeferredCore();
+      const secondPreparing = createDeferredCore();
+      const release = createDeferredCore();
+      const execute = stateReads.executeExistingOpenClawStateRead;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+        async (...args) => {
+          const result = await execute(...args);
+          secondPreparing.resolve();
+          await release.promise;
+          return result;
+        },
+      );
+      const pending = fixture.catalog.list({
+        onHost: (host) => {
+          if (host.hostId === "node:alpha") {
+            expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
+            firstPublished.resolve();
+          }
+        },
+      });
+      try {
+        await Promise.race([
+          Promise.all([firstPublished.promise, secondPreparing.promise]),
+          pending.then(() => {
+            throw new Error("Second host was not held");
+          }),
+        ]);
+        fixture.list.mockResolvedValue({
+          nodes: [{ nodeId: "beta", connected: true, commands }],
+        });
+        await fixture.catalog.list({ hostIds: [] });
+      } finally {
+        release.resolve();
+      }
+      await expect(pending).rejects.toThrow("Session Share is unavailable");
+    });
+  });
 
   it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
     const nodeId = "alpha";

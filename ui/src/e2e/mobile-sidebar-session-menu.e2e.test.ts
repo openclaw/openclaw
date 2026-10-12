@@ -22,7 +22,7 @@ const suite = createSessionManagementE2eSuite(true);
 
 suite.define(() => {
   it.each(["coarse", "fine"] as const)(
-    "separates reorder controls, colored session glyphs, and section labels with a %s pointer",
+    "keeps shortcut menus, colored session glyphs, and section labels usable in a %s pointer layout",
     async (pointer) => {
       await suite.withPage(
         {
@@ -62,7 +62,7 @@ suite.define(() => {
               localStorage.setItem(
                 key,
                 JSON.stringify({
-                  sidebarEntries: [
+                  railShortcuts: [
                     "route:cron",
                     "session:agent:main:release-plan",
                     "plugin:reports/reports",
@@ -117,41 +117,52 @@ suite.define(() => {
               frame.elements[0]!.png,
             );
           }
+          if (pointer === "coarse") {
+            await page.clock.install();
+          }
           for (const width of [320, 390, 768]) {
             await page.setViewportSize({ width, height: 844 });
             expect((await rail.boundingBox())?.width).toBe(52);
             for (const row of [pinned, plugin]) {
-              const grip = row.locator(".sidebar-reorder-trigger");
+              const shortcut = row.getByRole("link");
               await row.hover();
-              const [button, icon, glyph] = await Promise.all([
-                grip.boundingBox(),
-                grip.locator("svg").boundingBox(),
+              const [button, glyph] = await Promise.all([
+                shortcut.boundingBox(),
                 row.locator(".session-glyph, .nav-item__icon").first().boundingBox(),
               ]);
+              expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
               expect(button).not.toBeNull();
-              expect(icon).not.toBeNull();
               expect(glyph).not.toBeNull();
-              expect(button!.width).toBeGreaterThanOrEqual(24);
-              expect(button!.height).toBeGreaterThanOrEqual(24);
-              expect(icon!.x).toBeGreaterThanOrEqual(button!.x);
-              expect(icon!.x + icon!.width).toBeLessThanOrEqual(button!.x + button!.width);
-              // Rail controls may be stacked or adjacent, but must not cover the glyph.
-              expect(
-                glyph!.x + glyph!.width <= button!.x ||
-                  button!.x + button!.width <= glyph!.x ||
-                  glyph!.y + glyph!.height <= button!.y ||
-                  button!.y + button!.height <= glyph!.y,
-              ).toBe(true);
+              expect(button!.width).toBeGreaterThanOrEqual(32);
+              expect(button!.height).toBeGreaterThanOrEqual(32);
+              expect(glyph!.x).toBeGreaterThanOrEqual(button!.x);
+              expect(glyph!.x + glyph!.width).toBeLessThanOrEqual(button!.x + button!.width);
+              expect(glyph!.y).toBeGreaterThanOrEqual(button!.y);
+              expect(glyph!.y + glyph!.height).toBeLessThanOrEqual(button!.y + button!.height);
               if (width === 390) {
                 const previous = await row.evaluate((element) =>
                   element.previousElementSibling?.getAttribute("data-sidebar-entry"),
                 );
                 expect(previous).not.toBeNull();
                 if (pointer === "coarse") {
-                  await grip.tap();
+                  const touch = {
+                    pointerId: 1,
+                    pointerType: "touch",
+                    isPrimary: true,
+                    clientX: button!.x + button!.width / 2,
+                    clientY: button!.y + button!.height / 2,
+                  };
+                  const initialUrl = page.url();
+                  await shortcut.dispatchEvent("pointerdown", touch);
+                  await page.clock.fastForward(500);
+                  await page.getByRole("menuitem", { name: "Move up", exact: true }).waitFor();
+                  await shortcut.dispatchEvent("pointerup", touch);
+                  await shortcut.dispatchEvent("click", { ...touch, detail: 1 });
+                  expect(page.url()).toBe(initialUrl);
+                  await waitForMobileSidebarDrawerOpen(page);
                 } else {
-                  await grip.focus();
-                  await page.keyboard.press("Enter");
+                  await shortcut.focus();
+                  await page.keyboard.press("Shift+F10");
                 }
                 const move = page.getByRole("menuitem", { name: "Move up", exact: true });
                 if (pointer === "coarse") {

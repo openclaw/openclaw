@@ -366,6 +366,89 @@ describe("audit event persistence", () => {
     });
   });
 
+  it("tracks earlier inserted expiries and retains events at the exact cutoff", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const record = (sourceSequence: number, occurredAt: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence, occurredAt }), {
+        ...database,
+        database: owner,
+      });
+    const retained = () =>
+      owner.db.prepare("SELECT occurred_at FROM audit_events ORDER BY sequence").all();
+    try {
+      record(1, now + 100);
+      record(2, now - 100);
+      const cutoff = now - 100 + AUDIT_EVENT_RETENTION_MS_CONTRACT;
+      clock.mockReturnValue(cutoff);
+      record(3, cutoff);
+      expect(retained()).toEqual([
+        { occurred_at: now + 100 },
+        { occurred_at: now - 100 },
+        { occurred_at: cutoff },
+      ]);
+
+      clock.mockReturnValue(cutoff + 1);
+      record(4, cutoff + 1);
+      expect(retained()).toEqual([
+        { occurred_at: now + 100 },
+        { occurred_at: cutoff },
+        { occurred_at: cutoff + 1 },
+      ]);
+
+      const nextExpiry = now + 100 + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
+      clock.mockReturnValue(nextExpiry);
+      record(5, nextExpiry);
+      expect(retained()).toEqual([
+        { occurred_at: cutoff },
+        { occurred_at: cutoff + 1 },
+        { occurred_at: nextExpiry },
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("forgets expiry changes when the pruning transaction rolls back", () => {
+    const database = createDatabaseOptions();
+    const owner = openOpenClawStateDatabase(database);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const record = (sourceSequence: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence }), {
+        ...database,
+        database: owner,
+      });
+    try {
+      record(1);
+      owner.db.exec(`
+        CREATE TABLE audit_expiry_parent (id INTEGER PRIMARY KEY);
+        CREATE TABLE audit_expiry_child (
+          parent_id INTEGER NOT NULL,
+          FOREIGN KEY (parent_id) REFERENCES audit_expiry_parent(id)
+            DEFERRABLE INITIALLY DEFERRED
+        );
+        CREATE TRIGGER reject_audit_expiry
+        AFTER INSERT ON audit_events
+        BEGIN
+          INSERT INTO audit_expiry_child (parent_id) VALUES (1);
+        END;
+      `);
+      clock.mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
+      expect(() => record(2)).toThrow(/FOREIGN KEY/u);
+      owner.db.exec("DROP TRIGGER reject_audit_expiry");
+      const committed = record(3);
+      expect(committed).toBeDefined();
+      expect(owner.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
+        { event_id: committed?.eventId },
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps reused run ids distinct across actual event timestamps", async () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();

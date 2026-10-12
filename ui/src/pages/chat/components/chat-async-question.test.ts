@@ -12,7 +12,7 @@ import {
   readAsyncQuestions,
 } from "./chat-async-question.ts";
 import type { AsyncQuestionDraft } from "./chat-async-question.types.ts";
-import "./chat-question-panel.ts";
+import "./chat-question-panel.tsx";
 
 const container = document.createElement("div");
 afterEach(() => {

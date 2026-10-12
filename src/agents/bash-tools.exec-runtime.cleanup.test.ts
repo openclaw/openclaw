@@ -8,6 +8,7 @@ import {
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
+import { readBackgroundProcesses } from "./bash-process-observation.js";
 import {
   acknowledgeNotifyOnExit,
   deleteSession,
@@ -398,7 +399,7 @@ describe("terminal execution-context release", () => {
       }));
       const run = await runTestExecProcess({
         command: "context-release",
-        scopeKey: "process-scope",
+        scopeKey: "global",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
         eventRouting: { mainKey: "main", sessionScope: "per-sender" },
@@ -410,6 +411,9 @@ describe("terminal execution-context release", () => {
         },
       });
       markBackgrounded(run.session);
+      const scope = { scopeKeys: ["global"], agentId: "main" };
+      const running = readBackgroundProcesses(scope).processes[0];
+      expect(running).toMatchObject({ processId: run.session.id, status: "running" });
       if (path === "observed") {
         acknowledgeNotifyOnExit(run.session);
       }
@@ -418,10 +422,18 @@ describe("terminal execution-context release", () => {
       expect(observed).toEqual(trace);
       expect(outcome.status).toBe("completed");
       const retained = getFinishedSession(run.session.id);
-      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
+      expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
+      expect(readBackgroundProcesses(scope).processes).toEqual([
+        expect.objectContaining({
+          processId: run.session.id,
+          instanceId: running?.instanceId,
+          status: "completed",
+          canStop: false,
+        }),
+      ]);
+      expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
       for (const field of [
         "sessionKey",
-        "agentId",
         "eventRouting",
         "notifyDeliveryContext",
         "notifySessionTarget",
@@ -561,6 +573,7 @@ describe("exec settlement recovery", () => {
         expect(getActiveBackgroundExecSessionCount()).toBe(0);
         expect(run.session.finalizing).toBe(false);
         expect(run.session.terminalStatus).toBe("completed");
+        expect(run.session.agentId).toBe("main");
         if (boundary !== "stdin") {
           expect(getFinishedSession(run.session.id)).toMatchObject({
             terminalStatus: "completed",
@@ -569,7 +582,6 @@ describe("exec settlement recovery", () => {
         }
         for (const field of [
           "sessionKey",
-          "agentId",
           "eventRouting",
           "notifyDeliveryContext",
           "notifySessionTarget",

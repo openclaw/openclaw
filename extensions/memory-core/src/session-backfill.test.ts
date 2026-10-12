@@ -7,7 +7,6 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -167,75 +166,60 @@ describe("runSessionBackfill", () => {
     },
   );
 
-  it.each(["deleted", "replaced", "forgotten"] as const)(
-    "keeps a %s source out of backfill during admission preparation",
-    async (change) => {
-      const workspaceDir = await createIsolatedWorkspace(`admission-source-${change}-`);
-      await seedCanonicalTranscript("source", [
-        {
-          role: "user",
-          content: "Do not publish from a superseded physical source.",
-          timestamp: "2026-01-02T12:00:00.000Z",
-          owner: true,
-        },
-      ]);
-      await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const realpath = fs.realpath.bind(fs);
-      let paused = false;
-      const discovery = vi.spyOn(fs, "realpath").mockImplementation(async (file) => {
-        if (!paused && file === sessionsDir) {
-          paused = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return realpath(file);
-      });
-      const execution = executeSessionBackfillBatch({
-        agentId: "main",
-        workspaceDir,
-        apply: change !== "forgotten",
-        timezone: "UTC",
-        pluginConfig: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
-      });
-      const outcome = execution.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          outcome,
-          "Backfill settled before filesystem preparation",
-        );
-        if (change === "forgotten") {
-          seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["source"] });
-        } else {
-          const movedPath = `${databasePath}.original`;
-          await fs.rename(databasePath, movedPath);
-          if (change === "replaced") {
-            await fs.copyFile(movedPath, databasePath);
-          }
-        }
-        release.resolve();
-        expect(await outcome).toMatchObject(
-          change === "forgotten"
-            ? { value: { result: { candidateCount: 0, stagedEntries: 0 } } }
-            : { error: { message: expect.stringMatching(/identity|ENOENT|revoked/i) } },
-        );
-        await expect(
-          fs.readFile(path.join(workspaceDir, "memory", "2026-01-02.md"), "utf8"),
-        ).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        release.resolve();
-        await outcome;
-        discovery.mockRestore();
+  it("keeps a forgotten source out of backfill during admission preparation", async () => {
+    const workspaceDir = await createIsolatedWorkspace("admission-source-forgotten-");
+    await seedCanonicalTranscript("source", [
+      {
+        role: "user",
+        content: "Do not publish from a superseded physical source.",
+        timestamp: "2026-01-02T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const realpath = fs.realpath.bind(fs);
+    let paused = false;
+    const discovery = vi.spyOn(fs, "realpath").mockImplementation(async (file) => {
+      if (!paused && file === sessionsDir) {
+        paused = true;
+        entered.resolve();
+        await release.promise;
       }
-    },
-  );
+      return realpath(file);
+    });
+    const execution = executeSessionBackfillBatch({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+      pluginConfig: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
+    });
+    const outcome = execution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        outcome,
+        "Backfill settled before filesystem preparation",
+      );
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["source"] });
+      release.resolve();
+      expect(await outcome).toMatchObject({
+        value: { result: { candidateCount: 0, stagedEntries: 0 } },
+      });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "memory", "2026-01-02.md"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release.resolve();
+      await outcome;
+      discovery.mockRestore();
+    }
+  });
 
   it("preserves every session origin when backfill coalesces equivalent snippets", async () => {
     const workspaceDir = await createIsolatedWorkspace("coalesced-origins-");

@@ -1,7 +1,6 @@
 // Register shared transport mocks before production publication owners load.
 // oxfmt-ignore
 import {
-  createGitHubPublicationRequesterFixture,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
@@ -23,10 +22,11 @@ import {
 } from "../state/user-profile-writes.worker.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   guestScopes,
@@ -180,6 +180,7 @@ describe("shared GitHub publication requester alias bindings", () => {
         expect(JSON.stringify(f.readRequester(queued.requestId))).not.toContain(email);
         if (change === "captured alias") {
           await linkCanonicalUserProfileEmail(email, other.id);
+          expect(original.requester.signal.aborted).toBe(true);
           expect(original.requester.assertCurrent).toThrow(
             GitHubPublicationRequesterUnavailableError,
           );
@@ -279,7 +280,7 @@ describe("shared GitHub publication requester alias bindings", () => {
 
         await linkCanonicalUserProfileEmail(later, f.guestProfile);
         const controller = new AbortController();
-        const retry = await captureGitHubPublicationRequester(
+        const retry = await prepareGitHubPublicationRequesterV2(
           {
             client: original.client,
             context: original.context,

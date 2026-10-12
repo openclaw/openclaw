@@ -183,6 +183,10 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("returns no workspaces for an explicitly empty roster", () => {
+    expect(resolveMemoryDreamingWorkspaces({ agents: { entries: {} } })).toEqual([]);
+  });
+
   it("dedupes non-adjacent workspace symlink aliases across agents", async () => {
     const rootDir = tempDirs.make("openclaw-dreaming-workspace-");
     const workspaceDir = path.join(rootDir, "workspace");

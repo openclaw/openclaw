@@ -7,7 +7,7 @@ export type ScopedSessionSelection = {
   selectedAgentId?: string;
 };
 
-export type ProfileNavigation = Pick<UiSettings, "sidebarEntries" | "navigationScope">;
+export type ProfileNavigation = { railShortcuts: string[] };
 export type PersistedUiSettings = Omit<
   UiSettings,
   | "token"
@@ -16,13 +16,15 @@ export type PersistedUiSettings = Omit<
   | "selectedAgentId"
   | "navCollapsed"
   | "sidebarEntries"
-  | "navigationScope"
   | "background"
 > &
   Partial<ProfileNavigation> & {
     token?: never;
     sessionsByGateway?: Record<string, ScopedSessionSelection>;
-    navigationByProfile?: Record<string, ProfileNavigation>;
+    navigationByProfile?: Record<string, Partial<ProfileNavigation> & Record<string, unknown>>;
+    // Retired sidebar order is preserved as opaque data, never used as rail shortcuts.
+    sidebarEntries?: unknown;
+    sidebarPinnedRoutes?: unknown;
   };
 
 export type PersistedSettingsSource = {

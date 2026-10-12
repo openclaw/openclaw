@@ -120,7 +120,7 @@ suite.define(() => {
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
                 }),
               ),
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
@@ -138,66 +138,32 @@ suite.define(() => {
           expect(await row.locator(".nav-item--child").count()).toBe(0);
           const originalBox = await row.boundingBox();
           expect(originalBox).not.toBeNull();
-          const grip = row.getByRole("button", { name: "Reorder " + label, exact: true });
-          await row.hover();
-          await grip.click();
+          const order = () =>
+            sidebar
+              .locator(".sidebar-rail__pin")
+              .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+          const expected = await order();
+          const index = expected.indexOf(entry);
+          expect(index).toBeGreaterThan(0);
+          [expected[index - 1], expected[index]] = [expected[index]!, expected[index - 1]!];
+          const navLink = row.locator(".nav-item").first();
+          await navLink.click({ button: "right" });
           await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
-          await expect
-            .poll(() =>
-              sidebar.locator(".sidebar-rail__pin").first().getAttribute("data-sidebar-entry"),
-            )
-            .toBe(entry);
-          await row.hover();
-          await expect
-            .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
-            .toBe("1");
-          const [gripBox, gripIconBox, iconBox, rowBox, linkBox] = await Promise.all([
-            grip.boundingBox(),
-            grip.locator("svg").boundingBox(),
+          await expect.poll(order).toEqual(expected);
+          const [iconBox, rowBox, linkBox] = await Promise.all([
             row.locator(".nav-item__icon").first().boundingBox(),
             row.boundingBox(),
-            row.locator(".nav-item").first().boundingBox(),
+            navLink.boundingBox(),
           ]);
-          expect(gripBox).not.toBeNull();
-          expect(gripIconBox).not.toBeNull();
           expect(iconBox).not.toBeNull();
           expect(rowBox).not.toBeNull();
           expect(linkBox).not.toBeNull();
           expect(rowBox!.height).toBe(originalBox!.height);
+          expect(rowBox!.height).toBe(linkBox!.height);
           expect(
             Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
           ).toBeLessThanOrEqual(1);
-          expect(gripBox!.x).toBeGreaterThanOrEqual(rowBox!.x);
-          expect(gripBox!.y).toBeGreaterThanOrEqual(rowBox!.y);
-          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
-          expect(gripBox!.y + gripBox!.height).toBeLessThanOrEqual(rowBox!.y + rowBox!.height);
-          expect(gripBox!.width).toBeGreaterThanOrEqual(24);
-          expect(gripBox!.height).toBeGreaterThanOrEqual(24);
-          expect(gripIconBox!.x).toBeGreaterThanOrEqual(gripBox!.x);
-          expect(gripIconBox!.y).toBeGreaterThanOrEqual(gripBox!.y);
-          expect(gripIconBox!.x + gripIconBox!.width).toBeLessThanOrEqual(
-            gripBox!.x + gripBox!.width,
-          );
-          expect(gripIconBox!.y + gripIconBox!.height).toBeLessThanOrEqual(
-            gripBox!.y + gripBox!.height,
-          );
-          // A stacked or adjacent control must leave the navigation glyph uncovered.
-          expect(
-            gripBox!.x >= iconBox!.x + iconBox!.width ||
-              gripBox!.x + gripBox!.width <= iconBox!.x ||
-              gripBox!.y >= iconBox!.y + iconBox!.height ||
-              gripBox!.y + gripBox!.height <= iconBox!.y,
-          ).toBe(true);
-          const railBox = await sidebar.locator(".sidebar-rail").boundingBox();
-          expect(gripBox!.x + gripBox!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
-          expect(
-            await grip.evaluate((element) => {
-              const box = element.getBoundingClientRect();
-              return element.contains(
-                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
-              );
-            }),
-          ).toBe(true);
+          expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
           if (label === "Workboard") {
             const pages = await openSidebarPages(page);
             const operationsEntry = pages.locator(
@@ -238,6 +204,7 @@ suite.define(() => {
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
               await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+              await openSidebarPages(page);
               await pages.getByRole("link", { name: "Workboard", exact: true }).click();
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
               await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
@@ -389,9 +356,7 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-rail__pin[data-sidebar-entry^="route:"] .nav-item',
       );
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -651,7 +616,7 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureUiProof(page, "01-default-pinned.png");
+      await captureUiProof(page, "01-default-clean.png");
 
       const pagesButton = sidebar.getByRole("button", { name: "Pages", exact: true });
       let pages = await openSidebarPages(page);
@@ -665,14 +630,10 @@ suite.define(() => {
         .locator(".sidebar-pages__entry")
         .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
       await usage.getByRole("button", { name: "Pin", exact: true }).click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       await captureUiProof(page, "02-personal-pin.png");
       await page.reload();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Usage"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // The transient selected view resets, but saved personal pins do not.
       await expect.poll(() => pagesButton.getAttribute("aria-pressed")).toBe("false");
       pages = await openSidebarPages(page);
@@ -680,12 +641,10 @@ suite.define(() => {
       await captureUiProof(page, "03-persisted-customization.png");
       const pinMenu = await openSidebarPinMenu(page, "route:usage");
       await pinMenu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
 
-      // The sidebar header search button is the command palette entry point.
+      // The rail search button is the command palette entry point.
       const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
@@ -695,12 +654,7 @@ suite.define(() => {
 
       // Collapsing the list retains the personal icon rail; the content chrome
       // provides the matching expand control.
-      const collapseButton = page.locator(".sidebar-brand__collapse");
-      await expect
-        .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand__actions"))),
-        )
-        .toBe(true);
+      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -720,7 +674,7 @@ suite.define(() => {
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
-      await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(true);
+      await expect.poll(() => collapseButton.isVisible()).toBe(true);
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
@@ -761,7 +715,7 @@ suite.define(() => {
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.locator(".sidebar-brand__collapse").click();
+      await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
@@ -811,7 +765,9 @@ suite.define(() => {
         await installMockGateway(page);
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
-        await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+        await page
+          .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+          .click();
 
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
@@ -856,6 +812,13 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
+        const pages = await openSidebarPages(page);
+        await pages
+          .locator(".sidebar-pages__entry")
+          .filter({ has: page.getByRole("link", { name: "Agents", exact: true }) })
+          .getByRole("button", { name: "Pin", exact: true })
+          .click();
+        await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
         await sidebar.evaluate(async (element) => {
@@ -880,9 +843,9 @@ suite.define(() => {
         });
 
         const activity = home.locator(".session-glyph");
-        const grip = sidebar
+        const shortcut = sidebar
           .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
-          .getByRole("button", { name: "Reorder Agents", exact: true });
+          .getByRole("link", { name: "Agents", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
@@ -891,18 +854,20 @@ suite.define(() => {
         await page.mouse.move(900, 400);
         const restingActivity = await activity.boundingBox();
         expect(restingActivity).not.toBeNull();
-        await grip.focus();
-        await expect
-          .poll(() => grip.evaluate((element) => getComputedStyle(element).opacity))
-          .toBe("1");
+        await shortcut.focus();
+        await page.keyboard.press("Shift+F10");
+        await page
+          .locator(".sidebar-rail-pin-menu")
+          .getByRole("menuitem", { name: "Unpin", exact: true })
+          .waitFor();
         await expect
           .poll(async () => {
-            const [homeBox, activityBox, gripBox] = await Promise.all([
+            const [homeBox, activityBox, shortcutBox] = await Promise.all([
               home.boundingBox(),
               activity.boundingBox(),
-              grip.boundingBox(),
+              shortcut.boundingBox(),
             ]);
-            if (!homeBox || !activityBox || !gripBox || !restingActivity) {
+            if (!homeBox || !activityBox || !shortcutBox || !restingActivity) {
               return null;
             }
             return {
@@ -910,10 +875,10 @@ suite.define(() => {
               centerDelta: Math.abs(
                 activityBox.x + activityBox.width / 2 - (homeBox.x + homeBox.width / 2),
               ),
-              clearOfGrip: gripBox.y + gripBox.height < homeBox.y,
+              clearOfShortcut: shortcutBox.y + shortcutBox.height < homeBox.y,
             };
           })
-          .toEqual({ activityShift: 0, centerDelta: 0, clearOfGrip: true });
+          .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });
         await captureUiProof(page, "07-home-activity-rail.png");
       },
     );

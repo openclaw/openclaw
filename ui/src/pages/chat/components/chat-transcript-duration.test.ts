@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatStateController } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
@@ -149,9 +150,11 @@ describe("completed-work duration", () => {
       expect(disclosure).not.toBeNull();
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
       expect(container.textContent).toContain("read");
       disclosure?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
@@ -294,6 +297,7 @@ describe("live progress placement", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostConnected();
       transcript.hostUpdated();
+      flush();
       const progress = container.querySelector(".chat-working-indicator")!;
       const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
       const activity = container.querySelector('[data-entry-id="latest-tool"]')!;

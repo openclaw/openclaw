@@ -7,7 +7,7 @@ import { createProfilePrefsServer } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 const scope = "ws://navigation";
-const pinsKey = "ui.sidebarEntries";
+const pinsKey = "ui.railShortcuts";
 const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope;
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -30,14 +30,13 @@ it.each(["a", "b"])(
     await a.refresh();
     Object.assign(a.writer.state, { connected: false });
     const before = loadSettings();
-    const next = patchSettings({ sidebarEntries: ["route:plugins"], navigationScope: "all" });
+    const next = patchSettings({ sidebarEntries: ["route:plugins"] });
     pushServerUiPrefs(a.writer, changedServerUiPrefs(before, next)!, {
       profile: { selfUser: null, hello: null },
     });
     await vi.dynamicImportSettled();
     expect(JSON.parse(localStorage.getItem(pendingKey + ":profile:a") ?? "null")).toMatchObject({
-      sidebarEntries: ["route:plugins"],
-      navigationScope: "all",
+      railShortcuts: ["route:plugins"],
     });
     expect(localStorage.getItem(pendingKey)).toBeNull();
     const reconnected = backend.connect(reconnectedId);
@@ -55,7 +54,6 @@ it.each(["a", "b"])(
     }
     expect(backend.profiles.a).toEqual({
       [pinsKey]: ["route:plugins"],
-      "ui.navigationScope": "all",
     });
   },
 );
@@ -121,7 +119,7 @@ it.each([false, true])(
     Object.assign(offline.writer.state, { connected: false });
     pushServerUiPrefs(
       offline.writer,
-      { sidebarEntries: [], sidebarEntriesBase: [], navigationScope: "all" },
+      { sidebarEntries: [], sidebarEntriesBase: [] },
       { profile: { selfUser: null, hello: null } },
     );
     await vi.dynamicImportSettled();
@@ -212,9 +210,9 @@ it.each(["users.prefs.get", "users.prefs.set"])(
     localStorage.setItem(
       pendingKey + ":profile:a",
       JSON.stringify({
-        sidebarEntries: initial,
-        sidebarEntriesBase: initial,
-        sidebarEntriesOrder: true,
+        railShortcuts: initial,
+        railShortcutsBase: initial,
+        railShortcutsOrder: true,
       }),
     );
     reply.resolve(heldResult);

@@ -19,20 +19,20 @@ describe("Codex rate-limit cache", () => {
     const first = clientIdentity();
     const second = clientIdentity();
     expect(readCodexRateLimitsRevision(first)).toBe(0);
-    rememberCodexRateLimitsRead(first, { rateLimits: { limitId: "first" } }, 100);
-    rememberCodexRateLimitsRead(second, { rateLimits: { limitId: "second" } }, 200);
-    expect(readCodexRateLimitsRevision(first, "first")).toBe(1);
-    expect(readCodexRateLimitsRevision(second, "second")).toBe(1);
+    rememberCodexRateLimitsRead(first, { rateLimits: { limitId: "codex" } }, 100);
+    rememberCodexRateLimitsRead(second, { rateLimits: { limitId: "codex_other" } }, 200);
+    expect(readCodexRateLimitsRevision(first)).toBe(1);
+    expect(readCodexRateLimitsRevision(second)).toBe(0);
 
     expect(readRecentCodexRateLimits(first, { nowMs: 250 })).toEqual({
-      rateLimits: { limitId: "first" },
+      rateLimits: { limitId: "codex" },
     });
     expect(readRecentCodexRateLimits(second, { nowMs: 250 })).toEqual({
-      rateLimits: { limitId: "second" },
+      rateLimits: { limitId: "codex_other" },
     });
     expect(readRecentCodexRateLimits(first, { nowMs: 301, maxAgeMs: 200 })).toBeUndefined();
     expect(readRecentCodexRateLimits(second, { nowMs: 301, maxAgeMs: 200 })).toEqual({
-      rateLimits: { limitId: "second" },
+      rateLimits: { limitId: "codex_other" },
     });
   });
 
@@ -93,7 +93,6 @@ describe("Codex rate-limit cache", () => {
       },
     });
     expect(readCodexRateLimitsRevision(client)).toBe(2);
-    expect(readCodexRateLimitsRevision(client, "codex_other")).toBe(2);
 
     const mergedCodexSnapshot = {
       limitId: "codex",

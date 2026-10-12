@@ -19,12 +19,10 @@ import {
   boundSessionEntryReplacementPublication,
   prepareSessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
-import {
-  mergeSessionEntryPatch,
-  reduceSessionEntryPatch,
-} from "./session-entry-patch-operation.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -79,10 +77,16 @@ export function createSessionWorkerOperationContext(
 export function readSessionEntryPatchSnapshot(
   database: OpenClawAgentDatabase,
   selection: SessionEntryPatchSelection,
+  includeWindowFacts?: true,
 ) {
   return selection.kind === "target"
-    ? readLifecycleTargetSnapshot(database, selection.target)
-    : readSessionEntrySelectionSnapshot(database, selection.sessionKey, selection.exact);
+    ? readLifecycleTargetSnapshot(database, selection.target, { includeWindowFacts })
+    : readSessionEntrySelectionSnapshot(
+        database,
+        selection.sessionKey,
+        selection.exact,
+        includeWindowFacts,
+      );
 }
 
 export function commitSessionEntryPatch(
@@ -135,12 +139,13 @@ export function commitSessionEntryPatch(
           });
         },
       };
+      const publishActor = prepareSessionActorEntryPatch(database, input.sessionKey);
       let mutation;
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
         }
-        const fresh = readSessionEntryPatchSnapshot(database, input.selection);
+        const fresh = readSessionEntryPatchSnapshot(database, input.selection, true);
         if (input.ensureIdentitySource) {
           const target =
             input.selection.kind === "target"
@@ -174,11 +179,11 @@ export function commitSessionEntryPatch(
           };
           return transferSessionEntryWorkerCandidate(database, admit, result);
         }
-        const next = mergeSessionEntryPatch({
+        const next = projectSessionEntryPatch({
           ...input,
           existing,
           writeBase,
-          patch: reduceSessionEntryPatch(input.operation, writeBase, existing),
+          operation: input.operation,
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -190,7 +195,7 @@ export function commitSessionEntryPatch(
       } else {
         mutation = applySessionEntryPatchInDatabase(database, {
           ...input,
-          readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection),
+          readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection, true),
           options,
         });
       }
@@ -203,12 +208,15 @@ export function commitSessionEntryPatch(
               maintenancePlans: [],
             },
             database,
-            { captureFullFacts: true },
+            { captureFullFacts: true, postimages: mutation.postimages },
           )
         : undefined;
       // Publish after every patch-owned write, including commit-receipt preparation.
       if (mutation.identity) {
         publishRetention?.();
+      }
+      if (publication && mutation.postimages) {
+        publishActor?.(mutation.postimages, publication);
       }
       result = {
         kind: "session-entry-patch",

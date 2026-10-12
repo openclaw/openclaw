@@ -2,6 +2,8 @@
 export class LobsterPetTimers<Name extends string> {
   private readonly pending = new Map<Name, number>();
 
+  constructor(private readonly onFire: () => void = () => {}) {}
+
   has(name: Name): boolean {
     return this.pending.has(name);
   }
@@ -13,6 +15,7 @@ export class LobsterPetTimers<Name extends string> {
       window.setTimeout(() => {
         this.pending.delete(name);
         callback();
+        this.onFire();
       }, delayMs),
     );
   }

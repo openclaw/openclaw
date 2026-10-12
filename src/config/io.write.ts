@@ -15,6 +15,7 @@ import {
   assertUpdateDoctorConfigInputHash,
   recordUpdateDoctorConfigWrite,
 } from "../infra/update-doctor-result.js";
+import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -42,7 +43,7 @@ import {
 import type { ConfigIoContext } from "./io.context.js";
 import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
-import { hashConfigRaw } from "./io.read-helpers.js";
+import { hashConfigRaw, hasConfigMeta } from "./io.read-helpers.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteOptions,
@@ -156,7 +157,6 @@ export async function writeConfigFileFromContext(
     previousBytes,
     nextBytes,
     hasMetaBefore,
-    hasMetaAfter,
     gatewayModeBefore,
     gatewayModeAfter,
     includeFileHashes,
@@ -178,6 +178,7 @@ export async function writeConfigFileFromContext(
   const previousStat = snapshot.exists
     ? await deps.fs.promises.stat(configPath).catch(() => null)
     : null;
+
   const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
   const logConfigOverwrite = () => {
     if (
@@ -232,7 +233,7 @@ export async function writeConfigFileFromContext(
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,
-    hasMetaAfter,
+    hasMetaAfter: hasConfigMeta(stampedOutputConfig),
     gatewayModeBefore,
     gatewayModeAfter,
     suspicious: suspiciousReasons,
@@ -360,6 +361,7 @@ export async function writeConfigFileFromContext(
       assertBeforeMutation: writeGuard.assertBeforeMutation,
       onDestinationState: writeGuard.onDestinationState,
     });
+    await assertAgentDeletionTargetsUnchanged(snapshot.config, sourceConfigForPreflight, deps.env);
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
@@ -373,7 +375,7 @@ export async function writeConfigFileFromContext(
     publication.phase = "accepted";
     recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash, snapshot.parsed, json);
     try {
-      recordConfigWriteMetadata();
+      await recordConfigWriteMetadata();
     } catch (error) {
       deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }

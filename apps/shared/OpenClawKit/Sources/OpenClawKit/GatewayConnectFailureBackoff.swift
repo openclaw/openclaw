@@ -49,6 +49,12 @@ struct GatewayConnectFailureBackoff {
 }
 
 extension GatewayChannelActor {
+    public func clearConnectFailureBackoff() {
+        self.backoffMs = 500
+        self.connectFailureBackoff.reset()
+        self.connectFailureBackoffWaitTask?.cancel()
+    }
+
     nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
         // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
         if role == "node", clientMode == "node" {

@@ -3,12 +3,14 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import {
   appendToolLoopWarning,
   copyInternalToolResultState,
+  getInternalToolResultContentSource,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import type {
   AfterToolOutcomeContext,
   AgentContext,
   AgentLoopConfig,
+  AgentTool,
   AgentToolCall,
   AgentToolResult,
   ToolLoopWarning,
@@ -112,6 +114,19 @@ export type ImmediateToolCallOutcome = {
 
 export function immediateToolCallError(message: string): ImmediateToolCallOutcome {
   return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+}
+
+/**
+ * An executed call's source comes from its tool declaration, or from the raw
+ * result/error mark a dispatcher (Tool Search, Code Mode) sets for nested calls.
+ */
+export function resolveToolResultContentSource(
+  tool: Pick<AgentTool, "resultContentSource">,
+  result: object,
+): Pick<FinalizedToolCallOutcome, "resultContentSource"> {
+  const resultContentSource =
+    tool.resultContentSource ?? getInternalToolResultContentSource(result);
+  return resultContentSource ? { resultContentSource } : {};
 }
 
 export function createToolExecutionErrorResult(error: unknown): AgentToolResult<unknown> {
