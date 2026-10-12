@@ -32,7 +32,7 @@ describe("doctor --fix with a validation-blocked candidate", () => {
           plugins: { enabled: false },
         });
         const rawBefore = await fs.readFile(configPath, "utf-8");
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         const { configResult } = ctx;
 
         // The unknown-key repair is computed, but held until the write commits.

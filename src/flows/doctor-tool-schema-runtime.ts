@@ -229,11 +229,14 @@ export async function collectRuntimeToolSchemaFindings(
   ]);
   const cfg = captureRuntimeConfig(sourceConfig);
   const env = options.env ?? process.env;
+  await using resources = new AsyncDisposableStack();
   const runWithPluginMetadataSnapshot =
     options.runWithPluginMetadataSnapshot ??
-    (
-      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
-    ).createDoctorPluginMetadataSnapshotScope({ env }).run;
+    resources.use(
+      (
+        await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+      ).createDoctorPluginMetadataSnapshotScope({ env }),
+    ).run;
   const { frames, findings } = await prepareDoctorToolSchemaFrames(cfg, {
     ...options,
     env,
@@ -475,7 +478,18 @@ export async function collectRuntimeToolSchemaFindings(
     }
     if (inspection && options.deferInspectionDisposal) {
       const resource = inspection;
-      options.deferInspectionDisposal(() => resource.release());
+      // The deferred inspection retains the metadata that admitted its plugin callbacks.
+      resources.defer(() => resource.release());
+      const deferredResources = resources.move();
+      let disposalDeferred = false;
+      try {
+        options.deferInspectionDisposal(() => deferredResources.disposeAsync());
+        disposalDeferred = true;
+      } finally {
+        if (!disposalDeferred) {
+          await deferredResources.disposeAsync();
+        }
+      }
     } else {
       try {
         await inspection?.release();

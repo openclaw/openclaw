@@ -87,7 +87,7 @@ describe("Doctor Codex activation advisory", () => {
           plugins: { ...(allow === undefined ? {} : { allow }), entries: { codex: entry } },
         });
         const before = await fs.readFile(configPath, "utf8");
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(await fs.readFile(configPath, "utf8")).toBe(before);
         const advisory = note.mock.calls
           .filter(

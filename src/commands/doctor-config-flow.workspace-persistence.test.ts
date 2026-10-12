@@ -89,7 +89,7 @@ describe("Doctor workspace persistence", () => {
           expect((await readConfigFileSnapshot()).valid).toBe(false);
           await expect
             .soft(async () => {
-              const ctx = await prepareDoctorContext(configPath);
+              await using ctx = await prepareDoctorContext(configPath);
               await runInitialConfigWriteHealth(ctx);
             })
             .rejects.toThrow(
@@ -133,7 +133,7 @@ describe("Doctor workspace persistence", () => {
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         for (const index of [0, 1, 2]) {
           expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
             `commands.ownerAllowFrom[${index}]`,
@@ -144,7 +144,7 @@ describe("Doctor workspace persistence", () => {
         const saved = await readConfigFileSnapshot();
         expect(saved.config.commands?.ownerAllowFrom).toEqual([...canonical, ...preserved]);
         const bytes = await fs.readFile(configPath, "utf8");
-        const repeated = await prepareDoctorContext(configPath);
+        await using repeated = await prepareDoctorContext(configPath);
         expect(repeated.configResult.shouldWriteConfig).toBe(false);
         await runInitialConfigWriteHealth(repeated);
         expect(await fs.readFile(configPath, "utf8")).toBe(bytes);
@@ -192,7 +192,7 @@ describe("Doctor workspace persistence", () => {
             });
             expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             expect(ctx.configWriteRefusal).toBeUndefined();
 
@@ -207,9 +207,8 @@ describe("Doctor workspace persistence", () => {
               memory: { search: { provider: "openai" } },
             });
             expect((await readConfigFileSnapshot()).valid).toBe(true);
-            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-              false,
-            );
+            await using rechecked = await prepareDoctorContext(configPath);
+            expect(rechecked.configResult.shouldWriteConfig).toBe(false);
           },
         );
       });
@@ -240,15 +239,14 @@ describe("Doctor workspace persistence", () => {
           });
           expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           await runInitialConfigWriteHealth(ctx);
 
           const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
           expect(saved.agents).toEqual({ ownership: "explicit", entries });
           expect((await readConfigFileSnapshot()).valid).toBe(true);
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using rechecked = await prepareDoctorContext(configPath);
+          expect(rechecked.configResult.shouldWriteConfig).toBe(false);
         });
       });
     },
@@ -298,7 +296,7 @@ describe("Doctor workspace persistence", () => {
               expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
             }
 
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             const saved = await readConfigFileSnapshot();
             expect(saved.valid).toBe(true);
@@ -311,9 +309,8 @@ describe("Doctor workspace persistence", () => {
             for (const [name, content] of Object.entries(originals)) {
               expect(await fs.readFile(path.join(workspace, name), "utf8")).toBe(content);
             }
-            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-              false,
-            );
+            await using rechecked = await prepareDoctorContext(configPath);
+            expect(rechecked.configResult.shouldWriteConfig).toBe(false);
           },
         );
       });
@@ -346,7 +343,7 @@ describe("Doctor workspace persistence", () => {
             expect(before.sourceConfig.agents).not.toHaveProperty("list");
           }
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
           await runInitialConfigWriteHealth(ctx);
@@ -355,9 +352,8 @@ describe("Doctor workspace persistence", () => {
           expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
           expect(saved.agents).not.toHaveProperty("list");
           expect((await readConfigFileSnapshot()).valid).toBe(true);
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using rechecked = await prepareDoctorContext(configPath);
+          expect(rechecked.configResult.shouldWriteConfig).toBe(false);
         });
       });
     },
@@ -385,7 +381,7 @@ describe("Doctor workspace persistence", () => {
           [{ id: " Ops ", heartbeat: {} }],
         );
 
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         // The nested include owns the otel repair, but the legacy roster needs the
         // root writer; one file cannot take both, so the writer refuses and
         // Doctor records the refusal instead of flattening the include.
@@ -413,7 +409,7 @@ describe("Doctor workspace persistence", () => {
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
 
         await runInitialConfigWriteHealth(ctx);
         expect((await readConfigFileSnapshot()).config.agents?.entries?.main?.workspace).toBe(
@@ -471,7 +467,7 @@ describe("Doctor workspace persistence", () => {
           let firstPolicies: unknown;
           let firstRows: unknown;
           for (const pass of [1, 2]) {
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             await runWriteConfigHealth(ctx);
             const snapshot = await readConfigFileSnapshot();

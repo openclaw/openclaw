@@ -75,7 +75,7 @@ it.each([
               .get(),
           ).toBeUndefined();
 
-          await prepareDoctorContext(configPath);
+          await (await prepareDoctorContext(configPath))[Symbol.asyncDispose]();
           const { db: repairedDb } = openOpenClawStateDatabase();
 
           await expect(fs.access(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });

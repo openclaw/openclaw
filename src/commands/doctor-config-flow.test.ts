@@ -15,6 +15,10 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { warmDoctorConfigFlow } from "./doctor-config-flow-warmup.test-support.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
+  registerDoctorPreparedMetadataTests,
+  runDoctorConfigWithInputAndDispose,
+} from "./doctor-config-flow.metadata-lifetime.test-support.js";
+import {
   getDoctorConfigInputForTest,
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
@@ -777,7 +781,7 @@ function resetTerminalNoteMock() {
 
 async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
   const noteSpy = resetTerminalNoteMock();
-  await runDoctorConfigWithInput({
+  await runDoctorConfigWithInputAndDispose({
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
@@ -824,7 +828,7 @@ describe("doctor config flow", () => {
   });
 
   it("preserves invalid config for doctor repairs", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
         agents: { entries: { openclaw: {} } },
@@ -858,11 +862,11 @@ describe("doctor config flow", () => {
       warnings: [],
     }));
 
-    const preview = await runDoctorConfigWithInput({
+    await using preview = await runDoctorConfigWithInput({
       config,
       run: loadAndMaybeMigrateDoctorConfig,
     });
-    const repair = await runDoctorConfigWithInput({
+    await using repair = await runDoctorConfigWithInput({
       config,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -877,7 +881,7 @@ describe("doctor config flow", () => {
   });
 
   it("plans persistence of the injected main roster during doctor repair", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         agents: {
           entries: { main: { workspace: "/tmp/migrated-main" } },
@@ -937,7 +941,7 @@ describe("doctor config flow", () => {
       agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
     };
 
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: canonical,
       parsedConfig: legacy,
       sourceConfigBeforeMigrations: legacy,
@@ -952,7 +956,7 @@ describe("doctor config flow", () => {
     expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
 
     terminalNoteMock.mockClear();
-    const repaired = await runDoctorConfigWithInput({
+    await using repaired = await runDoctorConfigWithInput({
       config: canonical,
       parsedConfig: legacy,
       sourceConfigBeforeMigrations: legacy,
@@ -971,7 +975,7 @@ describe("doctor config flow", () => {
   });
 
   it("drops roster write intent when a preview repair is declined", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { main: { default: true } } } },
       parsedConfig: {},
       run: loadAndMaybeMigrateDoctorConfig,
@@ -991,7 +995,7 @@ describe("doctor config flow", () => {
         ],
       },
     };
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
       parsedConfig: rawConfig,
       repair: true,
@@ -1014,7 +1018,7 @@ describe("doctor config flow", () => {
     // A retired tuning knob inside an include-owned section is a Doctor repair
     // whose only changed path lives in that include file. The root already
     // carries a canonical roster, so Doctor has no root roster write to make.
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         agents: { entries: { main: {} } },
         browser: { enabled: true, actionTimeoutMs: 5000 },
@@ -1039,7 +1043,7 @@ describe("doctor config flow", () => {
   });
 
   it("keeps root wizard metadata when no include boundary owns the repair", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         agents: { entries: { main: {} } },
         browser: { enabled: true, actionTimeoutMs: 5000 },
@@ -1065,7 +1069,7 @@ describe("doctor config flow", () => {
         list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
       },
     };
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
       parsedConfig: rawConfig,
       repair: true,
@@ -1091,7 +1095,7 @@ describe("doctor config flow", () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
       };
-      const result = await runDoctorConfigWithInput({
+      await using result = await runDoctorConfigWithInput({
         config,
         parsedConfig: config,
         repair,
@@ -1118,7 +1122,7 @@ describe("doctor config flow", () => {
       talk: { provider: "test" },
     };
     const config = migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig;
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config,
       parsedConfig: rawConfig,
       repair: true,
@@ -1149,7 +1153,7 @@ describe("doctor config flow", () => {
       talk: { provider: "test" },
     };
     const config = migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig;
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config,
       parsedConfig: rawConfig,
       repair: true,
@@ -1176,13 +1180,13 @@ describe("doctor config flow", () => {
       channels: { telegram: { enabled: true } },
       talk: { provider: "test", agentId: "ops" },
     };
-    const secondRun = await runDoctorConfigWithInput({
+    await using secondRun = await runDoctorConfigWithInput({
       config: materialized,
       parsedConfig: materialized,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
-    const singleAgent = await runDoctorConfigWithInput({
+    await using singleAgent = await runDoctorConfigWithInput({
       config: {
         agents: { entries: { ops: {} } },
         channels: { telegram: { enabled: true } },
@@ -1200,7 +1204,7 @@ describe("doctor config flow", () => {
 
   it("preserves malformed keyed entries for schema validation during repair", async () => {
     const agents = { entries: { main: {}, broken: null as never } };
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents },
       parsedConfig: { agents },
       repair: true,
@@ -1215,7 +1219,7 @@ describe("doctor config flow", () => {
   });
 
   it("detects a legacy roster after environment resolution", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { ops: {} } } },
       parsedConfig: { agents: { list: [{ id: "${AGENT_ID}", default: true }] } },
       sourceConfigBeforeMigrations: {
@@ -1230,7 +1234,7 @@ describe("doctor config flow", () => {
   });
 
   it("preserves a roster supplied by an included config during repair", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { ops: {} } } },
       parsedConfig: { $include: "./agents.json" },
       agentRosterIncludeOwned: true,
@@ -1244,7 +1248,7 @@ describe("doctor config flow", () => {
   });
 
   it("preserves ownership of an explicitly empty included roster", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { main: {} } } },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
@@ -1258,7 +1262,7 @@ describe("doctor config flow", () => {
   });
 
   it("persists an injected roster when a root include contributes only channels", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         agents: { entries: { main: {} } },
         channels: { telegram: { enabled: true } },
@@ -1274,7 +1278,7 @@ describe("doctor config flow", () => {
   });
 
   it("repairs a locally authored roster when unrelated includes exist", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {
         agents: {
           defaults: { workspace: "/tmp/ops" },
@@ -1298,7 +1302,7 @@ describe("doctor config flow", () => {
   });
 
   it("repairs a missing roster when only a nested channel include exists", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { main: {} } } },
       parsedConfig: { channels: { $include: "./channels.json" } },
       repair: true,
@@ -1310,7 +1314,7 @@ describe("doctor config flow", () => {
   });
 
   it("does not persist an implicit roster when no config file exists", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { agents: { entries: { main: {} } } },
       exists: false,
       repair: true,
@@ -1322,7 +1326,7 @@ describe("doctor config flow", () => {
   });
 
   it("enables Doctor-only state migrations only for explicit repair", async () => {
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: {},
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1330,7 +1334,7 @@ describe("doctor config flow", () => {
       expect.objectContaining({ doctorOnlyStateMigrations: false }),
     );
 
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: {},
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1340,18 +1344,7 @@ describe("doctor config flow", () => {
     );
   });
 
-  it("prepares plugin metadata for the complete Doctor lifecycle", async () => {
-    const result = await runDoctorConfigWithInput({
-      config: {},
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ preparePluginMetadataSnapshot: true }),
-    );
-    expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
-    expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
-  });
+  registerDoctorPreparedMetadataTests(runDoctorConfigPreflightOptionsMock);
 
   it("exposes cleanup-refreshed plugin metadata to later Doctor scopes", async () => {
     const refreshedSnapshot = {
@@ -1366,7 +1359,7 @@ describe("doctor config flow", () => {
       pluginMetadataSnapshot: refreshedSnapshot,
     }));
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {},
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1409,7 +1402,7 @@ describe("doctor config flow", () => {
       options: { repair: true, yes: true, nonInteractive: true },
     });
     const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: {},
       repair: true,
       run: (params) => loadAndMaybeMigrateDoctorConfig({ ...params, prompter }),
@@ -1426,7 +1419,7 @@ describe("doctor config flow", () => {
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: {
         plugins: {
           allow: ["existing-plugin"],
@@ -1462,7 +1455,7 @@ describe("doctor config flow", () => {
       authProfilesRepaired: true,
     }));
 
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config: {},
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1492,7 +1485,7 @@ describe("doctor config flow", () => {
       openAICodexAuthProfileIdMap,
     }));
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: {},
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1522,7 +1515,7 @@ describe("doctor config flow", () => {
       },
     );
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1582,7 +1575,7 @@ describe("doctor config flow", () => {
       authProfilesRepaired: false,
     }));
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config: input,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1610,7 +1603,7 @@ describe("doctor config flow", () => {
       },
     };
     const previewNotes = resetTerminalNoteMock();
-    const preview = await runDoctorConfigWithInput({
+    await using preview = await runDoctorConfigWithInput({
       config,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1633,7 +1626,7 @@ describe("doctor config flow", () => {
       ),
     ).toBe(true);
 
-    const repair = await runDoctorConfigWithInput({
+    await using repair = await runDoctorConfigWithInput({
       config,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1660,7 +1653,7 @@ describe("doctor config flow", () => {
       },
     };
 
-    await runDoctorConfigWithInput({
+    await runDoctorConfigWithInputAndDispose({
       config,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1693,7 +1686,7 @@ describe("doctor config flow", () => {
       ] satisfies MediaUnderstandingModelConfig[];
       const config: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { models } } };
       config.agents = { entries: { main: {} } };
-      const result = await runDoctorConfigWithInput({
+      await using result = await runDoctorConfigWithInput({
         config,
         repair,
         run: loadAndMaybeMigrateDoctorConfig,
@@ -1745,7 +1738,7 @@ describe("doctor config flow", () => {
   });
 
   it("repairs generic legacy config surfaces in one pass", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         bridge: { bind: "auto" },
@@ -1793,7 +1786,7 @@ describe("doctor config flow", () => {
   });
 
   it("removes retired commitments config on repair", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         commitments: {
@@ -1810,7 +1803,7 @@ describe("doctor config flow", () => {
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      const result = await runDoctorConfigWithInput({
+      await using result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           channels: {
@@ -1877,7 +1870,7 @@ describe("doctor config flow", () => {
       { config, changes: [], warnings: ["Telegram account inactive: token unavailable"] },
     ]);
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1899,7 +1892,7 @@ describe("doctor config flow", () => {
       { config: repaired, changes: ["Discord allowlist ids normalized to strings."] },
     ]);
 
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       config,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1911,7 +1904,7 @@ describe("doctor config flow", () => {
   });
 
   it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -1945,7 +1938,7 @@ describe("doctor config flow", () => {
   });
 
   it("defers absent-plugin promotion instead of creating a partial default account", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -1982,7 +1975,7 @@ describe("doctor config flow", () => {
   });
 
   it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -2016,7 +2009,7 @@ describe("doctor config flow", () => {
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -2059,7 +2052,7 @@ describe("doctor config flow", () => {
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
-    const result = await withTempHome(
+    await using result = await withTempHome(
       async (home) => {
         const configDir = path.join(home, ".openclaw");
         await fs.mkdir(configDir, { recursive: true });
@@ -2106,7 +2099,7 @@ describe("doctor config flow", () => {
   });
 
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -2151,7 +2144,7 @@ describe("doctor config flow", () => {
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      await runDoctorConfigWithInputAndDispose({
         config: {
           memorySearch: {
             provider: "local",
@@ -2233,7 +2226,7 @@ describe("doctor config flow", () => {
     async (repair, shouldWriteConfig) => {
       const noteSpy = resetTerminalNoteMock();
       try {
-        const result = await runDoctorConfigWithInput({
+        await using result = await runDoctorConfigWithInput({
           config: {
             hooks: {
               internal: {
@@ -2275,7 +2268,7 @@ describe("doctor config flow", () => {
   it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      await runDoctorConfigWithInput({
+      await runDoctorConfigWithInputAndDispose({
         config: {
           gateway: { bind: "localhost" },
         },
@@ -2297,7 +2290,7 @@ describe("doctor config flow", () => {
   it("defers the applied panel to the config write when --fix is passed (#80817)", async () => {
     const noteSpy = resetTerminalNoteMock();
     try {
-      const result = await runDoctorConfigWithInput({
+      await using result = await runDoctorConfigWithInput({
         repair: true,
         config: {
           gateway: { bind: "localhost" },
@@ -2316,7 +2309,7 @@ describe("doctor config flow", () => {
   });
 
   it("preserves valid googlechat top-level DM policy and allowFrom", async () => {
-    const result = await runDoctorConfigWithInput({
+    await using result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         channels: {
@@ -2386,13 +2379,15 @@ describe("doctor config flow", () => {
 
         const noteSpy = resetTerminalNoteMock();
         try {
-          await loadAndMaybeMigrateDoctorConfig({
-            options: { nonInteractive: true, repair: true },
-            confirm: async () => false,
-          });
+          await (
+            await loadAndMaybeMigrateDoctorConfig({
+              options: { nonInteractive: true, repair: true },
+              confirm: async () => false,
+            })
+          )[Symbol.asyncDispose]();
           noteSpy.mockClear();
 
-          const secondRun = await loadAndMaybeMigrateDoctorConfig({
+          await using secondRun = await loadAndMaybeMigrateDoctorConfig({
             options: { nonInteractive: true, repair: true },
             confirm: async () => false,
           });
@@ -2414,7 +2409,7 @@ describe("doctor config flow", () => {
   it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
     legacyConfigMigrationForTest.setPartiallyValidOverride(true);
     try {
-      const result = await runDoctorConfigWithInput({
+      await using result = await runDoctorConfigWithInput({
         config: {
           gateway: { bind: "localhost" },
           tools: { web: { search: { provider: "brave" } } },

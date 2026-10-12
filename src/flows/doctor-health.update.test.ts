@@ -6,6 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
 import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
+import type { DoctorMaintenance } from "../commands/doctor-maintenance-types.js";
+import * as doctorMaintenance from "../commands/doctor-maintenance.js";
+import { createDoctorPluginMetadataSnapshotScope } from "../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import { withTriageTerminal } from "../commands/triage.test-support.js";
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +22,16 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -34,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   confirmReport: vi.fn<() => Promise<boolean>>(),
   runGh: vi.fn<RunGithubCli>(),
   config: vi.fn<() => OpenClawConfig>(),
+  configResources: vi.fn<() => Record<string, unknown>>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   packageRoot: vi.fn<() => string | undefined>(),
   stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
@@ -109,6 +123,8 @@ vi.mock("../commands/doctor-config-flow.js", () => ({
     cfg: mocks.config(),
     shouldWriteConfig: true,
     stateMigrationStepReceipts: mocks.stateMigrationReceipts,
+    [Symbol.asyncDispose]: async () => {},
+    ...mocks.configResources(),
   }),
 }));
 
@@ -141,11 +157,106 @@ describe("runDoctorHealthFlow update outcomes", () => {
     mocks.updateCommand.mockReset();
     mocks.triageCommand.mockReset().mockResolvedValue(undefined);
     mocks.config.mockReset().mockReturnValue({});
+    mocks.configResources.mockReset().mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.stateMigrationReceipts = [];
   });
+
+  it.each(["success", "contribution-failure", "finish-failure"] as const)(
+    "retains plugin contracts through maintenance finalization and retires before release on %s",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const rootDir = state.path("plugins", "fixture");
+        await fs.mkdir(rootDir, { recursive: true });
+        await fs.writeFile(
+          path.join(rootDir, "doctor-contract-api.cjs"),
+          'module.exports = { legacyConfigRules: [{ path: ["fixture"], message: "retained fixture contract" }] };',
+        );
+        const borrowedCache = createPluginCache();
+        let baseSnapshot: ReturnType<typeof loadPluginMetadataSnapshot> | undefined =
+          withPluginCache(borrowedCache, () =>
+            loadPluginMetadataSnapshot({ config: {}, env: process.env }),
+          );
+        await using metadata = createDoctorPluginMetadataSnapshotScope({
+          getBaseSnapshot: () => baseSnapshot,
+          env: process.env,
+        });
+        expect(metadata.run({ config: {} }, getPluginCache)).toBe(borrowedCache);
+        baseSnapshot = undefined;
+        metadata.invalidate();
+        const ownedCache = metadata.run({ config: {} }, getPluginCache);
+        const events: string[] = [];
+        const failure = new Error(`fixture ${outcome}`);
+        const readRules = () =>
+          metadata.run({ config: {} }, () =>
+            listPluginDoctorLegacyConfigRules({
+              manifestRegistry: {
+                plugins: [
+                  createPluginManifestRecordFixture({ id: "fixture", rootDir, origin: "global" }),
+                ],
+                diagnostics: [],
+              },
+            }),
+          );
+        mocks.configResources.mockReturnValue({
+          runWithPluginMetadataSnapshot: metadata.run,
+          invalidatePluginMetadataSnapshot: metadata.invalidate,
+          [Symbol.asyncDispose]: async () => {
+            events.push("contracts-retired");
+            await metadata[Symbol.asyncDispose]();
+          },
+        });
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          events.push("contributions");
+          expect(ctx.runWithPluginMetadataSnapshot!({ config: ctx.cfg }, readRules)).toEqual([
+            { path: ["fixture"], message: "retained fixture contract" },
+          ]);
+          if (outcome === "contribution-failure") {
+            throw failure;
+          }
+        });
+        const maintenance: DoctorMaintenance = {
+          run: (operation) => operation(),
+          signal: new AbortController().signal,
+          releaseState: async () => {},
+          finish: async () => {
+            events.push("finish");
+            expect(getPluginCacheRetirementSignal(ownedCache).aborted).toBe(false);
+            expect(readRules()).toEqual([
+              { path: ["fixture"], message: "retained fixture contract" },
+            ]);
+            if (outcome === "finish-failure") {
+              throw failure;
+            }
+          },
+          release: async () => {
+            events.push("release");
+            expect(getPluginCacheRetirementSignal(ownedCache).aborted).toBe(true);
+            expect(getPluginCacheRetirementSignal(borrowedCache).aborted).toBe(false);
+          },
+        };
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
+        try {
+          const operation = runDoctorHealthFlow(
+            { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            { nonInteractive: true },
+          );
+          if (outcome === "success") {
+            await operation;
+          } else {
+            await expect(operation).rejects.toBe(failure);
+          }
+          expect(events).toEqual(["contributions", "finish", "contracts-retired", "release"]);
+          expect(getPluginCacheRetirementSignal(ownedCache).aborted).toBe(true);
+          expect(getPluginCacheRetirementSignal(borrowedCache).aborted).toBe(false);
+        } finally {
+          await Promise.all([retirePluginCache(ownedCache), retirePluginCache(borrowedCache)]);
+        }
+      });
+    },
+  );
 
   it("publishes the first include input and last Doctor write through result IPC", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

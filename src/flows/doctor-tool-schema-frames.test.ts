@@ -178,7 +178,7 @@ it.each([
         );
         await using cache = createPluginCache();
         await withPluginCache(cache, async () => {
-          const scope = createDoctorPluginMetadataSnapshotScope({
+          await using scope = createDoctorPluginMetadataSnapshotScope({
             baseSnapshot: loadPluginMetadataSnapshot({ config: cfg, env: state.env }),
             env: state.env,
           });

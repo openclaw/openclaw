@@ -217,7 +217,11 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
 }));
 
 vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({ cfg: mocks.config(), shouldWriteConfig: true }),
+  loadAndMaybeMigrateDoctorConfig: async () => ({
+    [Symbol.asyncDispose]: async () => {},
+    cfg: mocks.config(),
+    shouldWriteConfig: true,
+  }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
