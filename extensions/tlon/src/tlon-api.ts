@@ -156,6 +156,16 @@ function sanitizeFileName(fileName: string): string {
   return fileName.split(/[/\\]/).pop() || fileName;
 }
 
+/** Join a storage object key onto publicUrlBase without treating #/? as URL delimiters. */
+export function buildCustomS3PublicUrl(publicUrlBase: string, fileKey: string): string {
+  const base = publicUrlBase.endsWith("/") ? publicUrlBase : `${publicUrlBase}/`;
+  const encodedKey = fileKey
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return new URL(encodedKey, base).toString();
+}
+
 async function scryJson<T>(config: ClientConfig, cookie: string, path: string): Promise<T> {
   return (await scryUrbitPath(
     {
@@ -368,7 +378,7 @@ export async function uploadFile(
   await uploadBlob(signedUrl, signedUrl.includes("digitaloceanspaces.com") ? headers : undefined);
 
   const publicUrl = storageConfig.publicUrlBase
-    ? new URL(fileKey, storageConfig.publicUrlBase).toString()
+    ? buildCustomS3PublicUrl(storageConfig.publicUrlBase, fileKey)
     : expectDefined(signedUrl.split("?").at(0), "signed URL base segment");
 
   return { url: assertSafeUploadResultUrl(publicUrl, "Upload result URL") };
