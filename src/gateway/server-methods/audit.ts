@@ -54,8 +54,8 @@ function isOwnerDecisionCursor(value: string): boolean {
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(event: AuditEventRecord): AuditEvent {
-  if (event.kind === "message") {
-    throw new Error("legacy audit.list cannot project message records");
+  if (event.kind === "message" || event.kind === "skill_selection") {
+    throw new Error("legacy audit.list cannot project message or skill-selection records");
   }
   const { schemaVersion: _schemaVersion, actorType, actorId, ...legacyEvent } = event;
   return {
@@ -72,6 +72,15 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
   if (event.kind === "tool_action") {
     const { actorType, actorId, ...activity } = event;
     return { ...activity, eventType: "tool_action", actor: { type: actorType, id: actorId } };
+  }
+  if (event.kind === "skill_selection") {
+    const { actorType, actorId, toolName, ...activity } = event;
+    return {
+      ...activity,
+      eventType: "skill_selection",
+      actor: { type: actorType, id: actorId },
+      selectedSkill: toolName,
+    };
   }
   if (event.direction === "inbound") {
     const { actorType, actorId, ...activity } = event;
@@ -114,6 +123,10 @@ function readAuditListPage(
     ...(cursor !== undefined ? { cursor } : {}),
     filters: {
       ...(includeMessages ? { includeMessages: true } : {}),
+      // SAFETY: legacy clients may send status:"observed" without kind; the cast only reads an optional string field.
+      ...(params.kind === "skill_selection" || (params as { status?: string }).status === "observed"
+        ? { includeSkillSelections: true }
+        : {}),
       ...(agentId ? { agentId } : {}),
       ...(sessionKey ? { sessionKey } : {}),
       ...(runId ? { runId } : {}),
@@ -143,7 +156,9 @@ export const auditHandlers: GatewayRequestHandlers = {
     }
     const page = await readAuditListPage(params, parsed.cursor);
     respond(true, {
-      events: page.events.map(mapLegacyAuditEvent),
+      events: page.events
+        .filter((event) => event.kind !== "message" && event.kind !== "skill_selection")
+        .map(mapLegacyAuditEvent),
       ...(page.nextCursor !== undefined ? { nextCursor: String(page.nextCursor) } : {}),
     });
   },

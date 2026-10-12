@@ -51,6 +51,27 @@ describe("legacy audit protocol schemas", () => {
     expect(validate.Check({ ...event, schemaVersion: 1 })).toBe(false);
     expect(validate.Check({ ...event, result: "secret" })).toBe(false);
   });
+
+  it("keeps skill selection out of the legacy audit.list contract", () => {
+    const validate = Compile(AuditEventSchema);
+    expect(
+      validate.Check({
+        eventId: "event-skill-1",
+        sequence: 1,
+        sourceSequence: 2,
+        occurredAt: 3,
+        kind: "skill_selection",
+        action: "skill.selection.observed",
+        status: "observed",
+        actor: { type: "agent", id: "main" },
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:c1",
+        runId: "run-1",
+        toolName: "runtime-skill-loading-diagnostics",
+        redaction: "metadata_only",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("audit activity protocol schemas", () => {
@@ -97,6 +118,128 @@ describe("audit activity protocol schemas", () => {
       false,
     );
     expect(validate.Check({ ...event, text: "secret message" })).toBe(false);
+  });
+
+  it("discriminates run, tool, skill-selection, inbound-message, and outbound-message records", () => {
+    const validate = Compile(AuditActivityEventV1Schema);
+    const common = {
+      schemaVersion: 1,
+      eventId: "event-1",
+      sequence: 1,
+      sourceSequence: 1,
+      occurredAt: 1,
+      status: "succeeded",
+      actor: { type: "agent", id: "main" },
+      agentId: "main",
+      runId: "run-1",
+      redaction: "metadata_only",
+    };
+    const agentRun = {
+      ...common,
+      eventType: "agent_run",
+      kind: "agent_run",
+      action: "agent.run.finished",
+    };
+    const toolAction = {
+      ...common,
+      eventType: "tool_action",
+      kind: "tool_action",
+      action: "tool.action.finished",
+      toolName: "exec",
+    };
+    const skillSelection = {
+      ...common,
+      eventType: "skill_selection",
+      kind: "skill_selection",
+      action: "skill.selection.observed",
+      status: "observed",
+      selectedSkill: "debug-toolkit",
+    };
+    const outboundMessage = {
+      ...common,
+      eventType: "outbound_message",
+      kind: "message",
+      action: "message.outbound.finished",
+      direction: "outbound",
+      channel: "telegram",
+      conversationKind: "direct",
+      outcome: "sent",
+    };
+
+    expect(validate.Check(agentRun)).toBe(true);
+    expect(validate.Check(toolAction)).toBe(true);
+    expect(validate.Check(skillSelection)).toBe(true);
+    expect(validate.Check(outboundMessage)).toBe(true);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        action: "message.outbound.queued",
+        status: "started",
+        outcome: "queued",
+      }),
+    ).toBe(false);
+    expect(
+      validate.Check({
+        ...agentRun,
+        action: "agent.run.started",
+        status: "failed",
+        errorCode: "run_failed",
+      }),
+    ).toBe(false);
+    expect(validate.Check({ ...toolAction, status: "failed", errorCode: "tool_cancelled" })).toBe(
+      false,
+    );
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        status: "blocked",
+        outcome: "suppressed",
+        reasonCode: "no_visible_payload",
+      }),
+    ).toBe(true);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        status: "blocked",
+        outcome: "suppressed",
+        reasonCode: "no_visible_payload",
+        deliveryKind: "text",
+      }),
+    ).toBe(false);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        status: "unknown",
+        outcome: "unknown",
+        failureStage: "platform_send",
+        deliveryKind: "text",
+      }),
+    ).toBe(false);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        outcome: "failed",
+        errorCode: "message_delivery_failed",
+        failureStage: "queue",
+      }),
+    ).toBe(false);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        status: "blocked",
+        outcome: "suppressed",
+        reasonCode: "acp_dispatch_aborted",
+      }),
+    ).toBe(false);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        status: "blocked",
+        outcome: "suppressed",
+        reasonCode: "adapter_returned_no_identity",
+      }),
+    ).toBe(false);
+    expect(validate.Check({ ...outboundMessage, direction: "inbound" })).toBe(false);
   });
 
   it("rejects contradictory inbound message terminals", () => {

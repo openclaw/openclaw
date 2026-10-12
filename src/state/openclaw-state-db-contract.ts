@@ -94,6 +94,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
+  "audit_skill_selection_events",
   "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
@@ -104,6 +105,11 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
+  "idx_audit_skill_selection_events_agent_sequence",
+  "idx_audit_skill_selection_events_session_sequence",
+  "idx_audit_skill_selection_events_run_sequence",
+  "idx_audit_skill_selection_events_status_sequence",
+  "idx_audit_skill_selection_events_occurred_sequence",
   "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */

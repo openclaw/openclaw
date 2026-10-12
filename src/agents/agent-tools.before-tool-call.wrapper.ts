@@ -45,7 +45,7 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
-  preExecutionBlockedToolCallIds,
+  recordPreExecutionBlockedToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -664,15 +664,6 @@ export function rewrapToolWithBeforeToolCallHook(
   }
   return rebuilt;
 }
-
-function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
-  if (!toolCallId) {
-    return;
-  }
-  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  pruneTrackedToolCallIds(preExecutionBlockedToolCallIds);
-}
-
 function pruneTrackedToolCallIds(ids: Set<string>): void {
   while (ids.size > MAX_TRACKED_ADJUSTED_PARAMS) {
     const oldest = ids.values().next().value;

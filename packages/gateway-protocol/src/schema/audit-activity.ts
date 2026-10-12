@@ -13,18 +13,20 @@ export const AUDIT_ACTIVITY_STATUSES = [
   "cancelled",
   "timed_out",
   "blocked",
+  "observed",
   "unknown",
 ] as const;
 export const AUDIT_ACTIVITY_MESSAGE_KIND = "message" as const;
 export const AUDIT_ACTIVITY_KINDS = [
   "agent_run",
   "tool_action",
+  "skill_selection",
   AUDIT_ACTIVITY_MESSAGE_KIND,
 ] as const;
 export const AUDIT_ACTIVITY_DIRECTIONS = ["inbound", "outbound"] as const;
 
 type AuditActivityKind = (typeof AUDIT_ACTIVITY_KINDS)[number];
-const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action"] as const;
+const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action", "skill_selection"] as const;
 
 export function findAuditActivityFilterConflict(filters: {
   kind?: AuditActivityKind;
@@ -249,6 +251,27 @@ export const AuditActivityToolActionV1Schema: TSchema = correlatedObject(
   ]),
 );
 
+const skillSelectionProperties = {
+  eventType: Type.Literal("skill_selection"),
+  ...commonProperties,
+  ...agentProperties,
+  kind: Type.Literal("skill_selection"),
+  action: Type.Literal("skill.selection.observed"),
+  status: Type.Literal("observed"),
+  selectedSkill: NonEmptyString,
+};
+
+/** V1 skill-selection activity record. */
+export const AuditActivitySkillSelectionV1Schema: TSchema = correlatedObject(
+  skillSelectionProperties,
+  Type.Union([
+    Type.Object({
+      action: Type.Literal("skill.selection.observed"),
+      status: Type.Literal("observed"),
+    }),
+  ]),
+);
+
 const inboundMessageProperties = {
   eventType: Type.Literal("inbound_message"),
   ...commonProperties,
@@ -426,6 +449,7 @@ export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
 export const AuditActivityEventV1Schema: TSchema = Type.Union([
   AuditActivityAgentRunV1Schema,
   AuditActivityToolActionV1Schema,
+  AuditActivitySkillSelectionV1Schema,
   AuditActivityInboundMessageV1Schema,
   AuditActivityOutboundMessageV1Schema,
 ]);
@@ -484,6 +508,12 @@ type AuditActivityToolActionV1Terminal =
 export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
   SchemaContract<Static<TObject<typeof toolActionProperties>>> &
   AuditActivityToolActionV1Terminal;
+
+// Derived from the canonical schema properties (same SchemaContract pattern
+// as the adjacent variants), so attribution fields required by wire
+// validation (agentId, runId) stay visible to typed consumers.
+export type AuditActivitySkillSelectionV1 = AuditActivityRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof skillSelectionProperties>>>;
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
   sessionKey?: never;
@@ -557,6 +587,7 @@ export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 &
 export type AuditActivityEventV1 =
   | AuditActivityAgentRunV1
   | AuditActivityToolActionV1
+  | AuditActivitySkillSelectionV1
   | AuditActivityInboundMessageV1
   | AuditActivityOutboundMessageV1;
 export type AuditActivityListParams = {

@@ -2311,6 +2311,7 @@ const workerModules = new Set([
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
   "src/audit/audit-event-read.kernel.ts", // Audit event list SQL runs only in the shared-state worker dispatcher.
+  "src/audit/audit-event-store.skill-selection-storage.ts", // Skill-selection audit SQL runs only via audit-event-read.kernel.ts (read worker list) and audit-event-store.ts (writer worker record/prune).
   "src/audit/audit-event-store.ts", // Audit writer worker owns inserts/pruning; host listing delegates to the worker.
   "src/audit/audit-identity.ts", // Audit writer worker alone reaches identity key reads and writes.
   "src/audit/execution-decision-facts.ts", // Audit writer and audit read workers alone execute decision-fact SQL.
