@@ -210,6 +210,21 @@ serveOwnedWorkerTasks(
           pending: result.found && result.value,
         };
       }
+      if (request.kind === "transcript-stats-batch") {
+        const { readTranscriptStatsBatchReadOnlySync } =
+          await import("./session-accessor.sqlite-read.js");
+        return {
+          kind: request.kind,
+          stats: readTranscriptStatsBatchReadOnlySync(
+            request.sessionIds.map((sessionId) => ({
+              ...request.database,
+              storePath: request.database.path,
+              sessionId,
+              env: request.env,
+            })),
+          ),
+        };
+      }
       if (request.kind === "session-transcript-instances") {
         const { listSessionTranscriptInstances } = await import("./session-history.js");
         return {
@@ -616,6 +631,11 @@ serveOwnedWorkerTasks(
             const { readSessionResetRecallCutoffInProcess } =
               await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
             return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
+          }
+          if (request.mode === "snapshot") {
+            const { readSessionEntrySnapshotRequest } =
+              await import("./session-transcript-hydration-read.worker.js");
+            return readSessionEntrySnapshotRequest(request);
           }
           const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
             await import("../../../packages/memory-host-sdk/src/host/session-files.js");

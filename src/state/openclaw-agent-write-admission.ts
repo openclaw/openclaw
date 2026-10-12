@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { SqliteWorkerEphemeralTarget } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -127,14 +128,27 @@ export function runOpenClawAgentPathWriteAdmission<T>(
 }
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */
-export function runOpenClawAgentWorkerWrite<T>(
+export async function runOpenClawAgentWorkerWrite<T>(
   options:
     | OpenClawAgentDatabaseOptions
     | { target: Readonly<SqliteWorkerEphemeralTarget>; assertCurrent(): void },
   run: () => Promise<T>,
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
+  priority?: "background",
 ): Promise<T> {
+  if (priority === "background") {
+    const storePath =
+      "target" in options
+        ? `ephemeral:${options.target.handle}:${options.target.incarnation}`
+        : readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath;
+    // Rebuildable work waits outside the FIFO until existing foreground work drains.
+    // Once admitted, its bounded transaction settles under the ordinary writer rules.
+    let draining: Promise<void> | null | undefined;
+    while ((draining = admission.queues.get(storePath)?.drainPromise)) {
+      await racePromiseWithAbortSignal(draining, signal, (aborted) => aborted.reason);
+    }
+  }
   return observeWriteAdmission("worker", timing, (observed) => {
     if ("target" in options) {
       const { handle, incarnation } = options.target;

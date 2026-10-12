@@ -52,6 +52,14 @@ const CODEX_NATIVE_SPAWN_HOOK_NAMES: readonly string[] = ["spawn_agent", "Agent"
 
 const CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
   exec: ["Bash", "exec", "exec_command"],
+  process: ["process", "write_stdin"],
+  read: ["read", "Read", "read_file"],
+  write: ["write", "Write"],
+  edit: ["edit", "Edit"],
+  ls: ["ls", "list_dir"],
+  grep: ["grep", "Grep", "grep_files"],
+  find: ["find", "Glob"],
+  view_image: ["view_image"],
   apply_patch: ["apply_patch", "Write", "Edit"],
   spawn_agent: CODEX_NATIVE_SPAWN_HOOK_NAMES,
 };
@@ -261,11 +269,14 @@ export function createCodexNativeHookRelay(params: {
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
     executionAdmission:
-      params.nativeProcessAuthority || params.nativeModelAdmission
+      params.nativeProcessAuthority ||
+      params.nativeModelAdmission ||
+      params.hostCapabilities.workspaceReadiness
         ? {
             toolNames: [
               ...(params.nativeProcessAuthority ? ["exec"] : []),
               ...(params.nativeModelAdmission ? modelInputTools : []),
+              ...(params.hostCapabilities.workspaceReadiness?.toolNames ?? []),
             ],
             admit: async (invocation, assertAdmissionCurrent, preparation) => {
               const payload = invocation.rawPayload;
@@ -316,6 +327,12 @@ export function createCodexNativeHookRelay(params: {
                 assertAdmissionCurrent();
                 return undefined;
               }
+              if (
+                !params.nativeProcessAuthority ||
+                !["Bash", "exec", "exec_command"].includes(invocation.toolName ?? "")
+              ) {
+                return undefined;
+              }
               const rootThreadId =
                 isJsonObject(payload) && typeof payload.session_id === "string"
                   ? payload.session_id.trim()
@@ -327,8 +344,8 @@ export function createCodexNativeHookRelay(params: {
                   "Codex native process admission requires exact thread, turn, and tool identities",
                 );
               }
-              params.nativeProcessAuthority!.owner.admit(
-                params.nativeProcessAuthority!.client(),
+              params.nativeProcessAuthority.owner.admit(
+                params.nativeProcessAuthority.client(),
                 { threadId, turnId: invocation.turnId, itemId: invocation.toolUseId },
                 assertAdmissionCurrent,
                 childThreadId ? rootThreadId : undefined,
@@ -418,7 +435,9 @@ export function createCodexNativeHookRelay(params: {
       // Hook relay subprocesses are observational for most tool events; keep
       // them lower priority so they do not compete with the active reply turn.
       nice: 10,
-      timeoutMs: params.options?.gatewayTimeoutMs,
+      timeoutMs: params.hostCapabilities.workspaceReadiness
+        ? Math.max(params.options?.gatewayTimeoutMs ?? 0, params.attemptTimeoutMs)
+        : params.options?.gatewayTimeoutMs,
     },
   });
   if (!processAdmissionDisposed) {

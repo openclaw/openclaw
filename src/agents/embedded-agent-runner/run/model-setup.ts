@@ -258,6 +258,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     runParams.resolvedModelSelection ??
     (await resolveHookModelSelection({
       prompt: runParams.prompt,
+      awaitSessionDiffBaseline: runParams.awaitSessionDiffBaseline,
       attachments: buildBeforeModelResolveAttachments(runParams.images),
       provider: params.provider,
       modelId: params.modelId,

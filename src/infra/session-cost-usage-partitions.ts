@@ -109,29 +109,29 @@ export function partitionUsageCostRollup(
   if (ephemeral) {
     return { ...encodeUsageCostRollup(entry), partitions: [] };
   }
-  const days = new Map<string, SessionUsageRollupData>();
+  const months = new Map<string, SessionUsageRollupData>();
   let canonicalNumbers = inheritedCanonicalNumbers;
   let regrouped = false;
   let integerArithmetic = true;
   const canonicalTotal = { ...entry.rollup.untimestamped.totals };
-  const groupedTotal = { ...entry.rollup.untimestamped.totals };
   const buckets = Object.values(entry.rollup.buckets).toSorted(
     (left, right) => left.timestampMs - right.timestampMs,
   );
   for (const bucket of buckets) {
     const quarter = Math.floor(bucket.timestampMs / USAGE_COST_QUARTER_MS) * USAGE_COST_QUARTER_MS;
-    const date = new Date(quarter).toISOString().slice(0, 10);
-    let day = days.get(date);
-    if (!day) {
-      day = createSessionUsageRollupData();
-      days.set(date, day);
+    // Pack sparse quarters together so small daily rows do not defeat compression.
+    const date = `${new Date(quarter).toISOString().slice(0, 7)}-01`;
+    let month = months.get(date);
+    if (!month) {
+      month = createSessionUsageRollupData();
+      months.set(date, month);
     }
-    const current = day.buckets[String(quarter)];
+    const current = month.buckets[String(quarter)];
     if (current) {
       regrouped = true;
       mergeSessionUsageRollupBucket(current, bucket);
     } else {
-      day.buckets[String(quarter)] = {
+      month.buckets[String(quarter)] = {
         ...structuredClone(bucket),
         timestampMs: quarter,
         firstTimestampMs: bucket.firstTimestampMs ?? bucket.timestampMs,
@@ -151,16 +151,8 @@ export function partitionUsageCostRollup(
         Number.isSafeInteger(canonicalTotal[key]);
     }
   }
-  for (const day of days.values()) {
-    for (const bucket of Object.values(day.buckets)) {
-      for (const key of numericTotals) {
-        groupedTotal[key] += bucket.totals[key];
-      }
-    }
-  }
   // Any regrouping must remain exact for every subrange, not just the full sum.
   canonicalNumbers ||= regrouped && !integerArithmetic;
-  canonicalNumbers ||= numericTotals.some((key) => canonicalTotal[key] !== groupedTotal[key]);
   const checkpoint = {
     ...entry,
     rollup: {
@@ -171,10 +163,10 @@ export function partitionUsageCostRollup(
   };
   const encoded = encodeUsageCostRollup(checkpoint);
   const envelope: UsageCostRollupEnvelope = JSON.parse(encoded.valueJson);
-  envelope.projection = { version: 1, dates: [...days.keys()], canonicalNumbers };
+  envelope.projection = { version: 2, dates: [...months.keys()], canonicalNumbers };
   return {
     valueJson: JSON.stringify(envelope),
     blob: encoded.blob,
-    partitions: [...days].map(([date, rollup]) => encodeUsageCostPartition(date, rollup)),
+    partitions: [...months].map(([date, rollup]) => encodeUsageCostPartition(date, rollup)),
   };
 }

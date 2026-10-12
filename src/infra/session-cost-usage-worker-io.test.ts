@@ -625,7 +625,7 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
   });
 });
 
-it("replaces every date partition after missing cached data forces a full rebuild", async () => {
+it("replaces every monthly partition after cache damage and filters within and across months", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-missing-partition";
     const sessionFile = state.path("usage-missing-partition.jsonl");
@@ -640,7 +640,7 @@ it("replaces every date partition after missing cached data forces a full rebuil
           usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
         },
       }) + "\n";
-    await fs.writeFile(sessionFile, record(18) + record(19));
+    await fs.writeFile(sessionFile, record(18) + record(19) + record(31));
     await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
     runOpenClawAgentWriteTransaction(
       ({ db }) =>
@@ -660,11 +660,7 @@ it("replaces every date partition after missing cached data forces a full rebuil
           .all(USAGE_COST_PARTITION_SCOPE),
       { agentId },
     );
-    expect(stored.map((row) => String(row.key).slice(-10))).toEqual([
-      "2026-09-18",
-      "2026-09-19",
-      "2026-09-20",
-    ]);
+    expect(stored.map((row) => String(row.key).slice(-10))).toEqual(["2026-09-01", "2026-10-01"]);
     expect(
       stored.map((row) => {
         if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
@@ -676,17 +672,22 @@ it("replaces every date partition after missing cached data forces a full rebuil
           0,
         );
       }),
-    ).toEqual([10, 10, 10]);
-    expect(
-      await loadSessionCostSummariesFromCache({
-        agentId,
-        sessions: [{ sessionFile }],
-        projection: "overview",
-        requestRefresh: false,
-        startMs: Date.UTC(2026, 8, 18),
-        endMs: Date.UTC(2026, 8, 21) - 1,
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      }),
-    ).toMatchObject({ summaries: [{ totalTokens: 30 }], cacheStatus: { status: "fresh" } });
+    ).toEqual([30, 10]);
+    for (const [startMs, endMs, totalTokens] of [
+      [Date.UTC(2026, 8, 19), Date.UTC(2026, 8, 20) - 1, 10],
+      [Date.UTC(2026, 8, 20), Date.UTC(2026, 9, 2) - 1, 20],
+    ]) {
+      expect(
+        await loadSessionCostSummariesFromCache({
+          agentId,
+          sessions: [{ sessionFile }],
+          projection: "overview",
+          requestRefresh: false,
+          startMs,
+          endMs,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens }], cacheStatus: { status: "fresh" } });
+    }
   });
 });

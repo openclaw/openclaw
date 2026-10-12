@@ -118,6 +118,7 @@ export async function tryDispatchAcpReplyCore(
     shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+    onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -369,6 +370,7 @@ export async function tryDispatchAcpReplyCore(
     sessionId: transcriptSessionId,
     runId: auditRunId,
     onAgentRunStart: params.onAgentRunStart,
+    onPreparedAgentRunStart: params.onPreparedAgentRunStart,
     getResult: () => ({ assistantTranscript, terminalOutcome }),
   });
   await input.withCurrent(() => {});

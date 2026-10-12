@@ -34,6 +34,11 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
+Durable heartbeat outcome claims check the current row in their existing worker FIFO.
+Missing outcomes and already committed claims for the same run return without
+another write. New claims keep their atomic conditional update and live commit
+authority check; retries retain the original claim timestamp.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -396,7 +401,9 @@ synchronous prompt adapter remains deprecated with a runtime warning.
 
 Plugin metadata reads, including retained artifact snapshots, use the shared read
 worker. Opening a database no longer reloads Claw provenance: explicit config
-preparation publishes those facts. Plugin-state consume deletes and returns its
+preparation publishes those facts. Setup credential activation and compensation
+use the auth worker, changing only the selected credential so neighboring profile
+and usage updates survive rollback. Plugin-state consume deletes and returns its
 live row in one statement, with decoding inside the transaction.
 
 Subagent descendant selection runs in the registry worker. Deletion consumes the
@@ -422,10 +429,16 @@ semantics are unchanged.
 
 ## SDK session writer migration
 
-Current-input read fences consume the committed admission receipt's sequence and
-message position. They validate the requested store, session key, and user role
-without rereading that receipt's identity from SQLite. Source/account authority
-still belongs to the context and writer owners at their effect boundaries.
+Current-input read fences derive sequence and message bounds from the committed
+admission receipt. Constructing a fence checks the requested store, session key,
+and user role without querying SQLite for the receipt's identity. Durable
+asynchronous model-context, full-context, and projection readers accept results
+only after comparing that receipt with the canonical active anchor returned by
+the retained worker. Owned removal or rewrite refuses acceptance; later appends
+remain valid. Bounded admitted reads use the same final acceptance check, without
+repeating it when selecting the input prefix. Source/account authority still
+belongs to the context and writer owners at their effect boundaries.
+Released synchronous SDK and native incognito readers retain their existing owners.
 Direct SQLite edits without owner publication are unsupported.
 
 Transcript search returns its read snapshot and obtains indexing readiness from
@@ -447,6 +460,21 @@ Activity recap presentation consumes the watermark prepared with its row. Explic
 recap requests read freshness through the history worker and revalidate access
 before returning the result. The unused synchronous message-by-event-ID accessor
 has been removed; transaction owners retain their existing message lookup kernel.
+
+Memory ingestion awaits `statSessionEntry`, which reuses supplied statistics or
+reads metadata through the existing history worker. Transcript export observers
+and explicit parse-yield callers obtain a snapshot through that worker before
+host-side parsing and callbacks. Full messages cross the worker boundary only
+when the observer needs them; other exports retain their SQL-side projection.
+`statSessionEntrySync` remains deprecated SDK compatibility and warns when it
+performs a host SQLite read.
+
+Bundled run-start callbacks use `onPreparedAgentRunStart` and its required
+transcript facts, prepared asynchronously by the runtime. The released
+`onAgentRunStart` callback remains deprecated and supported; only a legacy
+producer that omits those facts enters the named synchronous watermark adapter.
+Its retirement requires the next Plugin SDK major and explicit breaking-release
+approval. CLI history retains its current final cross-account disclosure guard.
 
 The session S–Z inventory still includes shared native kernels. They must not be
 marked worker-only merely because their ordinary durable callers use workers:
@@ -760,9 +788,13 @@ even if the old connection is restored. Profile-retirement notifications carry
 only the affected profile IDs. OAuth and refresh semantics and the existing stored
 representation remain unchanged.
 
-Cancellation without a matching pending request returns after a read in the same
-worker FIFO, without a write transaction or publication. Matching requests are
-still reread inside the mutation transaction. GitHub role checks prepare only the
+Cancellation checks the pending request once inside its mutation transaction;
+a stale request cannot cancel its successor. Personal credential and publication
+guards prepare their connection through the shared-state worker, then consume
+SQL-free authority revoked by the connection owner's write receipts. Restoring
+the same connection does not revive an earlier guard. Publication status RPCs
+use `personalStatusAsync`; the synchronous SDK method remains deprecated.
+GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
 authority fence. The Gateway reuses its retained profile catalog without another
 worker request. Standalone authority preparation without a retained catalog uses
@@ -3559,6 +3591,10 @@ admission can refuse dispatch or close can clean up the original handle. Host
 admission and physical-identity checks remain on the host.
 Checkpoint-only PASSIVE ticks preserve the connection's busy timeout without
 reading or changing it: SQLite does not invoke the busy handler for PASSIVE.
+After a complete tick, the WAL owner skips subsequent checkpoint-only work until
+an in-process write receipt changes. Sibling handles and workers share that receipt;
+blocked or failed checkpoints keep retrying when a reader may have released.
+Connections without a known write receipt continue checkpointing on every tick.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.

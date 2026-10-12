@@ -36,6 +36,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -212,7 +213,7 @@ it.each(["unchanged", "append", "rewrite"] as const)(
       await withSelectedTranscriptReader(
         target,
         async () => {
-          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsAsync");
+          const validated = vi.spyOn(transcriptAnchors, "readSessionTranscriptAnchorsFromSource");
           try {
             const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
               const selected = [...messages];
@@ -662,6 +663,40 @@ it.each([
     });
   },
 );
+
+it("rejects a removed user admission before the bounded reader captures its witness", async () => {
+  await withOpenClawTestState({ label: "bounded-removed-admission" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "bounded-removed-admission",
+      sessionKey: "agent:main:bounded-removed-admission",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const recorder = createUserTurnTranscriptRecorder({
+      target: { ...scope, sessionEntry: undefined },
+      input: { text: "current request", idempotencyKey: "bounded-current-input" },
+    });
+    await recorder.persistApproved();
+    const admission = recorder.getAdmissionReceipt();
+    if (!admission) {
+      throw new Error("Expected a committed user admission");
+    }
+    const source = await SessionManager.openAsync(scope);
+    await withSelectedTranscriptReader(scope, async () => {
+      expect(source.removeTrailingEntries((entry) => entry.id === admission.entryId)).toBe(1);
+      await expect(
+        SessionManager.openModelContextAsync(scope, {
+          admission,
+          limits: { maxBytes: 8192, maxEvents: 20 },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptReadFenceError",
+        message: "Current-turn transcript admission changed",
+      });
+    });
+  });
+});
 
 it.each(["append", "rewrite"] as const)(
   "rejects a native %s before consuming bounded admitted model context",

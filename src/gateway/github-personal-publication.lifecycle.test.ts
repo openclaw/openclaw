@@ -29,7 +29,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import { readUserGitHubConnection } from "../state/user-github-connections.js";
+import { readUserGitHubConnectionAsync } from "../state/user-github-connections.js";
 import { readPersonalGitHubPublicationInDatabase } from "./github-personal-publication-store.worker.js";
 import {
   callPersonalPublicationRpc,
@@ -483,6 +483,6 @@ describe("personal publication session lifecycle", () => {
     expect(installed.get(JSON.stringify(["personal-lifecycle", result.requestId]))).toEqual({
       kind: "absent",
     });
-    expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
+    expect((await readUserGitHubConnectionAsync(owner))?.generation).toBe(generation);
   });
 });

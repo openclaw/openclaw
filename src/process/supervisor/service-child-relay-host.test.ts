@@ -349,6 +349,23 @@ it("publishes root exit before drain, replays it, and acknowledges only the clos
   await expect(extinction).resolves.toBeUndefined();
 });
 
+it("publishes confirmed cancellation when the root result is missing", async () => {
+  const { adapter, emit, endOutput, close } = await createRelay("darwin");
+  const onExit = vi.fn();
+  adapter.onExit(onExit);
+  adapter.kill("SIGKILL");
+  endOutput();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  close();
+  await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
+  expect(onExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+  const lateExit = vi.fn();
+  adapter.onExit(lateExit);
+  expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+});
+
 it("keeps an observed Windows root result independent of failed extinction", async () => {
   const { adapter, emit, endOutput, close } = await createRelay("win32");
   adapter.kill("SIGTERM");
@@ -608,7 +625,6 @@ it.each(["before", "after"])(
       acknowledgements,
       cancellations,
       killSpy,
-      acknowledgeRetirement,
     } = await createRelay("darwin");
     completeRoot();
     await adapter.wait();
@@ -635,23 +651,20 @@ it.each(["before", "after"])(
       closeControl();
       await nextTurn();
     }
-    acknowledgeRetirement();
-    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(cancellations).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    const probesBeforeExit = groupProbe.mock.calls.length;
     groupProbe.mockImplementation(() => {
       throw Object.assign(new Error("synthetic absent group"), { code: "ESRCH" });
     });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(cancellations).toHaveLength(0);
+    expect(finished).not.toHaveBeenCalled();
+    expect(extinct).not.toHaveBeenCalled();
     exitRelay();
     await expect(closing).resolves.toMatchObject({
       reason: "forced-relay-exit",
       signalRequested: "SIGKILL",
       exit: { code: 0, signal: null },
     });
-    expect(groupProbe.mock.calls).toHaveLength(probesBeforeExit + 1);
     expect(groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
     expect(cancellations).toHaveLength(0);
   },

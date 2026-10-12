@@ -221,6 +221,28 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it("preserves the generation when initially recording identical model prompt text", async () => {
+    await withRewriteFixture(({ snapshot, rewrite }) => {
+      const before = snapshot();
+      const message = {
+        ...rewriteEvents[1].message,
+        __openclaw: { modelPromptProjection: { version: 1, text: "question" } },
+      };
+      rewrite({ ...rewriteEvents[1], message });
+      const captured = snapshot();
+      expect(captured.generation).toBe(before.generation);
+      expect(captured.raw[1]?.event_json).toBe(JSON.stringify({ ...rewriteEvents[1], message }));
+      rewrite({
+        ...rewriteEvents[1],
+        message: {
+          ...message,
+          __openclaw: { modelPromptProjection: { version: 1, text: "changed" } },
+        },
+      });
+      expect(snapshot().generation).not.toBe(captured.generation);
+    });
+  });
+
   it.each([
     { name: "content", message: { content: "changed" } },
     { name: "provenance", message: { provenance: { kind: "internal_system" } } },
