@@ -3,7 +3,15 @@ import {
   type BoardGetParams,
   type BoardSnapshot,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
@@ -304,6 +312,7 @@ class BoardDocumentController {
 }
 
 function BoardDocumentContent(props: BoardDocumentProps) {
+  const owner = getOwner();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
   createEffect(
@@ -313,7 +322,7 @@ function BoardDocumentContent(props: BoardDocumentProps) {
       sessionKey: props.sessionKey,
       preparedSession: props.preparedSession,
     }),
-    () => untrack(() => controller.update()),
+    () => runWithOwner(owner, () => controller.update()),
   );
   onCleanup(() => controller.dispose());
   const state = createMemo(() => {

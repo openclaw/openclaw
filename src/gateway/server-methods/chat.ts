@@ -97,6 +97,7 @@ async function injectChat(
   let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
   try {
     const admission = await beginSessionWorkAdmission({
+      agentId,
       scope: storePath,
       identities: [sessionKey, sessionId],
       assertAllowed: () => {

@@ -132,13 +132,15 @@ async function projectPublishedModelRuntimeOwner<T>(
 ): Promise<T> {
   const assertLifetime = context.captureLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
-  const replacement = context.getPendingReplacement(input);
-  if (replacement) {
+  let replacement = context.getPendingReplacement(input);
+  while (replacement) {
     // Individual owners may finish before a multi-owner publication commits. The lifecycle gate
     // makes the generation visible atomically only after every owner and auth mutation is ready.
     assertPreparedModelRuntimeAdmissionCanWait();
     await replacement.promise;
     assertLifetime();
+    // Superseding a gate wakes its readers before the successor has committed.
+    replacement = context.getPendingReplacement(input);
   }
   const existing = resolvePublishedOwner(context.owners, input, {
     allowConfiguredWorkspaceFallback:

@@ -1946,7 +1946,6 @@ src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
 src/gateway/managed-image-attachments.ts	1
-src/gateway/mcp-app-operations.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	2
 src/gateway/node-browser-proxy-policy.ts	1
@@ -2513,7 +2512,7 @@ src/sessions/session-key-utils.ts	1
 src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
-src/sessions/user-turn-transcript.ts	2
+src/sessions/user-turn-transcript.ts	1
 src/shared/account-enabled.ts	1
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2

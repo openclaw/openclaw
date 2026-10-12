@@ -1,6 +1,5 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
@@ -75,41 +74,6 @@ type SessionTranscriptReconcileWorkerCommand = {
   yield?: true;
 };
 
-function parseWorkerInput(input: unknown): SessionTranscriptReconcileWorkerInput | undefined {
-  if (!isRecord(input)) {
-    return undefined;
-  }
-  if (typeof input.stateDir !== "string" || typeof input.externallySupervised !== "boolean") {
-    return undefined;
-  }
-  const owner = { stateDir: input.stateDir, externallySupervised: input.externallySupervised };
-  if (
-    input.mode === "release" &&
-    typeof input.leaseId === "string" &&
-    typeof input.path === "string"
-  ) {
-    return { ...owner, mode: "release", leaseId: input.leaseId, path: input.path };
-  }
-  if (
-    typeof input.agentId !== "string" ||
-    typeof input.path !== "string" ||
-    !Array.isArray(input.sessionIds) ||
-    !input.sessionIds.every((sessionId) => typeof sessionId === "string")
-  ) {
-    return undefined;
-  }
-  const plan = {
-    ...owner,
-    agentId: input.agentId,
-    path: input.path,
-    sessionIds: input.sessionIds,
-  };
-  if (input.mode === "disk" && typeof input.leaseId === "string") {
-    return { ...plan, mode: "disk", leaseId: input.leaseId };
-  }
-  return undefined;
-}
-
 function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
   return {
     OPENCLAW_STATE_DIR: owner.stateDir,
@@ -145,24 +109,9 @@ function releaseLease(
   port.close();
 }
 
-function waitForContinue(port: MessagePort): Promise<SessionTranscriptReconcileWorkerCommand> {
-  return new Promise((resolve, reject) => {
-    port.once("message", (message: unknown) => {
-      if (
-        !isRecord(message) ||
-        message.type !== "continue" ||
-        typeof message.accepted !== "boolean" ||
-        (message.yield !== undefined && message.yield !== true)
-      ) {
-        reject(new Error("session transcript reconcile worker received an invalid command"));
-        return;
-      }
-      resolve({
-        accepted: message.accepted,
-        type: "continue",
-        ...(message.yield === true ? { yield: true } : {}),
-      });
-    });
+function waitForMessage<T>(port: MessagePort): Promise<T> {
+  return new Promise((resolve) => {
+    port.once("message", resolve);
   });
 }
 
@@ -172,7 +121,7 @@ async function postAndWait(
   transferList: ArrayBuffer[] = [],
 ): Promise<SessionTranscriptReconcileWorkerCommand> {
   port.postMessage(message, transferList);
-  return await waitForContinue(port);
+  return await waitForMessage<SessionTranscriptReconcileWorkerCommand>(port);
 }
 
 function encodeFtsChunk(rows: readonly TranscriptIndexEntry[]): EncodedTranscriptFtsChunk {
@@ -318,15 +267,7 @@ async function run(
   }
   port.postMessage(terminalMessage);
   // The final parent write must finish before this independent deletion fence is released.
-  await new Promise<void>((resolve, reject) => {
-    port.once("message", (message: { type?: unknown }) => {
-      if (message?.type !== "release") {
-        reject(new Error("session transcript reconcile worker expected lease release"));
-        return;
-      }
-      resolve();
-    });
-  });
+  await waitForMessage(port);
   // Cleanup uses the handles and lease opened by this task, even after retirement.
   if (coordination?.reconciliation) {
     closeDatabase?.();
@@ -339,13 +280,12 @@ serveWorkerTasks(
     if (!value || typeof value !== "object" || !("input" in value) || !("port" in value)) {
       throw new Error("session transcript reconcile worker requires a task");
     }
-    const input = parseWorkerInput(value.input);
-    if (!input || !(value.port instanceof MessagePort)) {
+    if (!(value.port instanceof MessagePort)) {
       throw new Error("session transcript reconcile worker requires valid task data");
     }
-    const port = value.port;
-    // SAFETY: The pool owns this private task and its retained phase admission.
-    const { coordination, sourceIdentity } = value as SessionTranscriptReconcileWorkerTask;
+    const { input, port, coordination, sourceIdentity } =
+      // SAFETY: The typed pool owns this private payload; phase admission is checked below.
+      value as SessionTranscriptReconcileWorkerTask;
     try {
       if (
         !coordination?.reconciliation ||

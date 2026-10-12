@@ -66,6 +66,7 @@ export type AgentDatabaseFileExecutionOwner = {
     requestedPath?: string,
   ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
+  retireForCleanup(): Promise<void>;
   close(): Promise<void>;
 };
 

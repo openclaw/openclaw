@@ -105,6 +105,7 @@ import type {
 import {
   readRequestedSessionCreateTarget,
   readSessionCreateTarget,
+  withSessionCreateAdmission,
   validateSessionCreateIncognitoTarget,
 } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
@@ -133,32 +134,31 @@ import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
-export async function createGatewaySession(
+export function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
-  const selected = sessionAgent.resolveSessionCreateAgentId(params.cfg, {
-    key: normalizeOptionalString(params.key),
-    agentId: params.agentId,
-    parentSessionKey: normalizeOptionalString(params.parentSessionKey),
-  });
-  if (!selected.ok) {
-    return selected;
-  }
+  return withSessionCreateAdmission(params, createAdmittedGatewaySession);
+}
+
+async function createAdmittedGatewaySession(
+  params: CreateGatewaySessionParams,
+  agentId: string,
+): Promise<CreateGatewaySessionResult> {
   const incognito = params.incognito === true || isIncognitoSessionKey(params.parentSessionKey);
   const generatedKey =
     !params.key?.trim() && incognito
-      ? buildDashboardSessionKey(selected.agentId, { incognito: true })
+      ? buildDashboardSessionKey(agentId, { incognito: true })
       : undefined;
   const sessionKey =
     generatedKey ??
     resolveSessionCreateTargetKey({
       cfg: params.cfg,
-      agentId: selected.agentId,
+      agentId,
       requestedKey: normalizeOptionalString(params.key),
     });
   const assertCurrent = () => params.commitGuard?.();
   const created = await withSessionActorStorage(
-    { sessionKey, agentId: selected.agentId },
+    { sessionKey, agentId },
     {
       create: true,
       lifetime: { assertCurrent, assertReadable: assertCurrent },
@@ -166,7 +166,7 @@ export async function createGatewaySession(
     },
     async (memory) => {
       try {
-        return await createGatewaySessionInScope(params, generatedKey);
+        return await createGatewaySessionInScope(params, agentId, generatedKey);
       } finally {
         const captured = captureSessionActorStorageOwner({ sessionActor: memory });
         // Failed creation may outlive its caller's authority; only empty state is discarded.
@@ -180,11 +180,12 @@ export async function createGatewaySession(
       }
     },
   );
-  return created ?? createGatewaySessionInScope(params, generatedKey);
+  return created ?? createGatewaySessionInScope(params, agentId, generatedKey);
 }
 
 async function createGatewaySessionInScope(
   params: CreateGatewaySessionParams,
+  agentId: string,
   generatedKey?: string,
 ): Promise<CreateGatewaySessionResult> {
   const { personalAccountDefaults, onPhase } = params;
@@ -213,15 +214,6 @@ async function createGatewaySessionInScope(
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
-  const selectedAgent = sessionAgent.resolveSessionCreateAgentId(params.cfg, {
-    key: requestedKey,
-    agentId: params.agentId,
-    parentSessionKey,
-  });
-  if (!selectedAgent.ok) {
-    return selectedAgent;
-  }
-  const agentId = selectedAgent.agentId;
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);

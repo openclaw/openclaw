@@ -63,6 +63,7 @@ async function reconstructMcpAppView(params: {
     const acquisition = await acquireSessionMcpRuntime({
       sessionId,
       sessionKey: loaded.canonicalKey,
+      agentId,
       workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
       agentDir: resolveAgentDir(params.cfg, agentId),
       cfg: params.cfg,

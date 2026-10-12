@@ -213,6 +213,7 @@ async function agentCommandInternal(
     // Reset marks its mutation before interrupting work. An aborted run must not
     // queue behind that mutation or reset would wait on the run holding the queue.
     sessionWorkAdmission = await beginSessionWorkAdmission({
+      agentId: sessionAgentId,
       scope: storePath ?? `agent:${sessionAgentId}`,
       isSettling: opts.isTerminalOutcomeObserved,
       identities: [sessionKey, sessionId],

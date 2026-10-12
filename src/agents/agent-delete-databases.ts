@@ -48,7 +48,6 @@ export type AgentDeleteDatabasePlan = {
 };
 
 export async function retireAgentDeleteRuntime(
-  cfg: OpenClawConfig,
   deletion: AgentDeletionOperation,
   agentDirs: readonly string[],
 ): Promise<void> {
@@ -56,9 +55,6 @@ export async function retireAgentDeleteRuntime(
   const { retirePreparedModelRuntimeAgent } = await import("./prepared-model-runtime.js");
   await deletion.assertCurrentAsync();
   await retirePreparedModelRuntimeAgent({ agentId, agentDirs });
-  const { closeActiveMemorySearchManagerCore } = await import("../plugins/memory-runtime.js");
-  await deletion.assertCurrentAsync();
-  await closeActiveMemorySearchManagerCore({ cfg, agentId });
   await deletion.assertCurrentAsync();
 }
 
