@@ -301,6 +301,7 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
+// mock-isolation: use the synthetic session fixture without opening Gateway worker databases.
 vi.mock("../gateway/session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: ({
     key,
