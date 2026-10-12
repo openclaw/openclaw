@@ -416,6 +416,35 @@ describe("isMessagingToolDuplicate", () => {
       ["Checking the deploy logs now."],
       false,
     ],
+    // A reply that opens with the sent text and then says something new is delivered.
+    ["Checking the deploy logs now. All good!", ["Checking the deploy logs now."], false],
+    ["Deployment finished. Actually it failed.", ["Deployment finished."], false],
+    ["Deployment finished. 2 hosts restarted.", ["Deployment finished."], false],
+    // A punctuation-only tail still falls through to the length ratio.
+    ["Deployment finished!!!", ["Deployment finished"], true],
+    // So does a tail that only repeats another send; new text after it is delivered.
+    ["Deployment finished. Tests passed.", ["Deployment finished.", "Tests passed."], true],
+    [
+      "Deployment finished. Tests passed. Actually it failed.",
+      ["Deployment finished.", "Tests passed."],
+      false,
+    ],
+    // An exact repeat of a send that extends an earlier send is still a repeat.
+    [
+      "Deployment finished. All good!",
+      ["Deployment finished.", "Deployment finished. All good!"],
+      true,
+    ],
+    // Longest sends are taken out of the tail first, so one that contains another counts whole.
+    [
+      "Deployment to staging finished without any errors. Tests passed. Coverage unchanged.",
+      [
+        "Deployment to staging finished without any errors.",
+        "Tests passed.",
+        "Tests passed. Coverage unchanged.",
+      ],
+      true,
+    ],
   ] satisfies [string, string[], boolean][])(
     "checks sent-text overlap: %s",
     (input, sentTexts, expected) => {

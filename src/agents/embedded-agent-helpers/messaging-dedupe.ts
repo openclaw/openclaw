@@ -10,6 +10,19 @@ export function normalizeTextForComparison(text: string): string {
     .trim();
 }
 
+// A reply tail is new when it still has a letter or digit after every prior send
+// is taken out of it. Longest sends go first so a send that contains another
+// one is removed whole.
+function hasTextBeyondSentTexts(tail: string, normalizedSentTexts: string[]): boolean {
+  let remainder = tail;
+  for (const normalizedSent of normalizedSentTexts.toSorted((a, b) => b.length - a.length)) {
+    if (normalizedSent.length >= MIN_DUPLICATE_TEXT_LENGTH) {
+      remainder = remainder.replaceAll(normalizedSent, " ");
+    }
+  }
+  return /[\p{L}\p{N}]/u.test(remainder);
+}
+
 export function isMessagingToolDuplicateNormalized(
   normalized: string,
   normalizedSentTexts: string[],
@@ -25,6 +38,17 @@ export function isMessagingToolDuplicateNormalized(
       return false;
     }
     if (normalized.includes(normalizedSent)) {
+      // Text that opens with a prior send and then says something new is a
+      // follow-up, not a repeat. The length ratio cannot tell "<sent> All good!"
+      // from "<sent> Actually it failed.", so a tail with any letter or digit is
+      // delivered. A tail that is only punctuation, or only repeats other sends,
+      // still falls through to the ratio.
+      if (
+        normalized.startsWith(normalizedSent) &&
+        hasTextBeyondSentTexts(normalized.slice(normalizedSent.length), normalizedSentTexts)
+      ) {
+        return false;
+      }
       return normalizedSent.length >= normalized.length * MIN_SUBSTRING_DUPLICATE_RATIO;
     }
     return (
@@ -42,9 +66,9 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
     return false;
   }
-  return sentTexts.some((sentText) =>
-    isMessagingToolDuplicateNormalized(normalized, [normalizeTextForComparison(sentText)]),
-  );
+  // One call with every send: a reply that opens with one send is judged
+  // against the others too.
+  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
 }
 
 export function resolveCurrentSourceMessagingToolPartial(
