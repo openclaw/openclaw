@@ -179,7 +179,15 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isItem && !isUsage && !isRetryStatus && !isAssistant) {
+  if (
+    mode === "summary" &&
+    !isTool &&
+    !isItem &&
+    !isUsage &&
+    !isRetryStatus &&
+    !isAssistant &&
+    !isNotice
+  ) {
     return snapshot;
   }
   if (

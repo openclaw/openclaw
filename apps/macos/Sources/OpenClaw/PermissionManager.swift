@@ -4,6 +4,7 @@ import AVFoundation
 import CoreLocation
 import Foundation
 import OpenClawIPC
+import OpenClawKit
 import PeekabooAutomationKit
 import Speech
 import UserNotifications
@@ -80,6 +81,14 @@ enum PermissionManager {
                 await self.ensureCapture(.video, capability: .camera, interactive: interactive)
             case .location:
                 await self.ensureLocation(interactive: interactive)
+            case .eventPosting:
+                await MainActor.run {
+                    self.screenRecordingPermissions.requestPostEventPermission(interactive: interactive)
+                }
+            case .computerControl:
+                isComputerControlEnabled()
+            case .canvas:
+                await MainActor.run { AppStateStore.shared.canvasEnabled }
             }
         }
         if interactive {
@@ -169,14 +178,14 @@ enum PermissionManager {
             }
             return false
         }
+        let requireAlways = AppDefaults.standard.string(forKey: locationModeKey) == OpenClawLocationMode.always.rawValue
         let status = await self.locationAuthorizationStatus()
+        if self.isLocationAuthorized(status: status, requireAlways: requireAlways) { return true }
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
-            return true
-        case .notDetermined:
+        case .authorizedAlways, .authorizedWhenInUse, .authorized, .notDetermined:
             guard interactive else { return false }
-            let updated = await LocationPermissionRequester.shared.request(always: false)
-            return self.isLocationAuthorized(status: updated, requireAlways: false)
+            let updated = await LocationPermissionRequester.shared.request(always: requireAlways)
+            return self.isLocationAuthorized(status: updated, requireAlways: requireAlways)
         case .denied, .restricted:
             if interactive {
                 await MainActor.run { SystemSettingsURLSupport.openPrivacySettings(for: .location) }

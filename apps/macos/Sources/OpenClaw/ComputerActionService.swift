@@ -376,7 +376,7 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
     static func probe() -> Self {
         Self(
             accessibility: AXIsProcessTrusted() ? .granted : .missing,
-            postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
+            postEvent: PermissionManager.screenRecordingPermissions.checkPostEventPermission() ? .granted : .missing,
             screenCapture: PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
                 ? .granted : .missing)
     }

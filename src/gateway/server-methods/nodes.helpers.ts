@@ -19,7 +19,7 @@ export function respondUnavailableOnNodeInvokeErrorWithProvenance<
 >(
   respond: RespondFn,
   res: T,
-  provenance?: { nodeCommandDispatched: boolean },
+  provenance?: { nodeCommandDispatched: boolean; permissionMissing?: unknown; message?: string },
 ): res is T & { ok: true } {
   if (res.ok) {
     return true;
@@ -30,10 +30,11 @@ export function respondUnavailableOnNodeInvokeErrorWithProvenance<
       : null;
   const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
   const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
-  const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  const message = provenance?.message ?? (nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage);
   const details = {
     nodeError: res.error ?? null,
     ...(provenance ? { nodeCommandDispatched: provenance.nodeCommandDispatched } : {}),
+    ...(provenance?.permissionMissing ? { permissionMissing: provenance.permissionMissing } : {}),
   };
   respond(
     false,

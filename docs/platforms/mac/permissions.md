@@ -19,6 +19,30 @@ when you return to the app after changing a grant in System Settings, focus the
 Dashboard, or complete a permission request. Open Dashboard windows do not start
 background permission polling.
 
+## When a tool needs permission
+
+Native tools check permissions when they need them. A missing permission stops
+the command with `PERMISSION_MISSING`, identifies the affected Mac and capabilities,
+and shows an inline **Grant** card in the Control UI conversation. Computer Control
+reports its missing Accessibility, Event Posting, Screen Recording, and OpenClaw
+capability grants together. The agent waits for your confirmation before retrying.
+
+In the Mac app, use the card to request access or open the corresponding System
+Settings pane. Enabling a capability that is off in OpenClaw uses the same native
+confirmation as **Settings → This Mac**. A stale Accessibility grant needs to be
+removed and re-added; a **Restart required** card offers to relaunch the app. Once
+the app observes the required grants, **Try again** sends a short confirmation to
+the agent. Granting permission does not automatically repeat the command.
+
+In a browser, or when the command targets another Mac, open the OpenClaw app on
+that Mac and go to **Settings → This Mac → Permissions**, grant the requested
+access, then confirm in the conversation.
+
+The structured error carries `capabilities` and one remediation `state`:
+`not-determined`, `denied`, `restart-required`, `stale-grant`, or
+`disabled-in-openclaw`. These describe native authorization or an OpenClaw
+capability switch, independently of the agent's tool approvals.
+
 Screen Recording and Accessibility show **Not granted** until access is confirmed;
 macOS's binary checks do not distinguish a first request from a denial. Click
 **Grant** to request access before looking for OpenClaw in System Settings.

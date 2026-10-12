@@ -1,6 +1,7 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
@@ -402,6 +403,11 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
     timestamp: payload.ts,
     kind,
   };
+  if (systemNotice && data.kind === "permission_missing") {
+    const request = readNodePermissionRequest(data.permissionMissing);
+    if (!request) return true;
+    notice.permissionMissing = request;
+  }
   if (systemNotice) {
     notice.source = "system";
   }

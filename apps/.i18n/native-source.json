@@ -1822,8 +1822,6 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/chat/SessionSnooze.kt","kind":"ui-call","surface":"android","id":"native.android.67c05140269eb221","source":"Tomorrow"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/chat/SessionSnooze.kt","kind":"ui-call","surface":"android","id":"native.android.61a461e668320541","source":"tomorrow $time"},
     {"path":"apps/macos/Sources/OpenClaw/VoiceWakeForwarder.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.405475b3a812acf0","source":"this Mac"},
-    {"path":"apps/macos/Sources/OpenClaw/CameraCaptureService.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.2ff88df4e6f840e0","source":"Camera"},
-    {"path":"apps/macos/Sources/OpenClaw/CameraCaptureService.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.f4ca9f48845be906","source":"Microphone"},
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bfee61a8bc05bad6","source":"All"},
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8154cd7674c08ac5","source":"Online"},
     {"path":"apps/ios/Sources/Design/AgentProTab.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c7150f26c257b807","source":"Ready"},

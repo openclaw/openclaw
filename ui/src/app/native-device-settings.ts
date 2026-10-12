@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  NODE_PERMISSION_STATES,
+  type NodePermissionRequest,
+} from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
 import {
   nativeChromeExtensionSetupActionSchema,
@@ -10,6 +14,7 @@ import {
 const permissionIdSchema = z.enum([
   "notifications",
   "accessibility",
+  "eventPosting",
   "screenRecording",
   "microphone",
   "camera",
@@ -33,6 +38,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     appVersion: z.string(), // CFBundleShortVersionString
     appBuild: z.string(), // CFBundleVersion
     profileName: z.string().nullable(), // OPENCLAW_PROFILE name when active, else null
+    nodeId: z.string().optional(),
   }),
   app: z
     .object({
@@ -100,11 +106,14 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
           // until the minimum supported app omits it; never expose a command or row.
           id: permissionIdSchema.or(z.literal("automation")),
           status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+          state: z.enum(NODE_PERMISSION_STATES).optional(),
         }),
       )
       .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length)
       .transform((entries) =>
-        entries.flatMap(({ id, status }) => (id === "automation" ? [] : [{ id, status }])),
+        entries.flatMap(({ id, status, state }) =>
+          id === "automation" ? [] : [{ id, status, ...(state ? { state } : {}) }],
+        ),
       ),
     location: z
       .object({
@@ -213,6 +222,7 @@ type NativeDeviceSettingsMessage =
   | { type: "set"; key: SettingKey; value: boolean | string | string[] | null }
   | { type: "request-permission"; id: PermissionId }
   | { type: "open-system-settings"; id: PermissionId }
+  | { type: "resolve-permission"; request: NodePermissionRequest }
   | { type: "open"; panel: NativePanel }
   | { type: "check-for-updates" }
   | { type: "chrome-extension-setup"; action: NativeChromeExtensionSetupAction }
@@ -242,6 +252,7 @@ export type NativeDeviceSettingsCapability = {
   ): void;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
+  resolvePermission?(request: NodePermissionRequest): Promise<void>;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
   setupChromeExtension(
@@ -361,6 +372,13 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     }
     return result.data;
   };
+  const resolvePermission = async (request: NodePermissionRequest) => {
+    if (!isCurrent() || snapshot?.device.nodeId !== request.nodeId) {
+      throw new Error("This permission belongs to another device");
+    }
+    // Native revalidates the node identity immediately before requesting access.
+    await post({ type: "resolve-permission", request });
+  };
   return {
     get snapshot() {
       return snapshot;
@@ -369,6 +387,9 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
     requestPermission: (id) => void send({ type: "request-permission", id }),
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
+    get resolvePermission() {
+      return snapshot?.device.nodeId ? resolvePermission : undefined;
+    },
     openPanel: (panel) => void send({ type: "open", panel }),
     checkForUpdates: () => void send({ type: "check-for-updates" }),
     async setupChromeExtension(action) {

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -41,6 +42,7 @@ import {
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
+import { publishNodePermissionMissing } from "./nodes.permission-missing.js";
 import {
   isNodePairingWorkCurrent,
   resolveDispatchableNodeSession,
@@ -461,16 +463,25 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           // Plugin policies can satisfy an invocation without crossing the raw
           // node command channel; still emit mirrored Talk events for UI state.
           if (!policyResult.ok) {
+            const permission = publishNodePermissionMissing({
+              error: asOptionalObjectRecord(policyResult.details)?.nodeError,
+              nodeId,
+              nodeName: nodeSession.displayName,
+              command,
+              client,
+              context,
+            });
             const errorCode = policyResult.unavailable
               ? ErrorCodes.UNAVAILABLE
               : ErrorCodes.INVALID_REQUEST;
             respond(
               false,
               undefined,
-              errorShape(errorCode, policyResult.message, {
+              errorShape(errorCode, permission?.message ?? policyResult.message, {
                 details: {
                   ...policyResult.details,
                   ...(policyResult.code ? { code: policyResult.code } : {}),
+                  ...(permission ? { permissionMissing: permission.permissionMissing } : {}),
                 },
               }),
             );
@@ -623,6 +634,14 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           }
           respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
             nodeCommandDispatched,
+            ...publishNodePermissionMissing({
+              error: res.error,
+              nodeId,
+              nodeName: nodeSession.displayName,
+              command,
+              client,
+              context,
+            }),
           });
           return;
         }

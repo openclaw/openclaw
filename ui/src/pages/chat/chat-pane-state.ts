@@ -1,7 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isChatControlCommand } from "../../lib/chat/commands.ts";
+import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
@@ -10,6 +10,39 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatProps } from "./chat-view.ts";
+
+export function createChatPaneSendActions(
+  state: Pick<ChatPageHost, "chatAttachments" | "chatMessage" | "handleSendChat">,
+  options: {
+    canSend: boolean;
+    modelRequiredReason?: string | null;
+    continueSession?: () => ReturnType<ChatProps["onSend"]>;
+    addSuggestion?: () => ReturnType<ChatProps["onSend"]>;
+  },
+): Pick<ChatProps, "onSend" | "onPermissionRetry"> {
+  return {
+    onPermissionRetry:
+      options.canSend && !options.continueSession && !options.addSuggestion
+        ? (message) => void state.handleSendChat(message)
+        : undefined,
+    onSend: (followUpModeOverride, submissionAction) => {
+      if (
+        !options.canSend ||
+        (options.modelRequiredReason &&
+          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
+      )
+        return;
+      if (options.continueSession) return options.continueSession();
+      if (options.addSuggestion) return options.addSuggestion();
+      return state.handleSendChat(
+        undefined,
+        followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+        submissionAction,
+      );
+    },
+  };
+}
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];

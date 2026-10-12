@@ -1,4 +1,5 @@
 /** Gateway request surface and bound replies used by the node-host runtime. */
+import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
@@ -9,7 +10,7 @@ export function createNodeInvokeResponder(client: NodeHostClient, frame: NodeInv
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
+    error?: { code?: string; message?: string; details?: NodePermissionDetails } | null;
   }) => {
     try {
       await client.request("node.invoke.result", {

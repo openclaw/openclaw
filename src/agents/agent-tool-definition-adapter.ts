@@ -31,6 +31,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
@@ -219,11 +220,14 @@ function normalizeToolExecutionResult(params: {
 function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
+  cause?: unknown;
 }): AgentToolResult<unknown> {
+  const permissionMissing = readNodePermissionError(params.cause);
   return jsonResult({
     status: "error",
     tool: params.toolName,
     error: params.message,
+    ...(permissionMissing ? { permissionMissing } : {}),
   });
 }
 
@@ -261,6 +265,7 @@ async function executeAdaptedToolOperation(params: {
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
+      cause: err,
     });
     // A protected network failure keeps its origin after becoming a result here.
     const contentSource =

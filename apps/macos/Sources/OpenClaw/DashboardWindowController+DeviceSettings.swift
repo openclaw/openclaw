@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import WebKit
 
@@ -49,6 +50,8 @@ extension DashboardWindowController {
             await BrowserProfileImportModel.shared.refreshAvailability()
         case let .set(key, value):
             try await self.setDeviceSetting(key, value: value)
+        case let .resolvePermission(request):
+            try await self.resolveNodePermission(request)
         case let .requestPermission(id):
             if let capability = id.capability {
                 _ = await PermissionManager.ensure([capability], interactive: true)
@@ -63,6 +66,69 @@ extension DashboardWindowController {
             if self.updater?.isAvailable == true { self.updater?.checkForUpdates(nil) }
         case .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
             break // The queued handler returns the canonical setup result directly.
+        }
+    }
+
+    private func resolveNodePermission(_ request: NodePermissionRequest) async throws {
+        let sourceID = self.notificationSourceID
+        let capabilities = request.capabilities.compactMap(Capability.init(rawValue:))
+        guard capabilities.count == request.capabilities.count else {
+            throw NSError(domain: "OpenClaw", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "This permission is not supported by this Mac app.",
+            ])
+        }
+        let isCurrent: @MainActor () -> Bool = {
+            MacNodeModeCoordinator.shared.connectedNodeId == request.nodeId &&
+                self.canUseDeviceSettings(sourceID: sourceID)
+        }
+        guard isCurrent() else {
+            throw NSError(domain: "OpenClaw", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Open the Mac app connected to the requested node and try again.",
+            ])
+        }
+        // Resolve local consent before requesting OS grants, regardless of the
+        // order in which the failed command reports missing capabilities.
+        for capability in capabilities {
+            guard isCurrent(), try await self.enableNodeCapability(capability, isCurrent: isCurrent) else { return }
+        }
+        for capability in capabilities {
+            let missingState = await PermissionManager.missingState(capability)
+            guard isCurrent() else { return }
+            switch missingState {
+            case .restartRequired:
+                DebugActions.restartApp()
+                return
+            case .denied, .staleGrant:
+                SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
+            case .notDetermined:
+                _ = await PermissionManager.ensure([capability], interactive: true)
+            case .disabledInOpenClaw, nil:
+                break
+            }
+        }
+    }
+
+    private func enableNodeCapability(
+        _ capability: Capability, isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool
+    {
+        let setting: (DeviceSettingKey, DeviceSettingValue)? = switch capability {
+        case .computerControl where !isComputerControlEnabled(): (.computerControlEnabled, .boolean(true))
+        case .canvas where !AppStateStore.shared.canvasEnabled: (.canvasEnabled, .boolean(true))
+        case .camera where !AppDefaults.standard.bool(forKey: cameraEnabledKey): (.cameraEnabled, .boolean(true))
+        case .location where AppDefaults.standard.string(forKey: locationModeKey) == nil ||
+            AppDefaults.standard.string(forKey: locationModeKey) == OpenClawLocationMode.off.rawValue:
+            (.locationMode, .string(OpenClawLocationMode.whileUsing.rawValue))
+        default: nil
+        }
+        guard let (key, value) = setting else { return true }
+        try await self.setDeviceSetting(key, value: value, isCurrent: isCurrent)
+        guard isCurrent() else { return false }
+        return switch capability {
+        case .computerControl: isComputerControlEnabled()
+        case .canvas: AppStateStore.shared.canvasEnabled
+        case .camera: AppDefaults.standard.bool(forKey: cameraEnabledKey)
+        case .location: AppDefaults.standard.string(forKey: locationModeKey) != OpenClawLocationMode.off.rawValue
+        default: true
         }
     }
 
@@ -97,7 +163,11 @@ extension DashboardWindowController {
         .realtimeRelayEnabled: \.talkRealtimeRelayEnabled,
     ]
 
-    private func setDeviceSetting(_ key: DeviceSettingKey, value: DeviceSettingValue) async throws {
+    private func setDeviceSetting(
+        _ key: DeviceSettingKey,
+        value: DeviceSettingValue,
+        isCurrent: @escaping @MainActor () -> Bool = { true }) async throws
+    {
         let sourceID = self.notificationSourceID
         let consent = self.requiredDeviceSettingConsent(key, value: value)
         if let consent {
@@ -105,19 +175,21 @@ extension DashboardWindowController {
         }
         // Another window can revoke scope while the sheet is open. Compare the consent
         // actually shown, then keep cookie mutations synchronous with this check.
-        guard self.canUseDeviceSettings(sourceID: sourceID),
+        guard isCurrent(), self.canUseDeviceSettings(sourceID: sourceID),
               self.requiredDeviceSettingConsent(key, value: value) == consent else { return }
         switch (key, value) {
         case let (.keepGatewayRunning, .boolean(enabled)):
             try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled) {
-                self.canUseDeviceSettings(sourceID: sourceID)
+                isCurrent() && self.canUseDeviceSettings(sourceID: sourceID)
             }
         case let (.wakeEnabled, .boolean(enabled)):
-            await AppStateStore.shared.setVoiceWakeEnabled(enabled) { self.canUseDeviceSettings(sourceID: sourceID) }
+            await AppStateStore.shared.setVoiceWakeEnabled(enabled) {
+                isCurrent() && self.canUseDeviceSettings(sourceID: sourceID)
+            }
         case let (.locationMode, .string(value)):
             guard let mode = DeviceSettingsLocationMode(rawValue: value) else { return }
             await AppStateStore.shared
-                .setLocationMode(mode.nativeMode) { self.canUseDeviceSettings(sourceID: sourceID) }
+                .setLocationMode(mode.nativeMode) { isCurrent() && self.canUseDeviceSettings(sourceID: sourceID) }
         case let (_, .boolean(enabled)):
             self.setDeviceBoolean(key, enabled: enabled)
         case let (_, .string(value)):

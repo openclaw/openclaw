@@ -11,6 +11,9 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case speechRecognition
     case camera
     case location
+    case eventPosting
+    case computerControl
+    case canvas
 }
 
 // MARK: - Canvas geometry
