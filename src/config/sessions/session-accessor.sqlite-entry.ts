@@ -469,6 +469,8 @@ async function patchSqliteSessionEntrySnapshot(
       agentId: resolved.agentId,
       selection: params.selection,
       assertCurrent: () => assertCurrent?.(),
+      assertCommitAllowed: options.assertCommitAllowed,
+      shouldCommit: options.shouldCommit,
       guard: options.workerGuard,
       preparedSource,
       retainedExecution: options.retainedExecution,

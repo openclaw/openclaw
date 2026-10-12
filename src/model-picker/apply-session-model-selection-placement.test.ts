@@ -12,7 +12,6 @@ import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
@@ -101,31 +100,6 @@ beforeEach(() => {
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection — placement guard", () => {
-  it("keeps released SDK validators inside the native session transaction", async () => {
-    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
-    const sessionKey = "agent:main:sdk-model-validator";
-    const sessionEntry = createEntry({ sessionId: "sdk-model-validator" });
-    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    let validatedInTransaction = false;
-    const result = await applySdkModelSelection(
-      createParams({
-        sessionEntry,
-        sessionKey,
-        storePath,
-        validateAuthProfileSelection: () => {
-          validatedInTransaction ||= database.db.isTransaction;
-          expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.sessionId).toBe(
-            sessionEntry.sessionId,
-          );
-          return undefined;
-        },
-      }),
-    );
-    expect(result.status).toBe("applied");
-    expect(validatedInTransaction).toBe(true);
-  });
-
   it("rejects a model selection incompatible with an active cloud placement without persisting", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-1" });
     const initial = structuredClone(sessionEntry);
@@ -164,63 +138,73 @@ describe("applySessionModelSelection — placement guard", () => {
     expect(result.status).toBe("applied");
   });
 
-  it("rejects runtime availability revoked while waiting for the session writer", async () => {
-    const tempRoot = sessionDirs.make();
-    const storePath = path.join(tempRoot, "sessions.json");
-    const sessionKey = "agent:main:dm:runtime-race";
-    const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
-    const initial = structuredClone(sessionEntry);
-    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
-      entered.resolve();
-      await release.promise;
-      return null;
-    });
-    await entered.promise;
-    let runtimeAvailable = true;
-    const validated = createDeferred();
-    runtimeChoiceMocks.validate.mockImplementation(() => {
-      validated.resolve();
-      return runtimeAvailable ? undefined : "Selected runtime is no longer available.";
-    });
-    const pending = applySessionModelSelection(
-      createParams({
-        sessionEntry,
-        sessionKey,
-        storePath,
-        request: {
-          provider: "openai",
-          model: "gpt-4o",
-          isDefault: false,
-          runtime: { kind: "set", runtime: "openclaw" },
-        },
-      }),
-    );
-    try {
-      // Preparation accepts the runtime; revoke it before the queued write can commit.
-      expect(
-        await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
-      ).toBe(true);
-      runtimeAvailable = false;
-    } finally {
-      release.resolve();
-      await writer;
-    }
+  it.each(["runtime", "SDK account"] as const)(
+    "rejects %s availability revoked while waiting for the session writer",
+    async (source) => {
+      const tempRoot = sessionDirs.make();
+      const storePath = path.join(tempRoot, "sessions.json");
+      const sessionKey = "agent:main:dm:runtime-race";
+      const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
+      const initial = structuredClone(sessionEntry);
+      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
+        entered.resolve();
+        await release.promise;
+        return null;
+      });
+      await entered.promise;
+      let available = true;
+      const validated = createDeferred();
+      const error = `Selected ${source === "runtime" ? "runtime" : "account"} is no longer available.`;
+      const validate = () => {
+        validated.resolve();
+        return available ? undefined : error;
+      };
+      if (source === "runtime") {
+        runtimeChoiceMocks.validate.mockImplementation(validate);
+      }
+      const applySelection =
+        source === "runtime" ? applySessionModelSelection : applySdkModelSelection;
+      const pending = applySelection(
+        createParams({
+          sessionEntry,
+          sessionKey,
+          storePath,
+          ...(source === "SDK account" ? { validateAuthProfileSelection: validate } : {}),
+          request: {
+            provider: "openai",
+            model: "gpt-4o",
+            isDefault: false,
+            runtime: { kind: "set", runtime: "openclaw" },
+          },
+        }),
+      );
+      try {
+        // Preparation accepts the selection; revoke it before the queued write can commit.
+        expect(
+          await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
+        ).toBe(true);
+        available = false;
+      } finally {
+        release.resolve();
+        await writer;
+      }
 
-    expect(await pending).toMatchObject({
-      status: "rejected",
-      reason: "not-allowed",
-      message: "Selected runtime is no longer available.",
-    });
-    expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(initial);
-    expect(sessionEntry).toEqual(initial);
-    expect(lifecycleEvents).toEqual([]);
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
+      expect(await pending).toMatchObject({
+        status: "rejected",
+        reason: "not-allowed",
+        message: error,
+      });
+      expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(initial);
+      expect(sessionEntry).toEqual(initial);
+      expect(lifecycleEvents).toEqual([]);
+      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+      expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
     const tempRoot = sessionDirs.make();

@@ -76,7 +76,6 @@ function captureAgentHarnessSessionMutations(
           let active = true;
           let preparing = true;
           const assertCurrent = () => {
-            target.initialization?.assertRollbackCurrent();
             if (
               !active ||
               !owner.current?.() ||

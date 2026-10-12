@@ -29,5 +29,5 @@ export const MENTION_INBOX_COMPAT_RECORD = {
     "src/gateway/mention-inbox.compat.test.ts",
   ],
   releaseNote:
-    "Mention Inbox reads, dismissals, recording, and invalidation expose awaited worker-backed methods. Synchronous plugin methods retain their existing return values and completion timing until the next Plugin SDK major; stored data, retention, and update behavior are unchanged.",
+    "Mention Inbox reads, dismissals, recording, and invalidation expose awaited worker-backed methods. Legacy recording now queues the same asynchronous worker operation after any enclosing commit; await recordCommittedInputAsync for completion. Other synchronous plugin methods retain their existing completion timing. Stored data, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

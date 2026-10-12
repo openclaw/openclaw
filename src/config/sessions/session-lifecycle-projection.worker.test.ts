@@ -204,7 +204,7 @@ async function runMaintenanceDrift(
   }
 }
 
-it("moves lifecycle counts and snapshot writes off the host while preserving maintenance", async () => {
+it("keeps guarded lifecycle writes and committed follow-ups off the host while preserving maintenance", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = maintenanceFixture();
     replaceSessionEntrySync(
@@ -226,13 +226,28 @@ it("moves lifecycle counts and snapshot writes off the host while preserving mai
       }
     });
     const sql = observeHostDataSql();
+    let commitAllowed = false;
+    let committedFollowup = false;
     try {
       const result = await applySessionEntryLifecycleMutation({
         ...f.scope,
         activeSessionKey: f.scope.sessionKey,
         upserts: f.upserts,
         maintenanceOverride: f.maintenanceOverride,
+        beforeCommitInTransaction: () => {
+          commitAllowed = true;
+        },
+        afterCommitted: async (context) => {
+          context.assertCurrent();
+          expect(commitAllowed).toBe(true);
+          expect(publications.get(f.scope.sessionKey)?.entry).toMatchObject({
+            sessionId: f.initial.sessionId,
+            createdAt: f.initial.createdAt,
+          });
+          committedFollowup = true;
+        },
       });
+      expect(committedFollowup).toBe(true);
       expect(result).toMatchObject({
         beforeCount: 2,
         afterCount: 3,

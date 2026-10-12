@@ -35,7 +35,7 @@ describe("released Mention Inbox compatibility", () => {
     });
   });
 
-  it("publishes native records only after outer commit and discards rollback notifications", async () => {
+  it("queues legacy records after outer commit and discards rolled-back submissions", async () => {
     await withInbox(async (f) => {
       const rollback = new Error("synthetic record rollback");
       for (const commit of [false, true]) {
@@ -59,7 +59,7 @@ describe("released Mention Inbox compatibility", () => {
             });
             expect(f.inbox.list(f.bobClient)).toMatchObject({
               ok: true,
-              value: { items: [{ messageId: "message-nested-record" }] },
+              value: { items: [] },
             });
             expect(f.broadcast).not.toHaveBeenCalled();
             expect(f.push).not.toHaveBeenCalled();
@@ -69,6 +69,9 @@ describe("released Mention Inbox compatibility", () => {
           });
         if (commit) {
           transaction();
+          expect((await read(f.inbox, f.bobClient)).items).toEqual([
+            expect.objectContaining({ messageId: "message-nested-record" }),
+          ]);
           expect(f.push).toHaveBeenCalledOnce();
           expect(f.broadcast).toHaveBeenCalledWith(
             "mentions.changed",
