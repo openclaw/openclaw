@@ -8,7 +8,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
@@ -96,13 +96,14 @@ export async function exportTrajectoryCommand(
     throwExpectedCliError("--store must not be blank");
   }
   let targetAgentId: string;
+  const readConfig = captureRuntimeConfigAsyncReader();
   try {
     targetAgentId = requestedAgent
-      ? resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent)
+      ? resolveConfiguredAgentId(await readConfig(), requestedAgent)
       : resolveAgentIdFromSessionKey(
           sessionKey,
           classifySessionKeyShape(sessionKey) === "legacy_or_alias"
-            ? resolveAgentOperationAgentId(getRuntimeConfig())
+            ? resolveAgentOperationAgentId(await readConfig())
             : undefined,
         );
   } catch (error) {
@@ -110,7 +111,7 @@ export async function exportTrajectoryCommand(
   }
   let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
-    : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+    : resolveSessionStorePathCore((await readConfig()).session?.store, { agentId: targetAgentId });
   if (resolvedOpts.store) {
     try {
       storePath = resolveExplicitSessionStorePath({

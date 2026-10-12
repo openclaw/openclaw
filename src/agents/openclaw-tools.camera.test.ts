@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cameraTempPath } from "../cli/nodes-camera.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
@@ -82,10 +83,12 @@ function firstText(result: NodesToolResult): string {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   callGateway.mockReset();
   setupNodeInvokeMock({});
   vi.unstubAllGlobals();
 });
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("nodes camera_snap", () => {
   it("uses front/high-quality defaults and includes images for vision models", async () => {

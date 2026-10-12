@@ -31,7 +31,6 @@ import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
 } from "../gateway/session-group-catalog.types.js";
-import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type {
@@ -58,7 +57,6 @@ import type * as secretWrites from "../secrets/store/secret-store-write.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
-import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { TuiLastSessionWorkerOperations } from "../tui/tui-last-session.contract.js";
@@ -73,11 +71,15 @@ import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-d
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
+import type { WorkerOperations } from "./worker-operation-registry.js";
 
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  WorkerOperations<
+    typeof import("../infra/device-auth-store.worker.js").deviceAuthWorkerOperations
+  > &
   GitHubPublicationSourceOperations &
   RestartLifecycleWorkerOperations &
   SandboxRegistryOperations &
@@ -132,37 +134,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: RepositoryGitHubPublicationPendingQuery;
       output: RepositoryGitHubPublicationStatusRow | undefined;
     };
-    "deviceAuth.prepare": { input: undefined; output: void };
-    "deviceAuth.list": { input: { deviceId: string }; output: DeviceAuthEntry[] };
-    "deviceAuth.read": {
-      input: Parameters<typeof deviceAuth.readDeviceAuthTokenObservationFromDatabase>[1] & {
-        readOnly: boolean;
-      };
-      output: ReturnType<typeof deviceAuth.readDeviceAuthTokenObservationFromDatabase>;
-    };
-    "deviceAuth.readOrigin": {
-      input: Parameters<typeof deviceAuth.readOriginDeviceTokenObservationFromDatabase>[1] & {
-        readOnly: boolean;
-      };
-      output: ReturnType<typeof deviceAuth.readOriginDeviceTokenObservationFromDatabase>;
-    };
-    "deviceAuth.store": {
-      input: Parameters<typeof deviceAuth.storeDeviceAuthTokenInDatabase>[1];
-      output: ReturnType<typeof deviceAuth.storeDeviceAuthTokenInDatabase>;
-    };
-    "deviceAuth.storeOrigin": {
-      input: Parameters<typeof deviceAuth.storeOriginDeviceTokenInDatabase>[1];
-      output: ReturnType<typeof deviceAuth.storeOriginDeviceTokenInDatabase>;
-    };
-    "deviceAuth.clear": {
-      input: Parameters<typeof deviceAuth.clearDeviceAuthTokenFromDatabase>[1];
-      output: ReturnType<typeof deviceAuth.clearDeviceAuthTokenFromDatabase>;
-    };
-    "deviceAuth.clearOrigin": {
-      input: Parameters<typeof deviceAuth.clearOriginDeviceTokenInDatabase>[1];
-      output: ReturnType<typeof deviceAuth.clearOriginDeviceTokenInDatabase>;
-    };
-
     "agentProvenance.readBatch": {
       input: { agentIds: readonly string[] };
       output: AgentProvenance[];

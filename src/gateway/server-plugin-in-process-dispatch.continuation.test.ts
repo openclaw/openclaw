@@ -11,6 +11,7 @@ import {
 } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -146,6 +147,7 @@ describe("typed in-process agent continuation authorization", () => {
             },
           },
         });
+        setRuntimeConfigSnapshot(context.getRuntimeConfig());
         const sessionKey = "agent:main:requester";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },

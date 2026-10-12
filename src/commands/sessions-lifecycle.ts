@@ -11,7 +11,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
@@ -57,12 +57,14 @@ type SessionsDescribeResult = {
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
-function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
+async function resolveLifecycleAgentId(rawAgent: string | undefined): Promise<string | undefined> {
   const requested = rawAgent?.trim();
   if (rawAgent !== undefined && !requested) {
     throw new Error("--agent must not be blank");
   }
-  return requested ? resolveConfiguredAgentId(getRuntimeConfig(), requested) : undefined;
+  return requested
+    ? resolveConfiguredAgentId(await captureRuntimeConfigAsyncReader()(), requested)
+    : undefined;
 }
 
 function listHint(agent?: string): string {
@@ -214,7 +216,7 @@ export async function sessionsLifecycleCommand(
   try {
     // The not-found hint points at `sessions list --agent <id>`, which rejects an unconfigured id
     // locally. Validating here keeps that suggestion runnable instead of handing back a dead end.
-    agent = resolveLifecycleAgentId(opts.agent);
+    agent = await resolveLifecycleAgentId(opts.agent);
     requested = await listRequestedSessions(keys, agent, rpcOptions);
   } catch (error) {
     rethrowExpectedCliError(error);

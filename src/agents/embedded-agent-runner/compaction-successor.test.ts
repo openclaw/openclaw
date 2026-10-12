@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionArtifactDirectory } from "../../config/sessions/paths.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -54,6 +55,8 @@ async function withAcceptanceFixture(
   await withOpenClawTestState(
     { label: "compaction-successor", scenario: "minimal" },
     async (state) => {
+      const config = {};
+      setRuntimeConfigSnapshot(config, config);
       const {
         appendTranscriptMessage,
         applySessionEntryLifecycleMutation,
@@ -134,7 +137,7 @@ async function withAcceptanceFixture(
             activeWriterRunId: entry.activeWriterRunId,
           },
           assertActive,
-          config: {},
+          config,
           result: {
             ok: true,
             compacted: true,

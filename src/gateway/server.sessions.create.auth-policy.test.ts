@@ -17,6 +17,7 @@ import {
   dashboardTitleScheduleMocks,
 } from "./server.sessions.create.test-support.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -34,6 +35,7 @@ it("retains committed initial turns through fencing and denies their final write
   testState.gatewayAuth = undefined;
   const token = "initial-turn-source-fixture-token";
   const configIO = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  configIO.setRuntimeConfigSnapshot(loadGatewayTestConfig());
   await configIO.writeConfigFile({
     ...configIO.getRuntimeConfig(),
     gateway: { ...configIO.getRuntimeConfig().gateway, auth: { mode: "token", token } },

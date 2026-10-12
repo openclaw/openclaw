@@ -1,5 +1,4 @@
 import { constants, setPriority } from "node:os";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { serializeSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -23,18 +22,6 @@ export type OpenClawDatabaseVerifyResult = {
   terminal?: boolean;
   generation?: string;
 };
-
-function isVerifyTarget(target: unknown): target is OpenClawDatabaseVerifyTarget {
-  return (
-    isRecord(target) &&
-    typeof target.path === "string" &&
-    (target.kind === "agent" || target.kind === "state") &&
-    typeof target.label === "string" &&
-    (target.check === "quick" || target.check === "full") &&
-    (target.identity === undefined || typeof target.identity === "string") &&
-    (target.confirm === undefined || (target.confirm === true && target.check === "full"))
-  );
-}
 
 function formatVerifyError(error: unknown): string {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -121,10 +108,10 @@ export async function verifyOpenClawDatabases(
 const sendToParent =
   process.argv[2] === DATABASE_VERIFY_CHILD_ARG ? process.send?.bind(process) : undefined;
 if (sendToParent) {
-  process.once("message", (message: unknown) => {
+  // The bundled parent sends typed targets over this dedicated private channel.
+  process.once("message", (targets: readonly OpenClawDatabaseVerifyTarget[]) => {
     void (async () => {
       try {
-        const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
         if (targets.some((target) => target.check === "full")) {
           try {
             setPriority(process.pid, constants.priority.PRIORITY_LOW);

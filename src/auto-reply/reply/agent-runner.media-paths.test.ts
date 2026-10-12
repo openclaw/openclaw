@@ -294,7 +294,7 @@ describe("runReplyAgent media path normalization", () => {
     overrides: Partial<AgentTurnParams> = {},
   ) {
     const { executeAgentTurn } = await import("./agent-runner-execution.js");
-    return await executeAgentTurn({
+    const params: AgentTurnParams = {
       commandBody: prompt,
       followupRun:
         overrides.followupRun ??
@@ -338,7 +338,9 @@ describe("runReplyAgent media path normalization", () => {
         normalizePayload: async (payload) => payload,
       },
       ...overrides,
-    });
+    };
+    setRuntimeConfigSnapshot(params.followupRun.run.config);
+    return await executeAgentTurn(params);
   }
 
   it.each([true, false])(

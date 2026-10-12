@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import type { preparePublishedModelRuntimeChoice } from "../agents/model-runtime-choice.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -11,6 +12,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-create-service.types.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -97,6 +99,7 @@ function configureAgentModels(
       },
     },
   };
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
 }
 
 const cases: ModelSelectionCase[] = [

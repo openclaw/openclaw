@@ -12,7 +12,8 @@ import {
   prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -62,6 +63,13 @@ afterEach(() => vi.restoreAllMocks());
 
 it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { utilityModel: "unit-test/small" },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:acp:row-receipts",
@@ -101,12 +109,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     });
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
+      cfg,
       modelCatalog: [],
     });
     const query = { agentId: scope.agentId, key: scope.sessionKey };

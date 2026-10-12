@@ -49,7 +49,7 @@ vi.mock("../config.js", async (importOriginal) => ({
 const configState = vi.hoisted(() => ({ allowLegacyAuth: true }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => ({
+  readRuntimeConfig: () => ({
     browser: { extensionRelay: { allowLegacyAuth: configState.allowLegacyAuth } },
   }),
 }));

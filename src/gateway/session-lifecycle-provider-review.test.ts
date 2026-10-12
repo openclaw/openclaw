@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
 import {
@@ -30,6 +31,7 @@ import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.j
 
 it("keeps embedded completion pending until its incognito pause fences the next admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const runId = "incognito-deferred-review";
     const target = {
       agentId: "main",
@@ -165,6 +167,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
 
 it("records an incognito pause in its existing terminal entry write and fences stale facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       env,

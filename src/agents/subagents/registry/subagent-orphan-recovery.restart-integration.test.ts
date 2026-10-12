@@ -7,7 +7,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -88,6 +88,7 @@ it.each(["durable", "incognito"] as const)(
   "classifies missing %s storage for recovery without creating its database",
   async (storage) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const databasePath = (
         storage === "incognito"
           ? resolveIncognitoOpenClawAgentSqlitePath
@@ -510,6 +511,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         rotateAgentEventLifecycleGeneration();
         await initSubagentRegistry();
         await activateGatewayRuntime();
+        await fixture.settle();
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
         expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({

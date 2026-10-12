@@ -4,6 +4,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -249,11 +253,13 @@ beforeEach(async () => {
     return result;
   });
   context = requestContext();
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);

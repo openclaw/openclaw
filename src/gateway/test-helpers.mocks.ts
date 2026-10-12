@@ -127,7 +127,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
-  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
@@ -189,8 +189,10 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   return {
     ...actual,
-    discoverModels: (authStorage: Parameters<typeof actual.discoverModels>[0], agentDir: string) =>
-      new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
+    discoverModelsAsync: async (
+      authStorage: Parameters<typeof actual.discoverModelsAsync>[0],
+      agentDir: string,
+    ) => new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
     ModelRegistry: MockModelRegistry,
   };
 });

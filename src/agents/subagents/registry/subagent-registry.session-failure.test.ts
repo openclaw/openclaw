@@ -1,6 +1,10 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -11,6 +15,10 @@ import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 describe("subagent session failures", () => {
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   it.each([
     { outcomeStatus: "error", interrupted: false },
     { outcomeStatus: "timeout", interrupted: false },
@@ -19,6 +27,7 @@ describe("subagent session failures", () => {
     "persists a bounded $outcomeStatus reason and its child notice (interrupted=$interrupted)",
     async ({ outcomeStatus, interrupted }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionKey: "agent:main:subagent:setup-failure",

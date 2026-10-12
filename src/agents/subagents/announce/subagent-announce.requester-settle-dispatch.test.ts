@@ -1,7 +1,11 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -57,6 +61,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await closeOpenClawAgentDatabasesAsync(dir);
     }
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 
@@ -90,6 +95,10 @@ function createContext(): GatewayRequestContext {
 
 describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
 
   it.each([
     { name: "WebChat settle", channel: "webchat", pause: false, external: false },
@@ -603,6 +612,7 @@ describe("requester settle dispatch deadline", () => {
     const accepted = createDeferredCore();
     const finals: string[] = [];
     const cfg = { agents: { defaults: { subagents: { announceTimeoutMs: 20 } } } };
+    setRuntimeConfigSnapshot(cfg);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       const request = preflight.request;
       io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
@@ -707,6 +717,7 @@ describe("requester settle dispatch deadline", () => {
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();

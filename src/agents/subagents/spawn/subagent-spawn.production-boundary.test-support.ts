@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
@@ -101,7 +101,7 @@ export async function createSpawnBoundaryParent(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const storePath = await writeSubagentSessionEntry({
     stateDir,
     agentId: "main",

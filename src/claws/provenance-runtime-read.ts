@@ -220,6 +220,10 @@ export function initializeCachedClawInstallSchemaVersions(
   }
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
+  if (previous?.kind === "ready") {
+    notifySnapshotListeners();
+    return;
+  }
   try {
     const read =
       options.artifactPreservingReadOnly === false
@@ -264,22 +268,26 @@ export async function prepareClawInstallSchemaVersions(
   try {
     const context = captureOpenClawStateWorkerContext({ path, env: options.env });
     assertCurrent = context.admission.assertCurrent;
-    const rows = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) =>
-        scope.execute({
-          type: "claws.install-schema-versions",
-          input: {
-            artifactPreservingReadOnly:
-              options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
-          },
-        }),
-      { existingOnly: true },
-    );
-    snapshot = resolveSchemaVersionSnapshot(
-      rows === undefined ? undefined : decodeSchemaVersions(rows),
-      previous,
-    );
+    if (previous?.kind === "ready") {
+      snapshot = previous;
+    } else {
+      const rows = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          scope.execute({
+            type: "claws.install-schema-versions",
+            input: {
+              artifactPreservingReadOnly:
+                options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+            },
+          }),
+        { existingOnly: true },
+      );
+      snapshot = resolveSchemaVersionSnapshot(
+        rows === undefined ? undefined : decodeSchemaVersions(rows),
+        previous,
+      );
+    }
   } catch (error) {
     snapshot = failedSchemaVersionSnapshot(error, previous);
   }

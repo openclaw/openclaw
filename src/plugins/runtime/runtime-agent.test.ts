@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
@@ -259,6 +263,7 @@ describe("plugin runtime session creation", () => {
 
   it("fences work admission until trusted initialization completes", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-fence" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-fence";
       const callbackStarted = createDeferred();
@@ -381,6 +386,7 @@ describe("plugin runtime session creation", () => {
 
   it("rejects creation while pre-existing session work is admitted", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-active" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-active";
       const workStarted = createDeferred();
@@ -636,6 +642,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-restart-admission" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-restart-pending";
         const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
@@ -665,6 +672,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-rollback-race" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-binding-race";
         let sessionId: string | undefined;
@@ -728,7 +736,9 @@ describe("plugin runtime session work admission", () => {
   const sessionKey = "agent:main:voice:caller";
   const sessionId = "voice-session-id";
 
+  afterEach(clearRuntimeConfigSnapshot);
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     await createRuntimeAgent().session.upsertSessionEntry({

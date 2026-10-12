@@ -22,7 +22,11 @@ import {
   getSubagentRunByChildSessionKey,
   releaseSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -73,12 +77,14 @@ afterEach(() => {
   clearFollowupQueue(sessionKey);
   clearFollowupDrainCallback(sessionKey);
   testing.resetReplyRunRegistry();
+  clearRuntimeConfigSnapshot();
 });
 
 async function setupStop(createEntry = true) {
   const root = await dirs.make("case");
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath }, commands: { allowFrom: { "*": ["*"] } } };
+  setRuntimeConfigSnapshot(cfg);
   const entry = { sessionId: "session-a", updatedAt: Date.now() };
   await replaceSessionEntry(
     { storePath, sessionKey: createEntry ? sessionKey : "agent:main:other" },

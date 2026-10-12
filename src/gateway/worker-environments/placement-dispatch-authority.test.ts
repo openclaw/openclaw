@@ -6,6 +6,10 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -34,6 +38,8 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cfg = {};
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("worker placement cancellation and reclaim authority", () => {
   let root: string;
@@ -47,6 +53,7 @@ describe("worker placement cancellation and reclaim authority", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(cfg);
     root = tempDirs.make("openclaw-reclaim-auth-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -361,6 +368,7 @@ describe("worker placement dispatch authority", () => {
 
   it("stops after requested placement acknowledgment before node readiness", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot(cfg);
       const database = openOpenClawStateDatabase({ env: state.env });
       const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
       const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
@@ -406,6 +414,7 @@ describe("worker placement dispatch authority", () => {
     "stops after membership revocation during $boundary",
     async ({ boundary, completedEffects }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot(cfg);
         const database = openOpenClawStateDatabase({ env: state.env });
         const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
         const harness = await createHarness(database, store, { workspacePath: state.workspaceDir });
@@ -425,7 +434,7 @@ describe("worker placement dispatch authority", () => {
         });
         const result = resolveSessionMutationAuthorization({
           client: identifiedClient(member.id),
-          context: sessionSharingTestContext(vi.fn()),
+          context: sessionSharingTestContext(vi.fn(), cfg),
           method: "sessions.dispatch",
           requestParams: { key: REQUEST.sessionKey, deviceId: "device-1" },
         });

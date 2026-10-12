@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -86,6 +87,7 @@ describe("sessions.patch archive attribution", () => {
     { change: { archivedAt: 42 }, name: "archive" },
   ])("rejects a $name race before drain and in the drain's live guard", async ({ change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const key = "agent:main:dashboard:archive-cas";
       const scope = { agentId: "main", sessionKey: key };
       const entry = { sessionId: "archive-cas", updatedAt: 1, lifecycleRevision: "unchanged" };
@@ -145,6 +147,7 @@ describe("sessions.patch archive attribution", () => {
     "checks organization CAS in the admitted writer for ordinary patches: %j",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const key = "agent:main:dashboard:writer-cas";
         const scope = { agentId: "main", sessionKey: key };
         await upsertSessionEntryCore(scope, {
@@ -174,6 +177,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("preserves a grandchild through hidden runs when its persistent ancestor becomes independent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const root = "agent:main:dashboard:tree-root";
       const child = "agent:main:dashboard:tree-child";
       const hidden = "agent:main:subagent:tree-bridge";
@@ -254,6 +258,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("returns per-target batch outcomes without acquiring independently archived rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const keys = ["agent:main:dashboard:cas-independent", "agent:main:dashboard:cas-selected"];
       for (const [index, key] of keys.entries()) {
         await upsertSessionEntryCore(
@@ -302,6 +307,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("archives only the selected conversation, preserving nested and promoted child work", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const parent = "agent:main:dashboard:archive-parent";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: parent },
@@ -349,6 +355,7 @@ describe("sessions.patch archive attribution", () => {
     "preserves the interruption outcome, receipts, and first archiver (endedAt=%s)",
     async (endedAt) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:archive-attribution";
         const sessionId = "session-archive-attribution";
         const retained = {
@@ -419,6 +426,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("does not fabricate attribution or transcript events for an unidentified client", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
       const terminal = {
@@ -450,6 +458,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("archives through an alias with attribution", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const canonicalKey = "agent:main:alias-happy-archive";
       const aliasKey = "alias-happy-archive";
       await upsertSessionEntryCore(

@@ -122,6 +122,7 @@ import {
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
 let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
+let configRuntime: typeof import("../../config/runtime-snapshot.js");
 
 let TEST_STORE_PATH: string;
 let TEST_SESSION_ID: string;
@@ -283,18 +284,29 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactTesting = await import("./compact.hooks.owner-test-support.js");
-  compactEmbeddedAgentSessionDirect = (params) =>
-    loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
-  compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
+  configRuntime = await import("../../config/runtime-snapshot.js");
+  compactEmbeddedAgentSessionDirect = (params) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
+  };
+  compactEmbeddedAgentSession = (params, host) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSession(params, host);
+  };
   TEST_STORE_PATH = await compactionFixture.prepare();
 });
 
 beforeEach(async () => {
+  configRuntime.setRuntimeConfigSnapshot({});
   ({
     workspaceDir: TEST_WORKSPACE_DIR,
     sessionFile: TEST_SESSION_FILE,
     sessionId: TEST_SESSION_ID,
   } = await compactionFixture.prepareSession());
+});
+
+afterEach(() => {
+  configRuntime.clearRuntimeConfigSnapshot();
 });
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {

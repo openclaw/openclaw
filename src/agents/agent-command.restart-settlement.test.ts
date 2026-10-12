@@ -1,6 +1,10 @@
 import path from "node:path";
-import { beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
@@ -31,7 +35,19 @@ const {
   createAgentRunRestartAbortError,
 } = compactionTestRuntime;
 
+// Stack-ordered teardown drains the compaction fixture before clearing its config.
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 registerAgentCommandCompactionTestHooks();
+
+beforeEach(() => {
+  if (!state.cfg) {
+    throw new Error("missing compaction fixture config");
+  }
+  setRuntimeConfigSnapshot(state.cfg);
+});
 
 let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifecycle-state.js").persistGatewaySessionLifecycleEvent;
 

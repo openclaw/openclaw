@@ -29,6 +29,8 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.prompt-timeout-fallback" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     useOpenAIPlatformAuthFixture();
   });
 
@@ -64,6 +66,9 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         )
         .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["Completion received."] }));
 
+      const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(config);
       await runEmbeddedAgent({
         ...createOverflowRunParams(state),
         provider: "openai",
@@ -71,7 +76,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         agentHarnessRuntimeOverride: harness,
         runId: "run-completion-transient-retry",
         inputProvenance: { kind: "inter_session", sourceTool },
-        config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+        config,
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
@@ -188,12 +193,15 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
       }),
     );
 
+    const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(config);
     const promise = runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-prompt-timeout-fallback",
-      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+      config,
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
@@ -277,6 +285,9 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         assistantTexts.map((text) => ({ text })),
       );
 
+      const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(config);
       const result = await runEmbeddedAgent({
         ...createOverflowRunParams(state),
         provider: "openai",
@@ -284,7 +295,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         agentHarnessRuntimeOverride: harness,
         prompt: "Write note.txt, then read it to verify its contents.",
         runId: "run-post-tool-idle-continuation",
-        config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+        config,
       });
 
       expect(result.payloads).toEqual([{ text: "The note was written once and verified." }]);
@@ -376,12 +387,15 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
         }),
       );
 
+    const config = createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]);
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(config);
     const result = await runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-post-tool-idle-finalization-empty",
-      config: createModelFallbackConfig("openai/gpt-5.4", ["anthropic/claude-opus-4-6"]),
+      config,
     });
 
     // Initial attempt plus both tool-free finalization attempts; no replay, no fallback model.

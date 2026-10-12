@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hiddenStore = vi.hoisted(() => ({ records: new Map<string, string>() }));
 
-// mock-isolation: Exercise record parsing against an in-memory hidden store without opening SQLite.
+// mock-isolation: OAuth record fixtures use an in-memory vault so tests cannot read or write real secrets.
 vi.mock("../secrets/store/secret-store-hidden-github.js", () => ({
   deleteHiddenGitHubSecretRecord: ({ name }: { name: string }) => hiddenStore.records.delete(name),
   listHiddenGitHubSecretRecords: ({ prefix }: { prefix: string }) =>

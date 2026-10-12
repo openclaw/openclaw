@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { addSession } from "../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -44,6 +45,7 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("write", "process-owner");
       const viewer = roleClient(role, "process-viewer");
       viewer.connect.scopes = scopes;
@@ -104,6 +106,7 @@ it.each([
 
 it("discards a remote process response after the request authority closes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const key = "agent:main:process-remote";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },

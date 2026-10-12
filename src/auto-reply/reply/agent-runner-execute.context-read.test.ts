@@ -1,7 +1,11 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -33,6 +37,8 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () 
 
 it("keeps a cron context prefix readable when an inbound turn persists before queuing", async () => {
   await withOpenClawTestState({ label: "cron-inbound-context-read" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const target = {
       agentId: "main",
       sessionId: "cron-session",

@@ -87,7 +87,7 @@ const uploadMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: configMocks.loadConfig,
+  readRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
 }));

@@ -25,9 +25,6 @@ export async function sweepSessionStateWatchNotices(
       { context },
     );
     context.admission.assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     const watchers = new Map<string, SessionStateSweepAddress[]>();
     for (const cursor of result?.type === "sessionState.pendingNotices" ? result.cursors : []) {
       const cursors = watchers.get(cursor.watcherSessionKey) ?? [];

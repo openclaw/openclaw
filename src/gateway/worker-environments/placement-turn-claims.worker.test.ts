@@ -1,13 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
 } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -67,6 +68,7 @@ beforeAll(async () => {
   await placements.releaseTurn(warm);
 });
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => vi.restoreAllMocks());
 
 async function workerClaim(name: string) {

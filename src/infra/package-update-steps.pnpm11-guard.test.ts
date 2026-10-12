@@ -169,7 +169,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const pathBinDir = path.join(base, "path-pnpm-home", "bin");
       const callerProjectDir = path.join(base, "caller-project");
       const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
-      const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+      const newPackageRoot = path.join(globalRoot, "hash-openclaw", "node_modules", "openclaw");
       await fs.mkdir(ownerBinDir, { recursive: true });
       await writePackageRoot(oldPackageRoot, "1.0.0");
       await fs.writeFile(
@@ -282,6 +282,12 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               path.join(stageGlobalRoot, "new"),
               path.join(stageGlobalRoot, "hash-openclaw"),
               "dir",
+            );
+            stagedPackageRoot = path.join(
+              stageGlobalRoot,
+              "hash-openclaw",
+              "node_modules",
+              "openclaw",
             );
           } else if (name === "pnpm-package-preinstall") {
             expect(input).toBeUndefined();

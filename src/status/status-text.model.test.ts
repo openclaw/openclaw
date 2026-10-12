@@ -2,6 +2,7 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -267,6 +268,7 @@ describe("buildStatusText prepared context windows", () => {
     } = {},
   ) {
     return await withTempHome(async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionId: "terminal-fallback",

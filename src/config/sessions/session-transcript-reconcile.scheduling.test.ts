@@ -7,6 +7,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,
@@ -35,7 +36,9 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
     await closeSessionTranscriptReconcileWorkerPool();
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   });
+  setRuntimeConfigSnapshot({});
   await persistSessionTranscriptTurn(
     { ...options, sessionId: "deferred", sessionKey: "agent:main:deferred" },
     {

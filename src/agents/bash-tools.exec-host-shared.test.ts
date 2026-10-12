@@ -1,4 +1,5 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -257,6 +258,8 @@ describe("resolveExecApprovalWaitOutcome", () => {
 });
 
 describe("createExecApprovalRequestRoute", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
   const createRoute = (turnSourceChannel?: string, finalDecision?: null) =>
     createExecApprovalRequestRoute({
       warnings: [],

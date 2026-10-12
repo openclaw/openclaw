@@ -8,10 +8,11 @@ import {
 } from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
@@ -55,6 +56,9 @@ import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
 
 function createPreparationGateway(

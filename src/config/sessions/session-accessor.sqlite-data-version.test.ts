@@ -10,6 +10,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   assignSessionOwner,
@@ -44,6 +45,7 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   };
 });
 
+afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-cache-");
 
 beforeEach(() => {
@@ -57,6 +59,7 @@ afterEach(() => {
 
 function createSessionScope(label: string) {
   const stateDir = sessionDirs.make();
+  setRuntimeConfigSnapshot({});
   return {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -60,6 +61,7 @@ const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactive
 describe("secret store mutation lifecycle", () => {
   it("rejects a redaction sentinel without replacing the stored credential", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
       await writeSecretStoreEntry({
@@ -99,6 +101,7 @@ describe("secret store mutation lifecycle", () => {
     "does not delete when admitted authority closes during %s",
     async (closure) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
         await writeSecretStoreEntry({
@@ -163,6 +166,7 @@ describe("secret store mutation lifecycle", () => {
 
   it("reports only committed safe facts when the operator replaces proposed hosts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const authority = claimAgentRunDelegatedAuthority({
         instanceId: "tool-instance",
         runId: "tool-run",
@@ -247,6 +251,7 @@ describe("secret store mutation lifecycle", () => {
     "refreshes an auth-profile-only %s ref on create, rotation, and delete",
     async (type) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const name = "AUTH_PROFILE_ONLY_KEY";
         const ref = { source: "store", provider: "default", id: name } as const;
         const profileId = "custom:store";

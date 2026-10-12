@@ -658,7 +658,8 @@ export function createAgentDatabaseNativeGeneration(
             errors.push(error);
           }
         }
-        if (nativeStopped && lease) {
+        // A failed close can leave the Worker running; its retry owns lease cleanup.
+        if (errors.length === 0 && nativeStopped && lease) {
           try {
             await cleanupRetiredAgentDatabaseLease({
               context,

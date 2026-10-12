@@ -2,7 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -11,6 +11,10 @@ import {
 import { readMemoryFile } from "../../packages/memory-host-sdk/src/host/read-file.js";
 import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as artifactCleanup from "../config/sessions/session-accessor.sqlite-artifact-cleanup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
@@ -158,6 +162,8 @@ it.each([
           cron: { enabled: false },
           agents: { entries: { main: { workspace: state.workspaceDir } } },
         };
+        setRuntimeConfigSnapshot(config, config);
+        onTestFinished(clearRuntimeConfigSnapshot);
         const sessionKey = "agent:main:dreaming-narrative-light-interrupted";
         const sessionId = "historical-narrative";
         const updatedAt = Date.now() - 600_000;
@@ -443,6 +449,8 @@ it.for([
           },
         },
       };
+      setRuntimeConfigSnapshot(config, config);
+      onTestFinished(clearRuntimeConfigSnapshot);
       const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
       const memoryFiles: MemoryWorkspaceFiles = {
         assertCurrent() {},

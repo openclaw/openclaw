@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -31,6 +35,7 @@ export let reloadSecrets: ReturnType<typeof vi.fn<SecretStoreReload>>;
 
 export function installQuestionTestHooks() {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     // Keep projection metadata alive independently of the exact admitted authority.
     registerAgentRunContext(requestParams.runId, {
       sessionKey: requestParams.sessionKey,
@@ -71,6 +76,7 @@ export function installQuestionTestHooks() {
     clearAgentRunContext(requestParams.runId);
     manager.close();
     await manager.drain();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });

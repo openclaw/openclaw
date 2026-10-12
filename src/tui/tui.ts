@@ -16,7 +16,7 @@ import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-res
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
@@ -588,7 +588,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const config =
+    opts.config ??
+    (await captureRuntimeConfigAsyncReader({ skipPluginValidation: !isLocalMode })());
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
   const resolveUsableCwd = () => tryProcessCwd() ?? cliInvocation.cwd;
   const initialSessionInput = (opts.session ?? "").trim();

@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createWorkerPlacementInitialRecovery,
@@ -23,8 +27,11 @@ import {
 } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("worker placement shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
     support.testState.prepareInstallation = async () => ({

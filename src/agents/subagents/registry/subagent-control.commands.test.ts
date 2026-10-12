@@ -3,10 +3,10 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
@@ -35,6 +35,10 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.each([
   "owned",

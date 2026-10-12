@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -25,11 +29,13 @@ describe("session titles with inbound Gateway metadata", () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = tempDirs.make("openclaw-session-title-inbound-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
   });
 

@@ -29,8 +29,11 @@ vi.mock("../node-host/runner.js", () => ({
   runNodeHost: mocks.runNodeHost,
 }));
 vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
+// mock-isolation: Connect fixtures capture config mutations without reading or writing operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
   mutateConfigFileWithRetry: mocks.mutateConfigFileWithRetry,
 }));
 vi.mock("./node-cli/daemon.js", () => ({

@@ -11,7 +11,7 @@ import {
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -111,7 +111,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
     gateway: createPluginGatewayRuntimeMock(),
     config: {
-      current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
+      current: vi.fn((): OpenClawConfig => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
         async () => ({
           path: "/tmp/openclaw.json",

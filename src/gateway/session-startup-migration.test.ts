@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -54,6 +58,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   tempDirs.cleanup();
 });
 
@@ -284,6 +289,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
           },
           ...(storePath ? { session: { store: storePath } } : {}),
         };
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           agentId,
           defaultAgentId: "main",

@@ -2,13 +2,13 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -48,6 +48,10 @@ import { registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",

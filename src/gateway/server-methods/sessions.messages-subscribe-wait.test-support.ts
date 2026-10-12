@@ -1,11 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { expect, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import * as history from "../../config/sessions/session-transcript-worker-runtime.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -17,13 +17,14 @@ import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sessionLog } from "../session-log.js";
+import * as rowFacts from "../session-row-database-facts.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
-/** The worker completes real SQLite work; only delivery of its display facts is held. */
+/** Hold display preparation at its owner, whether facts come from receipts or a worker. */
 export async function proveSubscriptionDoesNotWaitForDisplayRows(
   sessionCount: number,
   signal: AbortSignal,
@@ -32,6 +33,7 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
     const cfg = rolePolicyConfig();
     cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:subscribe-dirty-row",
@@ -68,35 +70,26 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       listSessionPendingApprovals: runtime.replay,
     });
     const projection = getSessionRowProjection(context)!;
-    const workerEntered = createDeferredCore();
-    const releaseWorker = createDeferredCore();
+    const displayEntered = createDeferredCore();
+    const releaseDisplay = createDeferredCore();
     const displayPreparationEntered = createDeferredCore();
-    const readDatabases = history.withSessionHistoryWorkerDatabases;
-    let heldWorkerReads = 0;
-    let workerReleased = false;
-    const workerRead = vi
-      .spyOn(history, "withSessionHistoryWorkerDatabases")
-      .mockImplementation((selected, consume, lane) =>
-        readDatabases(
-          selected,
-          (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  const reply = await owner.readRowFacts(input);
-                  if (!workerReleased && input.sessionKeys.includes(scope.sessionKey)) {
-                    heldWorkerReads++;
-                    workerEntered.resolve();
-                    await releaseWorker.promise;
-                  }
-                  return reply;
-                },
-              })),
-            ),
-          lane,
-        ),
-      );
+    const readFacts = rowFacts.withSessionRowDatabaseFacts;
+    let heldDisplayPreparations = 0;
+    let displayReleased = false;
+    const displayRead = vi
+      .spyOn(rowFacts, "withSessionRowDatabaseFacts")
+      .mockImplementation(async (owner, consume) => {
+        const selected = owner.selected ?? owner.dirty;
+        if (
+          !displayReleased &&
+          [...selected].some((id) => owner.rows.get(id)?.key === scope.sessionKey)
+        ) {
+          heldDisplayPreparations++;
+          displayEntered.resolve();
+          await releaseDisplay.promise;
+        }
+        return readFacts(owner, consume);
+      });
     const prepareRows = projection.withPreparedExactRows.bind(projection);
     const prepare = vi.spyOn(projection, "withPreparedExactRows").mockImplementation((...args) => {
       const result = prepareRows(...args);
@@ -110,8 +103,8 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
     const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     let clock: { mockRestore: () => void } | undefined;
     const release = () => {
-      workerReleased = true;
-      releaseWorker.resolve();
+      displayReleased = true;
+      releaseDisplay.resolve();
     };
     try {
       const turn = await persistSessionTranscriptTurn(scope, {
@@ -128,9 +121,9 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       pending.push(refresh);
       await withinTest(
         awaitGateBeforeSettlement(
-          workerEntered.promise,
+          displayEntered.promise,
           refresh,
-          "Dirty row did not reach its worker",
+          "Dirty row did not reach display preparation",
         ),
         signal,
       );
@@ -178,15 +171,15 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       console.log(
         JSON.stringify({
           sessionCount,
-          heldWorkerReads,
+          heldDisplayPreparations,
           subscriptionWaitMs: elapsed,
           wallMs: realNow() - wallStartedAt,
-          workerReleasedBeforeReply: workerReleased,
+          displayReleasedBeforeReply: displayReleased,
           diagnostics: warn.mock.calls,
         }),
       );
-      expect(elapsed, "subscription waited for unrelated display-row worker facts").toBe(0);
-      expect(workerReleased).toBe(false);
+      expect(elapsed, "subscription waited for unrelated display-row preparation").toBe(0);
+      expect(displayReleased).toBe(false);
       for (const { respond, includeApprovals } of responses) {
         expect(respond).toHaveBeenCalledExactlyOnceWith(
           true,
@@ -241,7 +234,7 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
       prepare.mockRestore();
       release();
       await Promise.allSettled(pending);
-      workerRead.mockRestore();
+      displayRead.mockRestore();
       clearAgentRunContext(runId);
       await disposeSessionReadContexts();
     }

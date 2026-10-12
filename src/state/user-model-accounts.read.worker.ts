@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   listUserProfileAuthLinksInDatabase,
   readPersonalCatalogProfilesInDatabase,
@@ -20,7 +17,7 @@ type UserModelAccountReadType =
 export function readUserModelAccountCommand(
   db: DatabaseSync,
   command: Extract<OpenClawStateReadCommand, { type: UserModelAccountReadType }>,
-): Extract<OpenClawStateReadResult, { type: UserModelAccountReadType }> {
+) {
   if (command.type === "userModelAccounts.selection") {
     return {
       type: command.type,

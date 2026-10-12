@@ -101,6 +101,7 @@ function registration(
   runId: string,
   overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
 ): Parameters<typeof registerSubagentRun>[0] {
+  config.setRuntimeConfigSnapshot(config.getRuntimeConfig());
   return {
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
@@ -126,6 +127,7 @@ afterEach(async () => {
   vi.mocked(callGateway).mockReset();
   vi.mocked(bindGatewayLifecycleRequest).mockReset();
   vi.mocked(onAgentEvent).mockReset();
+  vi.mocked(config.getRuntimeConfig).mockReset();
 });
 
 describe("registered completion source custody", () => {
@@ -133,6 +135,7 @@ describe("registered completion source custody", () => {
 
   it("keeps same-key child registrations owned by different agents separate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      config.setRuntimeConfigSnapshot({});
       const first = registration("research-global", {
         childSessionKey: "global",
         childAgentId: "research",
@@ -162,6 +165,7 @@ describe("registered completion source custody", () => {
     async (transition) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = { session: { store: state.path("sessions.json") } };
+        config.setRuntimeConfigSnapshot(cfg);
         vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
         const runId = "worker-registration";
         const entered = createDeferredCore();
@@ -301,6 +305,7 @@ describe("registered completion source custody", () => {
 
   it("keeps a committed registration restricted when its operator source expires before ACK", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      config.setRuntimeConfigSnapshot({});
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
@@ -401,6 +406,7 @@ describe("registered completion source custody", () => {
     async (authority, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = { session: { store: state.path("sessions.json") } };
+        config.setRuntimeConfigSnapshot(cfg);
         vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
         const requesterSessionKey = "agent:main:discord:dm:registered-completion";
         const childSessionKey = "agent:main:subagent:registered-final-delivery";
@@ -592,6 +598,7 @@ describe("registered completion source custody", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const originalConfig = { session: { store: state.path("original.sqlite") } };
       for (const childAgentId of [undefined, "research"]) {
+        config.setRuntimeConfigSnapshot(originalConfig);
         vi.mocked(config.getRuntimeConfig).mockReturnValue(originalConfig);
         const runId = childAgentId ?? "legacy";
         const params = registration(runId, {
@@ -614,9 +621,11 @@ describe("registered completion source custody", () => {
         }
         const original = loadSubagentRegistryFromSqlite().get(runId);
         expect(original?.childAgentId).toBe(childAgentId);
-        vi.mocked(config.getRuntimeConfig).mockReturnValue({
+        const replacementConfig = {
           session: { store: state.path("replacement.sqlite") },
-        });
+        };
+        config.setRuntimeConfigSnapshot(replacementConfig);
+        vi.mocked(config.getRuntimeConfig).mockReturnValue(replacementConfig);
         if (childAgentId === undefined) {
           await expect(registerSubagentRun(params, { acceptedRunReplay: true })).rejects.toThrow(
             "unresolved or different child owner",
@@ -646,6 +655,7 @@ describe("registered completion source custody", () => {
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         let cfg: OpenClawConfig = { session: { store: state.path("original.sqlite") } };
+        config.setRuntimeConfigSnapshot(cfg);
         const context = createContext();
         context.getRuntimeConfig = () => cfg;
         context.resolveGatewayContext = () => context;
@@ -739,6 +749,7 @@ describe("registered completion source custody", () => {
             }
           } else if (changed === "store") {
             cfg = { session: { store: state.path("replacement.sqlite") } };
+            config.setRuntimeConfigSnapshot(cfg);
             expect(
               resolvePhysicalSessionStorePath(
                 { sessionKey: requesterSessionKey, agentId: "main" },
@@ -788,6 +799,7 @@ describe("registered completion source custody", () => {
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      config.setRuntimeConfigSnapshot({});
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;

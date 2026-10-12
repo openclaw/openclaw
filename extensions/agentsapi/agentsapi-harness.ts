@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { migrateAgentsApiBinding } from "./agentsapi-binding-migration.js";
 import type { AgentsApiCleanupBinding } from "./agentsapi-binding-record.js";
@@ -68,7 +67,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
           assertCleanupCurrent();
           // Reacquire agent-scoped auth after restart without persisting credentials
           // or validating the new configuration against the session being removed.
-          const config = getRuntimeConfig();
+          const config = runtime.config.current({ clone: true });
           // Older hosted/external bindings have no executor metadata. The host
           // mutation target supplies their original agent, never the current default.
           const agentId = binding.executor?.agentId ?? targetAgentId;

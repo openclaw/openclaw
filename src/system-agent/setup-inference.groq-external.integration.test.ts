@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
@@ -130,6 +134,8 @@ export default defineSingleProviderPluginEntry({
       await fs.symlink(hostRoot, path.join(pluginDir, "node_modules", "openclaw"), "junction");
       const config = { plugins: { entries: { groq: { enabled: true } } } };
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config, config);
+      onTestFinished(clearRuntimeConfigSnapshot);
       await seedInstalledPluginIndex(
         {
           groq: {

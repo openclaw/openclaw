@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateApprovalGetResult } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
@@ -72,6 +76,7 @@ describe("approval authority boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await cleanupApprovalHandlerFixtures();
+    clearRuntimeConfigSnapshot();
   });
 
   it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
@@ -84,6 +89,21 @@ describe("approval authority boundaries", () => {
       const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
       setUserProfileRole(profile.id, "guest", databaseOptions);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog(databaseOptions)).release };
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.approvals"],
+              },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
       const ownerKey = "agent:main:approval-owned";
       const foreignKey = "agent:main:approval-foreign";
       for (const [sessionKey, creatorId] of [
@@ -108,20 +128,6 @@ describe("approval authority boundaries", () => {
         id: "approval:foreign",
         request: { sessionKey: foreignKey },
       });
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.approvals"],
-              },
-            },
-          },
-        },
-      };
       const context = {
         ...createContext(),
         getRuntimeConfig: () => cfg,

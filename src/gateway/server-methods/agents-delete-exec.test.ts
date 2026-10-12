@@ -18,7 +18,7 @@ import {
   createRunExit,
   runtimeManagedRun,
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { CronService } from "../../cron/service.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
@@ -87,6 +87,7 @@ it("drains an independent agent service through exit while preserving another ag
         entries: { keeper: { workspace: state.workspaceDir }, doomed: { workspace } },
       },
     });
+    await captureRuntimeConfigAsyncReader()();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const launch = async (agentId: string, cwd: string) => {
       const identity = { runId: `${agentId}-run`, agentId };

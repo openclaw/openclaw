@@ -1,6 +1,10 @@
 import { StatementSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   SqliteWorkerError,
@@ -70,9 +74,14 @@ function interceptAdmission(
     );
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 

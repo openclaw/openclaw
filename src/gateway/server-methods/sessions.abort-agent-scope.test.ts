@@ -9,6 +9,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -283,6 +284,7 @@ describe("sessions.abort agent scope", () => {
 
   it("kills controlled subagents after the parent run has already ended", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot(createContext().getRuntimeConfig());
       try {
         const actualChatAbort =
           await vi.importActual<typeof import("./chat-abort-handler.js")>(
@@ -784,6 +786,7 @@ describe("sessions.abort agent scope", () => {
           }),
         },
       });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
 
       const respond = await callSessions(
         "sessions.delete",

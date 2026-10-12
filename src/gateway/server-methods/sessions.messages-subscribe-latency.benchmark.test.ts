@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -30,6 +31,7 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
     const cfg = rolePolicyConfig();
     cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:subscribe-perf",

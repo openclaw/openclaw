@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -182,7 +186,12 @@ describe("sessionTranscriptHasContent", () => {
       sessionKey: "agent:audit:main",
       storePath: path.join(tmpDir, "openclaw-agent.sqlite"),
     };
+    setRuntimeConfigSnapshot({ session: { store: target.storePath } });
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   const assistantMessage = () =>

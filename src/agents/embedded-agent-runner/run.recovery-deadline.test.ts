@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
@@ -44,9 +45,11 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     typeof createDeferred<CompactEmbeddedAgentSessionRuntimeParams>
   >;
   let attemptStarted: ReturnType<typeof createDeferred<void>>;
+  let runtimeConfig: typeof import("../../config/runtime-snapshot.js");
 
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+    runtimeConfig = await import("../../config/runtime-snapshot.js");
     ({ prepareEmbeddedAttemptTimeout: prepareTimeout } =
       await import("./run/attempt-timeout-prepare.js"));
     ({ delegateCompactionToRuntime: delegate } = await import("../../context-engine/delegate.js"));
@@ -139,12 +142,17 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     restoreQueue?.();
     restoreCompact();
     vi.useRealTimers();
+    runtimeConfig.clearRuntimeConfigSnapshot();
   });
   afterAll(cleanupSharedRunIntegrationSessions);
 
   async function start() {
     const workspaceDir = tempDirs.make("openclaw-recovery-deadline-");
     const sessionManager = SessionManager.inMemory(workspaceDir);
+    const config: OpenClawConfig = {
+      agents: { defaults: { compaction: { timeoutSeconds: 180 } } },
+    };
+    runtimeConfig.setRuntimeConfigSnapshot(config);
     const run = runEmbeddedAgent({
       ...createOverflowRunParams({ workspaceDir }),
       agentHarnessRuntimeOverride: "openclaw",
@@ -154,7 +162,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       sessionManager,
       sessionPersistence: "detached",
       timeoutMs: 600_000,
-      config: { agents: { defaults: { compaction: { timeoutSeconds: 180 } } } },
+      config,
       abortSignal: parent.signal,
     });
     const observed = run.then(

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -174,6 +175,7 @@ describe("pre-mirror recovery input custody", () => {
     "retains exact pre-mirror recovery admission after the real recorder commits %s",
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         const { target, entry: original } = await setupNativeRequester(state);
         const claim = await captureForNativeRequester({
           agentId: "main",

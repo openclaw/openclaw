@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   replaceSessionEntry,
@@ -75,6 +79,7 @@ function target(
 
 beforeEach(() => {
   vi.resetAllMocks();
+  setRuntimeConfigSnapshot({});
   mocks.placementService.mockReturnValue({
     listAsync: async () => [],
     prepareMaintenancePlacements: async () => ({
@@ -97,6 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("createManagedWorktreeOwnerPolicy", () => {

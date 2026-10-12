@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,6 +63,7 @@ describe("session sharing sandbox requirements", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const guest = sandboxRoleClient("view");
       const maintainer = sandboxRoleClient("write");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };

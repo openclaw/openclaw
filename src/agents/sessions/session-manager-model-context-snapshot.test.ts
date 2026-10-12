@@ -9,6 +9,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
@@ -613,6 +614,7 @@ it.each([
 
 it("rejects a removed user admission before the bounded reader captures its witness", async () => {
   await withOpenClawTestState({ label: "bounded-removed-admission" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionId: "bounded-removed-admission",

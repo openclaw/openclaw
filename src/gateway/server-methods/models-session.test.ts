@@ -2,6 +2,7 @@ import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
 import {
@@ -72,6 +73,7 @@ function fixture() {
       },
     },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(config);
   const owner = createChatMetadataOwner(
     config,
     "gpt-5.6-luna",

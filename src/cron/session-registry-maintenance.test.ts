@@ -6,8 +6,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
@@ -75,6 +77,7 @@ async function withMaintenanceState(run: (state: OpenClawTestState) => Promise<v
     { layout: "state-only", prefix: "openclaw-session-registry-maintenance-" },
     async (state) => {
       resetConfigRuntimeState();
+      setRuntimeConfigSnapshot({});
       await run(state);
     },
   );
@@ -114,10 +117,12 @@ describe("runSessionRegistryMaintenance", () => {
           kind === "per-agent"
             ? undefined
             : state.statePath(kind === "fixed selector" ? "shared.json" : "shared.sqlite");
-        await state.writeConfig({
+        const config: OpenClawConfig = {
           agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
           ...(store ? { session: { store } } : {}),
-        });
+        };
+        await state.writeConfig(config);
+        setRuntimeConfigSnapshot(config);
         const scopes = [];
         for (const agentId of ["main", "beta"]) {
           const storePath = store ?? path.join(state.sessionsDir(agentId), "sessions.json");

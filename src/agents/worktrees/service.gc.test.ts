@@ -7,6 +7,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as backoff from "../../infra/backoff.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
@@ -92,12 +96,14 @@ describe("ManagedWorktreeService garbage collection", () => {
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({ env, now: () => now });
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
 

@@ -51,9 +51,6 @@ export async function readAgentDeletionRecoveryHoldsInWorker(
     { type: "agentRecovery.holds", input: { statePath } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.holds")) {
-    throw new Error("Unexpected agent recovery holds result");
-  }
   return reply?.held ?? [];
 }
 
@@ -66,9 +63,6 @@ export async function readAgentDeletionJournalForCreation(
     { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.creationJournal")) {
-    throw new Error("Unexpected agent creation journal result");
-  }
   return reply?.journal;
 }
 
@@ -106,9 +100,6 @@ export async function readAgentDeletionJournalStatusInWorker(
       { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
       { current: true, signal },
     );
-    if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
-      throw new Error("Unexpected agent deletion journal read result");
-    }
     return reply?.status ?? "absent";
   });
 }
@@ -259,9 +250,6 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       { context: readContext, current: true },
     );
     assertReadCurrent();
-    if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
-      throw new Error("Unexpected agent database deletion snapshot result");
-    }
     return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };
   const read = () => readSnapshot(context);

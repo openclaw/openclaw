@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   ensureDependency: vi.fn(),
   ensureTailscaleEndpoint: vi.fn(),
-  getRuntimeConfig: vi.fn(),
+  readRuntimeConfig: vi.fn(),
   replaceConfigFile: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.getRuntimeConfig,
+    captureRuntimeConfigAsyncReader: () => mocks.readRuntimeConfig,
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
@@ -124,7 +124,7 @@ describe("runGmailService", () => {
     children = [];
     mocks.ensureDependency.mockReset().mockResolvedValue(undefined);
     mocks.ensureTailscaleEndpoint.mockReset().mockResolvedValue(undefined);
-    mocks.getRuntimeConfig.mockReturnValue(createGmailConfig());
+    mocks.readRuntimeConfig.mockResolvedValue(createGmailConfig());
     mocks.runCommandWithTimeout.mockReset().mockResolvedValue(commandSuccess);
     mocks.spawn.mockReset().mockImplementation(() => {
       const child = Object.assign(new EventEmitter(), {

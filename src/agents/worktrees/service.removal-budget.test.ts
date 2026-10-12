@@ -89,7 +89,9 @@ it("backs off the shared repository after a missing-object snapshot failure", as
     vi.spyOn(gitExec, "executeGitCommandBuffered"),
   ];
   const gc = (retryDeferred = false) =>
-    new ManagedWorktreeService({ env, now: () => now }).gc({ retryDeferred });
+    new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) }).gc({
+      retryDeferred,
+    });
   const initialStarted = performance.now();
   const first = await gc();
   const initial = {
@@ -150,7 +152,11 @@ it("backs off the shared repository after a missing-object snapshot failure", as
     records.map((record) => record.id).toSorted(),
   );
   for (const record of records) {
-    const restored = await new ManagedWorktreeService({ env, now: () => now }).restore({
+    const restored = await new ManagedWorktreeService({
+      env,
+      now: () => now,
+      getConfig: () => ({}),
+    }).restore({
       id: record.id,
     });
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
@@ -192,7 +198,7 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
     return await execute(cwd, args, options);
   });
   await expect(
-    new ManagedWorktreeService({ env }).remove({
+    new ManagedWorktreeService({ env, getConfig: () => ({}) }).remove({
       id: record.id,
       reason: "idle-gc",
       signal: controller.signal,
@@ -247,7 +253,7 @@ it("persists timeout backoff across restart and retries only when due or explici
     }
     return await execute(cwd, args, options);
   });
-  const gc = () => new ManagedWorktreeService({ env, now: () => now }).gc();
+  const gc = () => new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) }).gc();
   expect((await gc()).outcome).toBe("partial");
   const first = getRegistryWorktree(env, record.id)?.gcRetry;
   expect(first).toEqual({
@@ -272,13 +278,21 @@ it("persists timeout backoff across restart and retries only when due or explici
     retryAt: now + 4 * hour,
   });
   fail = false;
-  const retried = await new ManagedWorktreeService({ env, now: () => now }).gc({
+  const retried = await new ManagedWorktreeService({
+    env,
+    now: () => now,
+    getConfig: () => ({}),
+  }).gc({
     retryDeferred: true,
   });
   expect(retried.removed).toEqual([record.id]);
   expect(attempts).toBe(3);
   expect(getRegistryWorktree(env, record.id)?.gcRetry).toBeUndefined();
-  const restored = await new ManagedWorktreeService({ env, now: () => now }).restore({
+  const restored = await new ManagedWorktreeService({
+    env,
+    now: () => now,
+    getConfig: () => ({}),
+  }).restore({
     id: record.id,
   });
   expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(

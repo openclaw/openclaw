@@ -119,7 +119,7 @@ export async function handleCodexConversationInboundClaim(
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
       const { inspectConversationBinding } =
         await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
-      const current = options.bindingStore.read(identity);
+      const current = await options.bindingStore.readAsync(identity);
       if (
         !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&

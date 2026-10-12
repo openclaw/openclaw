@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
@@ -206,13 +207,15 @@ describe("requester settle wake product flow", () => {
     sessionStorePath = testState.statePath("agents", "main", "sessions", "sessions.json");
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    loadConfigMock.mockReset().mockReturnValue({
+    const config: OpenClawConfig = {
       agents: {
         defaults: { subagents: { archiveAfterMinutes: 0 } },
         entries: { main: {}, research: {} },
       },
       session: { mainKey: "main", scope: "per-sender" },
-    });
+    };
+    setRuntimeConfigSnapshot(config);
+    loadConfigMock.mockReset().mockReturnValue(config);
     callGatewayMock.mockClear();
     vi.mocked(callGateway).mockImplementation(callGatewayMock as typeof callGateway);
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -313,6 +316,7 @@ describe("requester settle wake product flow", () => {
         process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
       }
       await testState.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 

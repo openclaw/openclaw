@@ -30,6 +30,7 @@ import { requestActiveCronJobCancellation } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
+import type { CronServiceDeps } from "../service/state.js";
 import { createCompletionFixture, PNG } from "./current-session-completion.test-fixtures.js";
 import * as deliveryPolicy from "./delivery-dispatch-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
@@ -162,16 +163,8 @@ describe("current-session completion media", () => {
             }
             return payloads;
           });
-        const cron = new CronService({
-          scheduler: createTestGatewayScheduler(),
-          storePath: state.path("cron", "jobs.json"),
-          cronEnabled: false,
-          defaultAgentId: "main",
-          isAgentAvailable: () => available,
-          log: createNoopLogger(),
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
+        const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(
+          async ({ job, abortSignal, deliveryAttemptFence }) => {
             expect(deliveryAttemptFence).not.toBeNull();
             fixture.params.job = job;
             fixture.params.deliveryPlan = resolveCronDeliveryPlan(job);
@@ -207,6 +200,17 @@ describe("current-session completion media", () => {
               error: result.deliveryError,
             };
           },
+        );
+        const cron = new CronService({
+          scheduler: createTestGatewayScheduler(),
+          storePath: state.path("cron", "jobs.json"),
+          cronEnabled: false,
+          defaultAgentId: "main",
+          isAgentAvailable: () => available,
+          log: createNoopLogger(),
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
         });
         try {
           await state.writeConfig(fixture.params.cfgWithAgentDefaults);
@@ -222,6 +226,9 @@ describe("current-session completion media", () => {
             delivery: { mode: "announce", channel: "telegram", to: "12345" },
           });
           await cron.run(job.id, "force");
+          // Cancellation can finish cron.run before the callback finishes media cleanup.
+          expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+          await runIsolatedAgentJob.mock.results[0]!.value;
           expect(revoked).toBe(true);
           expect(sendMedia).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
           expect(await fixture.messages()).toHaveLength(0);

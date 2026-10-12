@@ -61,6 +61,8 @@ describe("runEmbeddedAgent fast auto progress", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.fast-mode-auto" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
@@ -88,19 +90,22 @@ describe("runEmbeddedAgent fast auto progress", () => {
       return successAttempt("ollama", "glm-5.1:cloud");
     });
 
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
+          },
+        },
+      },
+    };
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(config);
     await runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
-            },
-          },
-        },
-      },
+      config,
       fastMode: "auto",
     });
 

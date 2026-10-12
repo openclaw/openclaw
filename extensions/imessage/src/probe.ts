@@ -5,7 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import {
@@ -272,7 +272,7 @@ export async function probeIMessage(
   timeoutMs?: number,
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
-  const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
+  const cfg = opts.cliPath || opts.dbPath ? undefined : await captureRuntimeConfigAsyncReader()();
   const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
   const cliPath = explicitCliPath || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();

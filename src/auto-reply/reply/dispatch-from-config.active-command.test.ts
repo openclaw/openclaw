@@ -1,6 +1,10 @@
 // Exercises control-command reachability without relaxing ordinary reply admission.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  raceWithTimeoutResult,
+} from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -187,6 +191,8 @@ describe("dispatch active command admission", () => {
     async (controlName, controlBody) => {
       const sessionKey = "agent:main:login-ticket";
       const releaseLogin = createDeferred();
+      const loginStarted = createDeferred();
+      const controlStarted = createDeferred();
       const loginEntered = vi.fn();
       const controlEntered = vi.fn();
       const shellEntered = vi.fn();
@@ -208,12 +214,18 @@ describe("dispatch active command admission", () => {
         });
       const login = dispatchCommand("/login openrouter", "login", async () => {
         loginEntered();
+        loginStarted.resolve();
         await releaseLogin.promise;
         return markCommandReplyForDelivery({ text: "Login ended." });
       });
       const pending = [login];
       try {
-        await vi.waitFor(() => expect(loginEntered).toHaveBeenCalledOnce());
+        await awaitGateBeforeSettlement(
+          loginStarted.promise,
+          login,
+          "login dispatch settled before entering its reply resolver",
+        );
+        expect(loginEntered).toHaveBeenCalledOnce();
         const shell = dispatchCommand("/bash echo ready", "bash", async () => {
           shellEntered();
           return markCommandReplyForDelivery({ text: "Shell command completed." });
@@ -221,11 +233,17 @@ describe("dispatch active command admission", () => {
         pending.push(shell);
         const control = dispatchCommand(controlBody, controlName, async () => {
           controlEntered();
+          controlStarted.resolve();
           return markCommandReplyForDelivery({ text: "Control command completed." });
         });
         pending.push(control);
 
-        await vi.waitFor(() => expect(controlEntered).toHaveBeenCalledOnce());
+        await awaitGateBeforeSettlement(
+          controlStarted.promise,
+          control,
+          "control dispatch settled before entering its reply resolver",
+        );
+        expect(controlEntered).toHaveBeenCalledOnce();
         expect(shellEntered).not.toHaveBeenCalled();
         expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
         releaseLogin.resolve();

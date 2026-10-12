@@ -8,6 +8,10 @@ import {
 import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
@@ -79,6 +83,7 @@ function createContext(
   config: OpenClawConfig = {},
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
 ) {
+  setRuntimeConfigSnapshot(config);
   const projection = {
     get state() {
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
@@ -182,6 +187,7 @@ beforeEach((context) => {
 
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
 });
 

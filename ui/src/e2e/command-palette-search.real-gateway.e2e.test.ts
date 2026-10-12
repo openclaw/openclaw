@@ -6,6 +6,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.ts";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
+import {
   appendTranscriptMessages,
   createSessionEntryWithTranscript,
 } from "../../../src/config/sessions/session-accessor.js";
@@ -229,7 +233,12 @@ const suite = createControlUiE2eSuite({
         },
       };
       await owner.state.writeConfig(config);
-      await seedSessions(owner, config);
+      setRuntimeConfigSnapshot(config);
+      try {
+        await seedSessions(owner, config);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
       await owner.startGateway();
       return {
         baseUrl: `http://127.0.0.1:${owner.port}/`,

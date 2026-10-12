@@ -8,6 +8,7 @@ import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -147,6 +148,7 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it("does not terminalize a replacement physical store containing the same claim", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:terminal",
@@ -180,6 +182,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     "refuses queued terminal settlement after its %s changes",
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:terminal",
@@ -274,6 +277,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
     async ({ settlement, missingProfile, policyFailure, sessionChanged, stateContention }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionKey: "agent:main:main",
@@ -506,6 +510,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
 
   it("keeps restart-safe settlement successful when its notice cannot be written", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = {
         sessionKey: "agent:main:main",
         storePath: path.join(state.sessionsDir(), "sessions.json"),

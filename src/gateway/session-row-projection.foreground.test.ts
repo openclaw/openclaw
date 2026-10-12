@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
@@ -111,6 +112,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
 it("publishes read-only transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:preview-only-backfill",
@@ -202,6 +204,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
 it("retains transcript previews across metadata edits and refreshes them after a transcript append", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:metadata-preview",
@@ -264,6 +267,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         defaults: { utilityModel: "unit-test/small" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:backfill-facts",
@@ -401,6 +405,7 @@ it("gives an in-flight Gateway request priority before starting read-only previe
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     resetGatewayWorkAdmission();
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:foreground-backfill",

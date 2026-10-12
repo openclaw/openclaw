@@ -5,7 +5,7 @@ import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discov
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { discoverModels } from "./agent-model-discovery.js";
+import { discoverModelsAsync } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import {
   buildInlineProviderModels,
@@ -67,7 +67,7 @@ export async function prepareFullCatalogFacts(
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
-    const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
+    const templateModelRegistry = await discoverModelsAsync(templateAuthStorage, input.agentDir, {
       config: input.config,
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       pluginMetadataSnapshot,

@@ -1,6 +1,6 @@
 // Install synthetic OAuth and subprocess transport before RPC modules load.
 // oxfmt-ignore
-import { network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
+import { createPersonalGitHubTestClient, network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
@@ -19,6 +19,10 @@ import {
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
 import { cleanupRetiredManagedGitHubProfiles } from "../../agents/github-tool-profile-cleanup.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveCommandEnv } from "../../process/exec-spawn.js";
@@ -49,7 +53,7 @@ import { getUserProfileListItem } from "../../state/user-profile-list-item.test-
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -74,27 +78,8 @@ let alice: GatewayClient;
 let bob: GatewayClient;
 let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
-function user(email: string, scopes = ["operator.read"]): GatewayClient {
-  const profile = ensureProfileForEmail(email);
-  const client: GatewayClient = {
-    connId: `connection-${profile.id}`,
-    authenticatedUserId: email,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
-  };
-  clients.add(client);
-  return client;
+function user(email: string, scopes = ["operator.read"]) {
+  return createPersonalGitHubTestClient(clients, email, scopes);
 }
 function owner(client = alice): string {
   return client.authenticatedUserProfile!.profileId;
@@ -129,6 +114,7 @@ async function connect(client = alice) {
 beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
   config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+  setRuntimeConfigSnapshot(config);
   clients = new Set();
   alice = user("alice@example.test");
   bob = user("bob@example.test");
@@ -154,6 +140,7 @@ afterEach(async () => {
   await lifecycle.stop();
   profileCatalog.release();
   await state.cleanup();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllGlobals();
 });
 
@@ -182,6 +169,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         ...config,
         gateway: { controlUi: { github: { token: "synthetic-preview" } } },
       };
+      setRuntimeConfigSnapshot(config, sourceConfig);
       const snapshot = vi
         .spyOn(secretsRuntime, "getActiveSecretsRuntimeConfigSnapshot")
         .mockReturnValue({ config, sourceConfig, configRefsPrepared: true });
@@ -440,6 +428,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         expect(polled.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
       }
       config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+      setRuntimeConfigSnapshot(config);
       const identity =
         scope === "system" ? config.tools?.github : config.agents?.entries?.main?.tools?.github;
       if (!identity) {

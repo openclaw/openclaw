@@ -559,6 +559,7 @@ describe("login-qr", () => {
       currentQrDataUrl: start.qrDataUrl,
       accountId,
     });
+    await waitForNextTask();
     expect(vi.getTimerCount()).toBe(1);
     finishLogin();
     await expect(waiting).resolves.toEqual({

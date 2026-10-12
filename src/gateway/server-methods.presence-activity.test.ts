@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -6,6 +10,7 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function setup() {
+  setRuntimeConfigSnapshot({});
   const started = 1_900_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(started);
   const tabs = ["one", "two"].map((tab): GatewayWsClient => ({
@@ -40,7 +45,10 @@ function setup() {
   return { started, clock, tabs, clients, request, publish: params.runtime.publishPresence };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 describe("presence.activity registered request", () => {
   it("rejects invalid telemetry and unauthorized callers before recording activity", async () => {

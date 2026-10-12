@@ -4,6 +4,7 @@ import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   replaceSessionEntry,
@@ -156,6 +157,7 @@ it.each([false, true])(
   "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = {
         agentId: "main",
         sessionKey: incognito
@@ -202,6 +204,7 @@ it.each([false, true])(
 
 it("reads an exact ended-session archive in the history worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const sessionId = "deleted-session-archive";
     const fixture = await seed(state, "main", sessionId);
     const content = [
@@ -247,6 +250,7 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   let previousWorker: Worker | undefined;
   for (const sessionId of ["first-fixture", "second-fixture"]) {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const fixture = await seed(state, "main", sessionId);
       await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
       const prewarmedWorker = observed.workers.at(-1);
@@ -316,6 +320,7 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
 
 it("settles cancelled message reads before reuse and closes their database handles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const fixture = await seed(state, "main", "cancel-message-read");
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
     const controller = new AbortController();
@@ -362,6 +367,7 @@ it.each(["no-commit", "metadata-refresh"] as const)(
   "reads history after unchanged sibling registration (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
       await a.read();
@@ -393,6 +399,7 @@ it.each(["no-commit", "metadata-refresh"] as const)(
 
 it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
@@ -441,6 +448,7 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
 
 it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const targets = [];
     for (let index = 0; index < 65; index++) {
       targets.push(await seed(state, `retained-${index}`, `history-${index}`));
@@ -487,6 +495,7 @@ it.for(["before restoration", "queued restoration"] as const)(
   "does not restore a replacement database for a revoked history read (%s)",
   async (phase, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
       const unrelated =
@@ -574,6 +583,7 @@ it.for(["before restoration", "queued restoration"] as const)(
 
 it("leaves the unrelated warm worker running when admission rejects a request before dispatch", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const b = await seed(state, "other", "overload-b");
     await b.read();
     const worker = observed.workers.at(-1)!;
@@ -600,6 +610,7 @@ it.each([false, true])(
   "joins the history worker when its 30-minute idle timer fires (missing=%s)",
   async (missing) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const a = missing
         ? prepareSessionEntryPresenceRead({
             agentId: "main",

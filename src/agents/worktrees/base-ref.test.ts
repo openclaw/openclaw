@@ -46,6 +46,7 @@ describe("managed worktree creation groups", () => {
     repo = await initializeRepository(root);
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      getConfig: () => ({}),
     });
   });
 

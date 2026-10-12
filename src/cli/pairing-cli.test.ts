@@ -66,9 +66,11 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
+// mock-isolation: Pairing command fixtures own empty config and intercepted config writes.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn().mockReturnValue({}),
   loadConfig: vi.fn().mockReturnValue({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
   readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
   replaceConfigFile: mocks.replaceConfigFile,
 }));

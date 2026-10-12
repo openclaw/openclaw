@@ -1,13 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -118,6 +121,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
   lifecycle.authorize.mockResolvedValue({
@@ -130,6 +134,8 @@ beforeEach(() => {
   lifecycle.execute.mockReset();
   lifecycle.execute.mockResolvedValue({ ok: true });
 });
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
   return fetch(`http://127.0.0.1:${serverPort}/tools/invoke`, {

@@ -59,6 +59,58 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it.each([false, true])(
+    "retires composer frames through detach and reattach (reduced motion: %s)",
+    async (reducedMotion) => {
+      vi.stubGlobal("matchMedia", (media: string) => ({
+        media,
+        matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent: () => true,
+      }));
+      let nextFrame = 0;
+      const frames = new Map<number, FrameRequestCallback>();
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        const id = ++nextFrame;
+        frames.set(id, callback);
+        return id;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const page = await mount(routeData("research"));
+      const flushFrames = async (timestamp: number) => {
+        const callbacks = [...frames.values()];
+        frames.clear();
+        for (const callback of callbacks) {
+          callback(timestamp);
+        }
+        await settle(page);
+      };
+      const placeholder = () => page.querySelector<HTMLTextAreaElement>("textarea")?.placeholder;
+      const target = t("newSession.messagePlaceholder");
+      await flushFrames(0);
+      await flushFrames(206);
+      expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
+      page.requestUpdate();
+      page.remove();
+      await settle(page);
+      expect(frames.size).toBe(0);
+
+      document.body.append(page);
+      await settle(page);
+      await flushFrames(0);
+      await flushFrames(206);
+      expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
+      await enterMessage(page, "Keep this draft");
+      await flushFrames(232);
+      expect(placeholder()).toBe(target);
+      expect(frames.size).toBe(0);
+    },
+  );
+
   it("focuses an opened draft and refocuses without changing its message", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");

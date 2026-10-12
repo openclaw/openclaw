@@ -1,6 +1,7 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -31,6 +32,12 @@ export function upsertSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): boolean {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.upsertSessionUpstreamLink",
+    replacement: "await upsertSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   const now = options.now ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
@@ -55,6 +62,12 @@ export function deleteSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): "deleted" | "absent" | "changed" | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.deleteSessionUpstreamLink",
+    replacement: "await deleteSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();

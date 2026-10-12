@@ -15,6 +15,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -92,6 +94,9 @@ describe("SQLite active transcript event projection", () => {
       sessionId: "active-transcript-test",
       sessionKey: "agent:main:active-transcript-test",
     };
+    setRuntimeConfigSnapshot({
+      session: { store: resolveSessionStorePathCore(undefined, scope) },
+    });
   });
 
   afterEach(async () => {
@@ -99,6 +104,7 @@ describe("SQLite active transcript event projection", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("defers branch rewind rebuilds off history and writer stacks", async ({ signal }) => {

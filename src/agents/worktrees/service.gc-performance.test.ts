@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -27,6 +31,14 @@ import {
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { hasTemplatesAsync } from "./template-registry-async.js";
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("worktree Git maintenance", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>

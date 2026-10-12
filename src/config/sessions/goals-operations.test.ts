@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal, SessionGoalOperationError } from "./goals-operations.js";
 import type {
@@ -39,6 +40,7 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 // These tests exercise the durable owner, including rollback and process reopen; existing
 // textual Goal tests protect the shared policy but cannot catch a split Goal/turn commit.
 describe("typed Goal operation persistence", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("openclaw-goal-operations-");
   const sessionKey = "agent:main:goal-operations";
   const sessionId = "goal-session-1";
@@ -90,6 +92,7 @@ describe("typed Goal operation persistence", () => {
     });
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     await upsertSessionEntryCore(scope(), {
       sessionId,
       updatedAt: now,

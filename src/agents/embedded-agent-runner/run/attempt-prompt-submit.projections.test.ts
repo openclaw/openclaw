@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -81,6 +82,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
           ...(withLogPatterns ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
         };
+        setRuntimeConfigSnapshot(target.config ?? {});
         await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const requests: ReturnType<typeof buildOpenAIResponsesParams>[] = [];
         const userEnvelopes: string[][] = [];
@@ -326,6 +328,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           sessionKey: "agent:main:fallback-model-projection",
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
         };
+        setRuntimeConfigSnapshot({});
         await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
         const original = "Keep the original user request.";
         const firstProjection = enriched ? "Original request with captured context." : original;
@@ -451,6 +454,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionEntry: { sessionId, updatedAt: 1 },
         };
+        setRuntimeConfigSnapshot({});
         await upsertSessionEntryCore(target, target.sessionEntry);
         const original = {
           text: "describe this image",
@@ -568,6 +572,7 @@ describe("durable model prompt projection at provider dispatch", () => {
         storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
         sessionEntry: { sessionId, updatedAt: 1 },
       };
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(target, target.sessionEntry);
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "original compacted turn", timestamp: 1 },
@@ -642,6 +647,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           sessionEntry: { sessionId, updatedAt: 1 },
           ...(hook ? { config: { logging: { redactPatterns: ["hidden"] } } } : {}),
         };
+        setRuntimeConfigSnapshot(target.config ?? {});
         await upsertSessionEntryCore(target, target.sessionEntry);
         const provenance = {
           kind: "inter_session" as const,

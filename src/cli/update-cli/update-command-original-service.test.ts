@@ -4,11 +4,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -126,10 +128,12 @@ beforeEach(async () => {
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: state.home });
   delete state.env.OPENCLAW_HOME;
   delete process.env.OPENCLAW_HOME;
-  await state.writeConfig({
+  const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
-  });
+  };
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
   rootA = state.path("A");
   rootB = state.path("B");
   for (const [root, version] of [

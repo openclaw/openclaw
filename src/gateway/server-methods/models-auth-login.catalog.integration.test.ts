@@ -188,9 +188,13 @@ it.for([false, true])(
           signal,
           start: () => list(true),
           read: list,
-          ready: () => {
+          ready: ({ result }) => {
             const { completedTasks, pendingTasks } = catalogWork.read();
-            return completedTasks > 0 && pendingTasks === 0;
+            return (
+              completedTasks > 0 &&
+              pendingTasks === 0 &&
+              !result.pendingProviders?.includes(provider)
+            );
           },
         });
         const beforeLoginWork = catalogWork.read();

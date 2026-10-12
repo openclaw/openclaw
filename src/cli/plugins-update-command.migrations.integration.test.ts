@@ -16,7 +16,7 @@ import {
 import { selectInstallMutationWriteOptions } from "../plugins/install-config-mutation.js";
 import { persistPluginInstall } from "../plugins/install-persistence.js";
 import { resolvePluginInstallTransactionRequest } from "../plugins/install-transaction.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { PluginInstallPersistedError } from "../plugins/lifecycle.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "../plugins/plugin-lifecycle-lease-identity.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -616,9 +616,9 @@ describe("installed plugin update config migration", () => {
             JSON.parse(fs.readFileSync(state.configPath, "utf8")).plugins.entries[pluginId].config,
           ).toEqual({ listener: { port: 57597 }, label: "kept" });
           expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-            superseded ? newerRecords : nextRecords,
-          );
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual(superseded ? newerRecords : nextRecords);
           expect(payload.commit).toHaveBeenCalledTimes(1);
           expect(payload.rollback).not.toHaveBeenCalled();
           expect(gateway.call).not.toHaveBeenCalled();
@@ -671,7 +671,9 @@ describe("installed plugin update config migration", () => {
           expect(readDeferredPluginMigrations({ env: state.env })).toEqual(
             scenario === "rollback-generation-conflict" ? [newerPending] : beforePending,
           );
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual(
             scenario === "revoked" || scenario === "include-post-publish-failure" || afterCompletion
               ? nextRecords
               : previousRecords,
@@ -716,9 +718,9 @@ describe("installed plugin update config migration", () => {
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual(
           inactive || pendingState ? beforePending : retainsOther ? [unrelated] : [],
         );
-        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-          nextRecords,
-        );
+        expect(
+          await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+        ).toEqual(nextRecords);
         if (inactive) {
           expect(plugins.entries[pluginId].enabled).toBe(false);
         }

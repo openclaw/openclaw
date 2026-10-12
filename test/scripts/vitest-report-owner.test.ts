@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { parseCLI, type CliOptions, type JsonTestResults } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
 import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owner.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
@@ -755,30 +756,47 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
-  reportTest.for([
-    ["help", ["--help"], "help"],
-    ["short help", ["-h"], "help"],
-    ["native dash prefix", ["---help"], "help"],
-    ["false help", ["--help=false"], "tests"],
-    ["separate false help", ["--help", "false"], "tests"],
-    ["negated help", ["--no-help"], "tests"],
-    ["negated alias", ["--no-h"], "tests"],
-    ["help then negation", ["--help", "--no-help"], "tests"],
-    ["false alias precedence", ["--help=false", "-h"], "tests"],
-    ["long alias precedence", ["--help=false", "--h"], "tests"],
-    ["repeated false", ["--help=false", "--help=false"], "help"],
-    ["short group", ["-vh"], "help"],
-    ["unknown under help", ["--not-an-option", "--help"], "help"],
-    ["missing under help", ["--pool", "--help"], "help"],
-    ["unknown without help", ["--not-an-option", "--help=false"], "error"],
-    ["missing without help", ["--pool", "--no-help"], "error"],
-    ["named run version", ["--version"], "tests"],
-    ["negated version", ["--no-version"], "tests"],
-    ["wrapper consumes separators", ["--", "--help"], "help"],
-    ["list tags", ["--listTags"], "native-error"],
-    ["clear cache", ["--clearCache"], "idle"],
-    ["standalone", ["--standalone"], "native-error"],
-  ] as const)(
+  const nativeControlCases = [
+    ["help", ["--help"], "help", true],
+    ["short help", ["-h"], "help", false],
+    ["native dash prefix", ["---help"], "help", false],
+    ["false help", ["--help=false"], "tests", true],
+    ["separate false help", ["--help", "false"], "tests", false],
+    ["negated help", ["--no-help"], "tests", false],
+    ["negated alias", ["--no-h"], "tests", false],
+    ["help then negation", ["--help", "--no-help"], "tests", false],
+    ["false alias precedence", ["--help=false", "-h"], "tests", false],
+    ["long alias precedence", ["--help=false", "--h"], "tests", false],
+    ["repeated false", ["--help=false", "--help=false"], "help", false],
+    ["short group", ["-vh"], "help", false],
+    ["unknown under help", ["--not-an-option", "--help"], "help", true],
+    ["missing under help", ["--pool", "--help"], "help", false],
+    ["unknown without help", ["--not-an-option", "--help=false"], "error", true],
+    ["missing without help", ["--pool", "--no-help"], "error", true],
+    ["named run version", ["--version"], "tests", true],
+    ["negated version", ["--no-version"], "tests", false],
+    ["wrapper consumes separators", ["--", "--help"], "help", true],
+    ["list tags", ["--listTags"], "native-error", true],
+    ["clear cache", ["--clearCache"], "idle", true],
+    ["standalone", ["--standalone"], "native-error", true],
+  ] as const;
+
+  it.for(nativeControlCases)(
+    "classifies native report admission: %s",
+    ([, nativeArgs, kind], { expect }) => {
+      const execution = parseVitestExecutionArgs(["run", ...nativeArgs], parseCLI);
+      // Native -- preserves the following literal; the project wrapper's
+      // consumption of its leading separator is covered by the executable case.
+      expect(execution !== null).toBe(kind === "tests" || nativeArgs[0] === "--");
+      if (execution) {
+        expect(execution.filter).toEqual([]);
+      }
+    },
+  );
+
+  // Keep real child/report proof for each distinct outcome and entry-point rule;
+  // aliases and boolean precedence share the admission contract above.
+  reportTest.for(nativeControlCases.filter((entry) => entry[3]))(
     "leaves native control execution with the project child: %s",
     { timeout: 60000 },
     async ([, nativeArgs, kind], { expect, reports }) => {

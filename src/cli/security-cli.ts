@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAuditCore } from "../security/audit.js";
@@ -119,7 +119,7 @@ export function registerSecurityCli(program: Command) {
       });
       const fixResult = opts.fix ? await fixSecurityFootguns() : null;
 
-      const sourceConfig = getRuntimeConfig();
+      const sourceConfig = await captureRuntimeConfigAsyncReader()();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,

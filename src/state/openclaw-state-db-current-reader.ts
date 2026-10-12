@@ -94,7 +94,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
     );
     assertSource();
     assertExistingDatabaseIdentity(pathname, key, birthtime);
-    if (!admitted?.ok || admitted.type !== "admit") {
+    if (!admitted) {
       throw new Error("Current shared-state reader admission did not settle");
     }
   }

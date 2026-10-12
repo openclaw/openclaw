@@ -238,9 +238,6 @@ export async function readDeferredPluginMigrationsAsync(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "plugins.deferredMigrations.read") {
-    throw new Error("Unexpected deferred plugin migration read reply");
-  }
   return reply.pending;
 }
 

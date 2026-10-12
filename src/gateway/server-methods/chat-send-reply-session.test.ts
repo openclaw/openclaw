@@ -138,6 +138,7 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
   "uses one entry phase and rechecks %s before the terminal delivery snapshot",
   async (change) => {
     await withOpenClawTestState({ label: "webchat-retained-terminal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const { dispatch, append, scope, runId, release } = await createReplyTranscriptFixture(
         "agent:main:retained-terminal",
         true,

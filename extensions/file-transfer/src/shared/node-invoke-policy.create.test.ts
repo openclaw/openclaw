@@ -1,5 +1,9 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import {
   createCtx,
@@ -12,6 +16,14 @@ vi.mock("./audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 const binding = { kind: "write", anchorPath: "/workspace", anchorDevice: "1", anchorInode: "2" };
 const sizeBytes = 50 * 1024 * 1024;
 const expectedSha256 = "a".repeat(64);
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 function fixture(overrides: { maxBytes?: number } = {}) {
   const { ctx, invokeNode } = createCtx({

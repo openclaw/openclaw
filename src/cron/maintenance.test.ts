@@ -1,7 +1,9 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -44,10 +46,12 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
       vi.setSystemTime(now);
       const gatewayScheduler = createTestGatewayScheduler("fake-timers");
       try {
-        await state.writeConfig({
+        const config: OpenClawConfig = {
           cron: { enabled: false },
           agents: { ownership: "explicit", entries: { main: {} } },
-        });
+        };
+        await state.writeConfig(config);
+        setRuntimeConfigSnapshot(config);
         const storePath = state.statePath("cron/jobs.json");
         const job = makeCronReceiptJob("receipt-owned", "main");
         await saveCronStore(storePath, { version: 1, jobs: [job] });

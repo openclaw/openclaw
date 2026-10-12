@@ -39,9 +39,6 @@ export async function getUserPreferenceValues(
     { type: "userPreferences.values", profileIds: ids, key },
     { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "userPreferences.values")) {
-    throw new Error(reply.ok ? "Unexpected user preference values reply" : reply.message);
-  }
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 

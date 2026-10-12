@@ -50,9 +50,11 @@ vi.mock("../utils.js", async (importOriginal) => ({
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
 
+// mock-isolation: Skill verification uses an empty fixture config and isolated workspace.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({

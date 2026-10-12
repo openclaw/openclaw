@@ -476,6 +476,13 @@ these APIs remain supported, with no deprecation warning or required migration.
 Worker activation must preserve them; changing these released contracts requires
 an explicitly approved Plugin SDK major release.
 
+The synchronous `readAcpSessionEntry` export remains available for the
+`v2026.9.4` contract, but is deprecated. Await `readAcpSessionEntryAsync` to read
+through the existing worker. Bundled callers have migrated. Legacy use emits
+one `DEP_PLUGIN_SDK` warning per plugin and ACP-session family per process;
+removal will follow in a later stable release after deprecation ships. The asynchronous signatures
+above remain supported without warnings. This changes no schema or stored data.
+
 ### Memory session binding compatibility
 
 `openclaw/plugin-sdk/memory-core-host-engine-sessions` retains the readers
@@ -637,6 +644,16 @@ including empty results without range metadata. Only an explicit
 `status: "not_found"` reports absence. New producers must emit that status for
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
+
+### Runtime config snapshot reads
+
+`runtime-config-snapshot.getRuntimeConfig` and
+`memory-core-host-runtime-core.getRuntimeConfig` retain their released synchronous
+cold-load contract but are deprecated. Use `readRuntimeConfig` for a prepared
+snapshot, or await `captureRuntimeConfigAsyncReader()()` at a cold preparation
+boundary. Legacy use emits one `DEP_SESSION_PERSISTENCE` warning per plugin and
+runtime-config family per process. Removal will follow in a later stable release
+after deprecation ships. This changes no stored-config format.
 
 ### Config record migrations
 
@@ -825,8 +842,9 @@ Anthropic Vertex and Kilocode providers. Their `2026.7.1` and `2026.7.33` throug
 for new code, but these aliases retain their reader-dependent removal condition.
 
 The unused private memory-host `loadConfig` re-exports have been removed.
-Memory implementations use `getRuntimeConfig` or caller-provided config;
-custom-table migration behavior remains intact.
+Memory implementations use `readRuntimeConfig` or caller-provided config;
+cold entrypoints await `captureRuntimeConfigAsyncReader()()`. Custom-table
+migration behavior remains intact.
 
 ### Published channel setup compatibility
 

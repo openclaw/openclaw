@@ -4,6 +4,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, onTestFinished,
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { digestGitHubPublicationRequest } from "../gateway/github-publication-receipt.js";
 import {
@@ -76,7 +80,10 @@ beforeAll(() => {
   openOpenClawStateDatabase(options);
   context = captureOpenClawStateWorkerContext(options);
 });
-beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot({});
+});
 afterEach(async () => {
   for (const release of heldReplies) {
     release();
@@ -84,6 +91,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all([...scopes].map((scope) => scope.close()));
   scopes.clear();
+  clearRuntimeConfigSnapshot();
 });
 
 function createScope(owner = context) {

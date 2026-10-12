@@ -3,7 +3,7 @@ import {
   requestExitAfterOneShotOutput,
   runCliWithExitFinalization,
 } from "../../cli/one-shot-exit.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   ensureNodeHostPluginRegistry,
   invokeRegisteredNodeHostCommand,
@@ -104,7 +104,7 @@ async function runComputerHost(): Promise<void> {
       }
       const pluginIds = message.pluginIds;
       startup = (async () => {
-        const config = getRuntimeConfig();
+        const config = await captureRuntimeConfigAsyncReader()();
         const context = { config, env: process.env };
         await ensureNodeHostPluginRegistry({
           ...context,

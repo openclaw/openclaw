@@ -110,7 +110,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
         },
         async () => {
           const parent = new AsyncWorkScope();
-          const create = vi.spyOn(ModelRegistry, "create");
+          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const realResolve = modelResolution.resolveModelAsync;
           const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
           let transportSpy: { mockRestore(): void } | undefined;

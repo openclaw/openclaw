@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -30,6 +31,7 @@ describe("worker placement dispatch reclaim", () => {
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });

@@ -2,7 +2,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../agents/run-wait.js";
 import { resolveSubagentController } from "../agents/subagents/registry/subagent-control-scope.js";
@@ -20,6 +20,7 @@ import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-reg
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -32,6 +33,9 @@ import {
 } from "./session-subagent-resume.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const parent = "agent:main:main";
 const sessionId = "resume-child-session";
 const previousRunId = "resume-previous";

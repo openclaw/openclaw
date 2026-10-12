@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -7,6 +7,10 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -118,9 +122,14 @@ describe("device worker placement dispatch", () => {
 
   beforeEach(() => {
     runtimeNodeCommandPolicy.commands = { allow: [CODEX_COMMAND] };
+    setRuntimeConfigSnapshot({});
     root = tempDirs.make("openclaw-device-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("provisions, syncs, and activates a local-install device environment", async () => {

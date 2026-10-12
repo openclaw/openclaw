@@ -15,7 +15,10 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
-import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -199,6 +202,7 @@ it.for([
     }
     const env = { ...process.env };
     const cfg = loadGatewayTestConfig();
+    setRuntimeConfigSnapshot(cfg);
     const root = resolveStateDir(env);
     const scope = {
       agentId,
@@ -829,6 +833,7 @@ it("admits a version-changed fleet in parallel without gating readiness on an un
 
 it("reports history in a skipped unconfigured agent store as not found", async () => {
   const sessionKey = "agent:gemini:acp:skipped-history";
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
   await upsertSessionEntryCore(
     { agentId: "gemini", sessionKey },
     { sessionId: "skipped-history", updatedAt: 1 },

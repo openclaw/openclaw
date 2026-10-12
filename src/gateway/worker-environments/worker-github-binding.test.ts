@@ -5,12 +5,17 @@ import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 async function prepareWorkerGitHubBinding(
   params: Parameters<typeof prepareGitHubPublicationFact>[0],
 ) {
+  setRuntimeConfigSnapshot(config);
   return (await prepareGitHubPublicationFact(params))?.github;
 }
 
@@ -117,7 +122,10 @@ describe("worker GitHub launch binding", () => {
       stderr: Buffer.alloc(0),
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+  });
 
   it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();

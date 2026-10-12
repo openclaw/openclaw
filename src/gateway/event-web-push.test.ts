@@ -1,6 +1,7 @@
 import type { StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -661,6 +662,7 @@ describe("event Web Push classification", () => {
               },
             },
           };
+          setRuntimeConfigSnapshot(cfg);
           const sessionKey = "agent:main:foreign-draft";
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey },
