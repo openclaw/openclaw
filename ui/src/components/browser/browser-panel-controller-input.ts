@@ -13,6 +13,7 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
+import type { BrowserPanelAnnotations } from "./browser-panel-annotations.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
@@ -44,6 +45,7 @@ type BrowserPanelInputState = {
 };
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
+  readonly annotations: Pick<BrowserPanelAnnotations, "refresh">;
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
@@ -155,9 +157,12 @@ export class BrowserPanelInputController {
       ) {
         return Promise.resolve(false);
       }
-      return this.host.runAction((actionClient) =>
-        clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y }),
-      );
+      return this.host.runAction(async (actionClient) => {
+        await clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y });
+        if (this.inputGeneration === generation && this.host.operations.isLive(epoch, client)) {
+          await this.host.annotations.refresh();
+        }
+      });
     };
     this.clickSequence += 1;
     // Preserve click order and failure: a failed click can leave the previous field focused.
@@ -387,17 +392,24 @@ export class BrowserPanelInputController {
     }
     const epoch = this.host.operations.epoch;
     const generation = this.inputGeneration;
+    const current = () =>
+      this.host.operations.isLive(epoch, client) &&
+      this.host.activeTargetId === targetId &&
+      this.host.view?.targetId === targetId &&
+      this.host.mode === "interact" &&
+      this.inputGeneration === generation;
     const run = (): Promise<boolean> | undefined => {
-      if (
-        !this.host.operations.isLive(epoch, client) ||
-        this.host.activeTargetId !== targetId ||
-        this.host.view?.targetId !== targetId ||
-        this.host.mode !== "interact" ||
-        this.inputGeneration !== generation
-      ) {
+      if (!current()) {
         return undefined;
       }
-      return this.host.runAction((actionClient) => action(actionClient, targetId));
+      return this.host.runAction(async (actionClient) => {
+        await action(actionClient, targetId);
+        // Any completed page input can enter annotation mode. Never let an old
+        // completion probe whichever tab or session replaced its captured owner.
+        if (current()) {
+          await this.host.annotations.refresh();
+        }
+      });
     };
     const click = this.pendingClick;
     const afterClick = () =>

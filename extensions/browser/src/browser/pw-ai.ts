@@ -1,3 +1,4 @@
+import { annotationsViaPlaywright } from "./pw-annotations.js";
 /** Playwright-backed browser helpers loaded as one optional runtime object. */
 import * as session from "./pw-session.js";
 import * as activity from "./pw-tools-core.activity.js";
@@ -10,6 +11,7 @@ import * as storage from "./pw-tools-core.storage.js";
 import * as trace from "./pw-tools-core.trace.js";
 
 export const pwAi = {
+  annotationsViaPlaywright,
   downloadCurrentDocumentViaPlaywright: downloads.downloadCurrentDocumentViaPlaywright,
   closePageByTargetIdViaPlaywright: session.closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection: session.closePlaywrightBrowserConnection,

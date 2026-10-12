@@ -139,9 +139,10 @@ describe("closed session browser route", () => {
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });
 
-  it("binds evaluation to the isolated target", async () => {
-    const path = "/act";
-    const body = { kind: "evaluate", fn: "() => location.href" };
+  it.each([
+    { path: "/act", body: { kind: "evaluate", fn: "() => location.href" } },
+    { path: "/annotations", body: { action: "state" } },
+  ])("binds $path to the isolated target", async ({ path, body }) => {
     const respond = await request({ method: "POST", path, body });
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
     expect(mocked.dispatch).toHaveBeenLastCalledWith(

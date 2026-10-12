@@ -208,6 +208,17 @@ export class BrowserPanelPresentation
     return clientChanged || sessionChanged || dashboardChanged;
   }
 
+  /** Called by the bridge before visibility changes revoke the current page scope. */
+  beforeVisibilityChange(key: "presented" | "suppressed", value: boolean): void {
+    const hiding =
+      key === "suppressed" ? value && !this.suppressed : !value && this.presented && this.embedded;
+    if (hiding && this.browserPanelController.annotations.state) {
+      // Parent bindings can replace authority in the same update as visibility.
+      this.synchronizeBrowserContext();
+      this.browserPanelController.annotations.suspend();
+    }
+  }
+
   private preferredRevision(): string | undefined {
     const preferred = this.preferredSelection;
     return preferred && readBrowserTabTarget(preferred.tab)

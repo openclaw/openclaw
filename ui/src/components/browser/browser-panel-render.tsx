@@ -1,6 +1,6 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -259,6 +259,88 @@ function AnnotateBar(props: ControllerProps) {
   );
 }
 
+function SurfaceAnnotations(props: ControllerProps) {
+  const annotations = () => props.controller.annotations;
+  return (
+    <Show when={annotations().state?.active && annotations().state}>
+      {(state) => (
+        <div class="bp-annotatebar bp-surfacebar" role="group" aria-label={t("browser.annotate")}>
+          <span class="bp-annotatebar__hint">
+            {state().controlsHeading || state().selection?.name || t("browser.surfaceHint")}
+          </span>
+          <For each={state().controls}>
+            {(control) => (
+              <div class="bp-surfacebar__control">
+                <label>
+                  {control.label || t("browser.surfaceColor")}
+                  <input
+                    type="color"
+                    value={control.currentValue}
+                    disabled={annotations().busy}
+                    onChange={(event) =>
+                      annotations().control("preview", control.callback, event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <button
+                  class="bp-btn"
+                  type="button"
+                  disabled={annotations().busy}
+                  onClick={() =>
+                    annotations().control(
+                      "preview-original",
+                      control.callback,
+                      control.currentValue,
+                    )
+                  }
+                >
+                  {t("browser.surfaceCompare")}
+                </button>
+                <button
+                  class="bp-btn"
+                  type="button"
+                  disabled={annotations().busy}
+                  onClick={() =>
+                    annotations().control("preview", control.callback, control.currentValue)
+                  }
+                >
+                  {t("browser.surfacePreview")}
+                </button>
+                <button
+                  class="bp-btn"
+                  type="button"
+                  disabled={annotations().busy}
+                  onClick={() =>
+                    annotations().control("reset", control.callback, control.currentValue)
+                  }
+                >
+                  {t("browser.surfaceReset")}
+                </button>
+              </div>
+            )}
+          </For>
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={annotations().busy}
+            onClick={() => void annotations().stop()}
+          >
+            {t("browser.surfaceDone")}
+          </button>
+          <button
+            class="bp-btn bp-btn--primary"
+            type="button"
+            disabled={annotations().busy || !state().selection}
+            onClick={() => void annotations().send()}
+          >
+            {t("browser.annotateSend")}
+          </button>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 function InspectTooltip(props: ControllerProps) {
   const node = createMemo(() => props.controller.inspected);
   const pointer = createMemo(() => props.controller.inspectPointer);
@@ -373,8 +455,11 @@ function ViewportContent(props: ControllerProps) {
             class={[
               "bp-overlay",
               {
-                "bp-overlay--annotate": props.controller.mode === "annotate",
-                "bp-overlay--inspect": props.controller.mode === "inspect",
+                "bp-overlay--annotate":
+                  !props.controller.annotations.state?.active &&
+                  props.controller.mode === "annotate",
+                "bp-overlay--inspect":
+                  props.controller.annotations.state?.active || props.controller.mode === "inspect",
               },
             ]}
             onClick={(event) => props.controller.handleStageClick(event)}
@@ -384,7 +469,7 @@ function ViewportContent(props: ControllerProps) {
             onPointerCancel={(event) => props.controller.input.handleOverlayPointerUp(event)}
             onLostPointerCapture={(event) => props.controller.input.handleOverlayPointerUp(event)}
           />
-          {props.controller.mode === "interact" ? (
+          {props.controller.mode === "interact" && !props.controller.annotations.state?.active ? (
             <textarea
               class="bp-overlay bp-input"
               aria-label={t("browser.inputLabel")}
@@ -466,6 +551,7 @@ export function BrowserPanelChrome(
       ) : null}
       <Toolbar controller={props.controller} embedded={props.embedded} />
       {props.controller.mode === "annotate" ? <AnnotateBar controller={props.controller} /> : null}
+      <SurfaceAnnotations controller={props.controller} />
       {props.controller.errorText ? (
         <div class="bp-note bp-note--error" role="alert">
           {props.controller.errorText}

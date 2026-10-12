@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { BrowserAnnotationState } from "openclaw/plugin-sdk/browser-annotations";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
@@ -147,6 +148,7 @@ export function buildBrowserAnnotationContent(params: {
   strokes: AnnotationStroke[];
   element?: BrowserInspectedNode | null;
   browserTab?: BrowserTabTarget;
+  surface?: Pick<BrowserAnnotationState, "selection" | "controls">;
 }): Pick<BrowserAnnotationDraft, "modelContext" | "card"> {
   const url = sanitizePageUrl(params.url);
   const title = sanitizePageText(params.title, ANNOTATION_TITLE_MAX_LENGTH);
@@ -192,6 +194,11 @@ export function buildBrowserAnnotationContent(params: {
   if (element) {
     lines.push(t("browser.annotatePrompt.elementDetail", element));
   }
+  if (params.surface?.selection) {
+    // Preserve JSON provenance without allowing page text to become prompt structure.
+    const data = JSON.stringify(params.surface).replace(/[\u2028\u2029]/g, " ");
+    lines.push(t("browser.annotatePrompt.surfaceDetail", { data }));
+  }
   lines.push(t("browser.annotatePrompt.outro"));
   return {
     modelContext: lines.join("\n"),
@@ -199,7 +206,7 @@ export function buildBrowserAnnotationContent(params: {
       title: title || truncateUtf16Safe(displayUrl, ANNOTATION_TITLE_MAX_LENGTH),
       displayUrl,
       markedRegionCount: regions.length,
-      inspectedElement: element !== null,
+      inspectedElement: element !== null || Boolean(params.surface?.selection),
     },
   };
 }

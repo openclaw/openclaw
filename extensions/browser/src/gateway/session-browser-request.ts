@@ -36,6 +36,7 @@ const routes = new Set([
   "POST /tabs/focus",
   "POST /act",
   "POST /screencast",
+  "POST /annotations",
 ]);
 const actions = new Set([
   "click",

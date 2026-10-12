@@ -1,3 +1,4 @@
+import type { BrowserAnnotationState } from "openclaw/plugin-sdk/browser-annotations";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import {
@@ -142,6 +143,7 @@ export function dispatchCompositedBrowserAnnotation(
   strokes: AnnotationStroke[],
   element: BrowserInspectedNode | null,
   highlight: AnnotationRegion | null,
+  surface?: Pick<BrowserAnnotationState, "selection" | "controls">,
 ): BrowserAnnotationDispatchResult {
   const url = view.metrics?.url || view.url || tab?.url || "";
   const title = view.metrics?.title || tab?.title || "";
@@ -151,6 +153,7 @@ export function dispatchCompositedBrowserAnnotation(
     strokes,
     element,
     browserTab: view.kind === "native" ? undefined : view.browserTab,
+    surface,
   });
   const dataUrl = composeAnnotatedImage({
     image: view.image,

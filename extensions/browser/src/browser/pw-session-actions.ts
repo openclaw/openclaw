@@ -3,6 +3,7 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, Page, Response } from "playwright-core";
+import { installBrowserAnnotationsOnPage } from "./annotation-bootstrap.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
@@ -506,6 +507,8 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    /** Install the page SDK before scripts run in a new session dashboard. */
+    browserAnnotations?: boolean;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
   const assertCurrent = () => {
@@ -561,6 +564,10 @@ export async function createPageViaPlaywright(
     ensureContextState(context);
     page = await context.newPage();
     assertCurrent();
+    if (opts.browserAnnotations) {
+      await installBrowserAnnotationsOnPage(page);
+      assertCurrent();
+    }
     ensurePageState(page);
     clearBlockedPageRef(opts.cdpUrl, page);
     const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;

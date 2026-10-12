@@ -22,7 +22,26 @@ export function defineBrowserPanelElement(
     | "requestUpdate"
   >(
     tag,
-    createController,
+    (element) => {
+      const controller = createController(element);
+      // Panel inputs read directly from the bridge. Intercept these writes before
+      // its setter hides the page and invalidates the request client's authority.
+      for (const key of ["presented", "suppressed"] as const) {
+        const descriptor = Object.getOwnPropertyDescriptor(element, key);
+        if (!descriptor?.get || !descriptor.set) {
+          throw new Error(`Browser panel bridge requires the ${key} input accessor`);
+        }
+        const write = descriptor.set.bind(element);
+        Object.defineProperty(element, key, {
+          ...descriptor,
+          set(value: boolean) {
+            controller.beforeVisibilityChange(key, value);
+            write(value);
+          },
+        });
+      }
+      return controller;
+    },
     (controller) => (
       <>
         <style>
