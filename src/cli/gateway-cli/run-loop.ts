@@ -13,6 +13,7 @@ import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { formatCliCommand } from "../command-format.js";
 import { registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
@@ -68,7 +69,7 @@ export async function runGatewayLoop(params: {
   lifecycleLockDeadlineMs?: number;
   healthHost?: string;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
-  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
+  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void | Promise<void>;
   /** Reports terminal cleanup disposition, never mere invocation or exit intent. */
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
@@ -119,15 +120,19 @@ export async function runGatewayLoop(params: {
   let installationReplacement: GatewayInstallationReplacement | undefined;
   let pendingRestartCompletion: GatewayBootLifecycleCompletion | undefined;
   let restartDrainWarning: string | undefined;
+  let bootCompletion: Promise<void> | undefined;
   const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
     pendingRestartCompletion = undefined;
-    params.completeBoot?.(
-      loopCompletion.formatBootCompletionContext(
-        completion,
-        installationReplacement?.reason,
-        restartDrainWarning,
+    bootCompletion = Promise.resolve(
+      params.completeBoot?.(
+        loopCompletion.formatBootCompletionContext(
+          completion,
+          installationReplacement?.reason,
+          restartDrainWarning,
+        ),
       ),
     );
+    cleanup.retain(bootCompletion);
     restartDrainWarning = undefined;
   };
   let startupFailedWithoutServerHandle = false;
@@ -186,6 +191,7 @@ export async function runGatewayLoop(params: {
     gatewayLog,
   );
   const releaseLockIfHeld = async (): Promise<void> => {
+    await bootCompletion;
     await lock?.release();
     lock = null;
   };
@@ -769,6 +775,7 @@ export async function runGatewayLoop(params: {
           budget.cleanupBudget(shutdownDeadline, HARD_EXIT_WATCHDOG_GRACE_MS),
           () =>
             server?.close({
+              retainSharedState: true,
               reason: isRestart ? "gateway restarting" : "gateway stopping",
               restartExpectedMs: isRestart ? 1500 : null,
               ...(isRestart ? { drainTimeoutMs: drainBudget.closeDrainTimeoutMs() } : {}),
@@ -1084,6 +1091,10 @@ export async function runGatewayLoop(params: {
       isFirstIteration = false;
       try {
         cleanup.beginIteration();
+        if (pendingRestartCompletion) {
+          completeBoot(pendingRestartCompletion);
+        }
+        await bootCompletion;
         if (isRestartIteration) {
           startupWork = prepareGatewayRestartIteration(
             eagerLifecycleRuntime,
@@ -1101,9 +1112,6 @@ export async function runGatewayLoop(params: {
         if (installationReplacement) {
           await exitReplacedInstallation(installationReplacement);
           break;
-        }
-        if (pendingRestartCompletion) {
-          completeBoot(pendingRestartCompletion);
         }
         if (iterationStartupOperations.getStopCompletion()) {
           await iterationStartupOperations.getStopCompletion();
@@ -1181,7 +1189,7 @@ export async function runGatewayLoop(params: {
         completeBoot(loopCompletion.formatStartupFailureCompletion(err, maintenanceRequired?.code));
         try {
           await signals.settle();
-          await failedServer?.close({ reason: "gateway startup failed" });
+          await failedServer?.close({ reason: "gateway startup failed", retainSharedState: true });
         } catch (closeError) {
           throw new GatewayStartupCleanupError(err, closeError);
         } finally {
@@ -1268,12 +1276,13 @@ export async function runGatewayLoop(params: {
     releaseRestartRuntime: () => restartRuntime.release(),
     closeTerminalServer: async () => {
       if (server) {
-        await server.close({ reason: "gateway stopping" });
+        await server.close({ reason: "gateway stopping", retainSharedState: true });
         server = null;
         await cleanup.drainProcessResources();
       }
     },
     retireHost: () => hostLifecycle?.retire(),
+    closeSharedState: () => drainGlobalSingletonLifecycleState("shared-state"),
     releaseLock: releaseLockIfHeld,
     clearStartupWatchdog: startupWatchdog.clear,
     clearRequestWatchdogs: () => {

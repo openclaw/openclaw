@@ -106,7 +106,7 @@ describe("update status installation replacement history", () => {
         "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
       const completedAtMs = Date.UTC(2026, 8, 19, 12);
       const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         { outcome: "planned_restart", reason },
         process.env,

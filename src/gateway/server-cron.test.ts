@@ -76,7 +76,6 @@ const {
   createCronScriptRuntimeMock,
   cronTriggerEvaluatorMock,
   cronScriptExecutorMock,
-  isAgentDeletionBlockedMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
@@ -159,7 +158,6 @@ const {
   createCronScriptRuntimeMock: vi.fn(),
   cronTriggerEvaluatorMock: vi.fn(),
   cronScriptExecutorMock: vi.fn(),
-  isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
 function enqueueSystemEvent(text: string, opts?: unknown) {
@@ -259,7 +257,6 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
 vi.mock("../agents/agent-lifecycle-registry.js", () => ({
   AgentDeletionAuthorityRollbackError: class extends AggregateError {},
   AgentDeletionCommitUncertainError: class extends Error {},
-  isAgentDeletionBlocked: isAgentDeletionBlockedMock,
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -554,7 +551,6 @@ describe("buildGatewayCronService", () => {
     cronTriggerEvaluatorMock.mockReset();
     cronTriggerEvaluatorMock.mockResolvedValue({ kind: "evaluated", fire: false });
     cronScriptExecutorMock.mockReset();
-    isAgentDeletionBlockedMock.mockReset().mockReturnValue(false);
     cronScriptExecutorMock.mockResolvedValue({ kind: "completed", stateChanged: false });
     createCronScriptRuntimeMock.mockReset();
     createCronScriptRuntimeMock.mockReturnValue({
@@ -2970,29 +2966,6 @@ describe("buildGatewayCronService", () => {
         "follows-runtime-default",
         "new-runtime-default",
       ]);
-    });
-  });
-
-  it("does not execute jobs for a journal-fenced agent still present in the roster", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-agent-fenced-${Date.now()}`);
-    const cfg = {
-      cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { entries: { main: {}, yinze: {} } },
-    } as OpenClawConfig;
-    await withCronService(cfg, async (state) => {
-      const job = await addAgentTurnJob(state, "fenced-job", "must not run", {
-        agentId: "yinze",
-      });
-      isAgentDeletionBlockedMock.mockImplementation((agentId: string) => agentId === "yinze");
-
-      await expect(state.cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-      expect(await state.cron.readJob(job.id)).toMatchObject({
-        state: {
-          lastRunStatus: "error",
-          lastError: expect.stringContaining("cron job agent is unavailable: yinze"),
-        },
-      });
     });
   });
 

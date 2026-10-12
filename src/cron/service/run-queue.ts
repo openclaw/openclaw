@@ -404,7 +404,7 @@ async function launchCronRun(
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
   const force = options.mode === "force" || options.onExit !== undefined;
   const unavailable =
-    state.deps.isAgentAvailable?.(entry.runReceipt.agentId, undefined, {
+    state.deps.isAgentAvailable?.(entry.runReceipt.agentId, {
       deletionBlocked: false,
     }) === false;
   // One final live owner/eligibility check; a disable may still race dispatch.

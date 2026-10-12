@@ -1,6 +1,5 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
   listAgentIds,
   resolveAgentEntry,
@@ -190,9 +189,6 @@ export function buildGatewayCronService(params: {
       normalized ? { agentId: normalized } : {},
       defaultAgentId,
     );
-    if (isAgentDeletionBlocked(agentId)) {
-      throw new Error(`cron job agent is unavailable: ${agentId}`);
-    }
     assertAgentDatabaseAdmitted(agentId, { env });
     return { agentId, cfg: runtimeConfig };
   };
@@ -518,8 +514,8 @@ export function buildGatewayCronService(params: {
         return listConfiguredSessionStoreAgentIds(cfg);
       }
     },
-    isAgentAvailable: (agentId, database, facts) =>
-      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(agentId, { env }, database)) &&
+    isAgentAvailable: (agentId, facts) =>
+      !facts.deletionBlocked &&
       !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,

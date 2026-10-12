@@ -714,5 +714,6 @@ export function getOpenClawStateWorkerOwner() {
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
     (sharedOwner) => sharedOwner.close(),
+    "shared-state",
   );
 }

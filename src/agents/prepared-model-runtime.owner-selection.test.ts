@@ -7,6 +7,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
@@ -54,6 +59,35 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it("awaits cold metadata preparation before deriving runtime selections", async () => {
+    const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
+    using resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockReturnValueOnce(prepared.promise);
+    const deriveRuntimePluginSelections = vi.fn(() => []);
+    const input = fixture.agentInput("cold-metadata", {});
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: input.config,
+      manifestRegistry: makeRegistry([]),
+    });
+    const pending = acquireAgentRunPreparedModelRuntime(input, {
+      deriveRuntimePluginSelections,
+    });
+    expect(resolveMetadata).toHaveBeenCalledOnce();
+    expect(deriveRuntimePluginSelections).not.toHaveBeenCalled();
+    prepared.resolve(metadataSnapshot);
+    const lease = await pending;
+    try {
+      expect(deriveRuntimePluginSelections).toHaveBeenCalledExactlyOnceWith({
+        config: input.config,
+        metadataSnapshot,
+      });
+      expect(lease.snapshot.metadataSnapshot).toBe(metadataSnapshot);
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+
   it.each(["binding owner", "binding demand", "environment", "workspace"] as const)(
     "matches the configured owner for %s",
     async (scope) => {

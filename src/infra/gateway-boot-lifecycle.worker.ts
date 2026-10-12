@@ -2,15 +2,57 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import type { GatewayBootLifecycleCompletion } from "./gateway-boot-lifecycle.js";
 import {
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
   inspectGatewayCrashLoopBreakerInDatabase,
 } from "./gateway-boot-lifecycle.kernel.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
 
 export const gatewayBootOperations = {
+  "gatewayBoot.complete": (
+    input: {
+      bootId: string;
+      completion: GatewayBootLifecycleCompletion;
+      nowMs: number;
+      countSignalStops: boolean;
+    },
+    context,
+  ) =>
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const { bootId, completion, nowMs } = input;
+      const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("gateway_boot_lifecycle")
+          .set({
+            completed_at_ms: nowMs,
+            outcome: completion.outcome,
+            ...(completion.startupReason ? { startup_reason: completion.startupReason } : {}),
+            reason: completion.reason ?? null,
+          })
+          .where("boot_id", "=", bootId),
+      );
+      return input.countSignalStops
+        ? executeSqliteQueryTakeFirstSync(
+            db,
+            kysely
+              .selectFrom("gateway_boot_lifecycle")
+              .select((eb) => eb.fn.countAll<number>().as("count"))
+              .where("outcome", "=", "clean_stop")
+              .where("reason", "=", completion.reason ?? null)
+              .where("completed_at_ms", ">=", nowMs - GATEWAY_SIGNAL_REPEAT_WINDOW_MS),
+          )?.count
+        : undefined;
+    }, context.stateOptions()),
   "gatewayBoot.recover": (input: { bootId?: string; nowMs?: number }, context) =>
     runOpenClawStateWriteTransaction(({ db }) => {
       const nowMs = input.nowMs ?? Date.now();

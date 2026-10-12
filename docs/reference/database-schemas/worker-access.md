@@ -3744,8 +3744,14 @@ an in-process write receipt changes. Sibling handles and workers share that rece
 blocked or failed checkpoints keep retrying when a reader may have released.
 Connections without a known write receipt continue checkpointing on every tick.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
-Existing worker-local maintenance and synchronous offline/close checkpoints retain
-their owners; durability, schemas, retention, and update behavior are unchanged.
+The Gateway run loop retains the shared-state database cache, actor owner, and
+SQLite worker broker until the final lifecycle outcome is recorded. Orderly
+retirement then joins the writer's final checkpoint before closing the host
+handle. A delegated host handle neither repeats that checkpoint nor restores an
+inline checkpoint fallback when cancelling maintenance. Interrupted retirement
+relies on WAL recovery and never certifies a clean close from stale observations.
+Synchronous offline checkpoints retain their owners; durability, schemas,
+retention, and update behavior are unchanged.
 
 Worker authority requests retain their unbounded live-owner wait unless the caller
 explicitly supplies a `deadlineMs` budget. Only cron's runtime mutation preparation

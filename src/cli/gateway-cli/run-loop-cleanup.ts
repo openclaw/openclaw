@@ -63,6 +63,7 @@ export function createGatewayRunCleanup(
       releaseRestartRuntime: () => Promise<void> | undefined;
       closeTerminalServer: () => Promise<void>;
       retireHost: () => Promise<void> | undefined;
+      closeSharedState: () => Promise<void>;
       releaseLock: () => Promise<void>;
       clearStartupWatchdog: () => void;
       clearRequestWatchdogs: () => void;
@@ -78,6 +79,8 @@ export function createGatewayRunCleanup(
         operations.releaseRestartRuntime,
         operations.closeTerminalServer,
         operations.retireHost,
+        joinCleanup,
+        operations.closeSharedState,
         operations.releaseLock,
         operations.clearStartupWatchdog,
         operations.clearRequestWatchdogs,

@@ -9,6 +9,7 @@ import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-er
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
 const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
+export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
 export const maintenanceStartupReasons = [

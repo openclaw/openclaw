@@ -154,6 +154,7 @@ async function closeHttpListener(params: {
 }
 
 export type GatewayCloseParams = {
+  retainSharedState?: boolean;
   resolveGatewayContext: GatewayRunShutdownParams["resolveGatewayContext"];
   closePluginRegistry: ReturnType<typeof createPluginRegistryOwner>["close"];
   pluginMetadata: Pick<GatewayPluginMetadataOwner, "beginClose" | "close">;
@@ -561,7 +562,9 @@ async function closeGatewayResources(
               }
               try {
                 await measureCloseStep("global-singletons", () =>
-                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close"),
+                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
+                    retainSharedState: params.retainSharedState,
+                  }),
                 );
               } finally {
                 try {

@@ -6,7 +6,7 @@ import {
   completeGatewayBootLifecycle,
   recordGatewayBootStart,
 } from "../infra/gateway-boot-lifecycle.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { checkGatewayHealth, collectGatewayHealthFindings } from "./doctor-gateway-health.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,8 +24,8 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     cleanup();
@@ -36,7 +36,7 @@ const installationReplacementWarning =
   "Installation replaced: on-disk 2026.9.5 differs from running 2026.9.4; draining active work.";
 const completedAtMs = Date.UTC(2026, 8, 19, 12);
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-doctor-replacement-"));
   mocks.callGateway.mockReset().mockResolvedValue({});
   mocks.buildGatewayProbeConnectionDetails
@@ -49,7 +49,7 @@ beforeEach(() => {
   mocks.hasActiveGatewayExecCredential.mockReset().mockResolvedValue(false);
   mocks.note.mockReset();
   const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
-  completeGatewayBootLifecycle(
+  await completeGatewayBootLifecycle(
     bootId,
     { outcome: "planned_restart", reason },
     process.env,

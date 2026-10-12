@@ -76,6 +76,7 @@ function resolveSqliteWorkerBroker() {
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
     (broker) => withCallerErrors(broker.close()),
+    "shared-state",
   );
 }
 

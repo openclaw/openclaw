@@ -26,9 +26,16 @@ import { applySessionEntryLifecycleMutation } from "../config/sessions/session-a
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import {
+  completeGatewayBootLifecycle,
+  type GatewayBootLifecycleCompletion,
+  readGatewayLastShutdown,
+  recordGatewayBootStart,
+} from "../infra/gateway-boot-lifecycle.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as systemdTimeout from "../infra/systemd-stop-timeout.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
@@ -592,7 +599,27 @@ it.skipIf(process.platform !== "linux")(
     const started = createDeferredCore<GatewayServer>();
     const exited = createDeferredCore<number>();
     const exit = vi.fn((code: number) => exited.resolve(code));
-    const completeBoot = vi.fn();
+    const closeBroker = vi.spyOn(SqliteWorkerBroker.prototype, "close");
+    let bootId: string | undefined;
+    let shared: ReturnType<typeof openOpenClawStateDatabase>["db"] | undefined;
+    let completedAtMs: number | undefined;
+    const completeBoot = vi.fn(async (completion: GatewayBootLifecycleCompletion) => {
+      assert(shared);
+      expect(shared.isOpen).toBe(true);
+      expect(closeBroker).not.toHaveBeenCalled();
+      const prepare = vi.spyOn(shared, "prepare");
+      const exec = vi.spyOn(shared, "exec");
+      try {
+        completedAtMs = Date.now();
+        await completeGatewayBootLifecycle(bootId, completion, fixture.state.env, completedAtMs);
+        expect(closeBroker).not.toHaveBeenCalled();
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
+    });
     const previousStops = new Set(process.listeners("SIGTERM"));
     let closing: Promise<void> | undefined;
     let unregister: (() => void) | undefined;
@@ -611,6 +638,9 @@ it.skipIf(process.platform !== "linux")(
       const port = await fixture.reservePort();
       void runGatewayLoop({
         lockPort: port,
+        beginBoot: (startedAtMs) => {
+          bootId = recordGatewayBootStart(fixture.state.env, startedAtMs);
+        },
         completeBoot,
         start: async (options) => {
           const server = await fixture.start(port, {
@@ -632,7 +662,7 @@ it.skipIf(process.platform !== "linux")(
       const options = { agentId: "main", env: fixture.state.env };
       const agent = openOpenClawAgentDatabase(options);
       agent.db.exec("INSERT INTO auth_profile_state VALUES ('restart-proof', '{}', 1)");
-      const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+      shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
       const sessionKey = "agent:main:managed-restart";
       await replaceSessionEntry(
         { ...options, storePath: agent.path, sessionKey },
@@ -701,6 +731,7 @@ it.skipIf(process.platform !== "linux")(
         reason: "gateway restarting",
         restartExpectedMs: 1_500,
         drainTimeoutMs: 0,
+        retainSharedState: true,
       });
       closing = close.mock.results[0]?.value;
       assert(closing);
@@ -718,6 +749,7 @@ it.skipIf(process.platform !== "linux")(
       expect(agentLeases.all(agent.path)).toEqual([]);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
+      expect(completeBoot).not.toHaveBeenCalled();
       expect(agent.db.isOpen).toBe(false);
       expect(shared.isOpen).toBe(true);
       expect(() =>
@@ -737,6 +769,11 @@ it.skipIf(process.platform !== "linux")(
       });
       expect(agent.db.isOpen).toBe(false);
       expect(shared.isOpen).toBe(false);
+      expect(closeBroker).toHaveBeenCalled();
+      expect(readGatewayLastShutdown(fixture.state.env)).toEqual({
+        reason: expect.stringMatching(/restart \(SIGTERM: gateway\.restart\)$/),
+        completedAtMs,
+      });
       expect(() =>
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: fixture.state.env }),
       ).not.toThrow();

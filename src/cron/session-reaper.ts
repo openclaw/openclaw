@@ -17,7 +17,9 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { CronAgentAvailability } from "./agent-availability.js";
 import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
 import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
@@ -115,7 +117,7 @@ export async function sweepCronRunSessions(params: {
   agentId: string;
   /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
-  isAgentAvailable?: (agentId: string) => boolean;
+  isAgentAvailable?: CronAgentAvailability;
   nowMs?: number;
   log: Logger;
 }): Promise<ReaperResult> {
@@ -146,7 +148,13 @@ export async function sweepCronRunSessions(params: {
   try {
     const context = captureOpenClawStateWorkerContext();
     const assertCurrent = () => assertSubagentReadContext(context);
-    if (params.isAgentAvailable?.(params.agentId) === false) {
+    const deletionStatus = await readAgentDeletionJournalStatusInWorker(params.agentId, {
+      env: context.environment,
+    });
+    if (
+      deletionStatus !== "absent" ||
+      params.isAgentAvailable?.(params.agentId, { deletionBlocked: false }) === false
+    ) {
       params.log.debug({ agentId: params.agentId }, "cron-reaper: skipped unavailable agent");
       return { swept: false, pruned: 0 };
     }

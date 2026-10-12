@@ -34,6 +34,7 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
+  isSqliteWalWorkerMaintained,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
@@ -80,7 +81,7 @@ export type SqliteWalMaintenance = {
   inspectIdle?: () => "healthy" | "retire";
   /** Retire timer admission and join accepted maintenance before closing its database. */
   stop: () => Promise<void>;
-  /** Final checkpoint; synchronous exit cleanup cancels work without joining it. */
+  /** Native owners checkpoint; delegated handles leave the final checkpoint to worker close. */
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
@@ -480,7 +481,9 @@ export function configureSqliteWalMaintenance(
     },
     close: (closeOptions) => {
       void beginClose();
-      if (invalidated) {
+      if (invalidated || isSqliteWalWorkerMaintained(db)) {
+        // Worker retirement already checkpoints before releasing its native handle.
+        // A host close cannot certify a clean seal, including after an interrupted drain.
         return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on

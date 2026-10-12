@@ -3,7 +3,6 @@ import { afterEach, expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   withAgentDeletion,
-  isAgentDeletionBlocked,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
@@ -126,9 +125,8 @@ export function useClawMonitorFixture() {
       resolveSessionStorePath: (agentId = "worker") =>
         state.statePath("agents", agentId, "sessions", "sessions.json"),
       resolveDefaultAgentId: () => listAgentEntries(config)[0]?.id ?? "main",
-      isAgentAvailable: (agentId) =>
-        !isAgentDeletionBlocked(agentId) &&
-        listAgentEntries(config).some((agent) => agent.id === agentId),
+      isAgentAvailable: (agentId, facts) =>
+        !facts.deletionBlocked && listAgentEntries(config).some((agent) => agent.id === agentId),
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       requestHeartbeatAndWait: async (_wake, lifecycle) => {

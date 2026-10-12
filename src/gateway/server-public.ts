@@ -9,6 +9,8 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 
 export type GatewayCloseOptions = {
+  /** Run-loop host retains the writer until its final boot outcome is durable. */
+  retainSharedState?: boolean;
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
