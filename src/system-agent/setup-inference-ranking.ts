@@ -30,6 +30,8 @@ function candidateRank(candidate: SetupInferenceCandidate): number | undefined {
         return 7;
       case "llama-cpp":
         return 8;
+      default:
+        return undefined;
     }
   }
   return undefined;

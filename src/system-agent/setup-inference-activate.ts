@@ -579,7 +579,9 @@ async function verifyAndActivateCandidate(
       },
     };
     await commitSetupInferenceActivation({
+      // Automatic setup has no restart handshake; this Gateway must apply the route before replying.
       preserveWorkingConnection: Boolean(
+        params.automaticSetup ||
         savedCredential?.setup?.replacement ||
         baselineRoute.route ||
         resolveAgentEffectiveModelPrimary(cfg, routeAgentId),

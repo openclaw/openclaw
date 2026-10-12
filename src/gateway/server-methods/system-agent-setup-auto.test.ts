@@ -114,6 +114,7 @@ beforeEach(() => {
   });
   fixture.readConfig.mockResolvedValue({ config: {}, runtimeConfig: {}, sourceConfig: {} });
   fixture.prepare.mockResolvedValue({ error: "Could not install the official Codex plugin." });
+  fixture.audit.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -195,11 +196,10 @@ describe("Gateway automatic inference setup", () => {
   });
 
   it("limits activation to four attempts even after Codex preparation discovers credentials", async () => {
-    const candidates = ["e", "d", "c", "b", "a"].map((id): SetupInferenceCandidate => ({
-      ...openai,
-      kind: `saved-auth:${id}`,
-      label: `Saved ${id}`,
-    }));
+    const candidates: SetupInferenceCandidate[] = [];
+    for (const id of ["e", "d", "c", "b", "a"]) {
+      candidates.push({ ...openai, kind: `saved-auth:${id}`, label: `Saved ${id}` });
+    }
     fixture.detect
       .mockResolvedValueOnce(detection(candidates))
       .mockResolvedValueOnce(detection([codex]));
@@ -254,42 +254,49 @@ describe("Gateway automatic inference setup", () => {
     }
   });
 
-  it("prepares Codex with native discovery off and returns the ChatGPT sign-in action", async () => {
-    const prepared: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
-    fixture.prepare.mockResolvedValue({ ok: true, config: prepared });
-    fixture.detect.mockResolvedValueOnce(detection()).mockResolvedValueOnce(
-      detection([], {
-        authOptions: [
-          {
-            id: "openai-codex",
-            brandId: "openai",
-            label: "ChatGPT",
-            kind: "oauth",
-            featured: true,
-          },
-        ],
-      }),
-    );
+  it.each([false, true])(
+    "prepares Codex and returns sign-in despite audit failure: %s",
+    async (auditFails) => {
+      if (auditFails) {
+        fixture.audit.mockRejectedValueOnce(new Error("audit store unavailable"));
+      }
+      const prepared: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
+      fixture.prepare.mockResolvedValue({ ok: true, config: prepared });
+      fixture.detect.mockResolvedValueOnce(detection()).mockResolvedValueOnce(
+        detection([], {
+          authOptions: [
+            {
+              id: "openai-codex",
+              brandId: "openai",
+              label: "ChatGPT",
+              kind: "oauth",
+              featured: true,
+            },
+          ],
+        }),
+      );
 
-    expect(await runGatewayAutomaticSetup(context())).toEqual({
-      status: "needs-sign-in",
-      alternatives: [],
-      attempts: [],
-      installedPlugins: ["codex"],
-      signIn: { authOptionId: "openai-codex", label: "ChatGPT" },
-    });
-    expect(fixture.activate).not.toHaveBeenCalled();
-    expect(fixture.commit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {
-          plugins: {
-            entries: {
-              codex: { enabled: true, config: { sessionCatalog: { enabled: false } } },
-              anthropic: { config: { sessionCatalog: { enabled: false } } },
+      expect(await runGatewayAutomaticSetup(context())).toEqual({
+        status: "needs-sign-in",
+        alternatives: [],
+        attempts: [],
+        installedPlugins: ["codex"],
+        signIn: { authOptionId: "openai-codex", label: "ChatGPT" },
+      });
+      expect(fixture.activate).not.toHaveBeenCalled();
+      expect(fixture.commit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          preserveWorkingConnection: true,
+          config: {
+            plugins: {
+              entries: {
+                codex: { enabled: true, config: { sessionCatalog: { enabled: false } } },
+                anthropic: { config: { sessionCatalog: { enabled: false } } },
+              },
             },
           },
-        },
-      }),
-    );
-  });
+        }),
+      );
+    },
+  );
 });

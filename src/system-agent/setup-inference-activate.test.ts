@@ -249,7 +249,7 @@ describe("setup activation credentials and configuration", () => {
       };
 
       const result = await setup.activate("codex-cli", automatic ? true : undefined, {
-        ...(automatic ? { automaticSetup: true } : {}),
+        automaticSetup: automatic ? true : undefined,
       });
       expect(result).toMatchObject({ ok: !automatic });
       if (automatic) {

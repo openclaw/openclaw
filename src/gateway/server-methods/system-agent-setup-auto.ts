@@ -211,6 +211,7 @@ async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
           await commitSetupInferenceActivation({
             config,
             configTarget: target,
+            preserveWorkingConnection: true,
             assertCurrent,
             activate: async () => undefined,
             deferCompletion: (completion) => {
@@ -223,11 +224,17 @@ async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
     } finally {
       await complete?.();
     }
-    await appendSystemAgentAuditEntry({
-      operation: "openclaw.setup.auto",
-      summary: "Prepared the official Codex plugin for automatic setup",
-      details: { source: "automatic-setup", pluginId: "codex" },
-    });
+    try {
+      await appendSystemAgentAuditEntry({
+        operation: "openclaw.setup.auto",
+        summary: "Prepared the official Codex plugin for automatic setup",
+        details: { source: "automatic-setup", pluginId: "codex" },
+      });
+    } catch (error) {
+      runtime.error?.(
+        `Codex is prepared, but its setup audit could not be recorded: ${await redactSetupInferenceError(error)}`,
+      );
+    }
     const refreshed = await runSystemAgentGatewayTask(() => detectSetupInference());
     ranked = rankSetupInferenceCandidates(refreshed.candidates);
     const codex = ranked.find((candidate) => candidate.kind === "codex-cli");
