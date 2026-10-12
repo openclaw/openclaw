@@ -282,7 +282,7 @@ export function createModelLifecycle(params: {
     observer.state.terminalEventEmitted = true;
     const terminalAtMs = Date.now();
     const durationMs = terminalAtMs - startedAt;
-    const providerTimingFields =
+    const providerTimingFields: Record<string, number> =
       observer.state.providerProcessingMs === undefined
         ? {}
         : {
