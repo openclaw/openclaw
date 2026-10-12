@@ -29,7 +29,8 @@ On desktop, opening Home or a pinned session, page, plugin, or person collapses
 the list while leaving the rail available. The mobile drawer keeps its normal
 navigation behavior.
 
-The rail starts without personal shortcuts. Drag a page, dashboard, session, or
+The rail starts without personal shortcuts, including after an upgrade from the
+older sidebar. Older sidebar order and pins are not carried over. Drag a page, dashboard, session, or
 person into its empty space to add one; a drop target appears while you drag.
 Drag shortcuts directly to reorder them. Right-click or touch and hold a shortcut, or focus it and
 press the Context Menu key or Shift+F10, to move or unpin it without dragging. Unpinning removes the shortcut, not the session, dashboard,
@@ -73,7 +74,9 @@ use the existing Gateway user-preference store and
 follow the profile across devices. Navigation is not a shared server setting.
 A profile without saved shortcuts starts empty. Reading its preferences does not
 import shared navigation or pinned sessions, and writes nothing until you edit
-the rail. Existing saved shortcuts, including an empty list, remain unchanged.
+the rail. Shortcuts use the new `ui.railShortcuts` preference; older
+`ui.sidebarEntries` values remain stored but are ignored. Shortcuts saved under
+the new preference, including an empty list, remain unchanged.
 Concurrent saves use conflict checks and preserve unrelated pin edits.
 
 The browser keeps device-specific geometry and transient presentation, such as

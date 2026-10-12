@@ -261,6 +261,7 @@ function AssistantViews(props: ContentProps) {
                 rawText: block().rawText ?? null,
                 canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
                 boardProvider: props.options.boardProvider,
+                widgetLayout: props.options.widgetLayout,
                 embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.options.allowExternalEmbedUrls,
                 sessionKey: props.options.sessionKey,
