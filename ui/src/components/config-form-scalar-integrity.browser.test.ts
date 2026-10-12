@@ -110,13 +110,14 @@ describe("config form scalar integrity", () => {
     const onRemove = vi.fn();
 
     renderNumberInputFixture(container, {
-      schema: { type: "integer", default: 3 },
+      schema: { type: "integer", default: 3, description: "Controls retry attempts." },
       value: 9,
       path: ["retries"],
       onPatch,
       onRemove,
     });
     expect(container.textContent).toContain("Default: 3");
+    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
     const numberInput = expectElement(
       container.querySelector<HTMLInputElement>("input[type='number']"),
       "number input",

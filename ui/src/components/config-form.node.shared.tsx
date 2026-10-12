@@ -91,7 +91,12 @@ export function FieldRow(props: {
               {help()}
             </span>
           )}
-          {defaultDescription() && <span class="settings-row__desc">{defaultDescription()}</span>}
+          {defaultDescription() && (
+            <>
+              {" "}
+              <span class="settings-row__desc">{defaultDescription()}</span>
+            </>
+          )}
           {props.error && (
             <span class="cfg-field__error" role="alert">
               {props.error}

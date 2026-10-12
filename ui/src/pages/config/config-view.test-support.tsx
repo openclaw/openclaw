@@ -31,8 +31,13 @@ function createViewContext() {
     refresh: () => undefined,
     subscribe: () => () => undefined,
   };
+  const context: Pick<ApplicationContext, "gateway" | "theme" | "router"> = {
+    gateway,
+    theme,
+    router,
+  };
   // Rendering consumes only Gateway, theme and router capabilities.
-  return { context: { gateway, theme, router } as ApplicationContext, router };
+  return { context: context as ApplicationContext, router };
 }
 
 /** Update one mounted view so the test exercises retained field identity. */
