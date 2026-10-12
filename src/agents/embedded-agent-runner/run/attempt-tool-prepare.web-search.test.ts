@@ -4,6 +4,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { getHoisted, resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
@@ -11,18 +12,26 @@ const hoisted = getHoisted();
 beforeEach(() => resetEmbeddedAttemptHarness());
 afterEach(() => vi.restoreAllMocks());
 
-describe("prepared missing-search guidance", () => {
+describe("prepared web search availability", () => {
   it.each([
     { name: "ordinary unconfigured", expected: true },
     { name: "configured", configured: true, expected: false },
     { name: "policy denied", deny: true, expected: false },
     { name: "globally disabled", disabled: true, expected: false },
     { name: "session disabled", sessionDisabled: true, expected: false },
-    { name: "native OpenAI", native: true, expected: false },
-  ])("keeps the actual callback truthful for $name and clears it on rebuild", async (scenario) => {
+    { name: "native OpenAI", native: true, expected: false, callable: true },
+    { name: "native policy denied", native: true, deny: true, expected: false },
+    { name: "native globally disabled", native: true, disabled: true, expected: false },
+    { name: "native session disabled", native: true, sessionDisabled: true, expected: false },
+    { name: "native runtime denied", native: true, runtimeDenied: true, expected: false },
+    { name: "native execution denied", native: true, executionDenied: true, expected: false },
+    { name: "native tools disabled", native: true, toolsDisabled: true, expected: false },
+    { name: "custom endpoint", native: true, customEndpoint: true, expected: true },
+  ])("keeps guidance and callable presence truthful for $name on rebuild", async (scenario) => {
     const config: OpenClawConfig = {
       tools: {
-        codeMode: false,
+        codeMode: true,
+        allow: ["web_search"],
         toolSearch: { enabled: false },
         ...(scenario.deny ? { deny: ["web_search"] } : {}),
         ...(scenario.disabled ? { web: { search: { enabled: false } } } : {}),
@@ -49,11 +58,18 @@ describe("prepared missing-search guidance", () => {
           id: "test-model",
           provider: scenario.native ? "openai" : "anthropic",
           api: scenario.native ? "openai-responses" : "anthropic-messages",
-          baseUrl: scenario.native ? "https://api.openai.com/v1" : "https://api.anthropic.com",
+          baseUrl: scenario.customEndpoint
+            ? "https://api.example.test/v1"
+            : scenario.native
+              ? "https://api.openai.com/v1"
+              : "https://api.anthropic.com",
         }),
         authProfileStore: { version: 1, profiles: {} },
         admittedRunContext: await admission.admit("embedded"),
         toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
+        toolsAllow: scenario.runtimeDenied ? ["exec"] : ["web_search", "exec"],
+        toolExecutionAllow: scenario.executionDenied ? ["read"] : undefined,
+        disableTools: scenario.toolsDisabled,
       } as EmbeddedRunAttemptInternalParams;
       result = await prepareEmbeddedAttemptToolBase({
         attempt,
@@ -68,15 +84,35 @@ describe("prepared missing-search guidance", () => {
         codeModeSkills: [],
         toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
       });
-      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(
+        scenario.toolsDisabled ? 0 : 1,
+      );
       expect(result.webSearchUnconfigured).toBe(scenario.expected);
+      const catalog = await prepareEmbeddedAttemptToolCatalog({
+        attempt,
+        setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
+        preparedToolBase: result,
+        bundleTools: { clientTools: undefined, uncompactedEffectiveTools: result.toolsRaw },
+        abortSignal: new AbortController().signal,
+        executeCodeModeTool: async () => ({ content: [], details: {} }),
+      });
+      expect(catalog.toolSearch.catalogToolCount).toBe(0);
+      expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(scenario.callable === true);
+      if (scenario.callable) {
+        expect(catalog.emptyExplicitToolAllowlistError).toBeNull();
+        expect(catalog.toolSearchRunPlan.liveAllowedToolNames.has("web_search")).toBe(false);
+      }
       // A disabled factory does not report configuration. Reset must clear the previous fact,
       // rather than relying on a later callback to overwrite it.
       hoisted.createOpenClawCodingToolsMock.mockImplementation(() => []);
       attempt.toolOverrides = { webSearch: false };
       await result.refreshPermissionMode(null, () => {});
       expect(result.webSearchUnconfigured).toBe(false);
-      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(2);
+      catalog.refreshTools(() => {});
+      expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(false);
+      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(
+        scenario.toolsDisabled ? 0 : 2,
+      );
     } finally {
       await result?.releaseTools("test-complete");
       result?.toolSurfaceRuntime.cleanup();

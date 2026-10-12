@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 
@@ -34,6 +35,43 @@ function plan(overrides: Partial<Parameters<typeof buildToolSearchRunPlan>[0]> =
 }
 
 describe("buildToolSearchRunPlan", () => {
+  it.each([
+    { label: "shell exec", entries: ["exec"] },
+    { label: "shell alias", entries: ["bash"] },
+    { label: "maintenance tools", entries: ["read", "write", "exec", "process"] },
+  ])("does not count an empty Code Mode bridge as $label", ({ entries }) => {
+    const result = plan({
+      visibleTools: [markCodeModeControlTool(tool("exec")), markCodeModeControlTool(tool("wait"))],
+      clientTools: [],
+      controlNames: ["exec", "wait"],
+      explicitAllowlistSources: [{ entries }],
+    });
+    expect(result.hasCallableTools).toBe(false);
+  });
+
+  it("counts provider-native tools without exposing them as local functions", () => {
+    const result = plan({
+      visibleTools: [markCodeModeControlTool(tool("exec")), markCodeModeControlTool(tool("wait"))],
+      clientTools: [],
+      controlNames: ["exec", "wait"],
+      explicitAllowlistSources: [{ entries: ["web_search", "exec"] }],
+      hasProviderNativeTools: true,
+    });
+    expect(result.hasCallableTools).toBe(true);
+    expect([...result.liveAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect(result.capabilityToolNames.has("web_search")).toBe(false);
+  });
+
+  it("counts a real directly exposed shell exec", () => {
+    const result = plan({
+      visibleTools: [tool("exec")],
+      clientTools: [],
+      controlsEnabled: false,
+      explicitAllowlistSources: [{ entries: ["exec"] }],
+    });
+    expect(result.hasCallableTools).toBe(true);
+  });
+
   it("carries native catalog capabilities without widening direct execution authority", () => {
     const foreignTool = tool("sessions_yield");
     setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });

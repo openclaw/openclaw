@@ -151,6 +151,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         toolSearch.catalogRegistered &&
         (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
       catalogToolCount: toolSearch.catalogToolCount,
+      hasProviderNativeTools: preparedToolBase.hasProviderNativeTools,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
       deferredToolsCallable: deferredDirectoryToolsCallable,
       controlNames: codeModeControlsEnabledForRun

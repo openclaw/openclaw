@@ -1,4 +1,5 @@
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
@@ -35,6 +36,8 @@ export function buildToolSearchRunPlan(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   clientToolsCataloged: boolean;
   catalogToolCount: number;
+  /** Policy-enabled hosted capabilities, not local function execution grants. */
+  hasProviderNativeTools?: boolean;
   controlsEnabled: boolean;
   deferredToolsCallable?: boolean;
   controlNames?: readonly string[];
@@ -90,6 +93,11 @@ export function buildToolSearchRunPlan(params: {
       (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
     ),
   );
+  // A policy's exec entry names the shell tool, not its Code Mode bridge. The
+  // bridge can remain visible even when no allowed catalog tools were constructed.
+  const codeModeControlNames = new Set(
+    params.visibleTools.filter(isCodeModeControlTool).map((tool) => tool.name),
+  );
   const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool(params);
   const emptyAllowlistVisibleToolNames = params.deferredToolsCallable
     ? collectAllowedToolNames({ tools: params.visibleTools })
@@ -97,10 +105,13 @@ export function buildToolSearchRunPlan(params: {
   // The guard needs presence, not catalog-sized synthetic names. Auto-added
   // controls alone must not conceal an explicit allowlist that matched nothing.
   const hasCallableTools =
+    params.hasProviderNativeTools === true ||
     params.catalogToolCount > 0 ||
     ((params.clientToolsCataloged || params.deferredToolsCallable === true) &&
       explicitlyAllowedClientTool) ||
-    [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
+    [...emptyAllowlistVisibleToolNames].some(
+      (toolName) => !autoAddedControlNames.has(toolName) && !codeModeControlNames.has(toolName),
+    );
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,
