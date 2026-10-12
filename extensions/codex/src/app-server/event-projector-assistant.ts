@@ -27,7 +27,7 @@ type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
 };
 
 export class CodexAssistantProjection {
-  private readonly assistantTextByItem = new Map<string, string>();
+  readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
