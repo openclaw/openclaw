@@ -1,6 +1,8 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { stripMentions, stripStructuralPrefixes } from "openclaw/plugin-sdk/channel-mention-gating";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -56,7 +58,7 @@ function parseSocketEvent(data: RawData): ClickClackEvent | null {
   }
 }
 
-async function processEvent(params: {
+async function resolveInboundEvent(params: {
   abortSignal: AbortSignal;
   account: ResolvedClickClackAccount;
   config: CoreConfig;
@@ -67,10 +69,10 @@ async function processEvent(params: {
   log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
-    return;
+    return undefined;
   }
   if (params.abortSignal.aborted || payloadString(params.event, "author_id") === params.botUserId) {
-    return;
+    return undefined;
   }
   const correlationId = normalizeClickClackCorrelationId(params.event.payload?.correlation_id);
   // The event body is only a routing hint. Re-fetch the authoritative message
@@ -88,10 +90,10 @@ async function processEvent(params: {
       `[${params.account.accountId}] skipped unreadable ClickClack message before agent dispatch: ` +
         `type=${params.event.type} messageId=${payloadString(params.event, "message_id") || "unknown"}`,
     );
-    return;
+    return undefined;
   }
   if (params.abortSignal.aborted || message.author_id === params.botUserId) {
-    return;
+    return undefined;
   }
   const access = await resolveClickClackInboundAccess({
     account: params.account,
@@ -100,7 +102,7 @@ async function processEvent(params: {
   });
   // Account shutdown can race either awaited lookup; retired generations must never start a turn.
   if (params.abortSignal.aborted) {
-    return;
+    return undefined;
   }
   if (!access.shouldDispatch) {
     params.log?.info(
@@ -111,16 +113,69 @@ async function processEvent(params: {
         `hasAnyMention=${access.mentionFacts.hasAnyMention ?? "unknown"} ` +
         `commandAuthorized=${access.commandAuthorized}`,
     );
-    return;
+    return undefined;
   }
-  await handleClickClackInbound({
-    account: params.account,
-    config: params.config,
-    message,
-    access,
-    buildContext: params.buildContext,
-    ...(correlationId ? { correlationId } : {}),
-  });
+  return { message, access, correlationId };
+}
+
+async function prepareEvent(
+  params: Parameters<typeof resolveInboundEvent>[0] & { onEventError: (error: unknown) => never },
+) {
+  const prepared = await resolveInboundEvent(params);
+  if (!prepared) {
+    return undefined;
+  }
+  const { message, access } = prepared;
+  const commandText = stripStructuralPrefixes(message.body);
+  const normalizedCommandText = message.direct_conversation_id
+    ? commandText
+    : stripMentions(
+        commandText,
+        { Provider: "clickclack" },
+        params.config,
+        access.preparedRoute?.route.agentId,
+      );
+  const interrupt =
+    (params.account.replyMode === "agent" || Boolean(access.preparedRoute?.discussionRoute)) &&
+    access.commandAuthorized &&
+    isAbortRequestText(normalizedCommandText);
+  return {
+    interrupt,
+    dispatch: async (assertCurrent: () => void, getInterruptBarrier: () => Promise<void>) => {
+      if (params.abortSignal.aborted) {
+        return;
+      }
+      let current = interrupt ? prepared : undefined;
+      if (!interrupt) {
+        // A stop can arrive while this reply waits or refreshes its route.
+        // Re-read after that stop settles before starting ordinary work.
+        let barrier: Promise<void>;
+        do {
+          barrier = getInterruptBarrier();
+          await barrier;
+          assertCurrent();
+          current = await resolveInboundEvent(params).catch(params.onEventError);
+        } while (barrier !== getInterruptBarrier());
+      }
+      assertCurrent();
+      if (params.abortSignal.aborted || !current) {
+        return;
+      }
+      const { correlationId } = current;
+      try {
+        await handleClickClackInbound({
+          account: params.account,
+          config: params.config,
+          message: current.message,
+          access: current.access,
+          buildContext: params.buildContext,
+          ...(correlationId ? { correlationId } : {}),
+        });
+      } catch (error) {
+        params.onEventError(error);
+      }
+    },
+  };
 }
 
 async function drainEventBacklog(params: {
@@ -175,13 +230,14 @@ export async function startClickClackGatewayAccount(
     botUserId: configuredAccount.botUserId ?? me.id,
     botHandle: me.handle,
   };
-  const processIncomingEvent = (event: ClickClackEvent) =>
-    processEvent({
+  const prepareIncomingEvent = (event: ClickClackEvent, onEventError: (error: unknown) => never) =>
+    prepareEvent({
       abortSignal: ctx.abortSignal,
       account,
       config: ctx.cfg,
       client,
       event,
+      onEventError,
       botUserId: account.botUserId,
       buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
         .buildContext,
@@ -207,6 +263,89 @@ export async function startClickClackGatewayAccount(
   let initialized = false;
   try {
     while (!ctx.abortSignal.aborted) {
+      let preparation = Promise.resolve();
+      let replies = Promise.resolve();
+      let interrupts = Promise.resolve();
+      let acknowledgements = Promise.resolve();
+      let failure: { error: unknown } | undefined;
+      let replayFailure: { error: unknown } | undefined;
+      let onFailure: ((error: unknown) => void) | undefined;
+      const inFlight = new Set<Promise<void>>();
+      const failed = (error: unknown) => {
+        failure ??= { error };
+        onFailure?.(error);
+      };
+      const enqueueEvent = (event: ClickClackEvent, replay = false) => {
+        // Only errors from this event's own lookups/handler are replay errors.
+        // Queue guards and rejected stop barriers may carry a live failure.
+        const eventFailed = (error: unknown): never => {
+          if (replay) {
+            replayFailure ??= { error };
+          }
+          failed(error);
+          throw error;
+        };
+        preparation = preparation.then(async () => {
+          if (failure) {
+            throw failure.error;
+          }
+          const prepared = await prepareIncomingEvent(event, eventFailed).catch(eventFailed);
+          // Fetch and authorize in arrival order, but do not make an abort
+          // wait for the reply it must cancel. Ordinary replies remain FIFO.
+          const dispatch = async () => {
+            if (failure) {
+              throw failure.error;
+            }
+            await prepared?.dispatch(
+              () => {
+                if (failure) {
+                  throw failure.error;
+                }
+              },
+              () => interrupts,
+            );
+          };
+          const handled = prepared?.interrupt ? dispatch() : replies.then(dispatch);
+          // Keep stop settlement separate from reply FIFO: a reply queued
+          // before this stop must also observe it without a dependency cycle.
+          if (prepared?.interrupt) {
+            interrupts = Promise.all([interrupts, handled]).then(() => undefined);
+            void interrupts.catch(failed);
+          } else {
+            replies = handled;
+          }
+          inFlight.add(handled);
+          void handled.then(
+            () => inFlight.delete(handled),
+            (error: unknown) => {
+              inFlight.delete(handled);
+              failed(error);
+            },
+          );
+          // A fast control may finish first; recovery can acknowledge only
+          // the contiguous successful prefix, never skip a failed reply.
+          acknowledgements = acknowledgements.then(async () => {
+            await handled;
+            afterCursor = event.cursor || afterCursor;
+          });
+          void acknowledgements.catch(failed);
+        });
+        void preparation.catch(failed);
+        return preparation;
+      };
+      const settleEvents = async () => {
+        // A rejected prefix must not reconnect while a later control still
+        // owns effects; settle admitted work before replaying the cursor.
+        await Promise.allSettled([preparation]);
+        await Promise.allSettled([acknowledgements, ...inFlight]);
+        if (replayFailure) {
+          throw replayFailure.error;
+        }
+        if (failure) {
+          throw failure.error;
+        }
+      };
+      let readCursor = afterCursor;
       if (!initialized) {
         const page = await client.eventPage(workspaceId, { includeTail: true });
         // Newer servers capture this cursor before listing the page, so events
@@ -221,24 +360,29 @@ export async function startClickClackGatewayAccount(
           }
         }
         initialized = true;
+        readCursor = afterCursor;
       } else {
-        afterCursor = await drainEventBacklog({
-          client,
-          workspaceId,
-          afterCursor,
-          abortSignal: ctx.abortSignal,
-          onEvent: processIncomingEvent,
-        });
+        try {
+          readCursor = await drainEventBacklog({
+            client,
+            workspaceId,
+            afterCursor,
+            abortSignal: ctx.abortSignal,
+            onEvent: (event) => enqueueEvent(event, true),
+          });
+        } catch (error) {
+          failed(error);
+          await settleEvents();
+        }
       }
       if (ctx.abortSignal.aborted) {
         break;
       }
-      const socket = client.websocket(workspaceId, afterCursor);
+      const socket = client.websocket(workspaceId, readCursor);
       await new Promise<void>((resolve) => {
         let settled = false;
         let closing = false;
         let loggedMessageFailure = false;
-        let messageQueue = Promise.resolve();
         let removeAbortListener: (() => void) | undefined;
         const finishSocketCycle = () => {
           if (settled) {
@@ -252,7 +396,7 @@ export async function startClickClackGatewayAccount(
         const finishAfterQueuedMessages = () => {
           // The queue is scoped to this account/socket. Waiting here preserves
           // its contiguous cursor without blocking unrelated account streams.
-          void messageQueue.then(
+          void settleEvents().then(
             () => finishSocketCycle(),
             () => finishSocketCycle(),
           );
@@ -276,6 +420,13 @@ export async function startClickClackGatewayAccount(
             socket.close();
           }
         };
+        onFailure = reconnectAfterMessageFailure;
+        if (failure) {
+          const error = failure.error;
+          queueMicrotask(() => reconnectAfterMessageFailure(error));
+        }
+        void preparation.catch(reconnectAfterMessageFailure);
+        void acknowledgements.catch(reconnectAfterMessageFailure);
         const abort = () => {
           socket.close();
           finishSocketCycle();
@@ -289,23 +440,12 @@ export async function startClickClackGatewayAccount(
           if (closing || settled) {
             return;
           }
-          // Preserve server event order and commit each cursor only after its
-          // handler succeeds, so reconnect backlog can retry a failed event.
-          messageQueue = messageQueue.then(async () => {
-            if (ctx.abortSignal.aborted) {
-              return;
-            }
-            const event = parseSocketEvent(data);
-            if (!event) {
-              ctx.log?.warn?.(
-                `[${account.accountId}] skipped malformed ClickClack websocket event`,
-              );
-              return;
-            }
-            await processIncomingEvent(event);
-            afterCursor = event.cursor || afterCursor;
-          });
-          void messageQueue.catch(reconnectAfterMessageFailure);
+          const event = parseSocketEvent(data);
+          if (!event) {
+            ctx.log?.warn?.(`[${account.accountId}] skipped malformed ClickClack websocket event`);
+            return;
+          }
+          void enqueueEvent(event).catch(reconnectAfterMessageFailure);
         });
         socket.on("close", () => {
           closing = true;
@@ -341,6 +481,11 @@ export async function startClickClackGatewayAccount(
           socket.close();
         });
       });
+      // Replay admission can finish before its handlers. Preserve terminal
+      // replay errors after the socket cycle has settled all admitted work.
+      if (replayFailure) {
+        throw replayFailure.error;
+      }
       if (!ctx.abortSignal.aborted) {
         try {
           // The gateway abort owns both the active socket and its reconnect delay;

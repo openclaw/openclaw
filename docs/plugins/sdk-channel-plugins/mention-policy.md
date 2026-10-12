@@ -22,6 +22,12 @@ Use `openclaw/plugin-sdk/channel-mention-gating` for mention-policy decisions.
 Use `openclaw/plugin-sdk/channel-inbound` only when you need the broader
 inbound helper barrel.
 
+When classifying a control message before dispatch, use `stripStructuralPrefixes`
+from `openclaw/plugin-sdk/channel-mention-gating`, then use `stripMentions` for
+group messages with the resolved agent ID, channel context, and configuration.
+These helpers apply the core command text rules. They do not authorize a command;
+keep sender authorization and current route validation at dispatch.
+
 Good fit for plugin-local logic:
 
 - reply-to-bot detection

@@ -337,6 +337,11 @@ not needed there.
 
 ## Command menu
 
+In agent mode, an authorized `/stop` message interrupts the current turn without
+waiting for its reply to finish. Send it in the same DM, channel, or thread as
+the running turn. Other messages keep their arrival order. Managed discussion
+channels also support this behavior; direct model replies do not.
+
 At gateway startup, each configured account publishes OpenClaw's native
 commands to ClickClack. They appear in composer autocomplete labeled with the
 bot's handle. The published set is replaced wholesale on each startup,
