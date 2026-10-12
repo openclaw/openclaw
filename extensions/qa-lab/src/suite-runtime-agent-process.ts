@@ -172,8 +172,11 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
   for (let depth = 0; depth < 4 && isRecord(current); depth += 1) {
     const code = current.gatewayCode ?? current.code;
     if (code === "UNAVAILABLE" && current.retryable === true) {
-      const detailMethod = isRecord(current.details) ? current.details.method : undefined;
-      if (detailMethod === "chat.history") {
+      const details = isRecord(current.details) ? current.details : undefined;
+      if (
+        details?.method === "chat.history" ||
+        (details?.method === undefined && details?.code === "agent-database-inspection-pending")
+      ) {
         return resolveIntegerOption(current.retryAfterMs, QA_HISTORY_RETRY_DEFAULT_MS, {
           min: QA_HISTORY_RETRY_MIN_MS,
           max: QA_HISTORY_RETRY_MAX_MS,
