@@ -481,7 +481,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         );
         const firstDetails = firstResult.details as { status: string };
         const firstSchemaValid = Value.Check(ConversationSendResultSchema, firstResult.details);
-        const firstNotice = toolResultText(firstResult).includes("already sent");
+        const firstNotice = toolResultText(firstResult).includes("already submitted");
         expect(firstDetails.status).toBe("sent");
         expect(firstSchemaValid).toBe(true);
         expect(firstNotice).toBe(false);
@@ -617,7 +617,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         const replayDetails = replay.details as { status: string };
         const replaySchemaValid = Value.Check(ConversationSendResultSchema, replay.details);
         const replayText = toolResultText(replay);
-        const replayNotice = replayText.includes("already sent");
+        const replayNotice = replayText.includes("already submitted");
         expect(replayDetails.status).toBe("sent");
         expect(replaySchemaValid).toBe(true);
         expect(replayNotice).toBe(false);
@@ -813,7 +813,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
           (result) => (result.details as { status?: string }).status,
         );
         const noticePresent = sameOpResults.some((result) =>
-          toolResultText(result).includes("already sent"),
+          toolResultText(result).includes("already submitted"),
         );
         expect(statuses).toEqual(["sent", "sent"]);
         expect(noticePresent).toBe(false);
@@ -842,7 +842,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
           deliveriesRecorded: sameOpDeliveries.length,
           toolResults: sameOpResults.map((result, index) => ({
             status: statuses[index] ?? "missing",
-            noticePresent: toolResultText(result).includes("already sent"),
+            noticePresent: toolResultText(result).includes("already submitted"),
             schemaValid: Value.Check(ConversationSendResultSchema, result.details),
           })),
           ledgerCounts: { "qa-channel:qa-operator": sameOpLedgerCount },
@@ -1022,7 +1022,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
 
   // These scenarios change the Gateway config (message-tool replies, the hard cap) and read
   // the mock provider's request log, which accumulates for the Gateway's lifetime. Scenarios 1
-  // and 3 both expect "already sent 2" and only scenario 3 rules out "already sent 3", so each
+  // and 3 both expect "already submitted 2" and only scenario 3 rules out "already submitted 3", so each
   // gets its own Gateway to keep those reads unambiguous.
   describe("per-scenario Gateway", () => {
     afterEach(stopHarness);
@@ -1063,11 +1063,11 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // is observed on the bus. Wait for the nudge to appear in the mock's recorded
         // requests rather than sampling once (which races the follow-up request).
         await waitForMockRequestText(live.mock!.baseUrl, (text) =>
-          text.includes("already sent 2 messages to this target this turn"),
+          text.includes("already submitted 2 messages to this target this turn"),
         );
         const mockTexts = await fetchMockRequestTexts(live.mock!.baseUrl);
         const noticePresent = mockTexts.some((text) =>
-          text.includes("already sent 2 messages to this target this turn"),
+          text.includes("already submitted 2 messages to this target this turn"),
         );
         expect(noticePresent).toBe(true);
 
@@ -1096,7 +1096,7 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // deliveryStatus "suppressed" (no_visible_payload) and hits the exact
         // message-tool-execution.ts `deliveredNothing` branch at the real boundary. If that
         // send were counted, the second visible send (SBM3-3) would be the 3rd and nudge
-        // "already sent 3 messages"; because it is not counted, SBM3-3 is the 2nd counted
+        // "already submitted 3 messages"; because it is not counted, SBM3-3 is the 2nd counted
         // send and nudges at 2. The "failed"/throwing branches of the same predicate are
         // covered at the message-tool seam in message-tool.test.ts ("does not count a
         // failed best-effort send" / "does not count a throwing send"); a real transport
@@ -1129,14 +1129,14 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         // nudge lands in a follow-up model request after SBM3-3's bus delivery, so wait for
         // it rather than sampling once (which races that request).
         await waitForMockRequestText(live.mock!.baseUrl, (text) =>
-          text.includes("already sent 2 messages to this target this turn"),
+          text.includes("already submitted 2 messages to this target this turn"),
         );
         const mockTexts = await fetchMockRequestTexts(live.mock!.baseUrl);
         const nudgeAtTwo = mockTexts.some((text) =>
-          text.includes("already sent 2 messages to this target this turn"),
+          text.includes("already submitted 2 messages to this target this turn"),
         );
         const nudgeAtThree = mockTexts.some((text) =>
-          text.includes("already sent 3 messages to this target this turn"),
+          text.includes("already submitted 3 messages to this target this turn"),
         );
         expect(nudgeAtTwo).toBe(true);
         expect(nudgeAtThree).toBe(false);

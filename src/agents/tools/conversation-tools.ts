@@ -36,6 +36,8 @@ import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
   commitTurnSend,
+  formatTurnSendBlockedNotice,
+  formatTurnSendNotice,
   releaseTurnSend,
   reserveTurnSend,
 } from "./turn-send-ledger.js";
@@ -269,7 +271,7 @@ export function createConversationsSendTool(
         toolCallId,
         args,
       );
-      // Per-turn send budget, shared with the message tool: count successful sends
+      // Per-turn send budget, shared with the message tool: count submitted sends
       // per (turn, resolved route) so a reworded resend to the same conversation is
       // visible even though the loop detector hashes full params and can't see it.
       // The ref is resolved to its (channel, account, target) route so the ledger key
@@ -302,7 +304,7 @@ export function createConversationsSendTool(
         // Report the configured per-turn limit, not a delivered count: admission is
         // blocked on committed + in-flight pending reaching the cap, so the number actually
         // delivered to this conversation may be fewer than `maxPerTurn`.
-        const blockedNotice = `Blocked: reached this turn's configured limit of ${maxPerTurn} message(s) to this conversation (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`;
+        const blockedNotice = formatTurnSendBlockedNotice(maxPerTurn, "conversation");
         return textResult(blockedNotice, {
           status: "suppressed" as const,
           conversationRef,
@@ -359,7 +361,7 @@ export function createConversationsSendTool(
             // callers) and the declared details.turnSendNotice, so a Code Mode guest
             // — which only receives the projected details — still sees it. The two
             // strings are identical by construction.
-            const turnSendNotice = `You have already sent ${sendCount} messages to this conversation this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
+            const turnSendNotice = formatTurnSendNotice(sendCount, "conversation");
             return {
               ...base,
               content: [

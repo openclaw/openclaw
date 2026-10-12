@@ -114,3 +114,11 @@ export function createChannelPlugin(params: {
     },
   };
 }
+
+/**
+ * The exact per-turn send reminder both send tools emit. Spelled out literally (not via
+ * the production formatter) so a wording regression fails the assertion.
+ */
+export function expectedTurnSendNotice(count: number, recipient: "target" | "conversation") {
+  return `You have already submitted ${count} messages to this ${recipient} this turn (some may still be pending delivery); if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
+}

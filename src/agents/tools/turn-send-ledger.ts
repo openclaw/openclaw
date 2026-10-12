@@ -4,8 +4,9 @@
  *
  * The loop detector hashes full tool params (tool-loop-detection.ts), so a model
  * that re-sends the same answer with slightly reworded text produces a distinct
- * hash every time and is invisible to it. This ledger counts *successful*
- * deliveries per (turn, target) so a tool can nudge the model — or, when an
+ * hash every time and is invisible to it. This ledger counts sends handed to
+ * delivery per (turn, target) — including ones the Gateway queued for retry or whose
+ * outcome is unknown — so a tool can nudge the model — or, when an
  * operator opts in, cap the fan-out — independently of the loop detector and its
  * default-off switch.
  *
@@ -166,6 +167,24 @@ export function buildTurnSendTargetKey(params: {
   const target =
     normalizeTargetForProvider(channel ?? params.channel, params.target) ?? params.target;
   return `${channel}\0${normalizeAccountId(params.accountId)}\0${target}`;
+}
+
+/**
+ * Model-facing reminder shared by the `message` and `conversations_send` tools from the
+ * second committed send to one recipient. The committed count is conservative: it includes
+ * sends the Gateway queued for retry and sends with an unknown outcome, so the text says
+ * "submitted" and flags possible pending delivery rather than claiming confirmed receipt.
+ */
+export function formatTurnSendNotice(count: number, recipient: "target" | "conversation"): string {
+  return `You have already submitted ${count} messages to this ${recipient} this turn (some may still be pending delivery); if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
+}
+
+/** Model-facing explanation for a send the opt-in hard cap blocked before dispatch. */
+export function formatTurnSendBlockedNotice(
+  maxPerTurn: number | undefined,
+  recipient: "target" | "conversation",
+): string {
+  return `Blocked: reached this turn's configured limit of ${maxPerTurn} message(s) to this ${recipient} (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`;
 }
 
 // The live (session, run) slot, or a fresh one — with the next generation stamped — when
