@@ -219,7 +219,7 @@ it.each([false, true])(
     worker.on("error", (error: Error) => reply.reject(error));
     const command = async (message: string) => {
       reply = createDeferred<unknown>();
-      worker.postMessage(message);
+      worker.postMessage(message, []);
       return await reply.promise;
     };
     let sibling:
@@ -244,7 +244,7 @@ it.each([false, true])(
       expect(await command("close")).toBe("close");
       expect(recordsFor(location)).toHaveLength(1);
       const siblingReply = once(siblingWorker, "message");
-      siblingWorker.postMessage("read");
+      siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
       await siblingWorker.terminate();
       siblingRelay.finish();
