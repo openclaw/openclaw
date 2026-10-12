@@ -144,7 +144,7 @@ test("configured-only multi-store target preparation is reused across distinct l
     const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionConfig = { store: storeTemplate };
     testState.agentsConfig = { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) };
-    (await getGatewayConfigModule()).getRuntimeConfig();
+    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(loadGatewayTestConfig());
     for (const agentId of agentIds) {
       const storePath = storeTemplate.replace("{agentId}", agentId);
       // Seed list metadata without running unrelated lifecycle deletion workers.
