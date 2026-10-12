@@ -169,7 +169,8 @@ export async function prepareAutomaticSetupCodex(params: {
   beforePersistentApply: () => void;
   signal?: AbortSignal;
 }): Promise<{ ok: true; config: OpenClawConfig } | StageFailure> {
-  return await withPluginLifecycleLease({ signal: params.signal }, async () => {
+  const leaseOptions = { signal: params.signal, assertCurrent: params.beforePersistentApply };
+  return await withPluginLifecycleLease(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForSupervision } =
       await import("../commands/codex-runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
@@ -188,7 +189,9 @@ export async function stageCodexCandidate(
   ctx: StageContext,
   modelRef: string,
 ): Promise<StagedCandidate | StageFailure> {
-  return await withPluginLifecycleLease({ signal: ctx.params.signal }, async () => {
+  const beforePersistentApply = () => throwIfSetupInferenceCancelled(ctx.params);
+  const leaseOptions = { signal: ctx.params.signal, assertCurrent: beforePersistentApply };
+  return await withPluginLifecycleLease(leaseOptions, async () => {
     const ensureCodex =
       ctx.deps.ensureCodexRuntimePlugin ??
       (await import("../commands/codex-runtime-plugin-install.js"))
@@ -198,7 +201,7 @@ export async function stageCodexCandidate(
       runtime: ctx.params.runtime,
       workspace: ctx.workspace,
       beforePersistentEffect: ctx.beforePersistentEffect,
-      beforePersistentApply: () => throwIfSetupInferenceCancelled(ctx.params),
+      beforePersistentApply,
       prompter: ctx.params.prompter,
       automaticSetup: ctx.params.automaticSetup,
       modelRef,
