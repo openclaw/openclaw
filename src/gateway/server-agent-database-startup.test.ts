@@ -451,7 +451,9 @@ it.for([
         await withinTest(inspectionSettled ?? Promise.resolve(), signal);
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
-          repairHint: expect.stringContaining("doctor --fix"),
+          repairHint: expect.stringContaining(
+            `openclaw doctor --session-sqlite recover --session-sqlite-agent ${agentId}`,
+          ),
         });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
