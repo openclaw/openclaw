@@ -328,12 +328,30 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   };
   const finish = async (
-    cfg: OpenClawConfig,
+    cfg: OpenClawConfig | undefined,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission?: () => void,
   ) => {
+    // Config recovery must not encounter Doctor's own offline-maintenance lease.
     const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
+    if (!cfg && !stopped?.stopped) {
+      throwSettledFailure(settledFailure);
+      return;
+    }
+    if (!cfg) {
+      try {
+        // Restore our own stop without re-entering the readiness gate that failed.
+        const { readConfigFileSnapshot } = await import("../config/config.js");
+        cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config;
+      } catch (error) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { cause: error },
+        );
+      }
+    }
     await restoreGateway(cfg, assertCustody, writeConfig, assertRestoreAdmission);
     throwSettledFailure(settledFailure);
   };
@@ -366,9 +384,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               : `Warning: Doctor could not reacquire maintenance ownership: ${String(ownershipError)} Restoring its service without repairing shared state.`;
           warn(warning);
         }
-        const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
-          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+          undefined,
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
@@ -667,7 +684,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       writeConfig?: DoctorConfigWriter,
       failure?: unknown,
     ) {
-      let cfg = initialConfig;
       if (cleanupFailure) {
         throw cleanupFailure.error;
       }
@@ -680,27 +696,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       custody = "restoring";
       let failed = failure !== undefined;
       try {
-        if (!cfg && !stopped?.stopped) {
-          await release(assertCustody);
-          return;
-        }
-        if (!cfg) {
-          try {
-            // Readiness may be the operation that failed. Reversing Doctor's own
-            // stop must not re-enter that gate; the previous Gateway remains the
-            // recovery owner for the persisted state it was already serving.
-            const { readConfigFileSnapshot } = await import("../config/config.js");
-            cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false }))
-              .config;
-          } catch (error) {
-            throw new DoctorMaintenanceRefusalError(
-              `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
-              { kind: "data-at-risk", reason: "incomplete-migration" },
-              { cause: error },
-            );
-          }
-        }
-        await finish(cfg, assertCustody, writeConfig);
+        await finish(initialConfig, assertCustody, writeConfig);
       } catch (restoreError) {
         failed = true;
         if (failure !== undefined) {

@@ -128,3 +128,28 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     }),
   };
 }
+
+export async function prepareDoctorMaintenanceArchives(
+  databasePreflight: DoctorDatabasePreflight | undefined,
+  runtime: RuntimeEnv,
+): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
+  try {
+    const { prepareDoctorDatabasePreflight } =
+      await import("../commands/doctor-database-preflight.js");
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
+      .agentDatabaseMigrationDiscovery;
+    if (discovery) {
+      const { prepareCanonicalTranscriptArchiveMigrations } =
+        await import("../infra/state-migrations.transcript-directives-archives.js");
+      await prepareCanonicalTranscriptArchiveMigrations(discovery);
+    }
+  } catch (error) {
+    // Offline admission still owns repairable schema and discovery failures.
+    runtime.log(`Archive verification preparation deferred: ${String(error)}`);
+  }
+  const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
+  // Keep an accepted signal during preparation ahead of service custody.
+  await waitForCliSignalExit();
+  return discovery;
+}

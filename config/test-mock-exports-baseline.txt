@@ -5595,7 +5595,6 @@
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../cli/daemon-cli/restart-health.js","1a59d93e93494ca9eef5d71cbc160ffcebd3bb82be4e53e74e07bf106eaeb94e",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../cli/update-cli/update-command-service-maintenance.js","036eecd0b266e9a900ccdb39b854fc52deb2df66396ce8c9ed53cbf8af766e4f",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../cli/update-cli/update-command-service-plan.js","32c9498fd83db1c0aaf4d0dbed532d8e49e4349a567964120f8034d26cc33bf1",1]
-["src/commands/doctor-maintenance.settlement.test-support.ts","../config/config.js","dfd4697197c2c109da35d1d4524d7543a2c5655e9af72b7456c9007313bd8581",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../daemon/service-operation-lock.js","7a8a1a3c0ab112968ac615d9c3a5590fd8696cac03e37f57092cb8976dba4467",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../daemon/service.js","30dbb672b6b59f3222ff0602802c345a09e8e2206549d2a3137279b26217685a",1]
 ["src/commands/doctor-maintenance.settlement.test-support.ts","../infra/update-run-ledger.js","faeffa50e87362a3a79bd906e7b9b681a98f83adb965786bb8067bed79e5b8d6",1]

@@ -69,6 +69,7 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  retiredStateAdmitted?: boolean;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
@@ -83,6 +84,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     },
     (progress) =>
       runDoctorConfigPreflight({
+        retiredStateAdmitted: params.retiredStateAdmitted,
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
