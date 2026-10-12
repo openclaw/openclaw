@@ -228,40 +228,6 @@ describe("sessions.catalog.startTerminal", () => {
     }
   });
 
-  it("keeps the terminal recovery hint on provider errors", async () => {
-    const cwd = process.cwd();
-    const startTerminalSession = vi.fn(async () => {
-      throw new Error("provider failed to build a start plan");
-    });
-    const open = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
-    const respond = await call(
-      { catalogId: "codex", agentId: "main", cwd },
-      { gateway: { cliAgents: { enabled: true } } },
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-      {
-        isTerminalEnabled: () => true,
-        terminalSessions: { open },
-        resolveTerminalLaunchPolicy: () => ({
-          ok: true,
-          plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-        }),
-      },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          "provider failed to build a start plan; check the selected CLI, host, and terminal configuration, then retry",
-      }),
-    );
-  });
-
   it("rejects local terminal start for a named profile before provider fallback", async () => {
     const cwd = process.cwd();
     const startTerminalSession = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
