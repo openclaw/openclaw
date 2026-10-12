@@ -66,12 +66,19 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         name: "skills_read",
         label: "Read Installed Skill",
         description:
-          "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Does not execute the skill or grant additional tool permissions.",
-        parameters: Type.Object({ name: Type.String({ minLength: 1 }) }),
+          "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Omit relativePath for instructions; use it for a bounded companion under a non-sandbox local Gateway skill directory. Other placements remain instruction-only. Does not execute the skill or grant additional tool permissions.",
+        parameters: Type.Object({
+          name: Type.String({ minLength: 1 }),
+          relativePath: Type.Optional(Type.String({ minLength: 1 })),
+        }),
         execute: async (_id, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
-          const content = await readInstalledSkill(skills, name, signal);
+          const relativePath = readToolStringParam(params, "relativePath", {
+            required: params.relativePath !== undefined || params.relative_path !== undefined,
+            trim: false,
+          });
+          const content = await readInstalledSkill(skills, name, signal, relativePath);
           return { content: [{ type: "text", text: content }], details: { name, content } };
         },
       },

@@ -300,3 +300,13 @@ with the same path and the returned `offset`, optional `cursor`, and optional
 Do not strip display-notice patterns from file data: those strings may be actual
 file contents. Each call still honors its explicit `limit`; if more file data
 remains, the result is `"truncated"` and its continuation describes the next page.
+
+### Reading installed skills
+
+When `skills_read` is enabled, `await skills.read(name)` returns the complete
+`SKILL.md` instructions for an exact eligible skill name. For a non-sandbox local
+Gateway skill, `await skills.read(name, "references/guide.md")` reads a companion
+beneath that skill's directory, up to 256 KiB. Companion paths must use relative,
+forward-slash segments; traversal, symlinks, hardlinks, and replaced roots are
+rejected. Sandbox, workspace, node, and workspace-restricted placements remain
+instruction-only. These calls use the native `skills_read` tool's permissions.

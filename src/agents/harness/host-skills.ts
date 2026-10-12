@@ -100,6 +100,8 @@ export function bindHostSkillCatalog(params: {
         const entry: InstalledSkill = Object.assign({}, skill);
         // Cached instructions must not bypass the read-time workspace boundary.
         entry.source = { filePath: skill.source.filePath };
+        // A captured local root must not bypass this placement's narrower reader.
+        entry.companionRoot = undefined;
         entry.reader = async ({ location, signal }) => {
           params.assertCurrent();
           signal?.throwIfAborted();
