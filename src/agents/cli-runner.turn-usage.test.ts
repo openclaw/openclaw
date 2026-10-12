@@ -44,6 +44,7 @@ it("persists the terminal Claude turn usage for a multi-call turn", async () => 
     runId: "run-claude-turn-usage",
   });
   Object.assign(context.params, {
+    config: {},
     storePath: sessionTarget.storePath,
     persistAssistantTranscript: true,
   });

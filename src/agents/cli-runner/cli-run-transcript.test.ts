@@ -106,6 +106,7 @@ it("keeps CLI usage unmarked when the backend reports no separate turn total", a
   await persistCliAssistantTranscript({
     runParams: {
       ...target,
+      config: {},
       sessionFile: `sqlite://agents/main/${target.sessionId}`,
       workspaceDir: root,
       prompt: "hi",
