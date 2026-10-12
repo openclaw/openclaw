@@ -243,3 +243,66 @@ it("reuses quiet roots across unrelated invalidations and rescans changed or unv
   expect(discoveryCount()).toBe(recoveredCount);
   expect(escapeWarnings()).toHaveLength(1);
 });
+
+it("retains rejected-file warnings across quiet root reuse and clears them after repair", async () => {
+  const discovery = await import("../loading/skill-root-discovery.js");
+  const discover = vi.spyOn(discovery, "discoverSkillCandidates");
+  const { loadSkillRootRecords } = await import("../loading/skill-root-loader.js");
+  const { loadWorkspaceSkillDiscovery } = await import("../loading/workspace-skill-loader.js");
+  const settling = await import("./refresh-file-stability.js");
+  const createScheduler = settling.createSkillFileScheduler;
+  const samples: Promise<unknown>[] = [];
+  vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
+    createScheduler({
+      ...options,
+      sample(changedPath) {
+        const work = options.sample(changedPath);
+        samples.push(work);
+        return work;
+      },
+    }),
+  );
+  const { ensureSkillsWatcher } = await import("./refresh.js");
+  const { bumpSkillsSnapshotVersion } = await import("./refresh-state.js");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const workspaceDir = fixture.workspaceDir;
+  const root = path.join(workspaceDir, "skills");
+  const broken = path.join(root, "broken");
+  const brokenFile = path.join(broken, "SKILL.md");
+  await writeSkill({ dir: path.join(root, "valid"), name: "valid", description: "Valid sibling" });
+  await fs.mkdir(broken);
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n");
+  const config = { plugins: { enabled: false } };
+  const options = { config, workspaceOnly: true };
+  ensureSkillsWatcher({ workspaceDir, config });
+  await observer.readyAll();
+  // A runtime root read must retain warnings even when its caller only consumes records.
+  expect(loadSkillRootRecords({ dir: root, source: "openclaw-workspace", config })).toHaveLength(1);
+  const scans = () => discover.mock.calls.filter(([params]) => params.dir === root).length;
+  const initialScans = scans();
+  const load = () => loadWorkspaceSkillDiscovery(workspaceDir, options);
+  const expected = {
+    items: [{ kind: "invalid", path: brokenFile, message: "description is required" }],
+    omitted: 0,
+  };
+  const first = load();
+  expect(first.entries.map(({ skill }) => skill.name)).toEqual(["valid"]);
+  expect(first.diagnostics).toEqual(expected);
+  expect(scans()).toBe(initialScans);
+  bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  expect(load().diagnostics).toEqual(expected);
+  expect(scans()).toBe(initialScans);
+
+  await writeSkill({ dir: broken, name: "broken", description: "Repaired skill" });
+  observer.forRoot(root).change(brokenFile, "content");
+  // Join real samples while advancing the existing settling/debounce clock.
+  for (const elapsed of [0, 100, 100, 50, 250]) {
+    await vi.advanceTimersByTimeAsync(elapsed);
+    await Promise.all(samples.splice(0));
+  }
+  const repaired = load();
+  expect(repaired.entries.map(({ skill }) => skill.name)).toEqual(["broken", "valid"]);
+  expect(repaired.diagnostics).toEqual({ items: [], omitted: 0 });
+  expect(scans()).toBe(initialScans + 1);
+  expect(first.diagnostics).toEqual(expected);
+});

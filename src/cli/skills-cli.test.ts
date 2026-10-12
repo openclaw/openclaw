@@ -219,6 +219,38 @@ describe("skills formatting", () => {
     expect(output).not.toContain("commands/cron may still use it");
   });
 
+  it("sanitizes load warnings and preserves omitted counts on every inventory surface", () => {
+    for (const inventory of [report([]), report([skill("valid-sibling")])]) {
+      inventory.diagnostics = {
+        items: [
+          {
+            kind: "invalid",
+            path: "/skills/evil\u001b[31m\u009f/SKILL.md",
+            message: "invalid frontmatter\u001b[2J\u0091",
+          },
+        ],
+        omitted: 3,
+      };
+      for (const json of [false, true]) {
+        for (const output of [
+          formatSkillsList(inventory, { json }),
+          formatSkillsCheck(inventory, { json }),
+          formatSkillInfo(inventory, "missing", { json }),
+        ]) {
+          expect(output).toContain("/skills/evil/SKILL.md");
+          expect(output).toContain("invalid frontmatter");
+          expect(output).not.toContain("\\u001b");
+          expect(output).not.toContain("\u009f");
+          if (json) {
+            expect(JSON.parse(output).diagnostics.omitted).toBe(3);
+          } else {
+            expect(output).toContain("3 additional skill warnings omitted");
+          }
+        }
+      }
+    }
+  });
+
   it("sanitizes ANSI and C1 controls in JSON fields", () => {
     const output = formatSkillsList(
       report([

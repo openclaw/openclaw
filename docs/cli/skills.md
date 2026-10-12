@@ -96,6 +96,14 @@ commands resolve the target workspace from `--agent <id>`, then the current
 working directory when it is inside a configured agent workspace, then the
 default agent.
 
+Malformed skill files appear as **Skill load warnings** in `list`,
+`info`, and `check`, including when the inventory comes from a
+running Gateway. Each warning identifies the file and the load error. Rejected
+files are excluded from loaded-skill counts; valid siblings remain available.
+JSON output includes `diagnostics` when warnings exist, with up to 64 `items`
+and an `omitted` count for additional warnings. Fix the file and refresh the
+inventory to clear its warning.
+
 Search results add `v` only to numeric version labels, preserving existing prefixes
 and build names. JSON output keeps the registry's original version values.
 

@@ -13,6 +13,7 @@ import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,
+  prepareWorkspaceSkillEntries,
   prepareWorkspaceSkills,
   readWorkspaceSkillSources,
   resolveWorkspaceSkillPromptEntries,
@@ -139,11 +140,22 @@ describe("remote skill discovery", () => {
     ] as const) {
       await writeSkill({ dir: path.join(dir, name), name, description });
     }
-    sources.entries = readWorkspaceSkillSources({
+    const gatewayFailure = path.join(options.managedSkillsDir, "bad-gateway", "SKILL.md");
+    const remoteFailure = path.join(remote, "skills", "bad-remote", "SKILL.md");
+    for (const [file, name] of [
+      [gatewayFailure, "bad-gateway"],
+      [remoteFailure, "bad-remote"],
+    ] as const) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, `---\nname: ${name}\n---\n`);
+    }
+    const discovered = readWorkspaceSkillSources({
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
       limits: resolveSkillDiscoveryLimits(),
       additionalBins: [],
-    }).entries;
+    });
+    sources.entries = discovered.entries;
+    sources.diagnostics = discovered.diagnostics;
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
     try {
@@ -179,6 +191,14 @@ describe("remote skill discovery", () => {
       expect(status.files.find((file) => file.name === "workshop-wins")?.skillCard?.content).toBe(
         "Workshop card",
       );
+      expect(status.report.diagnostics).toEqual({
+        items: [gatewayFailure, remoteFailure].map((file) => ({
+          kind: "invalid",
+          path: file,
+          message: "description is required",
+        })),
+        omitted: 0,
+      });
     } finally {
       release();
     }
@@ -192,6 +212,9 @@ describe("remote skill discovery", () => {
       description: "Gateway canonical instructions",
       metadata: JSON.stringify({ openclaw: { requires: { bins: ["remote-tool"] } } }),
     });
+    const invalidFile = path.join(options.executionWorkspaceDir, "skills", "invalid", "SKILL.md");
+    await fs.mkdir(path.dirname(invalidFile), { recursive: true });
+    await fs.writeFile(invalidFile, "---\nname: invalid\n---\n");
     const loadSkills = vi.fn(async (_request: WorkspaceSkillSourceRequest) => sources);
     const release = registerAgentWorkspaceAccess(gateway, { bridge, loadSkills });
     try {
@@ -203,6 +226,11 @@ describe("remote skill discovery", () => {
       expect(project).toMatchObject({ description: "Gateway canonical instructions" });
       expect(resolveSkillFileHost(project!)).toBe("gateway");
       expect(resolveSkillFileHost(available!)).toBe("workspace");
+      const prepared = await prepareWorkspaceSkillEntries(gateway, params);
+      expect(prepared.diagnostics).toEqual({
+        items: [{ kind: "invalid", path: invalidFile, message: "description is required" }],
+        omitted: 0,
+      });
       expect(loadSkills.mock.calls[0]![0]).toMatchObject({
         executionWorkspaceDir: undefined,
         additionalBins: expect.arrayContaining(["remote-tool", "library-tool"]),

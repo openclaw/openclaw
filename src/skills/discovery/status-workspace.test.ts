@@ -3,12 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "../../cli/skills-cli.format.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillStatus, prepareWorkspaceSkillStatus } from "./status.js";
 
 const tempDirs: string[] = [];
 
@@ -70,6 +76,54 @@ function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEn
 }
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("reports rejected skills through cached inventory and CLI output until they are repaired", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const brokenFile = path.join(workspaceDir, "skills", "broken", "SKILL.md");
+    const validFile = path.join(workspaceDir, "skills", "valid", "SKILL.md");
+    await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+    await fs.mkdir(path.dirname(validFile), { recursive: true });
+    await fs.writeFile(
+      brokenFile,
+      "---\nname: broken\ndescription: First line\ncontinued at column zero\n---\n",
+    );
+    await fs.writeFile(validFile, "---\nname: valid\ndescription: A valid sibling\n---\n");
+    const options = { managedSkillsDir: path.join(workspaceDir, "managed") };
+    // Runtime discovery may populate the cache before the operator requests status.
+    loadWorkspaceSkills(workspaceDir, options);
+    const prepared = await prepareWorkspaceSkillStatus(workspaceDir, options);
+    for (const report of [buildWorkspaceSkillStatus(workspaceDir, options), prepared.report]) {
+      expect(report.skills.map((skill) => skill.name)).toContain("valid");
+      expect(report.skills.map((skill) => skill.name)).not.toContain("broken");
+      expect(report).toMatchObject({
+        diagnostics: {
+          items: [
+            expect.objectContaining({
+              kind: "invalid",
+              path: brokenFile,
+              message: expect.stringContaining("invalid frontmatter: MISSING_CHAR"),
+            }),
+          ],
+          omitted: 0,
+        },
+      });
+      for (const json of [false, true]) {
+        for (const output of [
+          formatSkillsList(report, { json }),
+          formatSkillsCheck(report, { json }),
+          formatSkillInfo(report, "broken", { json }),
+        ]) {
+          expect(output).toContain("broken/SKILL.md");
+          expect(output).toContain("invalid frontmatter: MISSING_CHAR");
+        }
+      }
+    }
+    await fs.writeFile(brokenFile, "---\nname: broken\ndescription: Repaired skill\n---\n");
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch", changedPath: brokenFile });
+    const { report } = await prepareWorkspaceSkillStatus(workspaceDir, options);
+    expect(report.skills.map((skill) => skill.name)).toContain("broken");
+    expect(report).not.toHaveProperty("diagnostics");
+  });
+
   it.each([
     [false, true, ["brew", "node", "uv"], "uv-2"],
     [false, true, ["go", "brew", "download"], "brew-1"],

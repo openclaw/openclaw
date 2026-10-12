@@ -1,5 +1,6 @@
 import type { RequirementConfigCheck, Requirements } from "../../shared/requirements.js";
 import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/workspace-types.js";
+import type { SkillLoadDiagnostics } from "../loading/skill-load-diagnostics.js";
 import type { SkillInstallSpec } from "../types.js";
 
 export type SkillInstallOption = {
@@ -49,6 +50,8 @@ export type SkillStatusReport = {
   agentId?: string;
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
+  /** Rejected files are reported separately and never counted as loaded skills. */
+  diagnostics?: SkillLoadDiagnostics;
 };
 
 /** Filesystem facts, separate from Gateway policy and execution-host requirements. */

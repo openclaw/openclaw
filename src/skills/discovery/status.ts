@@ -15,9 +15,10 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
+import type { SkillLoadDiagnostics } from "../loading/skill-load-diagnostics.js";
 import { resolveSkillSource } from "../loading/source.js";
 import {
-  loadWorkspaceSkills,
+  loadWorkspaceSkillDiscovery,
   prepareWorkspaceSkillEntries,
 } from "../loading/workspace-skill-loader.js";
 import type { WorkspaceSkillSources } from "../loading/workspace-skill-sources.js";
@@ -270,6 +271,7 @@ type WorkspaceSkillStatusOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   entries?: SkillEntry[];
+  diagnostics?: SkillLoadDiagnostics;
   eligibility?: SkillEligibilityContext;
   agentId?: string;
 };
@@ -291,22 +293,21 @@ function prepareWorkspaceSkillRequirements(
     : undefined;
   // Status reports every skill (disabled/ineligible included) with flags, so
   // the loader must stay unfiltered; node-hosted skills merge in separately.
-  const skillEntries = mergeRemoteNodeSkillEntries(
-    opts?.entries ??
-      loadWorkspaceSkills(workspaceDir, {
-        config: opts?.config,
-        // agentId scopes custodian-source discovery only; the "ignore" mode
-        // keeps the entry list unfiltered per the invariant above.
-        agentId: opts?.agentId,
-        agentSkillFilter: "ignore",
-        managedSkillsDir,
-        bundledSkillsDir,
-      }),
-    {
-      canExec: opts?.eligibility?.nodeSkills?.canExec,
-      node: opts?.eligibility?.nodeSkills?.node,
-    },
-  );
+  const discovery =
+    opts?.entries === undefined
+      ? loadWorkspaceSkillDiscovery(workspaceDir, {
+          config: opts?.config,
+          // Status includes disabled and ineligible skills while scoping discovery to the agent.
+          agentId: opts?.agentId,
+          agentSkillFilter: "ignore",
+          managedSkillsDir,
+          bundledSkillsDir,
+        })
+      : { entries: opts.entries, diagnostics: opts.diagnostics };
+  const skillEntries = mergeRemoteNodeSkillEntries(discovery.entries, {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const allowBundled = resolveBundledAllowlist(opts?.config);
   // Missing binaries may appear between reports; reuse probes only within this synchronous read.
   const binaryAvailability = new Map<string, boolean>();
@@ -323,6 +324,7 @@ function prepareWorkspaceSkillRequirements(
     managedSkillsDir,
     agentSkillFilter,
     skillEntries,
+    diagnostics: discovery.diagnostics,
     context: {
       config: opts?.config,
       hasWorkspaceBin: hostBins ? (bin: string) => hostBins.has(bin) : hasLocalBin,
@@ -378,6 +380,7 @@ export async function prepareWorkspaceSkillStatus(
     report: buildWorkspaceSkillStatus(workspaceDir, {
       ...opts,
       entries: sources.entries,
+      diagnostics: sources.diagnostics,
       files,
       runtime: sources.runtime,
     }),
@@ -392,7 +395,7 @@ export function buildWorkspaceSkillStatus(
     runtime?: WorkspaceSkillSources["runtime"];
   },
 ): SkillStatusReport {
-  const { managedSkillsDir, agentSkillFilter, skillEntries, context } =
+  const { managedSkillsDir, agentSkillFilter, skillEntries, diagnostics, context } =
     prepareWorkspaceSkillRequirements(workspaceDir, opts);
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const files =
@@ -414,6 +417,9 @@ export function buildWorkspaceSkillStatus(
     agentId: opts?.agentId,
     agentSkillFilter,
     skills: skillEntries.map((entry) => buildSkillStatus(entry, statusContext)),
+    ...(diagnostics && (diagnostics.items.length > 0 || diagnostics.omitted > 0)
+      ? { diagnostics }
+      : {}),
   };
 }
 
