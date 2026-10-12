@@ -123,6 +123,11 @@ Discovered models use OpenRouter's advertised tool support. When a model's
 definitions or tool choice. Models without that metadata keep the default tool
 behavior.
 
+By default, on public OpenRouter chat-completions routes, OpenClaw sends `strict: false`
+for function tools and preserves the schema's original required fields. This
+lets optional inputs remain optional. Custom proxy endpoints retain their
+configured compatibility policy.
+
 ## Image generation
 
 OpenRouter can back the `image_generate` tool. Set an OpenRouter image model
