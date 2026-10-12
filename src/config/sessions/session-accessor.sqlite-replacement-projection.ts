@@ -2,7 +2,10 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  readOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -245,7 +248,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
         creation.creationSnapshot.targetEntry === undefined &&
         creation.creationSnapshot.legacyKeys.length === 0;
       // Carry the prepared absence into the commit's existing conflict check.
-      const snapshot: SessionEntryReplacementState & { databaseIdentity?: string } = absentCreation
+      const snapshot: SessionEntryReplacementState & {
+        databaseIdentity?: OpenClawAgentDatabaseIdentity;
+      } = absentCreation
         ? {
             entries: [],
             expectedRows: new Map(),
