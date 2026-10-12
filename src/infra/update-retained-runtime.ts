@@ -208,7 +208,7 @@ async function runWithRetainedUpdateRuntime<T>(
             // Missing optional peers must not pull unrelated ancestor installations
             // into a retained runtime. Explicit linked dependency owners still travel.
             retainedDependencyRoot: packageOwner
-              ? resolvePathViaExistingAncestorSync(path.resolve(packageOwner))
+              ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
               : sourceRoot,
             onProgress: assertCurrent,
           });
