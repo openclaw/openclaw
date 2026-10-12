@@ -20,6 +20,7 @@ import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { isMSTeamsLifecycleRemoval } from "./lifecycle-activity.js";
 import { createMSTeamsMonitorStores } from "./monitor-account-stores.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -534,7 +535,7 @@ export async function monitorMSTeamsProvider(
         return;
       }
     }
-    if (activity?.type === "message") {
+    if (activity?.type === "message" || isMSTeamsLifecycleRemoval(activity)) {
       // Throwing rejects the SDK route, so a failed SQLite append is never acked.
       await ingress.accept(activity, adaptedCtx);
       return;

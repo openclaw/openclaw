@@ -79,6 +79,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/mattermost/src/mattermost/monitor-posts.thread-history.test.ts",
   "extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ingress-lifecycle.test.ts",
+  "extensions/msteams/src/monitor-handler/lifecycle-handler.test.ts",
   "extensions/msteams/src/msteams-ingress.test.ts",
   "extensions/nextcloud-talk/src/inbound.room-info-retry.test.ts",
   "extensions/nextcloud-talk/src/webhook-spool.test.ts",
