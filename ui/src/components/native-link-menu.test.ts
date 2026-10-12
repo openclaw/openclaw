@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import type { NativeLinkMenu, NativeLinkMenuAction } from "./native-link-menu.runtime.ts";
+import type { NativeLinkMenu } from "./native-link-menu.runtime.ts";
 import "./native-link-menu.runtime.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
 
@@ -24,7 +24,7 @@ afterEach(async () => {
 
 async function mountMenu(options: {
   trigger?: HTMLAnchorElement;
-  onAction?: (action: NativeLinkMenuAction) => void;
+  onAction?: NativeLinkMenu["onAction"];
   onClose?: () => void;
 }): Promise<NativeLinkMenu> {
   const container = document.createElement("div");

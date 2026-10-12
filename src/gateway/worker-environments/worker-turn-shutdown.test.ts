@@ -163,26 +163,29 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
         (await recovered.listPendingWorkspaceResultsAsync())[0]?.workspaceAcceptedAtMs,
       ).toEqual(expect.any(Number));
     });
-    const recovery = createPlacementRecoveryActions({
-      placements: recovered,
-      environments: {
-        ...environments,
-        fenceWorkerTurnForRecovery: unexpected,
-        reconcileEnvironment: async () => {},
-        reconcileOnce: async () => {},
-        supportsProviderExecutionMode: () => true,
+    const recovery = createPlacementRecoveryActions(
+      {
+        placements: recovered,
+        environments: {
+          ...environments,
+          fenceWorkerTurnForRecovery: unexpected,
+          reconcileEnvironment: async () => {},
+          reconcileOnce: async () => {},
+          supportsProviderExecutionMode: () => true,
+        },
+        failure: {
+          failActive: unexpected,
+          failDraining: unexpected,
+          reclaimActive: unexpected,
+          retryFailedTeardown: unexpected,
+          teardownEnvironment: unexpected,
+        },
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace, reportFailure: unexpected }),
+        publishAcceptedWorkspace: published,
       },
-      failure: {
-        failActive: unexpected,
-        failDraining: unexpected,
-        reclaimActive: unexpected,
-        retryFailedTeardown: unexpected,
-        teardownEnvironment: unexpected,
-      },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace, reportFailure: unexpected }),
-      publishAcceptedWorkspace: published,
-    });
+      await recovered.listAsync(),
+    );
     await recovery.reconcile("startup");
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"), "utf8")).resolves.toBe(
       "slept-ok\n",

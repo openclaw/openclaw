@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { RUNTIME_CONTEXT_FOOTER, RUNTIME_CONTEXT_HEADER } from "../src/llm/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
   writeOpenAiResponsesSse,
@@ -96,8 +96,21 @@ describe("Gateway completed requester replay", () => {
           },
           { timeout: 30_000 },
         );
+        const suspendedChild = [...loadSubagentRegistryFromSqlite().values()].find(
+          (row) => row.task === CHILD_TASK,
+        );
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
+        console.log(
+          "[gateway-completion-replay-runtime-proof]",
+          JSON.stringify({
+            phase: "requester-effect-before-restart",
+            requesterEffectCalls: model.effectCalls(),
+            persistedEffectLines: (await fs.readFile(effectPath, "utf8")).trim().split("\n").length,
+            childDeliveryStatus: suspendedChild?.delivery?.status,
+            childSuspendedReason: suspendedChild?.delivery?.suspendedReason,
+          }),
+        );
       } catch (error) {
         throw new Error(
           String(error) +
@@ -132,21 +145,30 @@ describe("Gateway completed requester replay", () => {
       });
       try {
         // A real same-session round trip is the lane barrier, not a timed sleep.
-        expect(
-          await restoredClient.request(
-            "agent",
-            {
-              sessionKey: SESSION_KEY,
-              message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
-              deliver: false,
-              idempotencyKey: "followup-after-restart",
-            },
-            { expectFinal: true, timeoutMs: 30_000 },
-          ),
-        ).toMatchObject({ status: "ok" });
+        const followup = await restoredClient.request(
+          "agent",
+          {
+            sessionKey: SESSION_KEY,
+            message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
+            deliver: false,
+            idempotencyKey: "followup-after-restart",
+          },
+          { expectFinal: true, timeoutMs: 30_000 },
+        );
+        expect(followup).toMatchObject({ status: "ok" });
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
         await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
+        console.log(
+          "[gateway-completion-replay-runtime-proof]",
+          JSON.stringify({
+            phase: "requester-effect-after-restart",
+            followupStatus: (followup as { status?: string }).status,
+            requesterEffectCalls: model.effectCalls(),
+            persistedEffectLines: (await fs.readFile(effectPath, "utf8")).trim().split("\n").length,
+            effectUnchanged: (await fs.readFile(effectPath, "utf8")) === "effect\n",
+          }),
+        );
       } finally {
         await disconnectGatewayClient(restoredClient);
         await instance.stopGateway();
@@ -213,20 +235,20 @@ type ModelInput = {
   output?: unknown;
 };
 
-// Provider payloads carry runtime context as one labeled user item; it is not the requester turn.
-function isRuntimeContextCarrier(content: unknown): boolean {
-  const text = Array.isArray(content)
-    ? content
-        .map((part: unknown) =>
-          typeof part === "object" && part !== null && "text" in part ? part.text : undefined,
-        )
-        .join("")
-    : content;
-  return (
-    typeof text === "string" &&
-    text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) &&
-    text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`)
-  );
+function modelInputText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part: unknown) =>
+      typeof part === "object" && part !== null && "text" in part && typeof part.text === "string"
+        ? part.text
+        : "",
+    )
+    .join("\n");
 }
 
 async function startModel() {
@@ -253,10 +275,30 @@ async function startModel() {
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
     const input = body.input ?? [];
+    const serializedUserTexts = input
+      .filter((item) => item.role === "user")
+      .map((item) => modelInputText(item.content));
     const latestUser = input
       .toReversed()
-      .find((item) => item.role === "user" && !isRuntimeContextCarrier(item.content));
+      .find(
+        (item) =>
+          item.role === "user" &&
+          !isInternalRuntimeContextCarrierText(modelInputText(item.content)),
+      );
     const text = JSON.stringify(latestUser?.content);
+    const selectedUserText = latestUser?.role === "user" ? modelInputText(latestUser.content) : "";
+    if (selectedUserText.includes("START_REPLAY_REQUESTER")) {
+      console.log(
+        "[gateway-completion-replay-provider-proof]",
+        JSON.stringify({
+          phase: "requester-selected",
+          serializedRuntimeCarriersSkipped: serializedUserTexts.filter(
+            isInternalRuntimeContextCarrierText,
+          ).length,
+          requesterTurnSelected: selectedUserText.includes("START_REPLAY_REQUESTER"),
+        }),
+      );
+    }
     const last = input.at(-1);
     const id = String(++sequence);
     const final = (value: string) =>
@@ -271,6 +313,10 @@ async function startModel() {
       final("CHILD_REPLAY_RESULT");
     } else if (text?.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART")) {
       final("EXPLICIT_FOLLOWUP_OK");
+    } else if (text?.includes("Subagent completion delivery is blocked:")) {
+      // The host may run this durable notice as its own turn or fold it into the
+      // next prompt; either way it is a notification, not a completion retry.
+      final("Completion delivery is blocked.");
     } else if (last?.type === "function_call_output") {
       // Runtime normalization may change IDs; follow the actual call/output pair.
       const call = input.findLast(
