@@ -19,7 +19,9 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { invalidateAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import * as deletionJournals from "../../state/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -330,6 +332,10 @@ it.each(authorityLossCases)(
                 "DELETE FROM state_leases WHERE scope = 'core:agent-deletion' AND lease_key = 'doomed'",
             }[transition];
             changedRows = foreign.prepare(sql).run().changes;
+            invalidateAgentDeletionJournalStatus(
+              openOpenClawStateDatabase({ env: state.env }).db,
+              "doomed",
+            );
           };
           const authorize = () => {
             try {

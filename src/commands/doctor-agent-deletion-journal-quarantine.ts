@@ -15,6 +15,7 @@ import {
   recordAgentDeletionRecoveryHolds,
 } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import {
   parseCleanupPaths,
   readAgentDeletionJournalInDatabase,
@@ -187,6 +188,7 @@ export async function quarantineAgentDeletionJournal(params: {
             database.db,
             query.deleteFrom("agent_deletion_journal").where("agent_id", "=", row.agent_id),
           );
+          publishAgentDeletionJournalStatus(database.db, row.agent_id, "absent");
           continue;
         }
         executeSqliteQuerySync(
@@ -212,6 +214,7 @@ export async function quarantineAgentDeletionJournal(params: {
             })
             .where("agent_id", "=", row.agent_id),
         );
+        publishAgentDeletionJournalStatus(database.db, row.agent_id, "complete");
       }
       return recordAgentDeletionRecoveryHolds(database, held, {
         description:
