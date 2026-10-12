@@ -1,4 +1,5 @@
-import { assertSyncTransactionResult, assertTransactionUsable } from "../sql-connection.js";
+import { assertSyncTransactionResult, assertPostgresTransactionUsable } from "../sql-connection.js";
+import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
   finishSqliteDatabaseWrite,
@@ -9,7 +10,6 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
-import type { PostgresSyncConnection } from "./connection.js";
 
 function assertPostgresOperationCurrent(): void {
   const scope = currentSqliteWorkerOperationAdmission.getStore();
@@ -19,14 +19,14 @@ function assertPostgresOperationCurrent(): void {
 }
 
 export function runPostgresTransactionSync<T>(
-  db: PostgresSyncConnection,
+  db: PostgresSqlConnection,
   operation: () => T,
   options?: { withCommit?: (commit: () => void) => void },
   readOnly = false,
   reserved = false,
   admitWorker = true,
 ): T {
-  assertTransactionUsable(db);
+  assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
   return withSqlitePostCommitPublications(db.anchor, () => {
     const nested = db.isTransaction && !reserved;
@@ -45,7 +45,7 @@ export function runPostgresTransactionSync<T>(
       }
       const result = operation();
       assertSyncTransactionResult(result);
-      assertTransactionUsable(db);
+      assertPostgresTransactionUsable(db);
       if (nested) {
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {

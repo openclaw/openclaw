@@ -29,6 +29,7 @@ function postgresFixture() {
   // The transaction owner sees the real connection type; bridge/server behavior
   // is covered separately. Record its SQL protocol without starting a worker.
   const db = Object.create(PostgresSyncConnection.prototype) as PostgresSyncConnection;
+  Object.defineProperty(db, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
   Object.defineProperties(db, {
     anchor: { value: nativeDatabase() },
     advisoryLockKey: { value: -42n },

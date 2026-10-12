@@ -25,6 +25,7 @@ function transportFixture(
   const terminate = vi.fn(async () => 0);
   // Exercise the connection over real ports; live tests cover worker startup and admission.
   const db = Object.create(PostgresSyncConnection.prototype) as PostgresSyncConnection;
+  Object.defineProperty(db, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
   Object.assign(db, {
     port: port1,
     control,

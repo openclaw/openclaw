@@ -8,7 +8,7 @@ import {
 } from "node:worker_threads";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
-import type { SqlConnection, SqlStatement } from "../sql-connection.js";
+import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
   finishSqliteDatabaseWrite,
@@ -26,8 +26,9 @@ import {
   type BridgeReply,
   type BridgeCommand,
 } from "./protocol.js";
+import { runPostgresTransactionSync } from "./transaction.js";
 
-export class PostgresSyncConnection implements SqlConnection {
+export class PostgresSyncConnection implements PostgresSqlConnection {
   isOpen = true;
   isTransaction = false;
   readonly advisoryLockKey: bigint;
@@ -44,6 +45,7 @@ export class PostgresSyncConnection implements SqlConnection {
     readonly anchor: DatabaseSync,
     storeId: string,
   ) {
+    Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     const { port1, port2 } = new MessageChannel();
     this.port = port1;
@@ -64,6 +66,14 @@ export class PostgresSyncConnection implements SqlConnection {
       void this.worker.terminate();
       throw error;
     }
+  }
+
+  runTransaction<T>(
+    operation: () => T,
+    options?: { withCommit?: (commit: () => void) => void },
+    ...modes: [readOnly?: boolean, reserved?: boolean, admitWorker?: boolean]
+  ): T {
+    return runPostgresTransactionSync(this, operation, options, ...modes);
   }
 
   private loseConnection(): Error {
