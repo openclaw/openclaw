@@ -53,19 +53,21 @@ export function withDurableDeliveryRuntime<T>(
   const channel = current.channels.find((entry) => entry.plugin.id === input.channel);
   const prepareRuntimeHandoff = input.prepareRuntimeHandoff;
   const admittedChannel = getPluginRegistryGatewayChannelRegistration(registry, input.channel);
+  const admittedConfig = admittedChannel?.config;
   const retainedChannel =
     channel &&
     admittedChannel?.pluginId === channel.pluginId &&
     admittedChannel.plugin === channel.plugin;
   if (
     !cfg ||
-    !isDeepStrictEqual(cfg.channels?.[input.channel], input.cfg.channels?.[input.channel]) ||
-    !isDeepStrictEqual(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
+    !admittedConfig ||
+    !isDeepStrictEqual(cfg.channels?.[input.channel], admittedConfig.channels?.[input.channel]) ||
+    !isDeepStrictEqual(cfg.channels?.defaults, admittedConfig.channels?.defaults) ||
     !channel ||
     !retainedChannel ||
     !isDeepStrictEqual(
       cfg.plugins?.entries?.[channel.pluginId],
-      input.cfg.plugins?.entries?.[channel.pluginId],
+      admittedConfig.plugins?.entries?.[channel.pluginId],
     )
   ) {
     return reject("The reply channel changed; delivery was not started.");

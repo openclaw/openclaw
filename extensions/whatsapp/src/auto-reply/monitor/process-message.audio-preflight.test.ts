@@ -92,6 +92,11 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   type: undefined,
 }));
 
+vi.mock("./response-prefix.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./response-prefix.js")>()),
+  resolveWhatsAppResponsePrefix: () => undefined,
+}));
+
 vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
   return {
@@ -123,7 +128,6 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
       finalize: () => true,
     })),
     resolveWhatsAppDmRouteTarget: () => "+15550000002",
-    resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
   };
 });

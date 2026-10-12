@@ -7,8 +7,10 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 
 /** Registry entry shape used by channel tests without loading real plugins. */
 type TestChannelRegistration = {
@@ -18,17 +20,34 @@ type TestChannelRegistration = {
   origin?: "bundled" | "global" | "workspace" | "config";
 };
 
-export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  ...createEmptyPluginRegistry(),
-  channels: channels as unknown as PluginRegistry["channels"],
-  channelSetups: channels.map((entry) => ({
-    pluginId: entry.pluginId,
-    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
-    ...(entry.origin ? { origin: entry.origin } : {}),
-    source: entry.source,
-    enabled: true,
-  })),
-});
+export const createTestRegistry = (
+  channels: TestChannelRegistration[] = [],
+  options?: { config: OpenClawConfig },
+): PluginRegistry => {
+  const registry: PluginRegistry = {
+    ...createEmptyPluginRegistry(),
+    channels: channels as unknown as PluginRegistry["channels"],
+    channelSetups: channels.map((entry) => ({
+      pluginId: entry.pluginId,
+      plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+      ...(entry.origin ? { origin: entry.origin } : {}),
+      source: entry.source,
+      enabled: true,
+    })),
+  };
+  if (options) {
+    setPluginRuntimeLoadContext(registry, {
+      rawConfig: options.config,
+      config: options.config,
+      activationSourceConfig: options.config,
+      autoEnabledReasons: {},
+      workspaceDir: undefined,
+      env: {},
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    });
+  }
+  return registry;
+};
 
 /** Publish fixture channels after startup settles, before creating any fixture turns or handles. */
 export async function activateTestChannelRegistry(

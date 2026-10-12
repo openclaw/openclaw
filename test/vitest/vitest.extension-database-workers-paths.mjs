@@ -103,6 +103,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/twitch/src/monitor.test.ts",
   "extensions/whatsapp/src/auto-reply.web-auto-reply.media-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.test.ts",
+  "extensions/whatsapp/src/auto-reply/monitor.reload.test.ts",
   "extensions/whatsapp/src/inbound.media.test.ts",
   "extensions/whatsapp/src/inbound/durable-receive.test.ts",
   "extensions/whatsapp/src/monitor-inbox.access-and-echo.test.ts",

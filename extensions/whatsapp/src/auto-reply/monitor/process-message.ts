@@ -47,11 +47,11 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
+import { resolveWhatsAppResponsePrefix } from "./response-prefix.js";
 import {
   buildHistoryContextFromEntries,
   createChannelMessageReplyPipeline,
