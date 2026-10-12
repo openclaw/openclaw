@@ -51,6 +51,8 @@ otherwise it follows the default value's primitive type. Reflection is opt-in.
 Declared methods receive the typed host first, preserve arguments/return values,
 and work before connection. Keep stateful behavior in the primitive's owner;
 methods can change declared properties or invoke its native DOM operations.
+The returned component's `Element` constructor exposes that same registered,
+typed host for imperative callers.
 
 For owners that must invalidate requests or presentation synchronously, the optional
 `propertyChanged(host, key)` hook runs after a changed value is stored and before
@@ -74,6 +76,13 @@ Do not split, clone, or independently clear this range: that breaks the caller's
 Lit parts. Template-valued properties remain opaque values; never hand them to
 Solid as JSX.
 
+The tooltip temporarily keeps native shadow slots for default triggers and named
+rich content. Its caller range remains intact directly under the bridge host;
+Solid owns only the shadow renderer. Remove this projection with the bridge at
+cutover. The modal keeps its caller outlet separate from the transient overlay
+container returned by `getOverlayContainer()`, so toasts never enter a Lit-owned
+child range.
+
 DOM moves within a turn retain the root. A genuine disconnect disposes it at the
 microtask checkpoint. Reconnect creates a fresh root using current properties
 and the retained caller content. Moving to a different application provider
@@ -82,6 +91,13 @@ subscribe to the existing application's Lit provider; it never owns or disposes
 the application capabilities. Lit-hosted pages also publish layout traits to the
 existing shell layout owner. Direct Solid callers inherit their application and
 shell layout providers.
+
+Optional `connected(host)` and `disconnected(host)` hooks run synchronously for
+both entry points, including same-turn moves. Native policies use them to release
+focus custody, modal layers, and occlusion immediately; retaining the Solid root
+does not retain presentation authority. Context-driven root replacement does not
+call these DOM lifecycle hooks. A connection hook can run before content mounts,
+so the policy also initializes from current host state when its renderer mounts.
 
 The Lit ratchet excepts only this bridge test's Lit imports and templates, which
 prove caller compatibility. Other metrics and paths stay gated. Delete that

@@ -131,7 +131,7 @@ describe("UsageInsights", () => {
     const tooltip = button.closest("openclaw-tooltip")!;
     button.click();
     await tooltip.updateComplete;
-    const popup = tooltip.shadowRoot?.querySelector("wa-tooltip");
+    const popup = tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]");
     expect(popup).toBeTruthy();
     expect(document.activeElement).toBe(button);
 
@@ -143,7 +143,7 @@ describe("UsageInsights", () => {
     flush();
     expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
     expect(button.closest("openclaw-tooltip")).toBe(tooltip);
-    expect(tooltip.shadowRoot?.querySelector("wa-tooltip")).toBe(popup);
+    expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
     expect(document.activeElement).toBe(button);
     expect(
       button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,

@@ -1,43 +1,35 @@
 /* Page hubs use quiet text tabs on a hairline track so route navigation stays
    distinct from segmented filters inside each page. */
-wa-tab-group.hub-tabs {
+.hub-tabs {
   --track-color: color-mix(in srgb, var(--border) 60%, transparent);
   --indicator-color: var(--accent);
-}
 
-wa-tab-group.hub-tabs::part(body) {
-  display: none;
-}
-
-wa-tab-group.hub-tabs::part(tabs) {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-block-end: 2px;
+  box-shadow: inset 0 -2px 0 var(--track-color);
   gap: var(--space-2);
 }
 
-wa-tab-group.hub-tabs--sub::part(tabs) {
+.hub-tabs--sub {
   gap: var(--space-1);
 }
 
-wa-tab.hub-tab {
+.hub-tab {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   color: var(--muted);
   transition: color var(--duration-normal) var(--ease-out);
-}
-
-/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
-wa-tab.hub-tab::part(base) {
   padding: var(--space-1) var(--space-2) var(--space-2);
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  font: inherit;
-  color: inherit;
 }
 
-.hub-tabs--sub wa-tab.hub-tab {
+.hub-tabs--sub .hub-tab {
   font-size: var(--control-ui-text-xs);
   font-weight: 550;
-}
-
-.hub-tabs--sub wa-tab.hub-tab::part(base) {
   padding: 3px var(--space-2) var(--space-1);
 }
 
@@ -54,29 +46,30 @@ wa-tab.hub-tab::part(base) {
   line-height: 1;
 }
 
-wa-tab.hub-tab[active] .hub-tab__badge {
+.hub-tab[active] .hub-tab__badge {
   background: var(--accent-subtle);
   color: var(--accent);
 }
 
-wa-tab.hub-tab:hover {
+.hub-tab:hover {
   color: var(--text);
 }
 
-wa-tab.hub-tab[active] {
+.hub-tab[active] {
   color: var(--text-strong);
+  box-shadow: 0 2px 0 var(--indicator-color);
 }
 
-wa-tab.hub-tab:focus-visible {
+.hub-tab:focus-visible {
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Web Awesome also draws its stock focus ring on the inner base part;
-   without this reset both rings render at once. */
-wa-tab.hub-tab:focus-visible::part(base) {
-  outline: none;
+.hub-tab[active]:focus-visible {
+  box-shadow:
+    0 2px 0 var(--indicator-color),
+    0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 /* Equal outer columns keep hub tabs centered whether or not the active route

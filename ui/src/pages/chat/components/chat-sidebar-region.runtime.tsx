@@ -39,9 +39,7 @@ import {
 import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
 function activePanelTab(root: ParentNode | null | undefined) {
-  return [...(root?.querySelectorAll<HTMLElementTagNameMap["wa-tab"]>("wa-tab") ?? [])].find(
-    (tab) => tab.active,
-  );
+  return root?.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]');
 }
 
 function Region(props: RegionProps, host: RegionElement) {

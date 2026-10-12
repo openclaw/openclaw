@@ -45,7 +45,7 @@ describe("cron view list pane", () => {
       onListTabChange,
     });
 
-    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs wa-tab"), (tab) =>
+    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs .hub-tab"), (tab) =>
       tab.textContent?.trim(),
     );
     expect(labels).toEqual(["All", "Active", "Paused", "Run history"]);

@@ -1,4 +1,5 @@
 import { For, Show, createMemo, untrack } from "solid-js";
+import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DockLayoutController } from "../dock-layout-controller.ts";

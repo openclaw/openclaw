@@ -1,0 +1,354 @@
+/* Shadow-hosted primitives need the same noninherited reset as document-hosted controls. */
+:is(.oc-overlay, .oc-modal-dialog),
+:is(.oc-overlay, .oc-modal-dialog) * {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar,
+:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-track,
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-corner,
+:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-track,
+:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb,
+:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+  border: var(--scrollbar-thumb-inset) solid transparent;
+  border-radius: var(--radius-full);
+}
+
+:is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
+:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+/* The anchor owner sets position-anchor; each surface keeps its own placement and size budget. */
+.oc-overlay {
+  position: fixed;
+  inset: auto;
+  z-index: var(--z-dropdown);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(
+    var(--oc-overlay-max-width, calc(100dvw - 16px)),
+    var(--oc-overlay-available-width, calc(100dvw - 16px))
+  );
+  max-height: min(
+    var(--oc-overlay-max-height, 420px),
+    var(--oc-overlay-available-height, calc(100% - 16px)),
+    calc(100dvh - 16px)
+  );
+  margin: var(--oc-overlay-distance, 6px) 0 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  position-area: bottom span-right;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  transform-origin: top left;
+}
+
+.oc-overlay[data-placement="top"],
+.oc-overlay[data-placement="top-start"],
+.oc-overlay[data-placement="top-end"] {
+  margin: 0 0 var(--oc-overlay-distance, 6px);
+  transform-origin: bottom;
+}
+
+.oc-overlay[data-placement="top"] {
+  position-area: top;
+}
+
+.oc-overlay[data-placement="top-start"] {
+  position-area: top span-right;
+  transform-origin: left bottom;
+}
+
+.oc-overlay[data-placement="top-end"] {
+  position-area: top span-left;
+  transform-origin: right bottom;
+}
+
+.oc-overlay[data-placement="bottom"] {
+  position-area: bottom;
+  transform-origin: top;
+}
+
+.oc-overlay[data-placement="bottom-end"] {
+  position-area: bottom span-left;
+  transform-origin: right top;
+}
+
+.oc-overlay[data-placement="left"],
+.oc-overlay[data-placement="left-start"],
+.oc-overlay[data-placement="left-end"] {
+  margin: 0 var(--oc-overlay-distance, 6px) 0 0;
+  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  transform-origin: right;
+}
+
+.oc-overlay[data-placement="right"],
+.oc-overlay[data-placement="right-start"],
+.oc-overlay[data-placement="right-end"] {
+  margin: 0 0 0 var(--oc-overlay-distance, 6px);
+  position-try-fallbacks: flip-inline, --oc-overlay-below, --oc-overlay-above;
+  transform-origin: left;
+}
+
+.oc-overlay[data-placement="left"] {
+  position-area: left;
+}
+
+.oc-overlay[data-placement="left-start"] {
+  position-area: left span-bottom;
+  transform-origin: right top;
+}
+
+.oc-overlay[data-placement="left-end"] {
+  position-area: left span-top;
+  transform-origin: right bottom;
+}
+
+.oc-overlay[data-placement="right"] {
+  position-area: right;
+}
+
+.oc-overlay[data-placement="right-start"] {
+  position-area: right span-bottom;
+  transform-origin: left top;
+}
+
+.oc-overlay[data-placement="right-end"] {
+  position-area: right span-top;
+  transform-origin: left bottom;
+}
+
+@position-try --oc-overlay-below {
+  position-area: bottom span-right;
+  margin: var(--oc-overlay-distance, 6px) 0 0;
+}
+
+@position-try --oc-overlay-above {
+  position-area: top span-right;
+  margin: 0 0 var(--oc-overlay-distance, 6px);
+}
+
+.oc-overlay[data-placement="top-start"]:dir(rtl) {
+  position-area: top span-left;
+  transform-origin: right bottom;
+}
+
+.oc-overlay[data-placement="top-end"]:dir(rtl) {
+  position-area: top span-right;
+  transform-origin: left bottom;
+}
+
+.oc-overlay:not([data-placement]):dir(rtl),
+.oc-overlay[data-placement="bottom-start"]:dir(rtl) {
+  position-area: bottom span-left;
+  transform-origin: right top;
+}
+
+.oc-overlay[data-placement="bottom-end"]:dir(rtl) {
+  position-area: bottom span-right;
+  transform-origin: left top;
+}
+
+.oc-menu,
+.oc-popover {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--control-ui-font-weight-normal);
+  text-align: start;
+  opacity: 0;
+  scale: 0.9;
+  /* Keep the native top layer until the lifecycle's closing animation settles. */
+  transition:
+    opacity var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
+    scale var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) ease,
+    display var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete,
+    overlay var(--oc-overlay-hide-duration, var(--control-ui-transition-fast)) allow-discrete;
+}
+
+.oc-menu {
+  padding: var(--menu-padding);
+  user-select: none;
+}
+
+.oc-menu > :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0.25em 0;
+  padding: 0.25em 0.75em;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: round(calc(1em / 1.125), 1px);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.oc-popover {
+  padding: var(--oc-popover-padding, 1.5rem);
+}
+
+.oc-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0.5em 1em;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.2;
+  text-align: start;
+  cursor: var(--cursor-action);
+  transition:
+    background-color var(--control-ui-transition-fast) ease,
+    color var(--control-ui-transition-fast) ease;
+}
+
+.oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--bg-hover);
+}
+
+.oc-menu-item:focus-visible {
+  z-index: 1;
+  outline: var(--control-ui-focus-ring);
+  outline-offset: var(--control-ui-focus-ring-offset);
+}
+
+.oc-menu-item:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.oc-menu-item[data-variant="danger"],
+.oc-menu-item[data-variant="danger"] .oc-menu-item__details {
+  color: var(--danger);
+}
+
+.oc-menu-item[data-variant="danger"]:is(:hover, :focus-visible, [aria-expanded="true"]):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--danger-subtle);
+}
+
+.oc-menu-item__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.oc-menu-item__icon,
+.oc-menu-item__details,
+.oc-menu-item__check,
+.oc-menu-item__submenu-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.oc-menu-item__icon {
+  margin-inline-end: 0.75em;
+}
+
+.oc-menu-item__details,
+.oc-menu-item__submenu-icon {
+  margin-inline-start: 0.75em;
+  color: var(--muted);
+}
+
+.oc-menu-item__icon:empty,
+.oc-menu-item__details:empty {
+  display: none;
+}
+
+.oc-menu-item__check {
+  order: 1;
+  width: 1em;
+  margin-inline-start: 0.75em;
+  color: var(--accent);
+}
+
+.oc-menu-item__submenu-icon {
+  margin-inline-start: auto;
+  padding-inline-start: 0.75em;
+}
+
+.oc-menu-item__submenu-icon:dir(rtl) {
+  transform: scaleX(-1);
+}
+
+.oc-menu:popover-open:where(:not([data-phase="closing"])),
+.oc-popover:popover-open:where(:not([data-phase="closing"])) {
+  opacity: 1;
+  scale: 1;
+  transition-duration: var(--oc-overlay-show-duration, var(--control-ui-transition-fast));
+}
+
+.oc-overlay[hidden],
+.oc-overlay[data-phase="hidden"],
+.oc-overlay[popover]:not(:popover-open) {
+  display: none;
+}
+
+@starting-style {
+  .oc-menu:popover-open,
+  .oc-popover:popover-open {
+    scale: 0.9;
+    opacity: 0;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-menu,
+  .oc-popover {
+    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
+    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+
+    corner-shape: superellipse(1.5);
+  }
+
+  .oc-menu-item {
+    corner-shape: superellipse(1.5);
+  }
+}
+
+@media (forced-colors: active) {
+  .oc-menu,
+  .oc-popover {
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+
+  .oc-menu-item:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-menu,
+  .oc-popover,
+  .oc-menu-item {
+    animation: none;
+    transition: none;
+  }
+}

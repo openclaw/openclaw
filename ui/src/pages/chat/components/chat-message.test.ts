@@ -1023,11 +1023,12 @@ describe("grouped chat rendering", () => {
       const summary = view.querySelector<HTMLElement>(".msg-meta__summary")!;
       summary.click();
       const metadata = summary.closest("openclaw-tooltip")!;
+      await metadata.updateComplete;
       expect(metadata.hasAttribute("open")).toBe(true);
       const reply = view.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
       reply.focus();
       const replyTooltip = reply.closest("openclaw-tooltip")!;
-      // The wrapper owns visibility even while the optional popup is upgrading.
+      await replyTooltip.updateComplete;
       expect(replyTooltip.hasAttribute("open")).toBe(true);
       expect(metadata.hasAttribute("open")).toBe(false);
     } finally {

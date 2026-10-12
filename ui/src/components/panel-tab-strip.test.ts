@@ -3,7 +3,6 @@
 import { html, nothing, render } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
   panelTabStripStyles,
@@ -59,7 +58,7 @@ function panelBridge(container: ParentNode) {
 }
 
 function tabStrip(container: ParentNode) {
-  return container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip");
+  return container.querySelector<HTMLElement>(".tabstrip");
 }
 
 function renderedTabs(container: ParentNode) {
@@ -70,11 +69,11 @@ async function settleTabStrip(container: ParentNode) {
   await panelBridge(container).updateComplete;
   const strip = tabStrip(container);
   expect(strip).not.toBeNull();
-  await strip!.updateComplete;
+  await Promise.resolve();
 }
 
 function tabViewport(container: ParentNode) {
-  const viewport = tabStrip(container)?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+  const viewport = tabStrip(container);
   if (!viewport) {
     throw new Error("expected rendered tab strip viewport");
   }
@@ -82,33 +81,9 @@ function tabViewport(container: ParentNode) {
 }
 
 function requestTabSelection(container: ParentNode, id: string) {
-  tabStrip(container)!.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: id } }));
-}
-
-function deferTabLayout() {
-  const gate = createDeferred<boolean>();
-  const prototype = customElements.get("wa-tab-group")?.prototype;
-  expect(prototype).toBeDefined();
-  Object.defineProperty(prototype!, "updateComplete", {
-    configurable: true,
-    get: () => gate.promise,
-  });
-  return gate;
-}
-
-function resetTabLayout() {
-  Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
-}
-
-async function renderTabViewportBeforeLayout(container: ParentNode) {
-  await panelBridge(container).updateComplete;
-  const strip = container.querySelector<
-    HTMLElement & { getUpdateComplete: () => Promise<unknown> }
-  >(".tabstrip");
-  expect(strip).not.toBeNull();
-  // Set up the renderer's viewport without releasing the held layout completion.
-  await strip!.getUpdateComplete();
-  return tabViewport(container);
+  renderedTabs(container)
+    .find((tab) => tab.dataset.tabValue === id)
+    ?.click();
 }
 
 function tabMeasurementClock() {
@@ -164,7 +139,6 @@ afterEach(async () => {
   document.body.replaceChildren();
   await Promise.all(bridges.map((bridge) => bridge.updateComplete));
   document.documentElement.removeAttribute("dir");
-  resetTabLayout();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -472,10 +446,10 @@ describe("renderPanelTabStrip", () => {
     },
   );
 
-  // Installation waits for the group's shadow scroller. Renders during that
-  // wait must not accumulate subscriptions that cleanup can no longer reach.
+  // Repeated bridge updates retain one native measurement owner.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
-    const gate = deferTabLayout();
+    const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
+    const removed = vi.spyOn(HTMLElement.prototype, "removeEventListener");
 
     const observers: { target: Element | null; live: boolean }[] = [];
     class CountingResizeObserver {
@@ -501,16 +475,13 @@ describe("renderPanelTabStrip", () => {
       await renderStrip({ tabs, container });
     }
 
-    const scroller = await renderTabViewportBeforeLayout(container);
-    const added = vi.spyOn(scroller, "addEventListener");
-    const removed = vi.spyOn(scroller, "removeEventListener");
-
-    gate.resolve(true);
-    await gate.promise;
+    const scroller = tabViewport(container);
     await settleTabStrip(container);
 
     const scrollListeners = (spy: typeof added) =>
-      spy.mock.calls.filter(([type]) => type === "scroll").length;
+      spy.mock.calls.filter(
+        ([type], index) => type === "scroll" && spy.mock.contexts[index] === scroller,
+      ).length;
     expect(scrollListeners(added) - scrollListeners(removed)).toBe(1);
     expect(observers.filter((entry) => entry.live && entry.target === scroller)).toHaveLength(1);
   });

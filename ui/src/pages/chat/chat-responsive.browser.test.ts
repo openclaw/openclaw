@@ -2008,10 +2008,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             context.evaluate((node) => {
               const row = node.closest<HTMLElement>(".chat-virtual-row")!;
               const tooltipNode = node.closest("openclaw-tooltip")!;
-              const popup = tooltipNode.shadowRoot
-                ?.querySelector("wa-tooltip")
-                ?.shadowRoot?.querySelector("wa-popup")
-                ?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+              const popup = tooltipNode.shadowRoot?.querySelector<HTMLElement>(
+                ".tooltip-surface[popover]",
+              );
               const rect = node.getBoundingClientRect();
               const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
               return {

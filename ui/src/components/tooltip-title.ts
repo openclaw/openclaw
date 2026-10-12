@@ -4,6 +4,7 @@ import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { showToast } from "../lib/toast.ts";
 import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
+import { resolveTransientContainer } from "./transient-container.ts";
 
 function titleNamesElement(element: Element) {
   if (
@@ -61,7 +62,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (tooltip) {
       tooltip.anchor = null;
       tooltip.remove();
-      tooltip.replaceChildren();
+      tooltip = null;
     }
   };
 
@@ -267,9 +268,11 @@ export function installTitleTooltips(ownerDocument: Document) {
           });
         return;
       }
-      const mount =
-        elements.find((element) => element.localName === "openclaw-modal-dialog") ??
-        ownerDocument.body;
+      const mount = resolveTransientContainer(event.composedPath(), ownerDocument);
+      if (!mount) {
+        restore();
+        return;
+      }
       mount.append(tooltip);
       tooltip.previewForAnchor(anchor, tooltipContent, input);
     }

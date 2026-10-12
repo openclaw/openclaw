@@ -161,14 +161,19 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     }
 
     connectedCallback() {
-      spec.connected?.(this.#host);
       if (this.#solidOwned) {
+        spec.connected?.(this.#host);
         return;
       }
       for (const [key, value] of this.#upgraded) {
         this.#write(key, value);
       }
       this.#upgraded.clear();
+      spec.connected?.(this.#host);
+      this.#connectContext();
+    }
+
+    #connectContext() {
       this.#unsubscribe?.();
       this.#unsubscribe = undefined;
       this.#application = undefined;
@@ -208,7 +213,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         if (this.isConnected && !this.#solidOwned) {
           if (this.#dispose && this.#application !== this.#mountedApplication) {
             this.#disposeRoot();
-            this.connectedCallback();
+            this.#connectContext();
           }
           if (!this.#dispose) {
             runWithOwner(null, () => this.#mount());
@@ -293,6 +298,9 @@ export function defineSolidBridge<Props extends object, Methods extends object =
         this.#content.append(...outlet.childNodes);
       }
       this.#dispose?.();
+      if (this.#solidOwned) {
+        this.replaceChildren();
+      }
       this.#dispose = undefined;
       this.#application = undefined;
       this.#mountedApplication = undefined;
@@ -320,9 +328,16 @@ export function defineSolidBridge<Props extends object, Methods extends object =
   }
   customElements.define(tag, BridgeElement);
 
-  return function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
-    return BridgeElement.render(props);
-  };
+  return Object.assign(
+    function SolidBridge(props: ComponentProps<Props, Methods>): JSX.Element {
+      return BridgeElement.render(props);
+    },
+    {
+      // SAFETY: The constructor materializes every declared property and method above.
+      Element: BridgeElement as (new () => SolidBridgeElement<Props, Methods>) &
+        typeof BridgeElement,
+    },
+  );
 }
 
 /** Unported stateless templates exclusively own this adapter's descendants. */

@@ -61,24 +61,18 @@ export const panelTabStripStyles = css`
   }
   .tabstrip {
     --track-width: 0;
-    display: block;
+    display: flex;
+    align-items: center;
     /* Allow the strip to shrink inside a flex header so wide tab rows scroll
        here instead of squeezing out sibling header controls. */
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .tabstrip::part(nav) {
-    display: flex;
-    align-items: center;
-  }
-  .tabstrip::part(body) {
-    display: none;
-  }
   .tabstrip::-webkit-scrollbar {
     display: none;
   }
-  .tabstrip-tab::part(base) {
+  .tabstrip-tab {
     display: flex;
     align-items: center;
     gap: 7px;
@@ -94,16 +88,16 @@ export const panelTabStripStyles = css`
       background 0.12s ease,
       box-shadow 0.12s ease;
   }
-  .tabstrip-tab:hover::part(base) {
+  .tabstrip-tab:hover {
     color: var(--text, #d7dae0);
     background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
   }
-  .tabstrip-tab[active]::part(base) {
+  .tabstrip-tab[active] {
     color: var(--text, #d7dae0);
     background: var(--bg-hover, #1f2330);
     box-shadow: inset 0 0 0 1px var(--border-strong, #2e3040);
   }
-  .tabstrip-tab.is-exited:not([active])::part(base) {
+  .tabstrip-tab.is-exited:not([active]) {
     opacity: 0.55;
   }
   .tabstrip-tab.is-connecting .tabstrip-tab__icon {
@@ -148,8 +142,7 @@ export const panelTabStripStyles = css`
     padding: 0 5px;
     text-transform: uppercase;
   }
-  /* Keep the close action inside the tab surface without nesting it in wa-tab;
-     wa-tab-group still owns the direct tab children for keyboard navigation. */
+  /* Keep close actions visually inside each tab without nesting buttons. */
   .tabstrip-tab__close {
     flex: 0 0 auto;
     align-self: center;

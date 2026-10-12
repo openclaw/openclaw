@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHubTabs } from "./hub-tabs.ts";
+
+afterEach(() => document.body.replaceChildren());
 
 describe("renderHubTabs", () => {
   it("renders counts, badges, and the reduced sub variant", () => {
@@ -22,13 +24,13 @@ describe("renderHubTabs", () => {
       }),
       container,
     );
-    expect(container.querySelector("wa-tab-group")?.classList).toContain("hub-tabs--sub");
+    expect(container.querySelector('[role="tablist"]')?.classList).toContain("hub-tabs--sub");
     expect(container.querySelector("#example-tab-files")?.hasAttribute("active")).toBe(true);
     expect(container.querySelector(".hub-tab__badge--count")?.textContent).toBe("3");
     expect(container.querySelector("#example-tab-memory .hub-tab__badge")?.textContent).toBe("New");
   });
 
-  it("forwards the aria-label to the shadow tablist", async () => {
+  it("names the native tablist", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     try {
@@ -43,15 +45,9 @@ describe("renderHubTabs", () => {
         }),
         container,
       );
-      const group = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "wa-tab-group",
-      );
-      await group?.updateComplete;
-      // syncTabGroupLabel resolves on the same updateComplete chain; yield once more.
-      await group?.updateComplete;
-      expect(group?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe(
-        "Example sections",
-      );
+      const group = container.querySelector<HTMLElement>('[role="tablist"]');
+      await Promise.resolve();
+      expect(group?.getAttribute("aria-label")).toBe("Example sections");
     } finally {
       container.remove();
     }
@@ -87,13 +83,6 @@ describe("renderHubTabs", () => {
       container
         .querySelector("#example-tab-disabled")
         ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-      container.querySelector("wa-tab-group")?.dispatchEvent(
-        new CustomEvent("wa-tab-show", {
-          bubbles: true,
-          composed: true,
-          detail: { name: "disabled" },
-        }),
-      );
 
       container
         .querySelector("#example-tab-first")
@@ -108,7 +97,9 @@ describe("renderHubTabs", () => {
       expect(onActivate).toHaveBeenCalledOnce();
       expect(onSelect).toHaveBeenCalledWith("second");
       expect(onActivate).toHaveBeenCalledWith(container.querySelector("#example-tab-second"));
-      expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
+      expect(container.querySelector("#example-tab-first")?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
     },
   );
 
@@ -129,11 +120,58 @@ describe("renderHubTabs", () => {
       container,
     );
 
-    const group = container.querySelector<HTMLElement & { active: string }>("wa-tab-group");
-    expect(group?.active).not.toBe("");
-    expect(group?.active).not.toBe("first");
-    expect(container.querySelector("wa-tab[active]")).toBeNull();
+    expect(container.querySelector('[role="tab"][active]')).toBeNull();
     expect(container.querySelector<HTMLElement>("#example-tab-first")?.tabIndex).toBe(0);
     expect(container.querySelector<HTMLElement>("#example-tab-second")?.tabIndex).toBe(-1);
+  });
+
+  it.each([
+    { dir: "ltr", next: "middle" },
+    { dir: "rtl", next: "last" },
+  ])("moves focus without activating routes in $dir", async ({ dir, next }) => {
+    const container = document.createElement("div");
+    container.dir = dir;
+    document.body.append(container);
+    const onSelect = vi.fn();
+    render(
+      renderHubTabs({
+        id: "keyboard",
+        active: "first",
+        tabs: [
+          { value: "first", label: "First" },
+          { value: "middle", label: "Middle" },
+          { value: "disabled", label: "Disabled", disabled: true },
+          { value: "last", label: "Last" },
+        ],
+        ariaLabel: "Routes",
+        panelId: "route-panel",
+        onSelect,
+      }),
+      container,
+    );
+    await Promise.resolve();
+    const first = container.querySelector<HTMLElement>("#keyboard-tab-first")!;
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement?.id).toBe(`keyboard-tab-${next}`);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(first.getAttribute("aria-selected")).toBe("true");
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+    expect(document.activeElement?.id).toBe("keyboard-tab-last");
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    );
+    expect(document.activeElement?.id).toBe(
+      dir === "ltr" ? "keyboard-tab-middle" : "keyboard-tab-first",
+    );
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+    document.activeElement!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("last");
   });
 });

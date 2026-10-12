@@ -1,4 +1,4 @@
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -7,7 +7,7 @@ import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
 import "../styles/sidebar-issues.css";
-import "./web-awesome-tabs.ts";
+import { renderHubTabs } from "./hub-tabs.ts";
 // Upgrade the real element: the floating layout once regressed because a base
 // class stamped inline `display: contents`, which only a live upgrade reveals.
 import "./sidebar-attention.ts";
@@ -114,7 +114,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       };
 
       renderPanel("all");
-      await customElements.whenDefined("wa-tab-group");
+      await Promise.resolve();
       const populatedHeader = shell.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;
       const populatedTabs = shell.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
       const headerHeight = populatedHeader.getBoundingClientRect().height;
@@ -310,64 +310,58 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       fixture.style.position = "static";
       fixture.style.width = `${width}px`;
       fixture.style.height = "220px";
-      fixture.innerHTML = `
-      <wa-tab-group class="hub-tabs hub-tabs--sub sidebar-issues-panel__tabs" activation="manual" without-scroll-controls>
-        ${["All", "Approvals", "Mentions", "Automations", "System"]
-          .map(
-            (label, index) => `<wa-tab
-              slot="nav"
-              class="hub-tab"
-              panel="tab-${index}"
-              ${index === 0 ? "active" : ""}
-            >${label}${index > 0 ? `<span class="hub-tab__badge hub-tab__badge--count">${index}</span>` : ""}</wa-tab>`,
-          )
-          .join("")}
-      </wa-tab-group>
-      <div class="sidebar-issues-panel__list-wrap">
-        <div class="sidebar-issues-panel__list">
-          ${Array.from(
-            { length: 6 },
-            (_, index) => `<div data-attention-kind="cronFailed">
-              <div class="sidebar-issues-panel__summary">Inbox item ${index}</div>
-            </div>`,
-          ).join("")}
-        </div>
-      </div>
-    `;
+      render(
+        html` ${renderHubTabs({
+            id: "inbox-fixture",
+            active: "tab-0",
+            ariaLabel: "Inbox categories",
+            panelId: "inbox-fixture-panel",
+            className: "sidebar-issues-panel__tabs",
+            variant: "sub",
+            tabs: ["All", "Approvals", "Mentions", "Automations", "System"].map((label, index) => ({
+              value: `tab-${index}`,
+              label,
+              count: index || undefined,
+            })),
+            onSelect: () => undefined,
+          })}
+          <div class="sidebar-issues-panel__list-wrap">
+            <div class="sidebar-issues-panel__list">
+              ${Array.from(
+                { length: 6 },
+                (_, index) => html` <div data-attention-kind="cronFailed">
+                  <div class="sidebar-issues-panel__summary">Inbox item ${index}</div>
+                </div>`,
+              )}
+            </div>
+          </div>`,
+        fixture,
+      );
       const shell = document.createElement("div");
       shell.className = mobile ? "shell shell--mobile-nav" : "shell";
       shell.append(fixture);
       document.body.append(shell);
 
-      await customElements.whenDefined("wa-tab-group");
-      const group = fixture.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        ".sidebar-issues-panel__tabs",
-      );
+      await Promise.resolve();
+      const group = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__tabs");
       const header = document.createElement("header");
       header.className = "sidebar-issues-panel__header";
       fixture.prepend(header);
-      const tabs = Array.from(
-        fixture.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>(
-          "wa-tab.hub-tab",
-        ),
-      );
+      const tabs = Array.from(fixture.querySelectorAll<HTMLElement>(".hub-tab"));
       const badgeTab = tabs[1];
       expect(group).not.toBeNull();
       expect(badgeTab).not.toBeNull();
-      await group?.updateComplete;
-      await Promise.all(tabs.map((tab) => tab.updateComplete));
-      // Web Awesome selects and scrolls its first visible tab after Lit finishes rendering.
-      await expect.poll(() => group!.getAttribute("active")).toBe("tab-0");
+      expect(group!.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("tab-0");
 
       const badge = badgeTab!.querySelector<HTMLElement>(".hub-tab__badge");
       const list = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__list");
       const item = fixture.querySelector<HTMLElement>("[data-attention-kind]");
       const summary = fixture.querySelector<HTMLElement>(".sidebar-issues-panel__summary");
-      const track = group!.shadowRoot?.querySelector<HTMLElement>(".tabs");
-      const nav = group!.shadowRoot!.querySelector<HTMLElement>(".nav")!;
+      const track = group!;
+      const nav = group!;
 
-      expect(group?.scrollWidth).toBe(group?.clientWidth);
-      expect(getComputedStyle(group!).overflowX).toBe("hidden");
+      expect(group!.getBoundingClientRect().width).toBeLessThanOrEqual(fixture.clientWidth);
+      expect(getComputedStyle(group!).overflowX).toBe("auto");
       expect(getComputedStyle(group!).backgroundColor).toBe(
         getComputedStyle(header).backgroundColor,
       );
@@ -376,7 +370,17 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
       // The track hairline is the header/list separator; it must span the panel.
       expect(track).not.toBeNull();
-      expect(Number.parseFloat(getComputedStyle(track!).borderBottomWidth)).toBeGreaterThan(0);
+      const colorProbe = document.createElement("span");
+      colorProbe.style.cssText = "position: absolute; color: var(--track-color);";
+      track.append(colorProbe);
+      const separatorColor = getComputedStyle(colorProbe).color;
+      colorProbe.remove();
+      const paint = document.createElement("canvas").getContext("2d")!;
+      paint.fillStyle = separatorColor;
+      paint.fillRect(0, 0, 1, 1);
+      expect(paint.getImageData(0, 0, 1, 1).data[3]).toBeGreaterThan(0);
+      expect(getComputedStyle(track).boxShadow).toBe(`${separatorColor} 0px -2px 0px 0px inset`);
+      expect(getComputedStyle(track).paddingBottom).toBe("2px");
       expect(track!.getBoundingClientRect().width).toBeGreaterThanOrEqual(
         nav.getBoundingClientRect().width - 1,
       );

@@ -9,6 +9,7 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
 import "./web-awesome.ts";
 import "./tooltip.ts";
+import type { TooltipElement } from "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 type Lifecycle = "show" | "hide" | "after-show" | "after-hide";
@@ -68,50 +69,102 @@ function onSubmenuOpening(item: Item, listener: EventListener) {
   item.addEventListener("submenu-opening", listener);
 }
 
-async function focusedTooltip(tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) {
+async function focusedTooltip(tooltip: TooltipElement) {
   await rendered(tooltip);
-  // The wrapper renders before its lazy tooltip renderer registers.
-  await customElements.whenDefined("wa-tooltip");
-  const hint = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
-  await rendered(hint);
-  await expect.poll(() => hint.open).toBe(true);
+  const hint = tooltip.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  await expect.poll(() => hint.matches(":popover-open")).toBe(true);
   return hint;
 }
+
+type SecondarySurface =
+  | { kind: "tooltip"; element: TooltipElement; anchor: HTMLElement }
+  | { kind: "popover"; element: HTMLElementTagNameMap["wa-popover"]; anchor: HTMLElement };
 
 async function secondarySurface(
   host: HTMLElement,
   anchor: HTMLElement,
   kind: "tooltip" | "popover",
-) {
-  const surface = document.createElement(kind === "tooltip" ? "wa-tooltip" : "wa-popover");
-  anchor.id = "animation-proof-anchor";
-  surface.for = anchor.id;
-  surface.textContent = "Details";
+): Promise<SecondarySurface> {
   if (kind === "tooltip") {
-    surface.setAttribute("trigger", "manual");
+    const element = document.createElement("openclaw-tooltip");
+    element.anchor = anchor;
+    element.content = "Details";
+    host.append(element);
+    await rendered(element);
+    return { kind, element, anchor };
   }
-  host.append(surface);
-  await rendered(surface);
-  return surface;
+  const element = document.createElement("wa-popover");
+  anchor.id = "animation-proof-anchor";
+  element.for = anchor.id;
+  element.textContent = "Details";
+  host.append(element);
+  await rendered(element);
+  return { kind, element, anchor };
 }
 
-function duringSecondaryOpening(
-  surface: HTMLElementTagNameMap["wa-tooltip"] | HTMLElementTagNameMap["wa-popover"],
-  action: () => void,
-) {
-  const popup = surface.shadowRoot!.querySelector("wa-popup")!;
-  return duringElementAnimation(
-    popup.popup,
-    "show-with-scale",
-    () => (surface.open = true),
-    action,
-  );
+async function duringSecondaryOpening(surface: SecondarySurface, action: () => void) {
+  if (surface.kind === "popover") {
+    const popup = surface.element.shadowRoot!.querySelector("wa-popup")!;
+    return duringElementAnimation(
+      popup.popup,
+      "show-with-scale",
+      () => (surface.element.open = true),
+      action,
+    );
+  }
+  const popup = surface.element.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  // This retained WA fixture supplies its theme; initialize the native tooltip's motion token.
+  popup.style.setProperty("--control-ui-transition-fast", "200ms");
+  surface.anchor.blur();
+  // Cold tooltips load their skin with the view, while the native popover stays hidden.
+  await expect.element(popup).not.toBeVisible();
+  surface.anchor.focus();
+  let animation: Animation | undefined;
+  let rate = 1;
+  await expect
+    .poll(() => {
+      if (!animation) {
+        animation = popup
+          .getAnimations()
+          .find(
+            (candidate) => candidate instanceof CSSTransition && candidate.playState === "running",
+          );
+        if (animation) {
+          rate = animation.playbackRate;
+          animation.playbackRate = 0;
+        }
+      }
+      return animation;
+    })
+    .toBeDefined();
+  const active = animation!;
+  try {
+    await active.ready;
+    const { activeDuration } = active.effect!.getComputedTiming();
+    expect(activeDuration).toBeGreaterThan(0);
+    expect(Number.isFinite(activeDuration)).toBe(true);
+    active.currentTime = Number(activeDuration) / 2;
+    await frame();
+    expect(active.playState).toBe("running");
+    const { progress } = active.effect!.getComputedTiming();
+    expect(progress).toBeGreaterThan(0);
+    expect(progress).toBeLessThan(1);
+    expect(popup.dataset.phase).toBe("opening");
+    action();
+  } finally {
+    active.playbackRate = rate;
+  }
 }
 
-function expectSecondaryHidden(
-  surface: HTMLElementTagNameMap["wa-tooltip"] | HTMLElementTagNameMap["wa-popover"],
-) {
-  expect(surface.shadowRoot!.querySelector("wa-popup")!.active).toBe(false);
+async function expectSecondaryHidden(surface: SecondarySurface) {
+  if (surface.kind === "popover") {
+    expect(surface.element.shadowRoot!.querySelector("wa-popup")!.active).toBe(false);
+    return;
+  }
+  const popup = surface.element.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  expect(popup.matches(":popover-open")).toBe(false);
+  expect(popup.dataset.phase).toBe("hidden");
+  await expect.element(popup).not.toBeVisible();
 }
 
 function expectTopLayerVisibility(surface: HTMLElement, visible: boolean) {
@@ -391,7 +444,7 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     f.item.focus();
     const hint = await focusedTooltip(tooltip);
     await userEvent.keyboard("{Escape}");
-    await expect.poll(() => hint.open).toBe(false);
+    await expect.poll(() => hint.matches(":popover-open")).toBe(false);
     expect(f.dropdown.open).toBe(true);
     expect(f.item.checked).toBe(true);
     expect(document.activeElement).toBe(f.item);
@@ -848,16 +901,31 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     "waits for %s reactive popup rendering and its actual opening animation",
     async (kind) => {
       const f = await fixture();
+      if (kind === "tooltip") {
+        const { page } = await import("vitest/browser");
+        await page.elementLocator(f.trigger).hover();
+        expect(f.outside.matches(":hover")).toBe(false);
+      }
       const surface = await secondarySurface(f.host, f.outside, kind);
       let shown = false;
       let hidden = false;
-      onPhase(surface, "after-show", () => (shown = true));
-      onPhase(surface, "after-hide", () => (hidden = true));
+      onPhase(surface.element, "after-show", () => (shown = true));
+      onPhase(surface.element, "after-hide", () => (hidden = true));
       await duringSecondaryOpening(surface, () => expect(shown).toBe(false));
       await expect.poll(() => shown).toBe(true);
-      surface.open = false;
+      if (surface.kind === "tooltip") {
+        expect(surface.anchor.matches(":hover")).toBe(false);
+        expect(
+          surface.element.shadowRoot!.querySelector(".tooltip-surface")!.matches(":hover"),
+        ).toBe(false);
+        expect(document.activeElement).toBe(surface.anchor);
+        surface.anchor.blur();
+        expect(document.activeElement).not.toBe(surface.anchor);
+      } else {
+        surface.element.open = false;
+      }
       await expect.poll(() => hidden).toBe(true);
-      expectSecondaryHidden(surface);
+      await expectSecondaryHidden(surface);
     },
   );
 

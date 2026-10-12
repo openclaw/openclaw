@@ -632,7 +632,7 @@ describe("config view", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
+    expect(container.querySelector(".hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
     expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(

@@ -1,5 +1,9 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
+import { bindOverlayAnchor } from "./overlay-anchor.ts";
+import type { Overlay } from "./overlay-lifecycle.ts";
+
+type PopupBinding = { activate(): void; dispose(): void };
 
 const TEXT_LAYOUT_PROPERTIES = [
   "direction",
@@ -31,7 +35,8 @@ const TEXT_LAYOUT_PROPERTIES = [
 
 /** Measures only an open token menu; popup owns collision handling and the top layer. */
 export class TextareaTokenAnchor {
-  private popup: WaPopup | null = null;
+  private popup: HTMLElement | null = null;
+  private popupBinding: PopupBinding | null = null;
   private textarea: HTMLTextAreaElement | null = null;
   private start = 0;
   private value = "";
@@ -48,7 +53,57 @@ export class TextareaTokenAnchor {
 
   /** Call after rendering the popup, then when the token or textarea value changes. */
   update(popup: WaPopup, textarea: HTMLTextAreaElement, tokenStart: number): void {
-    if (this.popup !== popup || this.textarea !== textarea) {
+    this.updateSurface(popup, textarea, tokenStart, (anchor) => {
+      configureAnchoredPopup(popup, anchor, "top", "start");
+      return {
+        activate: () => {
+          popup.active = true;
+          popup.reposition();
+        },
+        dispose: () => {
+          popup.active = false;
+        },
+      };
+    });
+  }
+
+  /** Native menus share the same measured caret and CSS placement owner. */
+  updateNative(overlay: Overlay, textarea: HTMLTextAreaElement, tokenStart: number): void {
+    const root = overlay.surface.getRootNode();
+    this.updateSurface(
+      overlay.surface,
+      textarea,
+      tokenStart,
+      (anchor) => {
+        overlay.bindTrigger(textarea);
+        overlay.setReturnTarget(textarea);
+        const unbind = bindOverlayAnchor(overlay.surface, anchor, "top-start");
+        return {
+          activate: () => {
+            overlay.request(true);
+          },
+          dispose: () => {
+            overlay.retire();
+            unbind();
+          },
+        };
+      },
+      root instanceof ShadowRoot ? root : textarea.ownerDocument.body,
+    );
+  }
+
+  private updateSurface(
+    popup: HTMLElement,
+    textarea: HTMLTextAreaElement,
+    tokenStart: number,
+    bind: (anchor: HTMLElement) => PopupBinding,
+    anchorParent: ParentNode = textarea.ownerDocument.body,
+  ): void {
+    if (
+      this.popup !== popup ||
+      this.textarea !== textarea ||
+      this.anchor?.parentNode !== anchorParent
+    ) {
       this.close();
       this.popup = popup;
       this.textarea = textarea;
@@ -64,9 +119,11 @@ export class TextareaTokenAnchor {
       this.anchor = document.createElement("span");
       this.anchor.setAttribute("aria-hidden", "true");
       this.anchor.style.cssText =
-        "position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none;";
-      document.body.append(this.mirror, this.anchor);
-      configureAnchoredPopup(popup, this.anchor, "top", "start");
+        "position:fixed;left:0;top:0;width:0;opacity:0;pointer-events:none;";
+      document.body.append(this.mirror);
+      // Named CSS anchors must share the native popup's tree scope.
+      anchorParent.append(this.anchor);
+      this.popupBinding = bind(this.anchor);
       this.resizeObserver = new ResizeObserver(this.invalidateStyles);
       this.resizeObserver.observe(textarea);
       document.addEventListener("scroll", this.schedule, true);
@@ -97,9 +154,8 @@ export class TextareaTokenAnchor {
     window?.removeEventListener("resize", this.invalidateStyles);
     window?.visualViewport?.removeEventListener("resize", this.invalidateStyles);
     window?.visualViewport?.removeEventListener("scroll", this.schedule);
-    if (this.popup) {
-      this.popup.active = false;
-    }
+    this.popupBinding?.dispose();
+    this.popupBinding = null;
     this.mirror?.remove();
     this.anchor?.remove();
     this.popup = null;
@@ -193,7 +249,6 @@ export class TextareaTokenAnchor {
     anchor.style.left = `${x}px`;
     anchor.style.top = `${y}px`;
     anchor.style.height = `${this.lineHeight * scaleY}px`;
-    popup.active = true;
-    popup.reposition();
+    this.popupBinding?.activate();
   };
 }

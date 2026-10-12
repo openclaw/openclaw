@@ -783,9 +783,13 @@ describe("DevicesPage gateway lifecycle", () => {
     stubLocalDeviceIdentity();
     const page = mountPaired(rotatingRequest(ROTATED_TOKEN));
     button(page.container, t("devices.inventory.rotate")).click();
-    const { modal, webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await modal.updateComplete;
     expect(dismissal.defaultPrevented).toBe(true);
     expect(secretDialogText()).toBe(ROTATED_TOKEN);
@@ -852,9 +856,13 @@ describe("DevicesPage gateway lifecycle", () => {
     stubLocalDeviceIdentity();
     const page = mountPaired(rotatingRequest(null));
     button(page.container, t("devices.inventory.rotate")).click();
-    const { webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await expectNoModal();
     expect(dismissal.defaultPrevented).toBe(false);
   });

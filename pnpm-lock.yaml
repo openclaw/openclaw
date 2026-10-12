@@ -2966,6 +2966,15 @@ importers:
       '@tanstack/virtual-core':
         specifier: 3.17.11
         version: 3.17.11
+      '@zag-js/menu':
+        specifier: 2.0.0-next.3
+        version: 2.0.0-next.3
+      '@zag-js/rect-utils':
+        specifier: 2.0.0-next.3
+        version: 2.0.0-next.3
+      '@zag-js/vanilla':
+        specifier: 2.0.0-next.3
+        version: 2.0.0-next.3
       dompurify:
         specifier: 3.4.16
         version: 3.4.16
@@ -6845,6 +6854,45 @@ packages:
   '@yuku-toolchain/types@0.10.2':
     resolution: {integrity: sha512-sSeo4SSSToiS+sSD+bwn/s94EEcaLJ7tG5LCp8gFYC1G5VzxzX7fqB6m9RU1yMD8KTpu6zdU/I1NlQf8hVBJ9Q==}
 
+  '@zag-js/anatomy@2.0.0-next.3':
+    resolution: {integrity: sha512-Gv3/V+SAbcfsgjUQDRfDVz1X7VQonyU+IQnYJTE0RsxLnRqQnf/epsG+K3bZw2xwuED4/etxsNZcET3r/v/4Dg==}
+
+  '@zag-js/core@2.0.0-next.3':
+    resolution: {integrity: sha512-7Ps0Zc5HVNMBeUNBadYbqHWgOCZf4WfLCnRCAiqyIx/Cqe3C6GjpTxhqCCFM35B3k89G+czJ1zdVUkuOtVcQRg==}
+
+  '@zag-js/dismissable@2.0.0-next.3':
+    resolution: {integrity: sha512-tXJOx39qkEoRGQzHgcbJ9mD+I8NoorsK6WNfFFp0BHuub+yhHR61QJ8/AlUIXCvqN86W6nkQ67YXWSGtleJSoQ==}
+
+  '@zag-js/dom-query@2.0.0-next.3':
+    resolution: {integrity: sha512-bwtBahCat7JivtvxXhqwzwhb0RfcCQ8MHXbOKp5JDi7BP+Dvlib87EQdG22etk0qyvcCm8Nh9Vi0E/r4GtKBvw==}
+
+  '@zag-js/focus-visible@2.0.0-next.3':
+    resolution: {integrity: sha512-4n7Hfqq2BL9XNQVMtEa7VHzkGrONnXL93d2CP7XjCleSKgAiGoexUZrOuFNGqivDZdn8YZUSxrQpMdevIe8vhA==}
+
+  '@zag-js/interact-outside@2.0.0-next.3':
+    resolution: {integrity: sha512-XAuHvGjECnmHBjGDQjlyu0pf+wtYYLY4Qr9XcFGIQFDoo+WIGRUuTDK4vXe31QPjOyRNrG7AJv0thqyJTlhvog==}
+
+  '@zag-js/menu@2.0.0-next.3':
+    resolution: {integrity: sha512-m+F4qXgmJWaNwXYfph2VI78e3kRJpYGzcgHtIZqzXp9CHu5wegt2tuTl+pdsuHp4EQtT1ZhcPBAegz+xb6NwxQ==}
+
+  '@zag-js/popper@2.0.0-next.3':
+    resolution: {integrity: sha512-kmGQBAUhXU3Ym03B2ksdajJXGQdTn/MaEFIxUDXKkRdHrXH3hWUeEZDsFgTYqchsLLT4HX/K6YpnaEFeVUClFw==}
+
+  '@zag-js/rect-utils@2.0.0-next.3':
+    resolution: {integrity: sha512-fVJef8Ia4bIPFJhTywlzUFa46AClJ9E5Dx3l2o7lerEofBXIvsownXpmQTajhE8khUKwyOw2my3B+OP+BgvmnQ==}
+
+  '@zag-js/store@2.0.0-next.3':
+    resolution: {integrity: sha512-C1bDJZOUrIgw+/cKA3kY9Jw8NdlnlGZxbIndud3ZvCNmnV+tct4hLLFWrCBJMkGDfRKyWqTQyhTQE1iO9a15hQ==}
+
+  '@zag-js/types@2.0.0-next.3':
+    resolution: {integrity: sha512-EsfhD5EnKC7r9qcUU4LP2J7OEB58kxQR7MxKIUb8VgENfA5hYvOilvw1sY6fQDc3umnjatm1Z1kolh9+wqS/zA==}
+
+  '@zag-js/utils@2.0.0-next.3':
+    resolution: {integrity: sha512-4EtwkQ3xiREYTBAc9P7qmWARHdScG2OXg383ZNDEvIftA1hBnPCP8kADa2P5jll2oAFjnoczS2PUe/jbutlCsw==}
+
+  '@zag-js/vanilla@2.0.0-next.3':
+    resolution: {integrity: sha512-l97wAzQIvB0le91AVcy5AgDZFNH6jGuSYb1yMI0ZjC99JDPsTmJV2lfQsRkQcFFhE4qaMrMRfWU2ZpK0daKPHw==}
+
   '@zone-eu/mailsplit@5.4.19':
     resolution: {integrity: sha512-nDWzw+X3tqfwd7DpDThAjg3KqtrNA6bG2gkrf6m2j1JBaGyyKAZzu1TguzB4GEco+HYpXAbXZ7kbl4Sn8H1vXw==}
 
@@ -9820,6 +9868,9 @@ packages:
     peerDependenciesMeta:
       kerberos:
         optional: true
+
+  proxy-compare@3.0.1:
+    resolution: {integrity: sha512-V9plBAt3qjMlS1+nC8771KNf6oJ12gExvaxnNzN/9yVRLdTv/lc+oJlnSzrdYDAvBfTStPCoiaCOTmTs0adv7Q==}
 
   proxy-from-env@2.1.0:
     resolution: {integrity: sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==}
@@ -15059,6 +15110,69 @@ snapshots:
 
   '@yuku-toolchain/types@0.10.2': {}
 
+  '@zag-js/anatomy@2.0.0-next.3': {}
+
+  '@zag-js/core@2.0.0-next.3':
+    dependencies:
+      '@zag-js/dom-query': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
+  '@zag-js/dismissable@2.0.0-next.3':
+    dependencies:
+      '@zag-js/dom-query': 2.0.0-next.3
+      '@zag-js/interact-outside': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
+  '@zag-js/dom-query@2.0.0-next.3':
+    dependencies:
+      '@zag-js/types': 2.0.0-next.3
+
+  '@zag-js/focus-visible@2.0.0-next.3':
+    dependencies:
+      '@zag-js/dom-query': 2.0.0-next.3
+
+  '@zag-js/interact-outside@2.0.0-next.3':
+    dependencies:
+      '@zag-js/dom-query': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
+  '@zag-js/menu@2.0.0-next.3':
+    dependencies:
+      '@zag-js/anatomy': 2.0.0-next.3
+      '@zag-js/core': 2.0.0-next.3
+      '@zag-js/dismissable': 2.0.0-next.3
+      '@zag-js/dom-query': 2.0.0-next.3
+      '@zag-js/focus-visible': 2.0.0-next.3
+      '@zag-js/popper': 2.0.0-next.3
+      '@zag-js/rect-utils': 2.0.0-next.3
+      '@zag-js/types': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
+  '@zag-js/popper@2.0.0-next.3':
+    dependencies:
+      '@floating-ui/dom': 1.8.0
+      '@zag-js/dom-query': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
+  '@zag-js/rect-utils@2.0.0-next.3': {}
+
+  '@zag-js/store@2.0.0-next.3':
+    dependencies:
+      proxy-compare: 3.0.1
+
+  '@zag-js/types@2.0.0-next.3':
+    dependencies:
+      csstype: 3.2.3
+
+  '@zag-js/utils@2.0.0-next.3': {}
+
+  '@zag-js/vanilla@2.0.0-next.3':
+    dependencies:
+      '@zag-js/core': 2.0.0-next.3
+      '@zag-js/store': 2.0.0-next.3
+      '@zag-js/types': 2.0.0-next.3
+      '@zag-js/utils': 2.0.0-next.3
+
   '@zone-eu/mailsplit@5.4.19':
     dependencies:
       libbase64: 1.3.1
@@ -18363,6 +18477,8 @@ snapshots:
       ipaddr.js: 1.9.1
 
   proxy-agent-negotiate@1.1.0: {}
+
+  proxy-compare@3.0.1: {}
 
   proxy-from-env@2.1.0: {}
 

@@ -127,7 +127,9 @@ describeControlUiE2e("Control UI chat file links", () => {
         expect(await page.locator(".sidebar-file-view").count()).toBe(0);
         await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
 
-        const fileTab = page.locator(".side-panel__header wa-tab").filter({ hasText: "slow.ts" });
+        const fileTab = page
+          .locator(".side-panel__header .tabstrip-tab")
+          .filter({ hasText: "slow.ts" });
         expect(await fileTab.count()).toBe(1);
         if (intent === "close") {
           await page.getByRole("button", { name: "Close tab: slow.ts", exact: true }).click();
@@ -486,7 +488,10 @@ describeControlUiE2e("Control UI chat file links", () => {
       await browserRow.locator(".chat-workspace-rail__file-open").click();
       await fileView.waitFor({ state: "visible" });
       expect(
-        await page.locator(".side-panel__header wa-tab").filter({ hasText: "README.md" }).count(),
+        await page
+          .locator(".side-panel__header .tabstrip-tab")
+          .filter({ hasText: "README.md" })
+          .count(),
       ).toBe(1);
       const reads = await gateway.getRequests("sessions.files.get");
       expect(reads).toHaveLength(2);
@@ -496,7 +501,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         "2",
       );
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
-      await page.locator('.side-panel__header button[aria-label="Files"]').click();
+      await page
+        .locator(".side-panel__header")
+        .getByRole("button", { name: "Files", exact: true })
+        .click();
       const search = page.locator('.chat-workspace-rail input[type="search"]');
       await search.fill("README");
       await expect

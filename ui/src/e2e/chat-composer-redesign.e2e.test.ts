@@ -1017,7 +1017,9 @@ suite.define(() => {
         );
       }
       await page.mouse.move(0, 0);
-      await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".tooltip-surface[popover]:popover-open").count())
+        .toBe(0);
       await expect
         .poll(() => microphonePickerShell.evaluate((node) => node.getBoundingClientRect().width))
         .toBe(0);

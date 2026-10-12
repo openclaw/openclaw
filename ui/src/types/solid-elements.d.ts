@@ -91,6 +91,10 @@ declare module "@solidjs/web" {
         "prop:disabled"?: Tooltip["disabled"];
         "prop:anchor"?: Tooltip["anchor"];
         "prop:placement"?: Tooltip["placement"];
+        "prop:closeDelay"?: Tooltip["closeDelay"];
+        "prop:hoverDismissDelay"?: Tooltip["hoverDismissDelay"];
+        "prop:delay"?: Tooltip["delay"];
+        "prop:autoSize"?: Tooltip["autoSize"];
         content?: string;
         disabled?: boolean;
         placement?: Tooltip["placement"];

@@ -253,14 +253,14 @@ suite.define(() => {
             );
             expect(await page.locator(".lazy-view-error").count()).toBe(1);
             await page
-              .locator(".side-panel__header wa-tab")
+              .locator(".side-panel__header .tabstrip-tab")
               .filter({ hasText: "notes.txt" })
               .click();
             expect(await page.locator(".lazy-view-error:visible").textContent()).toContain(
               "Retired editor failed",
             );
             await page
-              .locator(".side-panel__header wa-tab")
+              .locator(".side-panel__header .tabstrip-tab")
               .filter({ hasText: "other.txt" })
               .click();
             expect(await page.locator(".cm-content:visible").textContent()).toContain(

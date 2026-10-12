@@ -1,0 +1,121 @@
+:host {
+  display: contents;
+}
+
+openclaw-tooltip,
+openclaw-tooltip-provider {
+  display: contents;
+}
+
+.tooltip-surface {
+  position: fixed;
+  inset: auto;
+  --oc-overlay-distance: 8px;
+  max-width: var(--openclaw-tooltip-max-width, min(260px, calc(100vw - 16px)));
+  max-height: min(420px, calc(100dvh - 16px));
+  overflow: auto;
+  border: 1px solid
+    var(--openclaw-tooltip-border-color, var(--overlay-border, var(--border-strong)));
+  border-radius: var(--openclaw-tooltip-border-radius, var(--radius-md));
+  padding: var(--openclaw-tooltip-padding, 5px 7px);
+  background: var(
+    --openclaw-tooltip-background-color,
+    color-mix(in srgb, var(--bg-elevated) 97%, var(--text) 3%)
+  );
+  color: var(--text);
+  box-shadow: var(--openclaw-tooltip-shadow, var(--overlay-shadow, var(--shadow-md)));
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0;
+  scale: 0.9;
+  transition:
+    opacity var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
+    scale var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast)) ease,
+    display var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
+      allow-discrete,
+    overlay var(--openclaw-tooltip-popup-hide-duration, var(--control-ui-transition-fast))
+      allow-discrete;
+}
+
+.tooltip-surface:popover-open:where(:not([data-phase="closing"])) {
+  opacity: 1;
+  scale: 1;
+  transition-duration: var(
+    --openclaw-tooltip-popup-show-duration,
+    var(--control-ui-transition-fast)
+  );
+}
+
+@starting-style {
+  .tooltip-surface:popover-open {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+
+:host(.sidebar-hover-tooltip) .tooltip-surface[data-phase="opening"] {
+  animation: var(--openclaw-tooltip-open-animation);
+}
+
+.tooltip-content {
+  display: block;
+  text-align: center;
+  white-space: pre-line;
+}
+
+.tooltip-rich-content {
+  display: block;
+  pointer-events: auto;
+  text-align: left;
+}
+
+.shortcut-kbd:where(:not([hidden])) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.shortcut-kbd > span + span {
+  margin-inline-start: 0.15em;
+}
+
+.kbd__text {
+  text-box: trim-both cap alphabetic;
+}
+
+.shortcut-kbd::before {
+  content: "";
+  height: 1lh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-surface {
+    --openclaw-tooltip-popup-show-duration: 0ms;
+    --openclaw-tooltip-popup-hide-duration: 0ms;
+    transition: none;
+  }
+
+  .tooltip-surface[data-phase="opening"],
+  .tooltip-surface[data-phase="closing"],
+  :host(.sidebar-hover-tooltip) .tooltip-surface[data-phase="opening"] {
+    animation: none;
+  }
+}
+
+@keyframes openclaw-tooltip-hover-card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

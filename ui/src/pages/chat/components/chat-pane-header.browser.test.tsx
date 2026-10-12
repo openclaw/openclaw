@@ -1,4 +1,3 @@
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
@@ -68,14 +67,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         await page.elementLocator(trigger).hover();
         const tooltip = () =>
           [...document.querySelectorAll("openclaw-tooltip")]
-            .map((element) => element.shadowRoot?.querySelector<WaTooltip>("wa-tooltip"))
-            .find((element) => element?.open);
+            .map((element) => element.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface"))
+            .find((element) => element?.matches(":popover-open"));
         await expect
           .poll(() => tooltip()?.textContent)
           .toContain(editor ? "Open in editor" : busy ? reason : "Versions");
         await expect
           .poll(() => {
-            const body = tooltip()?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
+            const body = tooltip();
             if (!body) {
               return false;
             }

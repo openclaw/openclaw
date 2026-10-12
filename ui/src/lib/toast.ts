@@ -34,7 +34,11 @@ function resolveToastAnchorRect(anchor: Element | undefined) {
 }
 
 function activeModalToastLayer() {
-  return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
+  const owner = [...(document.openClawModalLayers ?? [])]
+    .findLast((candidate) => candidate.isConnected)
+    ?.closest("openclaw-modal-dialog");
+  const container = owner?.getOverlayContainer();
+  return owner && container ? { owner, container } : undefined;
 }
 
 function restingToastLayer() {
@@ -83,8 +87,8 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (this.isConnected) {
       return;
     }
-    const target = activeModalToastLayer() ?? restingToastLayer();
-    if (this.parentElement?.localName === "openclaw-modal-dialog" && target) {
+    const target = activeModalToastLayer()?.container ?? restingToastLayer();
+    if (this.closest("openclaw-modal-dialog") && target) {
       target.append(this);
     } else {
       this.dismiss("disconnected");
@@ -284,16 +288,18 @@ export function showToast(options: ToastOptions): boolean {
     return false;
   }
   const modal = activeModalToastLayer();
-  if (modal && host.parentElement !== modal) {
-    modal.append(host);
+  if (modal && host.parentElement !== modal.container) {
+    modal.container.append(host);
     const handoff = (event: Event) => {
-      if (event.target !== modal) {
+      if (event.target !== modal.owner) {
         return;
       }
-      modal.removeEventListener("wa-after-hide", handoff);
-      queueMicrotask(() => (activeModalToastLayer() ?? restingToastLayer())?.append(host));
+      modal.owner.removeEventListener("wa-after-hide", handoff);
+      queueMicrotask(() =>
+        (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
+      );
     };
-    modal.addEventListener("wa-after-hide", handoff);
+    modal.owner.addEventListener("wa-after-hide", handoff);
   }
   host.show(options);
   return true;

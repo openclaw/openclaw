@@ -43,11 +43,7 @@ async function renderLightbox(
   Object.assign(modal, { src, mediaKind, originalSrc, imageTitle });
   mountSolid(() => modal, { container: target });
   await modal.updateComplete;
-  const dialogAdapter = modal.querySelector("openclaw-modal-dialog");
-  if (!dialogAdapter) {
-    throw new Error("missing modal dialog adapter");
-  }
-  await getRenderedModalDialog(modal);
+  const { modal: dialogAdapter } = await getRenderedModalDialog(modal);
   return { modal, dialogAdapter };
 }
 

@@ -1,5 +1,5 @@
 import { nothing, render } from "lit";
-import "./modal-dialog.ts";
+import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 
 type PromiseModalHost<T, Content> = {
   host: HTMLDivElement;
@@ -19,13 +19,28 @@ export function withPromiseModalHost<T, Content = unknown>(
   }
   const host = document.createElement("div");
   document.body.append(host);
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let disposeContent: (() => void) | undefined;
+    let pendingContent: (() => Content) | undefined;
+    let ready = customElements.get("openclaw-modal-dialog") !== undefined;
+    const cleanup = () => {
+      abort?.signal?.removeEventListener("abort", handleAbort);
+      pendingContent = undefined;
+      disposeContent?.();
+      if (!mountContent) {
+        render(nothing, host);
+      }
+      host.remove();
+    };
     const modal = {
       host,
       settled: false,
       render(content: () => Content) {
-        if (!modal.settled) {
+        if (modal.settled) {
+          return;
+        }
+        pendingContent = content;
+        if (ready) {
           if (mountContent) {
             disposeContent?.();
             disposeContent = mountContent(content, host);
@@ -39,17 +54,36 @@ export function withPromiseModalHost<T, Content = unknown>(
           return;
         }
         modal.settled = true;
-        abort?.signal?.removeEventListener("abort", handleAbort);
-        disposeContent?.();
-        if (!mountContent) {
-          render(nothing, host);
-        }
-        host.remove();
+        cleanup();
         resolve(value);
       },
     };
     const handleAbort = () => abort && modal.finish(abort.value);
     abort?.signal?.addEventListener("abort", handleAbort, { once: true });
-    initialize(modal);
+    const fail = (error: unknown) => {
+      if (!modal.settled) {
+        modal.settled = true;
+        cleanup();
+        reject(
+          error instanceof Error ? error : new Error("Unable to open dialog", { cause: error }),
+        );
+      }
+    };
+    // Initializers publish caller-owned reentrancy state before any asynchronous work.
+    try {
+      initialize(modal);
+    } catch (error) {
+      fail(error);
+    }
+    if (!ready && !modal.settled) {
+      void ensureCustomElementDefined("openclaw-modal-dialog", () => import("./modal-dialog.ts"))
+        .then(() => {
+          ready = true;
+          if (!modal.settled && pendingContent) {
+            modal.render(pendingContent);
+          }
+        })
+        .catch(fail);
+    }
   });
 }

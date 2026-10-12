@@ -95,7 +95,9 @@ describe("chat sidebar region", () => {
     const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
     const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
     const label = () =>
-      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .tabstrip-tab__label',
+      );
     expect(label()?.textContent).toBe("Chat");
 
     region.conversationTab = {
@@ -105,7 +107,9 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] [data-agent-avatar]',
+      ),
     ).not.toBeNull();
     expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
     expect(
@@ -116,8 +120,9 @@ describe("chat sidebar region", () => {
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
-        ?.content,
+      root(region)
+        .querySelector('.tabstrip-tab[data-tab-value="conversation"]')
+        ?.querySelector("openclaw-tooltip")?.content,
     ).toBe("Chat");
 
     region.conversationTab = {
@@ -422,10 +427,8 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.closeSlot).toHaveBeenCalledWith(slot);
 
     root(region)
-      .querySelector('wa-tab[panel="workspace"]')
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "workspace" } }),
-      );
+      .querySelector<HTMLButtonElement>('.tabstrip-tab[data-tab-value="workspace"]')
+      ?.click();
     expect(region.callbacks?.activatePanel).toHaveBeenCalledWith("workspace");
     region.layout = activatePanel(region.layout, "workspace");
     await region.updateComplete;

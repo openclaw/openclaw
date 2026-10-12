@@ -46,17 +46,12 @@ function selectTab(element: HTMLElement, tab: string) {
   target?.dispatchEvent(
     new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
   );
-  target?.dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true }));
-  dispatchTabShow(element, tab);
 }
 
-function dispatchTabShow(element: HTMLElement, tab: string) {
-  element.querySelector("wa-tab-group")?.dispatchEvent(
-    new CustomEvent("wa-tab-show", {
-      detail: { name: tab },
-      bubbles: true,
-    }),
-  );
+function moveTabFocus(element: HTMLElement, tab: string) {
+  element
+    .querySelector(`#memory-tab-${tab}`)
+    ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
 }
 
 describe("MemorySettingsPage engine slot", () => {
@@ -568,8 +563,8 @@ describe("MemorySettingsPage tab routing", () => {
           element.routeData = { ...element.routeData } as ConfigRouteData;
           await element.updateComplete;
         }
-        dispatchTabShow(element, "overview");
-        dispatchTabShow(element, "dreams");
+        moveTabFocus(element, "overview");
+        moveTabFocus(element, "dreams");
 
         expect(replace).toHaveBeenCalledTimes(expectedUrl ? 1 : 0);
         expect(navigate).not.toHaveBeenCalled();

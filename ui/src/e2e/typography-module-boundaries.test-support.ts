@@ -1,6 +1,5 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { describe, expect, it } from "vitest";
 import {
   type createControlUiE2eSuite,
@@ -24,7 +23,7 @@ export function defineTypographyModuleBoundaryTests(
         }, platform);
         const popupModule = await holdModuleResponse(
           page,
-          moduleRequest("node_modules/@awesome.me/webawesome/dist/components/tooltip/tooltip.js"),
+          moduleRequest("ui/src/components/solid/tooltip.tsx"),
         );
         try {
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -32,18 +31,20 @@ export function defineTypographyModuleBoundaryTests(
           await trigger.waitFor();
           expect(popupModule.requests()).toBe(0);
           await trigger.focus();
+          const tooltip = trigger.locator("..");
+          const popup = tooltip.locator(".tooltip-surface[popover]");
           await popupModule.request;
-          expect(await trigger.getAttribute("aria-describedby")).not.toBeNull();
-          await page.keyboard.press("Escape");
+          expect(popupModule.requests()).toBe(1);
+          expect(await popup.isVisible()).toBe(false);
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
           popupModule.release();
-          await page.waitForFunction(() => Boolean(customElements.get("wa-tooltip")));
-          const popup = trigger.locator("..").locator("wa-tooltip");
-          expect(
-            await popup.evaluate(async (element: WaTooltip) => {
-              await element.updateComplete;
-              return element.open;
-            }),
-          ).toBe(false);
+          await popup.waitFor({ state: "visible" });
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(true);
+          await page.keyboard.press("Escape");
+          await popup.waitFor({ state: "hidden" });
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(false);
+          expect(popupModule.requests()).toBe(1);
         } finally {
           popupModule.release();
         }

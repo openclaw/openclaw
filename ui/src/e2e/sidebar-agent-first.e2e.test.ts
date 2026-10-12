@@ -167,10 +167,16 @@ suite.define(() => {
             true,
           );
           await expect
-            .poll(() => group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").count())
+            .poll(() =>
+              group
+                .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+                .count(),
+            )
             .toBe(1);
           expect(
-            await group.locator(".sidebar-agent-roster__signals wa-tooltip[open]").textContent(),
+            await group
+              .locator(".sidebar-agent-roster__signals .tooltip-surface[popover]:popover-open")
+              .textContent(),
           ).toContain("Child session Review failed checks failed: Geometry mismatch");
           const attentionBounds = (await attention.boundingBox())!;
           const actionBounds = (await group

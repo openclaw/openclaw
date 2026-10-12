@@ -7,6 +7,7 @@ import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
+import { resolveTransientContainer } from "./transient-container.ts";
 import "./web-awesome.ts";
 
 type NativeLinkMenuAction = "inline" | "external" | "copy";
@@ -108,21 +109,6 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
   },
 );
 
-function menuContainer(path: EventTarget[]): HTMLElement {
-  const modalHost = path.find(
-    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
-  );
-  if (modalHost instanceof HTMLElement) {
-    return modalHost;
-  }
-  for (const target of path) {
-    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
-      return target;
-    }
-  }
-  return document.body;
-}
-
 /** Native-only menu placement and actions load with the menu, not the browser shell. */
 export function mountNativeLinkMenu(options: {
   path: EventTarget[];
@@ -134,8 +120,8 @@ export function mountNativeLinkMenu(options: {
   openExternal: () => void;
   openInline: () => void;
 }): NativeLinkMenu | null {
-  const container = menuContainer(options.path);
-  if (!container.isConnected) {
+  const container = resolveTransientContainer(options.path, options.anchor.ownerDocument);
+  if (!container?.isConnected) {
     return null;
   }
   const menu = document.createElement("openclaw-native-link-menu");

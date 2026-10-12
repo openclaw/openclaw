@@ -77,7 +77,11 @@ export async function captureUnionProof(
     await locator.evaluate(async (element) => {
       const running = element
         .getAnimations({ subtree: true })
-        .filter((animation) => animation.playState === "running");
+        .filter(
+          (animation) =>
+            animation.playState === "running" &&
+            Number.isFinite(animation.effect?.getComputedTiming().endTime),
+        );
       await Promise.all(running.map((animation) => animation.finished.catch(() => undefined)));
     });
     const box = await locator.boundingBox();
@@ -103,6 +107,7 @@ export async function captureUnionProof(
   );
   const artifactDir = path.join(owner.artifactDir, directory);
   await page.screenshot({
+    animations: "disabled",
     clip: { x, y, width: right - x, height: bottom - y },
     path: path.join(artifactDir, fileName),
   });
