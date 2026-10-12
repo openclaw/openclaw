@@ -1,9 +1,13 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as persist from "../../agents/auth-profiles.js";
+import { isPendingOAuthRefreshFence } from "../../agents/auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
+import * as authProfileSqlite from "../../agents/auth-profiles/sqlite.js";
+import type { OAuthCredential } from "../../agents/auth-profiles/types.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
@@ -31,8 +35,10 @@ it.each([
   { source: "direct", status: "format", output: "empty" },
   { source: "direct", status: "format", output: "thinking" },
   { source: "direct", status: "timeout" },
+  { source: "profile", status: "ok", oauth: "expired" },
+  { source: "profile", status: "ok", oauth: "valid" },
 ] as const)(
-  "checks $source credentials ($status) without changing auth state or creating an agent session",
+  "checks $source credentials ($status) with sessionless credential custody",
   async (scenario) => {
     const { source: credentialSource, status } = scenario;
     const state = await createOpenClawTestState({
@@ -40,7 +46,41 @@ it.each([
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
     const pluginId = "probe-resource-fixture";
-    const provider = "probe-resource-provider";
+    const oauth = "oauth" in scenario ? scenario.oauth : undefined;
+    const provider = oauth ? "openai" : "probe-resource-provider";
+    const profileId = `${credentialSource === "profile" ? provider : "unrelated-provider"}:stored`;
+    const originalOAuth: OAuthCredential = {
+      type: "oauth",
+      provider,
+      accountId: "synthetic-probe-account",
+      access: "original-test-access",
+      refresh: "original-test-refresh",
+      expires: oauth === "expired" ? Date.now() - 60_000 : Date.now() + 3_600_000,
+    };
+    const rotatedOAuth: OAuthCredential = {
+      ...originalOAuth,
+      access: "rotated-test-access",
+      refresh: "rotated-test-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    let refreshCount = 0;
+    let refreshOwnerFenced = false;
+    let refreshPeerFenced = false;
+    const refreshServer = createServer((_req, res) => {
+      refreshCount++;
+      const owner = loadPersistedAuthProfileStore(state.agentDir())?.profiles[profileId];
+      const peer = loadPersistedAuthProfileStore(state.agentDir("historical"))?.profiles[profileId];
+      refreshOwnerFenced = owner?.type === "oauth" && isPendingOAuthRefreshFence(owner);
+      refreshPeerFenced = peer?.type === "oauth" && isPendingOAuthRefreshFence(peer);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(rotatedOAuth));
+    });
+    refreshServer.listen(0, "127.0.0.1");
+    await once(refreshServer, "listening");
+    const refreshAddress = refreshServer.address();
+    if (!refreshAddress || typeof refreshAddress === "string") {
+      throw new Error("Expected the fixture refresh listener");
+    }
     const pluginRoot = state.path("plugin");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const entry = path.join(pluginRoot, "index.cjs");
@@ -62,7 +102,7 @@ it.each([
     );
     fs.writeFileSync(
       entry,
-      `module.exports = { id: '${pluginId}', register(api) { api.registerProvider({ id: '${provider}', label: 'Probe fixture', auth: [] }); } };`,
+      `module.exports = { id: '${pluginId}', register(api) { api.registerProvider({ id: '${provider}', label: 'Probe fixture', auth: [], formatApiKey: c => c.access, refreshOAuth: async () => { const response = await fetch('http://127.0.0.1:${refreshAddress.port}/token'); return response.json(); } }); } };`,
     );
     const cfg: OpenClawConfig = {
       agents: {
@@ -97,17 +137,29 @@ it.each([
       },
     };
     const profileProvider = credentialSource === "profile" ? provider : "unrelated-provider";
-    const profileId = `${profileProvider}:stored`;
+    const credential = oauth
+      ? originalOAuth
+      : { type: "api_key" as const, provider: profileProvider, key: "stored-test-key" };
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
-        [profileId]: { type: "api_key", provider: profileProvider, key: "stored-test-key" },
+        [profileId]: credential,
       },
-      lastGood: { [profileProvider]: profileId },
-      usageStats: {
-        [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 },
-      },
+      ...(oauth
+        ? {}
+        : {
+            lastGood: { [profileProvider]: profileId },
+            usageStats: {
+              [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 },
+            },
+          }),
     });
+    if (oauth) {
+      await state.writeAuthProfiles(
+        { version: 1, profiles: { [profileId]: originalOAuth } },
+        "historical",
+      );
+    }
     const authBefore = loadPersistedAuthProfileStore(state.agentDir());
     await state.writeConfig(cfg);
     const builder = createPluginRegistry({
@@ -130,7 +182,12 @@ it.each([
     let privateDir: string | undefined;
     const timeout = new AbortController();
     const timeoutSignal = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
-    complete.mockImplementation(async () => {
+    complete.mockImplementation(async (params) => {
+      if (oauth) {
+        expect(params.auth.apiKey).toBe(
+          oauth === "expired" ? rotatedOAuth.access : originalOAuth.access,
+        );
+      }
       expect(fs.existsSync(path.join(state.agentDir(), "sessions"))).toBe(false);
       if (status === "timeout") {
         timeout.abort(new DOMException("The operation timed out", "TimeoutError"));
@@ -174,6 +231,8 @@ it.each([
         return result;
       });
     const parent = new AsyncWorkScope();
+    const credentialWrites = vi.spyOn(authProfileSqlite, "writePersistedAuthProfileStoreRaw");
+    const stateWrites = vi.spyOn(authProfileSqlite, "writePersistedAuthProfileStateRaw");
     try {
       const result = await parent.track(() =>
         runAuthProbes({
@@ -199,7 +258,21 @@ it.each([
         expect(result.results[0]?.error).toContain("401 Invalid API key");
         expect(result.results[0]?.error).not.toContain("sk-synthetic-private");
       }
-      expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual(authBefore);
+      const authAfter = loadPersistedAuthProfileStore(state.agentDir());
+      if (oauth === "expired") {
+        expect(refreshCount).toBe(1);
+        expect(refreshOwnerFenced).toBe(true);
+        expect(refreshPeerFenced).toBe(true);
+        expect(authAfter?.profiles[profileId]).toEqual(rotatedOAuth);
+        expect(authAfter?.usageStats).toEqual(authBefore?.usageStats);
+      } else {
+        expect(authAfter).toEqual(authBefore);
+        if (oauth) {
+          expect(refreshCount).toBe(0);
+          expect(credentialWrites).not.toHaveBeenCalled();
+          expect(stateWrites).not.toHaveBeenCalled();
+        }
+      }
       expect(complete).toHaveBeenCalledOnce();
       expect(contextEngine).not.toHaveBeenCalled();
       if (credentialSource === "direct") {
@@ -214,10 +287,15 @@ it.each([
       capture.mockRestore();
       timeoutSignal.mockRestore();
       complete.mockReset();
+      credentialWrites.mockRestore();
+      stateWrites.mockRestore();
       await source.release();
       resetPreparedModelRuntimeSnapshotsForTest();
       clearPluginMetadataLifecycleCaches();
       resetPluginRuntimeStateForTest();
+      await new Promise<void>((resolve, reject) =>
+        refreshServer.close((error) => (error ? reject(error) : resolve())),
+      );
       await state.cleanup();
     }
   },

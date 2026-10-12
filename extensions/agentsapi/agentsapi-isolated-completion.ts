@@ -46,44 +46,54 @@ export async function runAgentsApiIsolatedCompletion(
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   try {
     assertCurrent();
-    // Conversation-only sessions admit input during creation. Retain the ID
-    // after caller cancellation so native cleanup can settle that work.
-    const session = await creationClient.createIsolated(
-      AbortSignal.any([timeout, AbortSignal.timeout(60_000)]),
-      params.systemPrompt,
-      params.prompt,
-      model.id,
+    const reasoning =
       params.thinkLevel === undefined
         ? {}
-        : { effort: resolveAgentsApiReasoningEffort({ model, thinkLevel: params.thinkLevel }) },
-    );
-    sessionId = session.id;
-    native = createAgentsApiSession({
-      client,
-      cleanupClient,
-      sessionId,
-      signal,
-      assertCurrent,
-      initialInputSubmitted: true,
-      onEvent: (event) => {
-        if (event.item) {
-          assertRestrictedItem(event.item);
-        }
-      },
-    });
-    assertCurrent();
-    if (
-      session.environment.type !== "none" ||
-      session.agent.tools.some((tool) => tool.type !== "programmatic_tool_calling") ||
-      session.agent.multi_agent.enabled
-    ) {
-      throw new Error("Agents API did not create the requested restricted completion session");
+        : { effort: resolveAgentsApiReasoningEffort({ model, thinkLevel: params.thinkLevel }) };
+    const creationSignal = AbortSignal.any([timeout, AbortSignal.timeout(60_000)]);
+    let result: { cancelled: boolean; turn: { id: string } };
+    // The creation request admits the sole input and starts inference.
+    const requestStartedAt = params.onRequestComplete ? performance.now() : undefined;
+    try {
+      const session = await creationClient.createIsolated(
+        creationSignal,
+        params.systemPrompt,
+        params.prompt,
+        model.id,
+        reasoning,
+      );
+      sessionId = session.id;
+      native = createAgentsApiSession({
+        client,
+        cleanupClient,
+        sessionId,
+        signal,
+        assertCurrent,
+        initialInputSubmitted: true,
+        onEvent: (event) => {
+          if (event.item) {
+            assertRestrictedItem(event.item);
+          }
+        },
+      });
+      assertCurrent();
+      if (
+        session.environment.type !== "none" ||
+        session.agent.tools.some((tool) => tool.type !== "programmatic_tool_calling") ||
+        session.agent.multi_agent.enabled
+      ) {
+        throw new Error("Agents API did not create the requested restricted completion session");
+      }
+      result = await native.run(
+        params.prompt,
+        async () => {},
+        () => {},
+      );
+    } finally {
+      if (requestStartedAt !== undefined) {
+        params.onRequestComplete?.(performance.now() - requestStartedAt);
+      }
     }
-    const result = await native.run(
-      params.prompt,
-      async () => {},
-      () => {},
-    );
     assertCurrent();
     if (result.cancelled) {
       throw new Error("Agents API isolated completion was cancelled");

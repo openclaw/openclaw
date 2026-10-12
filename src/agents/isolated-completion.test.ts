@@ -150,14 +150,17 @@ it.each([false, true])(
 
 describe("runIsolatedCompletion", () => {
   it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
-    "reports only %s request time, including a failed request",
+    "preserves %s request timing without measuring runtime preparation or cleanup",
     async (route) => {
       let clock = 0;
       const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
       const onRequestComplete = vi.fn();
       const failure = new Error("401 invalid API key");
-      const dispatch = vi.fn(async () => {
+      const dispatch = vi.fn(async (params: { onRequestComplete?: (ms: number) => void }) => {
+        clock += 2_000;
         clock += 13;
+        params.onRequestComplete?.(13);
+        clock += 3_000;
         throw failure;
       });
       mocks.ensureSelectedAgentHarnessPlugin.mockImplementationOnce(async () => {
@@ -165,11 +168,7 @@ describe("runIsolatedCompletion", () => {
       });
       if (route === "cli") {
         mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-        mocks.runCliAgent.mockImplementationOnce(async (params) => {
-          clock += 2_000;
-          params.onRequestComplete?.(13);
-          await dispatch();
-        });
+        mocks.runCliAgent.mockImplementationOnce(dispatch);
       } else {
         registerIsolatedHarness({
           authBootstrap: route === "harness-v2" ? "harness" : undefined,
@@ -184,7 +183,7 @@ describe("runIsolatedCompletion", () => {
         ).rejects.toThrow("401 invalid API key");
         expect(dispatch).toHaveBeenCalledOnce();
         expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(13);
-        expect(clock).toBe(route === "cli" ? 10_013 : 8_013);
+        expect(clock).toBe(13_013);
       } finally {
         now.mockRestore();
       }

@@ -688,7 +688,10 @@ async function probeTarget(params: {
         model: model.model,
         authProfileId: isolatedProfileId ?? target.profileId,
         ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
-        ...(target.source !== "profile" ? { agentHarnessRuntimeOverride: "openclaw" } : {}),
+        // OAuth/native profiles retain the raw transport and persistent refresh owner.
+        ...(target.source !== "profile" || target.mode !== "api_key"
+          ? { agentHarnessRuntimeOverride: "openclaw" }
+          : {}),
         systemPrompt: "",
         prompt: PROBE_PROMPT,
         timeoutMs,

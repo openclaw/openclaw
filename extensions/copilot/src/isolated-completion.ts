@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { CopilotSession, SessionConfig } from "@github/copilot-sdk";
+import type { CopilotSession, SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -217,17 +217,27 @@ export async function runCopilotIsolatedCompletion(
     });
     session = createdSession;
     const requestHeaders = sessionProvider.provider?.headers;
-    const event = await awaitWithinCompletionBoundary({
-      boundary,
-      start: async (remainingMs) =>
-        await createdSession.sendAndWait(
-          { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
-          remainingMs,
-        ),
-      onBoundary: () => {
-        void createdSession.abort().catch(() => undefined);
-      },
-    });
+    let requestStartedAt: number | undefined;
+    let event: SessionEvent | undefined;
+    try {
+      event = await awaitWithinCompletionBoundary({
+        boundary,
+        start: async (remainingMs) => {
+          requestStartedAt = params.onRequestComplete ? performance.now() : undefined;
+          return await createdSession.sendAndWait(
+            { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
+            remainingMs,
+          );
+        },
+        onBoundary: () => {
+          void createdSession.abort().catch(() => undefined);
+        },
+      });
+    } finally {
+      if (requestStartedAt !== undefined) {
+        params.onRequestComplete?.(performance.now() - requestStartedAt);
+      }
+    }
     if (event?.type !== "assistant.message" || event.agentId !== undefined) {
       throw new Error("[copilot] isolated completion did not return a root assistant message");
     }

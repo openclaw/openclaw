@@ -499,6 +499,73 @@ describe("createCopilotAgentHarness", () => {
     expect(pool.release).toHaveBeenCalledWith(expect.objectContaining({ client }));
   });
 
+  it.each(["success", "request failure", "session failure"] as const)(
+    "reports only dispatched request time for %s",
+    async (outcome) => {
+      const { harness, pool, client, session, createSession, sendAndWait } = isolatedFixture({
+        content: "Four.",
+        messageId: "message-1",
+      });
+      let now = 1_000;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const onRequestComplete = vi.fn();
+      const failure = new Error(outcome);
+      mocks.createCopilotByokProxy.mockImplementation(async () => {
+        now += 100;
+        return undefined;
+      });
+      pool.acquire.mockImplementation(async () => {
+        now += 200;
+        return { client, key: TEST_POOL_KEY };
+      });
+      createSession.mockImplementation(async () => {
+        now += 300;
+        if (outcome === "session failure") {
+          throw failure;
+        }
+        return session;
+      });
+      sendAndWait.mockImplementation(async () => {
+        now += 70;
+        if (outcome === "request failure") {
+          throw failure;
+        }
+        return {
+          type: "assistant.message",
+          data: { content: "Four.", messageId: "message-1" },
+        };
+      });
+      session.disconnect.mockImplementation(async () => {
+        expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(70);
+        now += 500;
+      });
+      pool.release.mockImplementation(async () => {
+        now += 500;
+      });
+      try {
+        const completion = harness.runIsolatedCompletionV2?.({
+          ...ISOLATED_COMPLETION_PARAMS,
+          onRequestComplete,
+        });
+        if (outcome === "success") {
+          await expect(completion).resolves.toMatchObject({
+            assistant: { content: [{ type: "text", text: "Four." }] },
+          });
+        } else {
+          await expect(completion).rejects.toBe(failure);
+        }
+        if (outcome === "session failure") {
+          expect(sendAndWait).not.toHaveBeenCalled();
+          expect(onRequestComplete).not.toHaveBeenCalled();
+        } else {
+          expect(onRequestComplete).toHaveBeenCalledExactlyOnceWith(70);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("rejects harness-owned authorization before acquiring a client", async () => {
     const pool = makePoolMock();
     const harness = createCopilotAgentHarness({ pool });

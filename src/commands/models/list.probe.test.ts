@@ -90,11 +90,9 @@ async function withProbeRuntime(
           ? {}
           : {
               "openai:profile": {
-                type: "oauth",
+                type: "api_key",
                 provider: "openai",
-                access: "access-token",
-                refresh: "refresh-token",
-                expires: Date.now() + 60_000,
+                key: "test-profile-key",
               },
             },
     }),

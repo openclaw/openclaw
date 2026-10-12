@@ -147,6 +147,7 @@ describe("Codex agent harness supports()", () => {
         model: hostModel,
         auth: hostAuth,
       },
+      onRequestComplete: vi.fn(),
       ...isolatedTask,
     } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
 
@@ -155,6 +156,42 @@ describe("Codex agent harness supports()", () => {
     });
     expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
     expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
+  });
+
+  it("forwards native request timing without adding a harness timer", async () => {
+    const onRequestComplete = vi.fn();
+    const params = {
+      ...isolatedTask,
+      onRequestComplete,
+      authorization: {
+        owner: "harness" as const,
+        plan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
+        authProfileStore: { version: 1, profiles: {} },
+      },
+    };
+    await harness.runIsolatedCompletionV2?.(params);
+    expect(runCodexIsolatedCompletion).toHaveBeenLastCalledWith(params, {
+      pluginConfig: undefined,
+    });
+    expect(onRequestComplete).not.toHaveBeenCalled();
+  });
+
+  it("forwards legacy request timing to the host transport owner", async () => {
+    const onRequestComplete = vi.fn();
+    const params = {
+      ...isolatedTask,
+      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+      auth: { apiKey: "secret", source: "profile:test", mode: "api-key" },
+      onRequestComplete,
+    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletion>>[0];
+    await harness.runIsolatedCompletion?.(params);
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        onRequestComplete,
+        authorization: expect.objectContaining({ owner: "host" }),
+      }),
+    );
+    expect(onRequestComplete).not.toHaveBeenCalled();
   });
 
   it("delegates locked-session execution only to the voice-call plugin", () => {

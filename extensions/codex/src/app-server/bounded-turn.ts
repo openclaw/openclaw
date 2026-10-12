@@ -15,7 +15,7 @@ import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
-import { CodexEphemeralTurn } from "./ephemeral-turn.js";
+import { CodexEphemeralTurn, type CodexEphemeralTurnResult } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexAppServerConfigOptions, resolveCodexPrivateLauncher } from "./launch-args.js";
 import { readModelListResult, type CodexAppServerModel } from "./models.js";
@@ -34,7 +34,11 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
-import { codexPrewriteRejectionCause } from "./rpc-error.js";
+import {
+  CodexAppServerLocalRequestCancellationError,
+  CodexAppServerScopedRequestRejectedError,
+  codexPrewriteRejectionCause,
+} from "./rpc-error.js";
 import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
@@ -102,6 +106,7 @@ type CodexBoundedTurnParams = {
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  onRequestComplete?: (durationMs: number) => void;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   options: CodexBoundedTurnOptions;
@@ -322,36 +327,51 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       onRequest: createCodexBoundedApprovalHandler(params.taskLabel),
     });
     try {
-      const turn = assertCodexTurnStartResponse(
-        // Inherit the admitted model and empty environment; another model/cwd
-        // override would replace the native selection or recreate native tools.
-        await client.request<unknown>(
-          "turn/start",
-          {
-            threadId: thread.thread.id,
-            input: params.input,
-            approvalPolicy: "on-request",
-            effort:
-              params.thinkLevel === undefined
-                ? "low"
-                : resolveCodexAppServerReasoningEffort({
-                    thinkLevel: params.thinkLevel,
-                    modelId: modelSelection.model,
-                    supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
-                  }),
-          } satisfies CodexTurnStartParams,
-          requestOptions,
-        ),
-      );
-      activeTurnId = turn.turn.id;
-      if (abortController.signal.aborted) {
-        requestInterrupt();
+      // Inherit the admitted model and empty environment; another model/cwd
+      // override would replace the native selection or recreate native tools.
+      const turnParams = {
+        threadId: thread.thread.id,
+        input: params.input,
+        approvalPolicy: "on-request",
+        effort:
+          params.thinkLevel === undefined
+            ? "low"
+            : resolveCodexAppServerReasoningEffort({
+                thinkLevel: params.thinkLevel,
+                modelId: modelSelection.model,
+                supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
+              }),
+      } satisfies CodexTurnStartParams;
+      let result: CodexEphemeralTurnResult;
+      const requestStartedAt = performance.now();
+      let rejectedBeforeDispatch = false;
+      try {
+        const turn = assertCodexTurnStartResponse(
+          await client.request<unknown>("turn/start", turnParams, requestOptions),
+        );
+        activeTurnId = turn.turn.id;
+        if (abortController.signal.aborted) {
+          requestInterrupt();
+        }
+        result = await collector.wait(turn.turn, {
+          signal: abortController.signal,
+          abortError: () =>
+            resolveCodexBoundedTurnAbortError(
+              abortController.signal,
+              params.taskLabel,
+              timeoutError,
+            ),
+        });
+      } catch (error) {
+        rejectedBeforeDispatch =
+          error instanceof CodexAppServerScopedRequestRejectedError ||
+          (error instanceof CodexAppServerLocalRequestCancellationError && !error.mayHaveWritten);
+        throw error;
+      } finally {
+        if (!rejectedBeforeDispatch) {
+          params.onRequestComplete?.(performance.now() - requestStartedAt);
+        }
       }
-      const result = await collector.wait(turn.turn, {
-        signal: abortController.signal,
-        abortError: () =>
-          resolveCodexBoundedTurnAbortError(abortController.signal, params.taskLabel, timeoutError),
-      });
       if (result.error || result.turn?.status === "failed") {
         const source = result.error
           ? readCodexErrorNotification(result.error)?.error

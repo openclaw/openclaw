@@ -147,21 +147,6 @@ function resolveIsolatedStreamParams(
   };
 }
 
-async function runCompletionRequest<T>(
-  request: Pick<RunIsolatedCompletionParams, "onRequestComplete">,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (!request.onRequestComplete) {
-    return run();
-  }
-  const startedAt = performance.now();
-  try {
-    return await run();
-  } finally {
-    request.onRequestComplete?.(performance.now() - startedAt);
-  }
-}
-
 async function runCliIsolatedCompletion(
   request: RunIsolatedCompletionParams & {
     config: OpenClawConfig;
@@ -495,6 +480,7 @@ async function runIsolatedCompletionOwned(
         assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
+        onRequestComplete: request.onRequestComplete,
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
@@ -691,18 +677,16 @@ async function runIsolatedCompletionOwned(
             assertCurrent();
             deadline ??= Date.now() + request.timeoutMs;
             const execution = modelAuthority.bind(modelForAuthorization);
-            const pending = runCompletionRequest(request, () =>
-              runIsolatedCompletionV2.call(harness, {
-                ...commonParams,
-                ...execution,
-                timeoutMs: remainingTimeoutMs(),
-                authorization:
-                  authorization.owner === "host"
-                    ? prepareIsolatedHostAuthorization(harness, authorization)
-                    : authorization,
-                streamParams: resolveIsolatedStreamParams(request, completionModel),
-              }),
-            );
+            const pending = runIsolatedCompletionV2.call(harness, {
+              ...commonParams,
+              ...execution,
+              timeoutMs: remainingTimeoutMs(),
+              authorization:
+                authorization.owner === "host"
+                  ? prepareIsolatedHostAuthorization(harness, authorization)
+                  : authorization,
+              streamParams: resolveIsolatedStreamParams(request, completionModel),
+            });
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
             execution.assertCurrent?.();
@@ -736,10 +720,8 @@ async function runIsolatedCompletionOwned(
         };
         assertCurrent();
         const execution = modelAuthority.bind(modelForAuthorization);
-        result = await runCompletionRequest(request, () =>
-          harness.runIsolatedCompletion!(
-            prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
-          ),
+        result = await harness.runIsolatedCompletion!(
+          prepareIsolatedHostAuthorization(harness, { ...harnessParams, ...execution }),
         );
         execution.assertCurrent?.();
       }
