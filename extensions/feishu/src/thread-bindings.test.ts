@@ -236,7 +236,7 @@ describe("Feishu thread bindings", () => {
     // Overlapping monitor restarts: the replacement monitor starts before the
     // previous monitor's teardown finishes. The previous stop must unregister
     // only its own adapter, never the replacement's live registration.
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    const previous = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
     const replacement = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
     const conversation = {
@@ -253,7 +253,7 @@ describe("Feishu thread bindings", () => {
     ).resolves.toMatchObject({ conversation });
 
     // The previous monitor's late teardown stops only the manager it owns.
-    trackedManagers[0].stop();
+    previous.stop();
 
     expect(
       getSessionBindingService().getCapabilities({ channel: "feishu", accountId: "default" }),
