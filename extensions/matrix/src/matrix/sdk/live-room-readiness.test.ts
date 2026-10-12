@@ -6,6 +6,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import { MatrixClient } from "../sdk.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
@@ -80,6 +81,7 @@ describe("Matrix live encrypted room ownership", () => {
   const liveSync = () => sdk.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Syncing);
 
   beforeEach(async () => {
+    installMatrixTestRuntime();
     vi.useFakeTimers();
     fixture.init.mockReset().mockResolvedValue(undefined);
     fixture.probe.mockReset().mockResolvedValue(true);
