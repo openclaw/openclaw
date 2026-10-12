@@ -41,10 +41,11 @@ import {
   ComposerProgress,
   ComposerGoal,
 } from "./chat-composer-regions.tsx";
+import { ComposerRunStatus } from "./chat-composer-run-status.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
-import { commitComposerDraft } from "./chat-composer-state.ts";
+import { commitComposerDraft, isChatRunWorking } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -282,9 +283,17 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ) : undefined;
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
+  const runStatus = () => (
+    <ComposerRunStatus
+      waitingSubagents={props.waitingSubagents ?? null}
+      working={isChatRunWorking(props) && !props.waitingApproval}
+      onOpenSubagents={props.onOpenSubagents}
+    />
+  );
   return (
     <>
       <div class="agent-chat__composer-shell">
+        {props.waitingSubagents || !showComposerInput() ? runStatus() : undefined}
         <div class="chat-footer__context">
           <LitContent value={props.footerContent ?? undefined} />
           <div class="agent-chat__composer-notices">
@@ -530,6 +539,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
+                    {!props.waitingSubagents ? runStatus() : undefined}
                     <ContextNotice
                       session={activeSession()}
                       messages={props.messages}

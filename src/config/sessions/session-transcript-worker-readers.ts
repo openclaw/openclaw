@@ -160,6 +160,19 @@ export function createSessionHistoryWorkerReaders(
       "lifecycle artifact plan",
       (value) => value,
     ),
+    readTranscriptInstances: reader(
+      "session-transcript-instances",
+      "transcript instances",
+      (value) => value.instances,
+      (input) => ({
+        kind: "session-transcript-instances",
+        ...input,
+        scope: {
+          ...input.scope,
+          env: captureSessionTranscriptStorageEnvironment(input.scope.env ?? process.env),
+        },
+      }),
+    ),
     readMemorySessionTargets: reader(
       "memory-session-targets",
       "memory session targets",
@@ -282,6 +295,7 @@ export function createSessionHistoryWorkerReaders(
           Array.isArray(value) ||
           (value.kind !== "active-accounting" &&
             value.kind !== "bounded-tail" &&
+            value.kind !== "recent-text" &&
             value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&

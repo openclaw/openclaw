@@ -4,7 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
-import { renderChatModelControls } from "./chat-model-controls.ts";
+import { renderChatModelControls } from "./chat-model-controls.tsx";
 
 const models = ["primary", "fallback", "custom"].map((id) => ({
   id,

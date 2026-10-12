@@ -10,7 +10,7 @@ import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
@@ -1150,13 +1150,14 @@ describe("chrome.ts internal", () => {
           }
           return target;
         });
-        const signal = vi.spyOn(process, "kill").mockReturnValue(true);
+        const owner = createChromeProcessIdentityFixture(43213, "2026-01-01");
+        onTestFinished(owner.restore);
 
         await expect(stopOwnedOpenClawChrome(makeResolved(), profile)).resolves.toMatchObject({
           status: expected,
         });
-        expect(signal).not.toHaveBeenCalledWith(43213, "SIGTERM");
-        expect(signal).not.toHaveBeenCalledWith(43213, "SIGKILL");
+        expect(owner.killSpy).not.toHaveBeenCalledWith(43213, "SIGTERM");
+        expect(owner.killSpy).not.toHaveBeenCalledWith(43213, "SIGKILL");
       },
     );
 
@@ -1229,9 +1230,6 @@ describe("chrome.ts internal", () => {
               execFileSyncMock.mockImplementation((command: string, args: string[]) => {
                 if (command === "ps" && args.includes("command=")) {
                   return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}${suffix} --no-first-run\n`;
-                }
-                if (path.basename(command) === "ps" && args.includes("lstart=")) {
-                  return `${processState.startTime}\n`;
                 }
                 if (command === "lsof") {
                   return `p${managedPid}\n`;

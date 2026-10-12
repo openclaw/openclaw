@@ -44,7 +44,6 @@ import type {
   CronRunReceiptRecoveryCandidate,
   CronRunReceiptStatus,
   PreparedCronRunReceiptAdjudication,
-  PreparedCronRunReceiptClaim,
 } from "./run-receipt.types.js";
 
 export { CronRunReceiptRevisionError } from "./run-receipt.types.js";
@@ -330,28 +329,20 @@ export function adjudicateActiveCronRunReceiptInDatabase(params: {
   throw new CronRunReceiptConflictError(receiptFromRow(current));
 }
 
-/** Claims the receipt inside the caller's synchronous cron-state transaction. */
+/** Inserts a receipt after the queue has admitted its current job and free slot. */
 export function claimCronRunReceiptInDatabase(params: {
   database: DatabaseSync;
-  prepared: PreparedCronRunReceiptClaim;
+  handle: CronRunReceiptHandle;
+  job: CronJob | undefined;
+  requestRunId?: string;
   receiptSchema: CronRunReceiptWriteSchema;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
-  const { handle } = params.prepared;
+  const { handle } = params;
   if (handle.ownerStartTime === null) {
     throw new Error("cron run cannot acquire a durable fence without process start identity");
   }
-  adjudicateActiveCronRunReceiptInDatabase({
-    database: params.database,
-    jobId: handle.jobId,
-    prepared: params.prepared,
-    finishedAtMs: handle.startedAtMs,
-  });
-  const job = validateCurrentJob({
-    database: params.database,
-    handle,
-    resolveAgentId: params.resolveAgentId,
-  });
+  const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
   pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job, params.receiptSchema);
   executeSqliteQuerySync(
@@ -364,7 +355,7 @@ export function claimCronRunReceiptInDatabase(params: {
         job_id: handle.jobId,
         config_revision: handle.configRevision,
         agent_id: handle.agentId,
-        request_run_id: params.prepared.requestRunId ?? null,
+        request_run_id: params.requestRunId ?? null,
         delivery_attempt_state: "not-started",
         status: "running",
         owner_pid: handle.ownerPid,
@@ -374,7 +365,7 @@ export function claimCronRunReceiptInDatabase(params: {
         error_text: null,
       }),
   );
-  return receiptHandle(receiptFromRow(activeRow(params.database, handle.storeKey, handle.jobId)!));
+  return { ...handle };
 }
 
 export function findActiveCronRunReceiptInDatabase(params: {
@@ -450,16 +441,23 @@ export function assertCronRunReceiptCurrentInDatabase(params: {
 export function activateCronRunReceiptInDatabase(params: {
   database: DatabaseSync;
   handle: CronRunReceiptHandle;
+  job: CronJob;
   startedAtMs: number;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
-  const job = assertCronRunReceiptCurrentInDatabase(params);
+  const job = validateCurrentReceiptJob(params.job, params);
   assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), params.handle.receiptId);
   executeSqliteQuerySync(
     params.database,
     query(params.database)
       .updateTable("cron_run_receipts")
-      .set({ started_at_ms: params.startedAtMs })
+      .set({
+        config_revision: params.handle.configRevision,
+        agent_id: params.handle.agentId,
+        owner_pid: params.handle.ownerPid,
+        owner_start_time: params.handle.ownerStartTime,
+        started_at_ms: params.startedAtMs,
+      })
       .where("receipt_id", "=", params.handle.receiptId)
       .where("status", "=", "running"),
   );
@@ -506,7 +504,7 @@ export function finishCronRunReceiptInDatabase(params: {
   status: Exclude<CronRunReceiptStatus, "running">;
   finishedAtMs: number;
   error?: string;
-}): CronRunReceipt | undefined {
+}): void {
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -527,12 +525,4 @@ export function finishCronRunReceiptInDatabase(params: {
     currentJob(params.database, params.handle.storeKey, params.handle.jobId),
     params.receiptSchema,
   );
-  const row = executeSqliteQueryTakeFirstSync(
-    params.database,
-    query(params.database)
-      .selectFrom("cron_run_receipts")
-      .selectAll()
-      .where("receipt_id", "=", params.handle.receiptId),
-  );
-  return row ? receiptFromRow(row) : undefined;
 }

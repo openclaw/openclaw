@@ -12,6 +12,7 @@ import type {
   ReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type {
   SessionLifecycleProjectionCommit,
@@ -98,6 +99,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
   assertPrepared: () => void;
   assertCandidate: (candidate: SessionLifecycleProjectionCommitted) => void;
   onLifecycleCommitted?: () => void;
+  afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 }) {
   return runSessionEntryWorkerOperation<
     SessionLifecycleProjectionCommitted,
@@ -118,7 +120,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
         startSessionTranscriptIndexReconcile({ ...params.database, preferredSessionId: sessionId });
       }
     },
-    onCommitted(candidate, published, identity) {
+    async onCommitted(candidate, published, identity, context) {
       for (const sessionKey of candidate.progressCardResetKeys) {
         emitSessionLifecycleEvent({
           agentId: params.input.agentId,
@@ -135,6 +137,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
           published.prepared,
         );
       }
+      await params.afterCommitted?.(context);
       return candidate.result;
     },
   });

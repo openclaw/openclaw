@@ -59,6 +59,8 @@ export async function patchSessionEntryInWorker(params: {
   agentId: string;
   selection: SessionEntryPatchSelection;
   assertCurrent: () => void;
+  assertCommitAllowed?: () => void;
+  shouldCommit?: () => boolean;
   guard?: SessionEntryPatchGuard;
   preparedSource?: PreparedSessionSourceAuthority;
   reduction?: SessionEntryPatchReduction;
@@ -76,6 +78,8 @@ export async function patchSessionEntryInWorker(params: {
   let input: SessionEntryPatchCommit | SessionEntryPatchReduction | undefined = params.reduction;
   const ensureIdentitySource = params.guard?.ensureIdentitySource;
   let transactionFacts: SessionPendingInputAuthorityFacts | undefined;
+  let commitRefusal: Error | undefined;
+  let committing = false;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
@@ -93,6 +97,7 @@ export async function patchSessionEntryInWorker(params: {
         throw new Error("Session source refusal omitted its prepared assertion");
       }
       if (candidate.entry !== null) {
+        params.assertCommitAllowed?.();
         params.guard?.assertCurrent?.();
         source?.assertCurrent();
         params.guard?.assertMutationAllowed?.();
@@ -105,6 +110,10 @@ export async function patchSessionEntryInWorker(params: {
       }
     },
     onTransactionFacts: (value) => {
+      if (committing && value === undefined && params.shouldCommit?.() === false) {
+        commitRefusal = new Error("Session entry patch was cancelled before mutation");
+        throw commitRefusal;
+      }
       if (isRecord(value) && value.kind === "session-entry-patch-validated") {
         params.guard?.assertMutationAllowed?.();
       }
@@ -160,26 +169,29 @@ export async function patchSessionEntryInWorker(params: {
         prepared.sources = sourceChecks.map((check) => check.predicate);
         source.assertCurrent();
       }
+      committing = true;
       return commit(() => worker.execute({ type: "session.entry.patch.commit", input: prepared }));
     },
     async onCommitted(committed, published, identity, _context, fileIdentity) {
       try {
-        if (committed.publication && committed.entry) {
+        if (committed.applied && committed.entry) {
           const entry = structuredClone(committed.entry);
           if (committed.transcriptPredicate) {
             params.onCommitted?.(entry, committed.transcriptPredicate);
           } else {
             params.onCommitted?.(entry);
           }
-          params.onCommittedSource?.(
-            {
-              agentId: params.database.agentId,
-              path: params.database.path,
-              databaseIdentity: fileIdentity.physicalIdentity,
-              databaseBirthtime: fileIdentity.birthtime,
-            },
-            structuredClone(committed.entry),
-          );
+          if (committed.publication) {
+            params.onCommittedSource?.(
+              {
+                agentId: params.database.agentId,
+                path: params.database.path,
+                databaseIdentity: fileIdentity.physicalIdentity,
+                databaseBirthtime: fileIdentity.birthtime,
+              },
+              structuredClone(committed.entry),
+            );
+          }
         }
       } finally {
         if (published) {
@@ -196,6 +208,11 @@ export async function patchSessionEntryInWorker(params: {
       await releaseSource();
       return { entry: committed.entry, wrote: Boolean(committed.publication) };
     },
+  }).catch((error: unknown) => {
+    if (error === commitRefusal) {
+      return { entry: null, wrote: false };
+    }
+    throw error;
   });
 }
 

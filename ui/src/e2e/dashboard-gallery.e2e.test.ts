@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -219,16 +220,13 @@ suite.define(() => {
           await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
         }
 
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await task.locator(".chat-thread").waitFor();
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
         }
-        await page
-          .locator('[data-region-header="side"]')
-          .getByRole("button", { name: "Close", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await page.locator(".board-session-surface").waitFor();
         await task.locator(".chat-thread").waitFor({ state: "hidden" });
         if (proofDir) {

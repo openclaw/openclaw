@@ -46,6 +46,16 @@ from the index-facts postimage. The publication worker owns vector extension loa
 and retirement, while the retrieval worker owns read-only capability probing.
 These paths add no schema, retention, or update contract.
 
+Scheduled cron runs reuse the job and receipt loaded by their queue transaction
+when claiming and activating work. Activation commits ownership and start time
+together. Isolated preparation persists skills with the pre-run metadata, and
+continuation synchronization includes its selected CLI provider in the same
+write. Transcript existence is read only when resume fields need reconciliation.
+Duplicate-run exclusion, delivery settlement, and run-history retention keep
+their existing owners and semantics.
+The watchdog reuses write-invalidated scheduler rows and live local receipt
+ownership. Running contexts do not trigger queue drains; queued rows still do.
+
 Managed outgoing media cleanup uses the same retained session reader as media
 serving. Durable session discovery and entry reads execute in the existing
 read workers; bound incognito reads use their actor. Cleanup distinguishes an
@@ -59,6 +69,25 @@ opaque transaction callbacks, or unbound process-held incognito readers still
 call them. A worker caller does not make the shared kernel worker-only. The
 inventory retains those calls as migration debt; raw-row removal guarded by
 Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
+Durable SessionManager calls from the Gateway must use the asynchronous methods.
+The deprecated synchronous SDK methods retain compatibility until the next SDK
+major; bundled transcript archive and model-context readers use workers. Skill Workshop keeps
+one live synchronous context validation immediately before a filesystem effect:
+raw SDK writers do not yet publish complete permission and transcript revocation
+facts. This security boundary remains until those writers are removed and the
+session owner can publish every revocation; ordinary context preparation uses
+the history worker.
+
+Session lifecycle callbacks use the existing worker admission and post-commit
+context. Initialization rollback records its completion through the existing
+commit finalizer. Bundled harnesses use worker-aware deletion participants;
+external opaque deletion callbacks retain a deprecated synchronous adapter.
+Replace them with `createNativeSessionBindingLifecycleV2` for stored bindings or
+`createNativeSessionCommitFinalizer` for commit-only effects. Shared lifecycle,
+maintenance, and artifact kernels remain conservatively classified as T1 while
+those adapters and native incognito callers exist. Native incognito is a separate
+owner cutover; it is not a fallback for failed durable work.
 
 Node-host configuration writes and one-use GitHub setup handoffs use the existing
 shared-state writer. Handoff consumption deletes and returns the matching live
@@ -296,7 +325,11 @@ unbound incognito stores retain their existing process-local native owner.
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
-Write receipts invalidate reusable target facts. Current authorization at
+Registry receipts and physical replacement invalidate reusable target facts.
+Session-row writes invalidate fixed-store inventories, whose agent visibility
+can depend on those rows. Per-agent inventories retain their path and registry
+facts across ordinary turns, avoiding another discovery and
+reader-cleanup request. Current authorization at
 search disclosure, project removal, and other real effects remains required.
 The released synchronous transcript-hit SDK and native mutation callbacks retain
 their existing kernels until those owning contracts are migrated; this is not a
@@ -345,6 +378,11 @@ the existing history worker. Full suffix replacement derives its retained prefix
 from the canonical rows already compared inside the writer transaction; it does
 not reread the derived active-event prefix. Unsupported direct edits to derived
 rows are repaired by reconciliation rather than checked on every replacement.
+
+Activity recap presentation consumes the watermark prepared with its row. Explicit
+recap requests read freshness through the history worker and revalidate access
+before returning the result. The unused synchronous message-by-event-ID accessor
+has been removed; transaction owners retain their existing message lookup kernel.
 
 The session S–Z inventory still includes shared native kernels. They must not be
 marked worker-only merely because their ordinary durable callers use workers:

@@ -196,12 +196,9 @@ export function requestCronRunsInWorker(
         const runReceipt = claimCronRunReceiptInDatabase({
           database: db,
           receiptSchema,
-          prepared: {
-            handle,
-            storeKey: input.storeKey,
-            observedStale: false,
-            requestRunId: request.requestRunId,
-          },
+          handle,
+          job,
+          requestRunId: request.requestRunId,
           resolveAgentId: (current) =>
             resolveCronJobEffectiveAgentId(current, input.defaultAgentId),
         });
@@ -336,22 +333,10 @@ export function drainCronQueueInWorker(
           agentId,
           configRevision: resolveCronJobConfigRevision(job),
         };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("cron_run_receipts")
-            .set({
-              config_revision: currentHandle.configRevision,
-              agent_id: agentId,
-              owner_pid: currentHandle.ownerPid,
-              owner_start_time: currentHandle.ownerStartTime,
-            })
-            .where("receipt_id", "=", handle.receiptId)
-            .where("status", "=", "running"),
-        );
         const runReceipt = activateCronRunReceiptInDatabase({
           database: db,
           handle: currentHandle,
+          job,
           startedAtMs: input.nowMs,
           resolveAgentId: (current) =>
             resolveCronJobEffectiveAgentId(current, input.defaultAgentId),

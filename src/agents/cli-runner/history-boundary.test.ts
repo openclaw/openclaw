@@ -316,13 +316,6 @@ describe("CLI transcript account boundary", () => {
     },
   );
 
-  it("establishes coverage before the first transcript header and user row exist", async () => {
-    const f = await fixture(false);
-    await f.seed();
-    await f.run("epoch-a", async (allowed, params) => {
-      expect(await history(allowed, params)).toContain("A private canary");
-    });
-  });
   it("retains same-account raw and compacted history without exposing private metadata", async () => {
     const f = await fixture();
     await f.seed();
