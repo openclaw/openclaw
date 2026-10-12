@@ -370,6 +370,14 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
+  if (
+    userVersion < 21 &&
+    ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"].some(
+      (table) => tableExists(db, table),
+    )
+  ) {
+    migrations.push({ kind: "predicate-columns-v21", path: pathname });
+  }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });
   }

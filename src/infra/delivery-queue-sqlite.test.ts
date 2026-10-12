@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import { promoteDeliveryQueueEntryPlatformSendInDatabase } from "./delivery-queue-sqlite-claim.kernel.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
@@ -67,10 +68,12 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       `INSERT INTO delivery_queue_entries
          (queue_name, id, status, entry_kind, session_key, channel, target, account_id,
           retry_count, last_attempt_at, last_error, platform_send_started_at, recovery_state,
-          entry_json, enqueued_at, updated_at, failed_at)
+          entry_json, enqueued_at, updated_at, failed_at,
+          retention_id_prefix, retention_max_age_ms, retention_max_entries)
        VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL,
-               0, NULL, NULL, NULL, NULL, ?, ?, ?, NULL)`,
-    ).run(QUEUE, id, json, Date.now(), Date.now());
+               0, NULL, NULL, NULL, NULL, ?, ?, ?, NULL,
+               @retention_id_prefix, @retention_max_age_ms, @retention_max_entries)`,
+    ).run(deriveDeliveryQueueRetentionColumns(id, json), QUEUE, id, json, Date.now(), Date.now());
     db.close();
   }
 

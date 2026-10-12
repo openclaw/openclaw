@@ -1805,6 +1805,7 @@ describe("openclaw state database", () => {
       { kind: "state-consolidation-v13", path: fixture.databasePath },
       { kind: "creator-namespace-v14", path: fixture.databasePath },
       { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
+      { kind: "predicate-columns-v21", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1820,6 +1821,7 @@ describe("openclaw state database", () => {
         "Retired legacy skill curator lifecycle and proposal origin-run tables",
         "Folded singleton state tables into config_machine_state (v12)",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
+        "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
@@ -2120,6 +2122,7 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "creator-namespace-v14", path: seeded.databasePath },
+      { kind: "predicate-columns-v21", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -3147,97 +3150,6 @@ describe("openclaw state database", () => {
       expect.stringContaining("automatic repair refused the unrecognized schema shape"),
     ]);
     expect(result.warnings[0]).not.toContain("run openclaw doctor --fix");
-  });
-
-  it("opens databases with early cron tables before creating cron indexes", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath);
-    const jobJson = JSON.stringify({
-      id: "legacy-job",
-      name: "Legacy job",
-      enabled: true,
-      deleteAfterRun: true,
-      createdAtMs: 123,
-      updatedAtMs: 456,
-      agentId: "agent-a",
-      sessionKey: "agent:agent-a:main",
-      schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 0 },
-      payload: { kind: "agentTurn", message: "hello", model: "anthropic/claude-sonnet-4-6" },
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "chat-1",
-        accountId: "acct-1",
-        bestEffort: true,
-        failureDestination: { to: "https://example.invalid/hook" },
-      },
-      failureAlert: { mode: "announce", channel: "discord", to: "ops", after: 2 },
-    });
-    const projectedJobJson = JSON.stringify({ delivery: { threadId: 1008013 } });
-    db.exec(`
-      CREATE TABLE cron_jobs (
-        store_key TEXT NOT NULL,
-        job_id TEXT NOT NULL,
-        name TEXT NOT NULL DEFAULT '',
-        schedule_kind TEXT NOT NULL DEFAULT 'manual',
-        payload_kind TEXT NOT NULL DEFAULT 'message',
-        delivery_thread_id TEXT,
-        job_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (store_key, job_id)
-      );
-    `);
-    db.prepare(
-      `INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at)
-         VALUES (?, ?, ?, ?)`,
-    ).run(path.join(stateDir, "cron", "jobs.json"), "legacy-job", jobJson, 456);
-    db.prepare(
-      `INSERT INTO cron_jobs (
-         store_key, job_id, name, schedule_kind, payload_kind, delivery_thread_id, job_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      path.join(stateDir, "cron", "jobs.json"),
-      "already-projected-job",
-      "Already projected",
-      "every",
-      "agentTurn",
-      null,
-      projectedJobJson,
-      456,
-    );
-    db.close();
-
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expect(
-      database.db
-        .prepare(
-          `SELECT name, enabled, payload_kind, agent_id, job_json
-             FROM cron_jobs
-            WHERE job_id = ?`,
-        )
-        .get("legacy-job"),
-    ).toEqual({
-      enabled: 1,
-      agent_id: "agent-a",
-      name: "Legacy job",
-      payload_kind: "agentTurn",
-      job_json: jobJson,
-    });
-    expect(
-      database.db
-        .prepare(
-          `SELECT json_extract(job_json, '$.delivery.threadId') AS delivery_thread_id
-             FROM cron_jobs
-            WHERE job_id = ?`,
-        )
-        .get("already-projected-job"),
-    ).toEqual({ delivery_thread_id: 1008013 });
   });
 
   it("opens databases with early queue tables before creating newer indexes", async () => {

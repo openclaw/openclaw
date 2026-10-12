@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
@@ -73,6 +74,7 @@ function createGlobalDatabase(databasePath: string): void {
         `,
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
         `
@@ -81,12 +83,16 @@ function createGlobalDatabase(databasePath: string): void {
             id,
             status,
             entry_json,
+            retention_id_prefix,
+            retention_max_age_ms,
+            retention_max_entries,
             enqueued_at,
             updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?, 1, 1)
+          ) VALUES ('delivery', 'queued', 'pending', ?,
+            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
         `,
       )
-      .run('{"payload":"do-not-restore"}');
+      .run(deriveDeliveryQueueRetentionColumns("queued", entryJson), entryJson);
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("checkpointed");
     database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     database.prepare("INSERT INTO durable_entries (value) VALUES (?)").run("committed-in-wal");

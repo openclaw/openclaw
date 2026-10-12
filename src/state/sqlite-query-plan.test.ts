@@ -4,6 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessions/session-transcript-index.js";
+import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -205,25 +206,31 @@ describe("sqlite hot query plans", () => {
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
     });
     const { db } = database;
-    db.exec(`
+    const unboundedColumns = deriveDeliveryQueueRetentionColumns("", "{}");
+    db.prepare(`
       INSERT INTO delivery_queue_entries
-        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at,
+         retention_id_prefix, retention_max_age_ms, retention_max_entries)
       VALUES
-        ('z', 'null', 'failed', '{}', 1, 1, NULL),
-        ('a', 'late', 'failed', '{}', 1, 1, 30),
-        ('a', 'b', 'failed', '{}', 1, 1, 10),
-        ('a', 'a', 'failed', '{}', 1, 1, 10),
-        ('a', 'null', 'failed', '{}', 1, 1, NULL),
-        ('a', 'pending', 'pending', '{}', 1, 1, 0),
-        ('pending-only', 'pending', 'pending', '{}', 1, 1, NULL);
+        ('z', 'null', 'failed', '{}', 1, 1, NULL, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('a', 'late', 'failed', '{}', 1, 1, 30, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('a', 'b', 'failed', '{}', 1, 1, 10, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('a', 'a', 'failed', '{}', 1, 1, 10, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('a', 'null', 'failed', '{}', 1, 1, NULL, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('a', 'pending', 'pending', '{}', 1, 1, 0, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries),
+        ('pending-only', 'pending', 'pending', '{}', 1, 1, NULL, @retention_id_prefix, @retention_max_age_ms, @retention_max_entries);
+    `).run(unboundedColumns);
+    db.prepare(`
       WITH RECURSIVE history(n) AS (
         VALUES(1) UNION ALL SELECT n + 1 FROM history WHERE n < 200
       )
       INSERT INTO delivery_queue_entries
-        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at)
-      SELECT 'history-' || (n % 10), CAST(n AS TEXT), 'completed', '{}', 1, 1, 0
+        (queue_name, id, status, entry_json, enqueued_at, updated_at, failed_at,
+         retention_id_prefix, retention_max_age_ms, retention_max_entries)
+      SELECT 'history-' || (n % 10), CAST(n AS TEXT), 'completed', '{}', 1, 1, 0,
+        @retention_id_prefix, @retention_max_age_ms, @retention_max_entries
         FROM history;
-    `);
+    `).run(unboundedColumns);
 
     for (const analyzed of [false, true]) {
       if (analyzed) {
