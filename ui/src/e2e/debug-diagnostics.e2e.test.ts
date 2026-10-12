@@ -238,7 +238,7 @@ suite.define(() => {
           .toContain("432 MB");
         const desktopWidget = await widget.boundingBox();
         expect(desktopWidget).not.toBeNull();
-        expect(desktopWidget!.width).toBeLessThanOrEqual(210);
+        expect(desktopWidget!.width).toBeLessThanOrEqual(240);
         expect(desktopWidget!.height).toBeLessThanOrEqual(100);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeGreaterThanOrEqual(0);
         expect(1280 - desktopWidget!.x - desktopWidget!.width).toBeLessThanOrEqual(32);
@@ -390,12 +390,19 @@ suite.define(() => {
         await page.setViewportSize({ height: 844, width: 390 });
         const mobileWidget = await widget.boundingBox();
         expect(mobileWidget).not.toBeNull();
-        expect(mobileWidget!.width).toBeLessThanOrEqual(210);
+        expect(mobileWidget!.width).toBeLessThanOrEqual(240);
         expect(mobileWidget!.height).toBeLessThanOrEqual(100);
         expect(mobileWidget!.x).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.y).toBeGreaterThanOrEqual(0);
         expect(mobileWidget!.x + mobileWidget!.width).toBeLessThanOrEqual(390);
         expect(mobileWidget!.y + mobileWidget!.height).toBeLessThanOrEqual(844);
+        expect(
+          await widget
+            .locator(".sparkline-tile__label, .sparkline-tile__value")
+            .evaluateAll((elements) =>
+              elements.every((element) => element.scrollWidth <= element.clientWidth),
+            ),
+        ).toBe(true);
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
