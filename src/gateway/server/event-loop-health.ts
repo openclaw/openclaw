@@ -315,6 +315,8 @@ export function createGatewayEventLoopHealthMonitor(
       delayMaxMs < EVENT_LOOP_DELAY_WARN_MS &&
       intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS
     ) {
+      // Reset can leave an earlier wake pending; finish the new window on time.
+      samplingJob = scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS - intervalMs);
       return;
     }
     const delayP99Ms = nanosecondsToMilliseconds(histogram.percentile(99));
@@ -383,15 +385,15 @@ export function createGatewayEventLoopHealthMonitor(
     }
   };
 
-  const samplingJob = histogram
-    ? scheduler.schedule({
-        id: "event-loop-health",
-        atMs: scheduler.now() + SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
-        everyMs: SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
-        // Let the blocking callback's after hook publish its stall before resetting the window.
-        run: () => queueMicrotask(sample),
-      })
-    : undefined;
+  const scheduleSample = (delayMs: number) =>
+    scheduler.schedule({
+      id: "event-loop-health",
+      delayMs,
+      everyMs: SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
+      // Let the blocking callback's after hook publish its stall before resetting the window.
+      run: () => queueMicrotask(sample),
+    });
+  let samplingJob = histogram ? scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) : undefined;
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
