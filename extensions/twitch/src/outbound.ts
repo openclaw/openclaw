@@ -5,6 +5,7 @@ import { getClientManager } from "./client-manager-registry.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
+import { normalizeTwitchMessagingTarget } from "./target.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -35,10 +36,13 @@ export const twitchOutbound = {
     const hasWildcard = allowListRaw.includes("*");
     const allowList = allowListRaw
       .filter((entry: string) => entry !== "*")
-      .map((entry: string) => normalizeTwitchChannel(entry))
+      // Keep invalid entries restrictive instead of turning them into an empty allowlist.
+      .map(
+        (entry: string) => normalizeTwitchMessagingTarget(entry) || normalizeTwitchChannel(entry),
+      )
       .filter((entry): entry is string => entry.length > 0);
 
-    const normalizedTo = normalizeTwitchChannel(trimmed);
+    const normalizedTo = normalizeTwitchMessagingTarget(trimmed);
     const restricted = mode === "implicit" || mode === "heartbeat";
     if (
       normalizedTo &&
@@ -84,13 +88,17 @@ export const twitchOutbound = {
           "Required: username, clientId, and accessToken (config or env for default account).",
       );
     }
-    // A target that normalizes to empty still uses the account's default channel.
-    const deliveryChannel = normalizeTwitchChannel(channel) || account.channel;
-    if (!deliveryChannel) {
+    // Empty channel names retain the default; unsupported messaging targets do not.
+    const deliveryTarget = normalizeTwitchChannel(channel) ? channel : account.channel;
+    if (!deliveryTarget) {
       throw new Error("No channel specified and no default channel in account config");
     }
+    const deliveryChannel = normalizeTwitchMessagingTarget(deliveryTarget);
+    if (!deliveryChannel) {
+      throw new Error("Delivering to Twitch requires target <channel-name>");
+    }
     const result = await sendMessageTwitchInternal({
-      channel: normalizeTwitchChannel(deliveryChannel),
+      channel: deliveryChannel,
       text,
       cfg,
       account,
