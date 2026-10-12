@@ -2573,6 +2573,39 @@ The checkpoint normally does not apply to a read-only query that preserves exist
 
 For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
 
+## Initialize shared state before the first start
+
+Use `openclaw database init` to prepare the shared state database before starting
+a headless Gateway:
+
+```bash
+openclaw database init --json
+```
+
+The command resolves state from the process environment, including
+`OPENCLAW_STATE_DIR`, and `--profile`; it does not load dotenv files.
+`OPENCLAW_CONFIG_PATH` selects the config file. It reads the config only to look
+for existing agent stores and never writes it. It prints
+`databasePath`, `schemaVersion`, and `status`: `created` when it initialized an
+absent, empty, or recognized native bootstrap database; `found` for an existing
+current database. Repeating it leaves current database contents unchanged.
+
+Leave the path absent for a new installation: a file that already exists, even
+empty or partly initialized, is initialized as existing state without the
+Doctor-owned `agent_deletion_journal` table, just as the Gateway initializes it.
+
+Initialization uses the canonical database opener and preserves ownership,
+locking, integrity, and permission checks. It refuses older, newer, or incompatible
+state with a nonzero exit code; use the reported repair or version guidance. It
+does not migrate mature state, import legacy files, record `state-migrations` or
+`startup-migrations` completion, change application config or workspaces, issue
+credentials, or start a Gateway or plugin runtime. Normal Gateway startup checks
+still run afterward.
+
+This command creates storage, not device approvals. Device enrollment and approval
+remain separate operations; legacy `devices/paired.json` is left for explicit
+[Doctor migration](/cli/doctor/state-migrations).
+
 ## Preflight a target release
 
 Before activating or rolling back a release, run that target release's CLI against one explicit copied state database:

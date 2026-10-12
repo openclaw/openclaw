@@ -44,7 +44,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["database"],
-    // Release-local database inspection must not observe default state or load runtime policy.
+    // Database actions own state access; CLI startup must not load runtime policy.
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
   },
   {

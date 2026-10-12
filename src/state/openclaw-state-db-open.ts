@@ -41,6 +41,7 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
+import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
@@ -80,6 +81,7 @@ type UnpublishedStateDatabaseOptions = {
   ensureSchema: (database: DatabaseSync, initialization: StateDatabaseInitialization) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
   existingSchema?: boolean;
+  initializeOnly?: boolean;
   initializationAgentPaths?: readonly string[];
 };
 
@@ -159,7 +161,10 @@ function openNativeStateDatabase(
       databasePath: params.pathname,
       env: params.env,
     });
-    if (params.existingSchema) {
+    if (
+      params.existingSchema ||
+      (params.initializeOnly && !isUninitializedNativeStartupDatabase(db))
+    ) {
       assertSameFile();
       params.ensureSchema(db, initialization);
       assertSameFile();

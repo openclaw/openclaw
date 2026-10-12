@@ -44,6 +44,23 @@ async function runDatabasePreflight(
   }
 }
 
+async function runDatabaseInit(options: DatabaseOutputOptions): Promise<void> {
+  try {
+    const { initOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
+    const result = initOpenClawStateDatabase();
+    if (options.json) {
+      writeRuntimeJson(defaultRuntime, result);
+    } else {
+      writeRuntimeStdout(
+        defaultRuntime,
+        `Shared state database: ${result.status} at ${result.databasePath} (schema ${result.schemaVersion}).\n`,
+      );
+    }
+  } catch (error) {
+    writeDatabaseError(error, options.json === true);
+  }
+}
+
 async function runDatabaseOwnership(
   options: DatabaseOutputOptions & { manager?: string },
 ): Promise<void> {
@@ -95,6 +112,12 @@ export function registerDatabaseCommand(program: Command): void {
     .command("database")
     .description("Inspect database schema compatibility and shared-state write ownership")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
+
+  database
+    .command("init")
+    .description("Initialize the shared state database without running migrations")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(runDatabaseInit);
 
   database
     .command("preflight")

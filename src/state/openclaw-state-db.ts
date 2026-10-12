@@ -11,7 +11,10 @@ import {
   type SqliteLockFailureReporting,
 } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
@@ -24,6 +27,7 @@ import {
 } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
@@ -70,6 +74,7 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import {
   initializeNativeOpenClawStateConnection,
+  isUninitializedNativeStartupDatabase,
   withOpenClawStateStartupCheckpointConnection,
 } from "./openclaw-state-db-startup-checkpoint.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
@@ -224,6 +229,58 @@ export function initializeNativeOpenClawStateDatabase(
   initializeNativeOpenClawStateConnection(options, (db, pathname, env, initialization) =>
     ensureSchema(db, pathname, env, initialization, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, true),
   );
+}
+
+/** Initialize shared state before startup without running migrations or claiming their completion. */
+export function initOpenClawStateDatabase(
+  options: Omit<OpenClawStateDatabaseOptions, "database" | "readOnly"> = {},
+): { databasePath: string; schemaVersion: number; status: "created" | "found" } {
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  assertOpenClawStateSchemaRepairAllowed(pathname);
+  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
+  let created = false;
+  const database = withStateDatabaseColdAdmission(
+    { databasePath: pathname, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+    (remaining) => {
+      stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+      assertOpenClawStateDatabaseFreshOpenAllowed(options);
+      return openUnpublishedStateDatabase({
+        pathname,
+        env,
+        busyTimeoutMs: remaining(),
+        lockFailureReporting: "report",
+        initializeOnly: true,
+        initializationAgentPaths: options.initializationAgentPaths,
+        recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
+        ensureSchema: (db, initialization) => {
+          assertSupportedStateSchemaVersion(db, pathname);
+          created = isUninitializedNativeStartupDatabase(db);
+          if (created) {
+            ensureSchema(db, pathname, env, initialization, remaining(), true);
+          } else if (readStateSchemaContentVersion(db) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+            throw new StartupMaintenanceRequiredError(
+              "state-migrations",
+              `OpenClaw state database requires schema migration at ${pathname}; run openclaw doctor --fix.`,
+            );
+          }
+          assertExistingOpenClawStateRuntimeSchema(db, pathname);
+          if (!created) {
+            ensureOpenClawStatePermissions(pathname, env);
+          }
+        },
+      });
+    },
+  );
+  throwSqliteLifecycleErrors(
+    stateDbCache.closeUnpublishedOpenClawStateDatabaseHandle(database),
+    `OpenClaw state database initialization cleanup failed for ${pathname}.`,
+  );
+  return {
+    databasePath: database.path,
+    schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    status: created ? "created" : "found",
+  };
 }
 
 /** Open existing shared state without creating, migrating, chmodding, or configuring it. */
