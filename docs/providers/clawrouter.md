@@ -286,9 +286,9 @@ Missing upstream measurements appear as **Not reported**.
 
 The page calls the plugin-owned `clawrouter.pool.get` Gateway method, which
 requires `operator.read`. The Gateway requests `/v1/pool` from the configured
-ClawRouter origin using the same provider credential resolution as usage
-(env key first, then configured credentials and auth profiles). The key stays
-on the Gateway and is never included in the page response.
+ClawRouter origin with the same credential that model requests use, so the page
+shows the pool of the policy your agents route through. The key stays on the
+Gateway and is never included in the page response.
 
 Pool visibility is opt-in on the ClawRouter policy. If it is hidden, ask your
 ClawRouter admin to enable pool status for that policy. An older deployment

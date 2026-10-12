@@ -49,7 +49,6 @@ export function registerClawRouterPoolMethod(
               provider: "clawrouter",
               cfg: config,
               signal,
-              credentialPrecedence: "env-first",
             })
           )?.apiKey;
         } catch {

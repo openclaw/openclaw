@@ -61,7 +61,6 @@ describe("ClawRouter pool Gateway method", () => {
       provider: "clawrouter",
       cfg: config,
       signal: undefined,
-      credentialPrecedence: "env-first",
     });
     expect(mocks.fetch).toHaveBeenCalledWith(
       expect.objectContaining({
