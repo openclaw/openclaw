@@ -186,9 +186,9 @@ suite.define(() => {
           .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
           .toContain("Trailing rate update 2");
         expect(primaryReads()).toHaveLength(primaryBefore + 1);
-        expect(lists.every(({ params }) => params.rowMode === "compact" && params.source)).toBe(
-          true,
-        );
+        expect(lists.every(({ params }) => params.source)).toBe(true);
+        expect(pageReads().every(({ params }) => params.rowMode === "compact")).toBe(true);
+        expect(primaryReads().every(({ params }) => params.rowMode === "sidebar")).toBe(true);
 
         expect(pageReads().every(({ params }) => params.agentId === "main")).toBe(true);
         const beforeOther = lists.length;

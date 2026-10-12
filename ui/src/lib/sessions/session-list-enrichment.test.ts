@@ -16,15 +16,18 @@ it.each([undefined, 1])(
       const offset = Number(asOptionalRecord(raw)?.offset ?? 0);
       const actor = { type: "human", id: `profile-${offset}`, label: `Teammate ${offset}` };
       return {
-        ...sessionsResult([
-          {
-            key: `agent:main:thread-${offset}`,
-            sessionId: `thread-${offset}`,
-            kind: "direct",
-            rowMode: "sidebar",
-            sharedFacts: [0],
-          },
-        ]),
+        ...sessionsResult(
+          [
+            {
+              key: `agent:main:thread-${offset}`,
+              sessionId: `thread-${offset}`,
+              kind: "direct",
+              rowMode: "sidebar",
+              sharedFacts: [0],
+            },
+          ],
+          1,
+        ),
         sharedFacts: [{ createdActor: actor, owner: { actor } }],
         hasMore: offset === 0,
         nextOffset: offset + 1,
