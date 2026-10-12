@@ -237,12 +237,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     // Reuse the prepared payload across retries of this append.
     const preparedMessage =
       this.persistenceTarget && canonicalEntry.type === "message"
-        ? prepareTranscriptMessageAppend(
-            {
-              message: canonicalEntry.message,
-              config: options?.config,
-            },
-          )
+        ? prepareTranscriptMessageAppend({
+            message: canonicalEntry.message,
+            config: options?.config,
+          })
         : undefined;
     if (
       preparedMessage &&
