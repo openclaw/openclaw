@@ -454,6 +454,75 @@ describe("bedrock discovery", () => {
     expect(models.find((m) => m.id === "ap.anthropic.claude-sonnet-4-6")).toBeUndefined();
   });
 
+  it.each([
+    { label: "repeated", tokens: ["first-page", "first-page"] },
+    { label: "cyclic", tokens: ["first-page", "second-page", "first-page"] },
+  ])(
+    "rejects $label profile pagination without caching an incomplete catalog",
+    async ({ label, tokens }) => {
+      sendMock.mockReset();
+      const profile = buildBedrockProfile("us.amazon.nova-micro-v1:0", "US Nova", [
+        "amazon.nova-micro-v1:0",
+      ]);
+      sendMock.mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] });
+      for (const nextToken of tokens) {
+        sendMock.mockResolvedValueOnce({ inferenceProfileSummaries: [profile], nextToken });
+      }
+      const params = {
+        region: `${label}-profile-pages`,
+        discoveryMode: "strict" as const,
+        clientFactory,
+      };
+
+      await expect(discoverBedrockModels(params)).rejects.toThrow(
+        "Bedrock ListInferenceProfiles repeated a pagination token",
+      );
+      expect(sendMock).toHaveBeenCalledTimes(tokens.length + 1);
+      expect(destroyMock).toHaveBeenCalledTimes(1);
+
+      mockBedrockDiscovery([baseActiveAnthropicSummary], [profile]);
+      const recovered = await discoverBedrockModels(params);
+      expect(recovered.map((model) => model.id)).toEqual([
+        baseActiveAnthropicSummary.modelId,
+        profile.inferenceProfileId,
+      ]);
+      expect(sendMock).toHaveBeenCalledTimes(tokens.length + 3);
+      expect(destroyMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("collects inference profile pages with advancing tokens", async () => {
+    const profiles = ["eu", "us", "global"].map((region) =>
+      buildBedrockProfile(`${region}.amazon.nova-micro-v1:0`, `${region} Nova`, [
+        "amazon.nova-micro-v1:0",
+      ]),
+    );
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] });
+    for (const [index, profile] of profiles.entries()) {
+      sendMock.mockResolvedValueOnce({
+        inferenceProfileSummaries: [profile],
+        nextToken: index < profiles.length - 1 ? `page-${index + 2}` : undefined,
+      });
+    }
+
+    const models = await discoverFreshBedrockModels({
+      region: "advancing-profile-pages",
+      clientFactory,
+    });
+
+    expect(models.map((model) => model.id)).toEqual([
+      profiles[2]?.inferenceProfileId,
+      profiles[0]?.inferenceProfileId,
+      profiles[1]?.inferenceProfileId,
+    ]);
+    expect(sendMock.mock.calls.slice(1).map(([command]) => command)).toMatchObject([
+      { input: { nextToken: undefined } },
+      { input: { nextToken: "page-2" } },
+      { input: { nextToken: "page-3" } },
+    ]);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["foundation", "profile-page"])(
     "rejects failed %s acquisition and retries the complete catalog",
     async (surface) => {
