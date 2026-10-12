@@ -20,8 +20,8 @@ import type {
   SessionIdentityMutationListener,
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
-import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 

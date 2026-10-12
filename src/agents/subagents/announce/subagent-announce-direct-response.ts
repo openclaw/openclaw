@@ -16,6 +16,7 @@ import {
   hasIntentionalSilentAgentPayload,
   hasVisibleAgentPayload,
 } from "../../embedded-agent-runner/message-visibility.js";
+import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   buildRequesterCompletionDeliveryResult,
   hasMessagingToolDeliveryToSource,
@@ -25,7 +26,6 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
-import type { AgentInternalEvent } from "../../internal-events.js";
 
 type DirectAnnounceResponseContext = {
   params: {

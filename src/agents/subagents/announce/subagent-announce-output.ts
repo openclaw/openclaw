@@ -11,8 +11,8 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
-import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { sleep } from "../../../utils/sleep.js";
+import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
