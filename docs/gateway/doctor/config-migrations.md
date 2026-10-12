@@ -338,11 +338,12 @@ directories outside its scan might still use them. The supported `auth.json`,
 `auth-profiles.json`, SQLite credential, and migration-recovery contracts
 remain unchanged.
 
-Doctor checks these retired sources before schema repair, so a refusal leaves
-the existing database schemas usable by the previous OpenClaw version. Follow
-the intermediate upgrade instructions before retrying. If the intermediate
-Doctor retains a file after verifying its import, keep a backup and move that
-file out of the active state directory before continuing the upgrade.
+Doctor checks these retired sources before stopping a managed Gateway or
+repairing schemas, preserving the previous Gateway and its database generation.
+Follow the intermediate upgrade instructions before retrying. If a retired-state
+refusal occurs after migration writes, Doctor restores verified database backups
+created by that run and retains the refused state for recovery. Reused backups
+require manual recovery so that later writes are not overwritten.
 
 ## Cron ownership before roster migration
 

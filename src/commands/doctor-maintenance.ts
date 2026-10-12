@@ -440,6 +440,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   });
   try {
     await settle(async () => {
+      const { assertDoctorStateMigrationSupported } = await import("./doctor-state-admission.js");
+      await assertDoctorStateMigrationSupported(state.env);
       const externallyManaged = isServiceRepairExternallyManaged();
       if (externallyManaged) {
         await preflightExternalDoctorAgentLease(env);
