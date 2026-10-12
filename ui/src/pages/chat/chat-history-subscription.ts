@@ -213,8 +213,6 @@ async function synchronizeSelectedSessionMessageSubscription(
             : {}),
         });
       } catch (error) {
-        // A timeout is retryable only after the shared lease owner has completed
-        // its compensation. Aggregate compensation failures remain explicit failures.
         if (!isCurrent() || !isRetryableChatReadError(error, "sessions.messages.subscribe")) {
           throw error;
         }
