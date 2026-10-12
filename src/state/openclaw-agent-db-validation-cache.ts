@@ -214,7 +214,12 @@ export function getOpenClawAgentDatabaseValidation(
       ) {
         // Promotion keeps custody captured before this physical proof arrived.
         entry.agentId = database.agentId;
-        entry.validation = validation;
+        if (entry.validation && entry.validation.receiptId === validation.receiptId) {
+          // Schema publication refreshes the same receipt without replacing its borrowers' owner.
+          entry.validation.schema = validation.schema;
+        } else {
+          entry.validation = validation;
+        }
         entry.integrityVerified = true;
       } else {
         entry = { agentId: database.agentId, validation, integrityVerified: true };

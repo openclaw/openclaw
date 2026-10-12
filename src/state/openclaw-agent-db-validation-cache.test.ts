@@ -85,6 +85,8 @@ describe("canonical proof on physical database validation", () => {
         throw new Error("Expected independent reader");
       }
       const previous = getOpenClawAgentDatabaseValidation(database)!;
+      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
+      expect(retainedReader).toBeDefined();
       try {
         runSqliteImmediateTransactionSync(database.db, () => {
           stageOpenClawAgentDatabaseSchemaExtension(database.db);
@@ -98,6 +100,7 @@ describe("canonical proof on physical database validation", () => {
         );
         try {
           const current = refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(() => retainedReader!.assertCurrent()).not.toThrow();
           expect(current.valid).toBe(previous.valid);
           expect(current.schema?.facts.tables.has("derived_vectors")).toBe(true);
           expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);

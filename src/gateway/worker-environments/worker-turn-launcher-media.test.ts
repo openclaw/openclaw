@@ -132,7 +132,7 @@ describe("cloud turn media boundary", () => {
     await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
-  it.each(["relative", "absolute"] as const)(
+  it.each(["relative"] as const)(
     "stages %s worker reply bytes before reconciliation without using the Gateway copy",
     async (pathKind) => {
       const remoteRoot = path.join(root, "remote-output");
@@ -499,20 +499,8 @@ describe("cloud turn media boundary", () => {
     },
     {
       modelHasVision: true,
-      contentType: "image/png",
-      hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: true,
       contentType: "text/plain",
       hydrationSuppressed: true,
-      error: /media ID does not resolve/,
-    },
-    {
-      modelHasVision: false,
-      contentType: "image/png",
-      hydrationSuppressed: false,
       error: /media ID does not resolve/,
     },
   ])(

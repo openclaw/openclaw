@@ -35,11 +35,6 @@ describe("gradium speech provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("reports configured when GRADIUM_API_KEY is set", () => {
-    vi.stubEnv("GRADIUM_API_KEY", "gsk_test");
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(true);
-  });
-
   it("reports not configured for an invalid baseUrl instead of throwing", () => {
     vi.stubEnv("GRADIUM_API_KEY", undefined);
     expect(

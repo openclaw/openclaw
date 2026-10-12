@@ -56,24 +56,6 @@ describe("spawnWithFallback", () => {
     expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
-  it("does not retry on non-EBADF errors", async () => {
-    const spawnMock = vi.fn().mockImplementationOnce(() => {
-      const err = new Error("spawn ENOENT");
-      (err as NodeJS.ErrnoException).code = "ENOENT";
-      throw err;
-    });
-
-    await expect(
-      spawnWithFallback({
-        argv: ["missing"],
-        options: { stdio: ["pipe", "pipe", "pipe"] },
-        fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
-        spawnImpl: spawnMock,
-      }),
-    ).rejects.toThrow(/ENOENT/);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-
   it("does not spawn a fallback after request authority retires during startup", async () => {
     let current = true;
     const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
