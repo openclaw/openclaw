@@ -1,19 +1,75 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  getGlobalHookRunner,
+  loadSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { withTempConfig } from "../../gateway/test-temp-config.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { enqueuePluginNextTurnInjection } from "../../plugins/host-hook-state.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
-afterEach(() => {
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-harness-injection-");
+
+afterEach(async () => {
   resetGlobalHookRunner();
+  await clearActivePluginRegistry();
+  forgetPromptBuildDrainCacheForRun("harness-injection-run");
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("delivers queued injections without prompt hooks and reuses them within the run", async () => {
+    const stateDir = sessionDirs.make();
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    const sessionKey = "agent:main:main";
+    const registry = createMockPluginRegistry([]);
+    registry.plugins.push(createPluginRecord({ id: "injector", status: "loaded" }));
+    setActivePluginRegistry(registry);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await withTempConfig({
+        cfg: config,
+        run: async () => {
+          await replaceSessionEntry(
+            { sessionKey, storePath },
+            { sessionId: "session-1", updatedAt: Date.now() },
+          );
+          expect(
+            await enqueuePluginNextTurnInjection({
+              cfg: config,
+              pluginId: "injector",
+              injection: { sessionKey, text: "queued workflow context" },
+            }),
+          ).toMatchObject({ enqueued: true });
+          const build = () =>
+            resolveAgentHarnessBeforePromptBuildResult({
+              prompt: "hello",
+              developerInstructions: "base",
+              messages: [],
+              ctx: { config, sessionKey, agentId: "main", runId: "harness-injection-run" },
+            });
+          const first = await build();
+          expect(first.prompt.match(/queued workflow context/g)).toHaveLength(1);
+          expect((await build()).prompt).toBe(first.prompt);
+          expect(
+            loadSessionEntryReadOnly({ sessionKey, storePath })?.pluginNextTurnInjections,
+          ).toBeUndefined();
+        },
+      });
+    });
+  });
+
   it("preserves the admitted request through projected prompts", async () => {
     const handler = vi.fn(async (_event: unknown) => undefined);
     const history = [{ role: "user", content: "Earlier request" }];
@@ -176,10 +232,6 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         },
       ]),
     );
-    await getGlobalHookRunner()!.runAgentTurnPrepare(
-      { prompt: "hello", messages, queuedInjections: [] },
-      {},
-    );
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: "hello",
       developerInstructions: "base",
@@ -192,7 +244,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       },
     });
     expect(calls).toEqual(["prepare", "first", "second", "authorized"]);
-    expect(result.prompt).toBe("first\n\nsecond\n\nauthorized\n\nhello");
+    expect(result.prompt).toBe("prepare\n\nfirst\n\nsecond\n\nauthorized\n\nhello");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
   it("classifies restrictive globs before building system instructions", async () => {
