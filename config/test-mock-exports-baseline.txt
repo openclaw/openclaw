@@ -6908,7 +6908,6 @@
 ["src/gateway/drain-active-sessions-for-shutdown.test.ts","./session-transcript-files.fs.js","ad18d47fa03427b7a19c2a49db7e0d9b7820869055e3afbf87eda9a4ec9470c1",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","../infra/device-pairing-worker.js","c8673a7a713ee3db67be249a4ea43d361b4d7c2c1ec00e44c34caf3c8ed82ad6",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","../infra/device-pairing.js","ed2f7be7730fca83a724374ace2670cb67dc6fb4500b290087d432f526134d1b",1]
-["src/gateway/event-web-push.storage-scope.test.ts","../infra/push-web-store.native.js","d0934d7d3a28550f6b1d8b4daf1a2a117358757ef464e77f04edafd474ca5996",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","../state/openclaw-state-worker-context.js","f4dffd60091c58f7e696f3689102e93846083ebd3c0608317dfac5223238baa4",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","../state/openclaw-state-worker-store.js","74fefc9e6f48856468916198cf8aeb0f436086fc3a1b8085e95319080b6e0c16",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","../state/user-preferences.js","9f4ce3793de467f59bebf1598f879f55af98c141d05969038b24fc6732d877b0",1]
