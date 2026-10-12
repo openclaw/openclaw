@@ -154,7 +154,7 @@ describe("installed skill prompt guidance", () => {
       ];
       const prompt = render(skills);
       expect(prompt).toContain("- alpha: Review invoices. Calculate tax.\n- zebra: ");
-      expect(prompt).toContain(`- zebra: ${skills[0].description.trim().slice(0, 60)}`);
+      expect(prompt).toContain(`- zebra: ${skills[0]!.description.trim().slice(0, 60)}`);
       expect(prompt).not.toContain("<location>");
       expect(prompt).not.toContain(demo.filePath);
       expect(prompt).not.toContain("Before work involving files");
