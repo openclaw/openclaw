@@ -1,6 +1,6 @@
-# OpenClaw for Linux
+# OpenClaw for Linux and Windows
 
-The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
+The desktop app is a Tauri v2 shell for Linux and Windows, supporting local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
 
@@ -87,6 +87,41 @@ The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
 With the matching desktop app running, it uses the app’s Primary Gateway and
 keeps a single visible OpenClaw icon. See [Omarchy support](https://docs.openclaw.ai/platforms/omarchy)
 for installation, app handoff, shortcuts, and troubleshooting.
+
+## Windows
+
+Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
+releases. The Windows updater uses the `windows-stable` channel and verifies
+Tauri updater signatures. Installer Authenticode signing is opt-in through the
+release workflow's Foundation Azure signing job; no credentials are needed for
+non-publishing builds.
+
+Local setup seeds the private Windows Bun runtime, installs the CLI with its
+package manager, and delegates service installation and health checks to
+`openclaw gateway`. System Node.js and npm are not required. The managed launcher
+is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions execute Bun directly,
+without interpreting arguments in a command shell. Stable and Beta use published
+packages; Windows source development uses `OPENCLAW_DESKTOP_CLI`.
+
+Production runtime admission requires a matching Windows entry in the pinned
+OpenClaw Bun release with `authenticodeSigned: true` and `testOnly: false`.
+The current pin has no Windows entry, so local setup reports an actionable
+missing-runtime error while remote Gateways remain available. Enabling local
+setup for end users requires a signed Windows fork release and a shared pin
+update. Unsigned dry-run binaries are proof fixtures only.
+
+Build on Windows with Rust's MSVC toolchain, Visual Studio C++ build tools, and
+the repository's Node/pnpm development tools:
+
+```powershell
+pnpm install
+cd apps/linux/src-tauri
+pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+The Tauri hook stages the Windows runtime. When its signed pin is unavailable,
+it stages an unavailable sentinel so the app can still build and connect remotely.
+See [Windows setup and troubleshooting](https://docs.openclaw.ai/platforms/windows).
 
 ## Linux prerequisites
 

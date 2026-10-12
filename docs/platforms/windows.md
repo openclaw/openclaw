@@ -1,19 +1,64 @@
 ---
-summary: "Windows support: Windows Hub, native CLI and Gateway, WSL2 gateway setup, node mode, and troubleshooting"
+summary: "Windows desktop app, native CLI and Gateway, Windows Hub, WSL2, and troubleshooting"
 read_when:
   - Installing OpenClaw on Windows
-  - Choosing between Windows Hub, native Windows, and WSL2
+  - Choosing between the desktop app, Windows Hub, native Windows, and WSL2
   - Setting up the Windows companion app or Windows node mode
 title: "Windows"
 ---
 
-OpenClaw ships a native **Windows Hub** companion app plus Windows CLI support.
-Use Windows Hub for a desktop app with setup, tray status, chat, Command
-Center diagnostics, and Windows node capabilities. Use the PowerShell
-installer for the CLI/Gateway directly. Use WSL2 for the most
-Linux-compatible Gateway runtime.
+OpenClaw's Tauri desktop app supports **Windows and Linux**. It hosts the
+Control UI, connects to local or remote Gateways, and delegates local service
+management to the same `openclaw gateway` owner as the native Windows CLI.
+Windows Hub remains an alternative with Windows node capabilities and an
+app-owned WSL Gateway. Terminal users can use the PowerShell installer or WSL2.
 
-## Recommended: Windows Hub
+## Recommended desktop app: OpenClaw
+
+Download the **Windows x64 NSIS installer** named
+`OpenClaw-<version>-windows-x86_64.exe` from the
+[OpenClaw releases page](https://github.com/openclaw/openclaw/releases).
+Run it, then launch **OpenClaw** from the Start menu. Windows uses WebView2 to
+show the Control UI; the installer provisions WebView2 when necessary.
+
+### First launch and local Gateway
+
+Choose local setup to install the matching OpenClaw CLI and start its Gateway.
+The app uses its private Bun runtime and package manager; system Node.js and npm
+are not required. Gateway installation, startup, status, and recovery remain
+owned by `openclaw gateway`, including Scheduled Task and Startup-folder support.
+Closing the window keeps the app in the tray; the local Gateway has its own
+service lifecycle.
+
+**Local setup requires a signed Windows Bun runtime in the app's pinned release.**
+The current shared pin has no Windows runtime. Builds using that pin report
+“This app does not include a signed Windows Gateway runtime” when local setup
+is requested. Connect to a remote Gateway, or install a newer app once the
+signed runtime is available. Installing system Node.js does not change the
+bundled runtime's admission policy. Remote connections continue to work.
+
+Use connection settings when you already have a Gateway. Enter its URL and token
+or password, or choose an SSH connection. The app opens that Gateway's Control UI.
+The desktop updater verifies Tauri signatures independently of Windows
+Authenticode. Installer Authenticode signing is separately enabled by the
+release owner; Windows may show an unknown-publisher warning for an unsigned
+installer.
+
+### Troubleshooting
+
+- **Signed runtime unavailable:** update the desktop app after a Windows-enabled
+  runtime release, or use a remote Gateway. Linux, macOS, and unsigned test
+  binaries are never substituted for a Windows release runtime.
+- **Download or installation failed:** check your internet connection and proxy,
+  then retry local setup. The error panel retains the installer diagnostics.
+- **Gateway will not start:** use the tray's Gateway controls and inspect
+  `openclaw gateway status --json`. The app-managed CLI launcher is
+  `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; invoke it by its full path
+  if that directory is not on your terminal's `PATH`.
+- **Startup task denied:** see the native Windows service notes below. The
+  service owner reports whether it registered a task or a logon fallback.
+
+## Alternative: Windows Hub
 
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and
 Windows 11. It installs without administrator privileges and ships signed x64

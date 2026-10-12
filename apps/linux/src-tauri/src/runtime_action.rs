@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "windows"))]
 const MARKER: &str = "# OpenClaw-Tauri runtime v1 ";
+#[cfg(target_os = "windows")]
+const MARKER: &str = "@rem # OpenClaw-Tauri runtime v1 ";
 const CHANGED: &str = "The Gateway runtime or service definition changed. Its current selection was preserved; inspect it before retrying.";
 const PAUSED: &str = "The Gateway is paused. Start it before choosing Use bundled runtime.";
 const UPGRADE: &str = "Update the installed OpenClaw CLI before selecting the bundled runtime; this CLI cannot verify the current runtime pin and service definition.";
@@ -39,6 +43,8 @@ struct LauncherFile {
     path: PathBuf,
     bytes: Vec<u8>,
     entry: PathBuf,
+    #[cfg(target_os = "windows")]
+    runtime: BundledRuntime,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -394,6 +400,10 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
     let Some(path) = cli.managed_wrapper() else {
         return Ok(None);
     };
+    read_launcher_path(path)
+}
+
+fn read_launcher_path(path: PathBuf) -> Result<Option<LauncherFile>, String> {
     let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() > 65536 {
         return Ok(None);
@@ -402,7 +412,7 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
     let Ok(text) = std::str::from_utf8(&bytes) else {
         return Ok(None);
     };
-    let entry = if let Some(marker) = text
+    if let Some(marker) = text
         .lines()
         .nth(1)
         .and_then(|line| line.strip_prefix(MARKER))
@@ -413,8 +423,18 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
         if render(&launcher).ok().as_deref() != Some(bytes.as_slice()) {
             return Ok(None);
         }
-        launcher.entry
-    } else {
+        return Ok(Some(LauncherFile {
+            path,
+            bytes,
+            entry: launcher.entry,
+            #[cfg(target_os = "windows")]
+            runtime: launcher.runtime,
+        }));
+    }
+    #[cfg(target_os = "windows")]
+    return Ok(None);
+    #[cfg(not(target_os = "windows"))]
+    {
         let prefix = path.parent().and_then(Path::parent).ok_or(CHANGED)?;
         let start = format!(
             "#!/usr/bin/env bash\nset -euo pipefail\nexec \"{}/tools/node/bin/node\" \"",
@@ -433,9 +453,65 @@ fn read_launcher(cli: &OpenClawCli) -> Result<Option<LauncherFile>, String> {
         if !entry.starts_with(fs::canonicalize(prefix).map_err(|error| error.to_string())?) {
             return Ok(None);
         }
-        entry
+        Ok(Some(LauncherFile { path, bytes, entry }))
+    }
+}
+
+/// The desktop invokes Bun directly so Windows shell parsing never sees user arguments.
+#[cfg(target_os = "windows")]
+pub(crate) fn managed_command(cli: &OpenClawCli) -> Result<Option<Command>, String> {
+    if cli.managed_wrapper().is_none() {
+        return Ok(None);
+    }
+    let launcher = read_launcher(cli)?.ok_or(
+        "The managed OpenClaw launcher is invalid. Reinstall the local CLI from the desktop app.",
+    )?;
+    validate_runtime(&launcher.runtime)?;
+    let mut command = Command::new(&launcher.runtime.bun);
+    command
+        .arg("--no-install")
+        .arg(&launcher.entry)
+        .env_remove("OPENCLAW_SQLITE_LIBRARY")
+        .env_remove("LD_LIBRARY_PATH");
+    if let Some(sqlite) = &launcher.runtime.sqlite {
+        command.env("OPENCLAW_SQLITE_LIBRARY", sqlite);
+    }
+    Ok(Some(command))
+}
+
+/// Publish the initial Windows launcher only after the bundled package has been installed.
+#[cfg(target_os = "windows")]
+pub(crate) fn install_launcher(
+    prefix: &Path,
+    runtime: &BundledRuntime,
+    entry: &Path,
+    purpose: Purpose,
+) -> Result<(), String> {
+    validate_runtime(runtime)?;
+    let entry = fs::canonicalize(entry).map_err(|error| error.to_string())?;
+    if !entry.starts_with(fs::canonicalize(prefix).map_err(|error| error.to_string())?) {
+        return Err("The CLI entry point must belong to its managed installation.".into());
+    }
+    let path = crate::cli::managed_launcher(prefix);
+    fs::create_dir_all(path.parent().ok_or(CHANGED)?).map_err(|error| error.to_string())?;
+    let bytes = match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        _ => {
+            read_launcher_path(path.clone())?
+                .ok_or("The existing CLI launcher is not a recognized managed installation.")?
+                .bytes
+        }
     };
-    Ok(Some(LauncherFile { path, bytes, entry }))
+    publish_launcher(
+        &LauncherFile {
+            path,
+            bytes,
+            entry,
+            runtime: runtime.clone(),
+        },
+        runtime,
+        purpose,
+    )
 }
 
 fn publish_launcher(
@@ -460,18 +536,24 @@ fn publish_launcher(
     let temporary =
         path.with_file_name(format!(".openclaw-tauri-launcher-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o700)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o700);
+        let mut file = options
             .open(&temporary)
             .map_err(|error| error.to_string())?;
         file.write_all(&replacement)
             .and_then(|()| file.sync_all())
             .map_err(|error| error.to_string())?;
-        if read_regular(path)? != original.bytes {
+        if original.bytes.is_empty() {
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(CHANGED.into());
+            }
+        } else if read_regular(path)? != original.bytes {
             return Err(CHANGED.into());
         }
+        drop(file);
         fs::rename(&temporary, path).map_err(|error| error.to_string())
     })();
     let _ = fs::remove_file(temporary);
@@ -490,6 +572,7 @@ fn validate_runtime(runtime: &BundledRuntime) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn quote(path: &Path) -> Result<String, String> {
     let value = path
         .to_str()
@@ -498,6 +581,7 @@ fn quote(path: &Path) -> Result<String, String> {
     Ok(format!("'{}'", value.replace('\'', "'\\''")))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
     let sqlite = launcher
         .runtime
@@ -509,6 +593,51 @@ fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
     Ok(format!("#!/bin/sh\n{MARKER}{}\nunset OPENCLAW_SQLITE_LIBRARY LD_LIBRARY_PATH\n{sqlite}exec {} --no-install {} \"$@\"\n",
         serde_json::to_string(launcher).map_err(|error| error.to_string())?,
         quote(&launcher.runtime.bun)?, quote(&launcher.entry)?).into_bytes())
+}
+
+#[cfg(target_os = "windows")]
+fn quote(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .filter(|value| !value.contains(['\n', '\r', '\0']))
+        .ok_or("Runtime paths must be single-line UTF-8.")?;
+    Ok(format!("'{}'", value.replace('\'', "''")))
+}
+
+#[cfg(target_os = "windows")]
+fn cmd_quote(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .filter(|value| !value.contains(['\n', '\r', '\0', '"']))
+        .ok_or("Runtime paths must be single-line UTF-8 without quotes.")?;
+    // cmd.exe does not accept the extended path prefix returned by canonicalize.
+    let value = if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        value.strip_prefix(r"\\?\").unwrap_or(value).to_string()
+    };
+    Ok(format!("\"{}\"", value.replace('%', "%%")))
+}
+
+#[cfg(target_os = "windows")]
+fn render(launcher: &Launcher) -> Result<Vec<u8>, String> {
+    let sqlite = launcher
+        .runtime
+        .sqlite
+        .as_ref()
+        .map(|path| {
+            cmd_quote(path).map(|value| {
+                format!(
+                    "@set \"OPENCLAW_SQLITE_LIBRARY={}\"\r\n",
+                    &value[1..value.len() - 1]
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(format!("@setlocal DisableDelayedExpansion\r\n{MARKER}{}\r\n@set OPENCLAW_SQLITE_LIBRARY=\r\n@set LD_LIBRARY_PATH=\r\n{sqlite}@{} --no-install {} %*\r\n@exit /b %errorlevel%\r\n",
+        serde_json::to_string(launcher).map_err(|error| error.to_string())?,
+        cmd_quote(&launcher.runtime.bun)?, cmd_quote(&launcher.entry)?).into_bytes())
 }
 
 fn read_regular(path: &Path) -> Result<Vec<u8>, String> {
@@ -527,6 +656,6 @@ fn check_current(is_current: &dyn Fn() -> bool) -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "runtime_action_tests.rs"]
 mod tests;

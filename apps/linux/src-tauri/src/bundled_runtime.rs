@@ -10,6 +10,11 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 const MANIFEST: &str = include_str!(concat!(env!("OUT_DIR"), "/desktop-runtime.json"));
 const LINUX_RESOURCE_PREFIX: &[u8] = b"OPENCLAW-BUN-RUNTIME-V1\n";
+const BUN_PATH: &str = if cfg!(target_os = "windows") {
+    "bin/bun.exe"
+} else {
+    "bin/bun"
+};
 
 type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -22,14 +27,39 @@ struct Manifest {
     platform: String,
     arch: String,
     files: BTreeMap<String, String>,
+    #[serde(default, rename = "authenticodeSigned")]
+    authenticode_signed: Option<bool>,
+    #[serde(default, rename = "testOnly")]
+    test_only: Option<bool>,
 }
 
 pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
-    let manifest: Manifest = serde_json::from_str(MANIFEST)
-        .map_err(|_| "This build has no embedded runtime.".to_string())?;
+    let manifest: Manifest = serde_json::from_str(MANIFEST).map_err(|_| {
+        if cfg!(target_os = "windows") {
+            missing_runtime_message()
+        } else {
+            "This build has no embedded runtime."
+        }
+        .to_string()
+    })?;
     validate_manifest(&manifest)?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    Ok(runtime_directory(&prefix, MANIFEST, &manifest).join("bin/bun"))
+    let path = runtime_directory(&prefix, MANIFEST, &manifest).join(BUN_PATH);
+    #[cfg(target_os = "windows")]
+    let path = match fs::canonicalize(&path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path,
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(path)
+}
+
+fn missing_runtime_message() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "This app does not include a signed Windows Gateway runtime. Install an updated OpenClaw desktop app when a signed Windows runtime is available, or connect to a remote Gateway."
+    } else {
+        "This build has no embedded runtime. Build with the Tauri CLI or run apps/linux/scripts/stage-runtime.mjs before rebuilding."
+    }
 }
 
 fn runtime_directory(prefix: &Path, bytes: &str, manifest: &Manifest) -> PathBuf {
@@ -64,9 +94,8 @@ fn seed_at(
     {
         return Err("The OpenClaw home must be an absolute, non-traversing path.".into());
     }
-    let manifest: Manifest = serde_json::from_str(manifest_bytes).map_err(|_| {
-        "This build has no embedded runtime. Build with the Tauri CLI or run apps/linux/scripts/stage-runtime.mjs before rebuilding.".to_string()
-    })?;
+    let manifest: Manifest =
+        serde_json::from_str(manifest_bytes).map_err(|_| missing_runtime_message().to_string())?;
     validate_manifest(&manifest)?;
     verify_payload(source, manifest_bytes, &manifest, true)?;
     let store = prefix.join("tools/desktop-runtime");
@@ -101,7 +130,10 @@ fn seed_at(
             output.write_all(manifest_bytes.as_bytes())?;
             output.sync_all()?;
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
-            probe(&staging.join("bin/bun"), &manifest)?;
+            probe(&staging.join(BUN_PATH), &manifest)?;
+            // Windows flushes each file above; Rust cannot open directory handles for
+            // fsync there. Atomic publication still prevents partial runtime copies.
+            #[cfg(unix)]
             for directory in [
                 Some(staging.join("bin")),
                 manifest
@@ -121,6 +153,7 @@ fn seed_at(
                 verify_payload(&destination, manifest_bytes, &manifest, false)?;
             } else {
                 fs::rename(&staging, &destination)?;
+                #[cfg(unix)]
                 fs::File::open(&store).and_then(|directory| directory.sync_all())?;
             }
             Ok(())
@@ -130,8 +163,11 @@ fn seed_at(
         }
         result?;
     }
+    // Windows canonical paths include the extended prefix required by runtime admission.
+    #[cfg(target_os = "windows")]
+    let destination = fs::canonicalize(destination)?;
     Ok(BundledRuntime {
-        bun: destination.join("bin/bun"),
+        bun: destination.join(BUN_PATH),
         sqlite: manifest
             .files
             .contains_key("lib/libsqlite3.dylib")
@@ -161,12 +197,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     if !safe_tag
         || manifest.platform != platform
         || manifest.arch != arch
-        || !matches!(platform, "linux" | "darwin")
+        || !matches!(platform, "linux" | "darwin" | "windows")
+        || (platform == "windows"
+            && (manifest.authenticode_signed != Some(true) || manifest.test_only != Some(false)))
         || manifest.commit.len() != 40
         || !manifest.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
         || manifest.revision.is_empty()
         || manifest.files.len() != expected
-        || !manifest.files.contains_key("bin/bun")
+        || !manifest.files.contains_key(BUN_PATH)
         || (platform == "darwin" && !manifest.files.contains_key("lib/libsqlite3.dylib"))
         || manifest
             .files
@@ -314,7 +352,7 @@ mod tests {
             fs::create_dir_all(source.join("bin")).unwrap();
             write_source(&source, b"synthetic runtime");
             let mut files = BTreeMap::from([(
-                "bin/bun",
+                BUN_PATH,
                 Sha256::digest(b"synthetic runtime")
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
@@ -332,8 +370,9 @@ mod tests {
                 );
             }
             let manifest = serde_json::json!({ "tag": "test-fork", "commit": "a".repeat(40), "revision": "test-revision",
-                "platform": if cfg!(target_os = "macos") { "darwin" } else { "linux" },
-                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files }).to_string();
+                "platform": if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS },
+                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files,
+                "authenticodeSigned": true, "testOnly": false }).to_string();
             fs::write(source.join("manifest.json"), &manifest).unwrap();
             Self {
                 prefix: root.join("state"),
@@ -361,7 +400,7 @@ mod tests {
         } else {
             bytes.to_vec()
         };
-        fs::write(source.join("bin/bun"), encoded).unwrap();
+        fs::write(source.join(BUN_PATH), encoded).unwrap();
     }
 
     #[test]
@@ -457,6 +496,53 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plain_windows_home_seeds_a_runtime_accepted_by_launcher_binding() {
+        let mut fixture = Fixture::new();
+        fixture.prefix = PathBuf::from(
+            fixture
+                .prefix
+                .to_str()
+                .unwrap()
+                .strip_prefix(r"\\?\")
+                .unwrap(),
+        );
+        let runtime = fixture.seed().unwrap();
+        let entry = fixture.prefix.join("package").join("entry.js");
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        fs::write(&entry, "synthetic entry").unwrap();
+        crate::runtime_action::install_launcher(
+            &fixture.prefix,
+            &runtime,
+            &entry,
+            crate::runtime_action::Purpose::Gateway,
+        )
+        .unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn refuses_unsigned_test_only_or_foreign_runtime_before_installation() {
+        let fixture = Fixture::new();
+        for (field, value) in [
+            ("authenticodeSigned", serde_json::json!(false)),
+            ("testOnly", serde_json::json!(true)),
+            ("platform", serde_json::json!("linux")),
+        ] {
+            let mut manifest: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+            manifest[field] = value;
+            assert!(seed_at(
+                &fixture.source,
+                &fixture.prefix,
+                &manifest.to_string(),
+                &|_, _| Ok(())
+            )
+            .is_err());
+            assert!(!fixture.prefix.exists());
+        }
+    }
+
     #[test]
     fn rejects_missing_manifest_identity_and_unexpected_resources() {
         let fixture = Fixture::new();
@@ -464,7 +550,7 @@ mod tests {
             seed_at(&fixture.source, &fixture.prefix, "{}", &|_, _| Ok(()))
                 .unwrap_err()
                 .to_string()
-                .contains("no embedded runtime")
+                .contains(missing_runtime_message())
         );
         fs::write(fixture.source.join("extra"), "unexpected").unwrap();
         assert!(fixture.seed().is_err());
