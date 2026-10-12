@@ -322,6 +322,12 @@ export function prepareSessionEntryReplacementDatabase(
   assertCurrent: () => void,
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ): Promise<void> {
+  const prepared = retainedExecution?.capturePreparedGenerationClaim();
+  if (prepared) {
+    assertCurrent();
+    prepared.assertCurrent();
+    return Promise.resolve();
+  }
   return withSessionEntryWorker(
     options,
     undefined,
