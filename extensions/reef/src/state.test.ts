@@ -377,7 +377,7 @@ describe("Reef SQLite state", () => {
 
     await expectReefStateOperationError(
       generateAndStoreKeys(runtime),
-      "Reef identity @existing on https://reefwire.ai has no canonical keys; restore the original keys before registration",
+      "Reef identity @existing on https://reefwire.ai has no stored keys; restore the original keys before registration",
     );
     await expect(loadKeys(runtime)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(loadReefIdentityBinding(runtime)).resolves.toEqual({
