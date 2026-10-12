@@ -227,6 +227,32 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each([
   },
 );
 
+it.runIf(process.platform === "linux" || process.platform === "darwin")(
+  "admits handoff beneath its verified gateway despite an unreadable higher supervisor",
+  async () => {
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockImplementation(
+      (_timeout, options) => ({
+        pids: new Set([process.pid, process.ppid]),
+        complete: options?.throughPid === process.ppid,
+      }),
+    );
+    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, async () => {
+      await expect(
+        handoffUpdateFromGateway({
+          state: { ...callerService, runtime: { status: "running", pid: process.ppid } },
+          root: process.cwd(),
+          mode: "npm",
+          opts: {},
+          timeoutMs: 1000,
+          stopProgress: () => {
+            throw new Error("verified handoff admitted");
+          },
+        }),
+      ).rejects.toThrow("verified handoff admitted");
+    });
+  },
+);
+
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
     const blockMessage = gatewayMaintenanceBlock(callerService, process.cwd())?.message ?? "";
