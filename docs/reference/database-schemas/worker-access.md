@@ -52,6 +52,16 @@ they do not request a second handle admission before that transaction. Current
 transaction authority and final commit admission remain unchanged. These changes
 require no schema, stored-format, retention, or update migration.
 
+Pairing mutations read paired-device rows once in their existing worker write
+transaction. Nested reads reuse transaction-local facts; store writes install the
+normalized persisted rows, and the existing commit receipt publishes those
+postimages. Rollback discards the transaction-local facts. Authentication and
+live commit authority remain unchanged; no schema or update migration is needed.
+
+WebSocket hello prepares session membership only when the resident presence
+roster includes watched sessions. An idle roster needs no session rows; active
+watches retain the existing membership preparation and visibility filtering.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -269,13 +279,16 @@ refusal certifies that no agent handle opened and admission cleanup succeeded.
 Admission failures during native open or schema refresh cannot carry that
 certificate; retirement keeps conservative validation and lease cleanup.
 
-Quarantine guards retain their indexed durable row lookup by target pathname.
-A separate inspection process can admit a file before the Gateway's verifier
-confirms corruption and records quarantine. The inspecting process must observe
-that new refusal at its next guard even though the file's physical identity is
-unchanged. The quarantine store's schema, version, and installation are still
-admitted once per physical database per process, and aliases share the target's
-physical format, schema, and integrity facts. The persisted schema is unchanged.
+Quarantine guards load each target pathname's decision once and consume committed
+record/clear postimages through the existing database-fact transport. Absence is
+an explicit fact, so unchanged guards do not query the quarantine store. Rollback
+preserves the previous decision. Explicit Doctor inspection retains its disk read,
+and a recorded refusal still checks that it applies to the verified file generation.
+Other processes must route writes through the Gateway or hold exclusive offline
+ownership. The quarantine store's schema, version, and installation remain admitted
+once per physical database per process. Aliases share the target's physical format,
+schema, and integrity facts; decisions retain their pathname scope. The persisted
+schema is unchanged.
 
 The host owns retained identity descriptors so worker retirement cannot close them
 and release a sibling SQLite connection's POSIX locks. Workers outside OpenClaw's
@@ -3809,7 +3822,7 @@ Memory source-state reads, cache pruning, standing-intent operations, and sessio
 collaboration writes without a preparation callback use that single-command
 path. Memory bindings reuse the canonical connection's installed policy. Small
 source replacements and embedding-cache writes carry a bounded inline batch in
-one request through the same revision, tombstone, capacity, and commit checks.
+one request through the same tombstone, capacity, and commit checks.
 Larger inputs retain bounded fragment messages and stage one publication in worker
 memory until settlement, without TEMP tables or staging SQL. This trades additional
 memory proportional to that publication for fewer database calls; source size is
@@ -3827,8 +3840,14 @@ the database's write receipts. The next sync refreshes invalidated facts in one
 bounded worker query, then reuses them for provider generation, index identity,
 and vector setup. Publication-worker recreation reuses the connection policy
 captured at first creation. Full-reindex revision conflicts and forgotten-session
-checks remain at their committing writer. Schemas, stored bytes, durability, and
-update behavior are unchanged.
+checks remain at their committing writer. Incremental source publication returns
+its post-write facts without rereading the revision before writing. Session
+tombstones load once into admitted facts keyed by session and agent. The forget
+writer publishes inserted rows through the existing transaction-aware fact
+transport; rollback preserves the prior view and schema recreation invalidates it.
+Origin membership reads use the same facts with bounded replies. Ordinary session
+deletion still retains memory; only explicit memory forgetting records tombstones.
+Schemas, stored bytes, durability, and update behavior are unchanged.
 
 Ordinary human chat prepares initial skill selections and authoring presentation
 in one shared-state snapshot. Both consumers retain the original requester and
@@ -3944,8 +3963,10 @@ unchanged.
 
 Generated embedding-cache publication uses the existing memory publication worker
 and the captured published database, including during a shadow rebuild. Its native
-transaction rereads the index revision and session tombstones before reserving cache
-capacity and writing vectors. Conflicting dimensions invalidate the generation
+transaction excludes tombstoned sessions before reserving cache capacity and writing
+vectors. Content-addressed cache entries remain reusable when unrelated sources
+change; cache writes and clears do not compare the index revision. Conflicting
+dimensions invalidate the generation
 before the operation returns, even when clearing fails or loses its reply;
 the error still propagates without replay. Worker-owned staging preserves cache
 binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
@@ -5202,6 +5223,11 @@ Released synchronous SDK readers retain their compatibility kernels. These
 changes add no schema, cache, configuration, migration, or update requirements.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
+Its ordered cursor includes the first bounded byte slice of each event; only
+larger events need follow-up slice queries. The cursor and follow-up reads retain
+one SQLite snapshot across transport acknowledgments.
+Manual compaction reads entry and transcript statistics after the previous writer
+settles, then reuses them while its lifecycle owner holds admission closed.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
 reader retain raw event order, read fences, and byte limits. The host captures the
 physical store before discovery yields and keeps its read custody through cold

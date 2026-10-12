@@ -1,12 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import type { OpenClawConfig } from "../../config/types.js";
+import { resolveCanonicalConfiguredSecretInputString as resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 
-export type WorkboardDatabaseInput = { connection: string; schemaPrefix: string } | undefined;
+export type DatabaseEngineInput = { connection: string; schemaPrefix: string } | undefined;
 
-/** Resolve secrets on the host; workers receive only the selected connection. */
-export async function resolveWorkboardDatabaseInput(
+/** Resolve on the host; the existing broker input transport keeps credentials out of config/logs. */
+export async function resolveDatabaseEngineInput(
   config: OpenClawConfig,
-): Promise<WorkboardDatabaseInput> {
+): Promise<DatabaseEngineInput> {
   if (config.database?.engine !== "postgres") {
     return undefined;
   }

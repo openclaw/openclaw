@@ -676,7 +676,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("does not let an older start overwrite a newer start or disconnected generation", async () => {
     const old = createDeferredCore<Awaited<ReturnType<typeof network.start>>>();
-    const entered = createDeferredCore<void>();
+    const entered = createDeferredCore();
     network.start.mockImplementationOnce(() => {
       entered.resolve();
       return old.promise;
