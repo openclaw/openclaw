@@ -7,7 +7,7 @@ export const page = definePage({
   loaderDeps: (_context, location) => location.search,
   loader: (_context, { location }) => location.search,
   component: () =>
-    import("./apps-page.ts").then(() => ({
+    import("./apps-page.tsx").then(() => ({
       header: true,
       render: (search: string | undefined) =>
         html`<openclaw-apps-page .appSearch=${search ?? ""}></openclaw-apps-page>`,
