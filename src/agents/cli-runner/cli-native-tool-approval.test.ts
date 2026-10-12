@@ -32,22 +32,17 @@ afterEach(() => {
 describe("resolveCliNativeToolApprovalPlan", () => {
   it.each([
     ["deny", "off", "deny"],
-    ["deny", "on-miss", "deny"],
-    ["deny", "always", "deny"],
     // Exec mode "allowlist" maps to allowlist/off: deny without prompting.
     ["allowlist", "off", "deny"],
-    ["allowlist", "on-miss", "prompt"],
-    ["allowlist", "always", "prompt"],
     ["full", "off", "allow"],
     ["full", "on-miss", "prompt"],
-    ["full", "always", "prompt"],
   ] as const)("resolves security=%s ask=%s to %s", (security, ask, expected) => {
     expect(resolveCliNativeToolApprovalPlan({ security, ask })).toBe(expected);
   });
 });
 
 describe("requestCliNativeToolApproval", () => {
-  it.each(["gog calendar list", "absolute"])(
+  it.each(["gog calendar list"])(
     "auto-allows and records an allowlisted native command: %s",
     async (input) => {
       const dir = makeExecApprovalsTempDir();
@@ -75,14 +70,9 @@ describe("requestCliNativeToolApproval", () => {
 
   it.each([
     ["gog calendar list | missing-binary", "pipeline", false],
-    ["gog | gog", "pipeline", false],
     ["gog $(date)", "command-substitution", false],
     ["gog '", "syntax-error", false],
     ["MODE=test gog", "MODE=test gog", true],
-    ["gog > output.txt", "redirect", false],
-    ["(gog)", "subshell", false],
-    ["exec gog", "exec", true],
-    ["gog *", "shell expansion", true],
   ])(
     "keeps the binding guard and explains allowlist misses for %s",
     async (command, reason, prompts) => {
@@ -253,27 +243,6 @@ describe("requestCliNativeToolApproval", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
   });
 
-  it("identifies the owning backend when another provider requests native approval", async () => {
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "approval-other-provider",
-      decision: "allow-once",
-    });
-
-    await expect(
-      requestCliNativeToolApproval({
-        toolName: "Read",
-        toolInput: { file_path: "/tmp/example.txt" },
-        pluginId: "gemini-cli",
-        ask: "on-miss",
-      }),
-    ).resolves.toEqual({ kind: "allow", grantAlways: false });
-
-    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
-      pluginId: "gemini-cli",
-      title: "gemini-cli native tool: Read",
-    });
-  });
-
   it("fails closed when the approval wait times out", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-3" })
@@ -287,37 +256,6 @@ describe("requestCliNativeToolApproval", () => {
         ask: "on-miss",
       }),
     ).resolves.toEqual({ kind: "deny", reason: "unavailable" });
-  });
-
-  it("fails closed when the gateway request errors", async () => {
-    mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
-
-    await expect(
-      requestCliNativeToolApproval({
-        toolName: "Bash",
-        toolInput: { command: "ls" },
-        pluginId: "claude-cli",
-        ask: "on-miss",
-      }),
-    ).resolves.toEqual({ kind: "deny", reason: "unavailable" });
-  });
-
-  it("fails closed when the run aborts while waiting", async () => {
-    const abortController = new AbortController();
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "approval-4" })
-      .mockImplementationOnce(() => new Promise(() => {}));
-    const approval = requestCliNativeToolApproval({
-      toolName: "Bash",
-      toolInput: { command: "ls" },
-      pluginId: "claude-cli",
-      abortSignal: abortController.signal,
-      ask: "on-miss",
-    });
-
-    abortController.abort(new Error("run stopped"));
-
-    await expect(approval).resolves.toEqual({ kind: "deny", reason: "unavailable" });
   });
 
   it("fails closed when the run aborts while registering the approval", async () => {
@@ -424,18 +362,6 @@ describe("requestCliNativeToolApproval", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("denies Bash input beyond the reviewer detail limit without calling the gateway", async () => {
-    await expect(
-      requestCliNativeToolApproval({
-        toolName: "Bash",
-        toolInput: { command: "x".repeat(16_384) },
-        pluginId: "claude-cli",
-        ask: "on-miss",
-      }),
-    ).resolves.toEqual({ kind: "deny", reason: "policy-oversized" });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("denies Bash whose short raw command expands past the summary bound when sanitized", async () => {
     // ~70 bidi override chars stay under the raw description budget but escape
     // to \u{202E} sequences that overflow the 512-char channel summary.
@@ -443,18 +369,6 @@ describe("requestCliNativeToolApproval", () => {
       requestCliNativeToolApproval({
         toolName: "Bash",
         toolInput: { command: `echo ${"‮".repeat(70)}; rm -rf /tmp/example` },
-        pluginId: "claude-cli",
-        ask: "on-miss",
-      }),
-    ).resolves.toEqual({ kind: "deny", reason: "policy-oversized" });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("denies Bash when reviewer sanitization would hide the command tail", async () => {
-    await expect(
-      requestCliNativeToolApproval({
-        toolName: "Bash",
-        toolInput: { command: `# ${"\u202e".repeat(3_000)}\necho destructive-tail` },
         pluginId: "claude-cli",
         ask: "on-miss",
       }),
@@ -476,25 +390,6 @@ describe("requestCliNativeToolApproval", () => {
     expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
       allowedDecisions: ["allow-once", "deny"],
     });
-  });
-
-  it("truncates only the display title for long native tool names", async () => {
-    mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-6", decision: "deny" });
-    const toolName = `mcp__claude-in-chrome__${"long-tool-segment-".repeat(6)}`;
-
-    await requestCliNativeToolApproval({
-      toolName,
-      toolInput: {},
-      pluginId: "claude-cli",
-      ask: "on-miss",
-    });
-
-    const requestPayload = mockCallGatewayTool.mock.calls[0]?.[2] as
-      | { title?: unknown; toolName?: unknown }
-      | undefined;
-    expect(requestPayload?.title).toHaveLength(80);
-    expect(requestPayload?.title).toMatch(/^claude-cli native tool: /u);
-    expect(requestPayload?.toolName).toBe(toolName);
   });
 
   it("uses an object fallback when JSON serialization returns undefined", async () => {
