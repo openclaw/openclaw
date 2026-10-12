@@ -1327,22 +1327,19 @@ ${channelPluginSource({
   });
 
   it.each([
-    { successor: "removed", preserved: true },
-    { successor: "replaced", replaced: true, preserved: false },
+    { successor: "replaced", replaced: true },
     {
       successor: "removed and its Gateway is closing",
       closeGatewayA: true,
-      preserved: false,
     },
     {
       // A published build shares this process state but never links its registries.
       successor: "removed from a registry a published build left unlinked",
       unlinked: true,
-      preserved: false,
     },
   ])(
-    "keeps a run's tool result only when its middleware plugin was $successor",
-    async ({ successor, replaced, closeGatewayA, unlinked, preserved }) => {
+    "rejects retired middleware when its plugin was $successor",
+    async ({ successor, replaced, closeGatewayA, unlinked }) => {
       useNoBundledPlugins();
       const pluginId = `tool-result-middleware-${successor}`;
       const plugin = writePlugin({
@@ -1389,24 +1386,12 @@ ${channelPluginSource({
         await gatewayA?.close();
       }
       await instance.dispose();
-      // Callable and cyclic details survive only on the untouched no-middleware path.
+      // A retired callback cannot run against the later result.
       const details: Record<string, unknown> = { format: () => "exit 0" };
       details.self = details;
       const raw = { content: [{ type: "text" as const, text: "exit 0" }], details };
       const result = await runner.applyToolResultMiddleware({ ...event, result: raw });
-      if (preserved) {
-        // The removed plugin no longer post-processes: same result as no middleware.
-        expect(result).toBe(raw);
-        expect(
-          await createAgentToolResultMiddlewareRunner(
-            { runtime: "openclaw" },
-            [],
-          ).applyToolResultMiddleware({ ...event, result: raw }),
-        ).toBe(raw);
-      } else {
-        // A replacement, a closing owner or no owner link: the stale handler fails closed.
-        expect(result.details).toEqual({ status: "error", middlewareError: true });
-      }
+      expect(result.details).toEqual({ status: "error", middlewareError: true });
     },
   );
 
