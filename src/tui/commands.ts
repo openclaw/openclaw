@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
+// Like generic command menus, completions lack authenticated account-tier facts, so `ultrafast` is typed only.
 const FAST_LEVELS = ["status", "auto", "on", "off", "default"];
 const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
@@ -137,7 +138,12 @@ const TUI_COMMAND_ROWS = [
   ["model", "Set model (or open picker)", "/model <provider/model|default> (or /models)"],
   ["models", "Open model picker"],
   ["think", "Set thinking level", "/think <{thinkingLevels}|default>", "thinking"],
-  ["fast", "Set fast mode auto/on/off", "/fast <status|auto|on|off|default>", FAST_LEVELS],
+  [
+    "fast",
+    "Set fast mode auto/on/off/ultrafast",
+    "/fast <status|auto|on|off|ultrafast|default>",
+    FAST_LEVELS,
+  ],
   [
     "verbose",
     `Set verbose ${VERBOSE_LEVELS.join("/")}`,

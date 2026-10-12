@@ -940,6 +940,11 @@ describe("tui command handlers", () => {
       message: "fast mode set to auto",
     },
     {
+      command: "/fast ultrafast",
+      patch: { key: "agent:main:main", fastMode: "ultrafast" },
+      message: "fast mode set to ultrafast",
+    },
+    {
       command: "/model kimi",
       patch: { key: "agent:main:main", model: "kimi" },
       result: { entry: {}, resolved: { modelProvider: "nvidia", model: "moonshotai/kimi-k2.5" } },

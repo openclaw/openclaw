@@ -14,6 +14,7 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   isSessionDefaultDirectiveValue,
   listThinkingLevelOptions,
+  normalizeFastMode,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -684,12 +685,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         chatLog.addSystem(`fast mode: ${formatFastModeValue(state.sessionInfo.fastMode)}`);
         return;
       }
-      const reset = isSessionDefaultDirectiveValue(args);
-      if (!reset && !["auto", "on", "off"].includes(args)) {
-        chatLog.addSystem("usage: /fast <status|auto|on|off|default>");
+      const fastMode = isSessionDefaultDirectiveValue(args) ? null : normalizeFastMode(args);
+      if (fastMode === undefined) {
+        chatLog.addSystem("usage: /fast <status|auto|on|off|ultrafast|default>");
         return;
       }
-      const fastMode = reset ? null : args === "auto" ? args : args === "on";
       await applySessionSetting({ fastMode }, `fast mode set to ${args}`, "fast failed");
     },
     reasoning: settingCommand(
