@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -527,11 +528,11 @@ describe("secrets runtime provider and media surfaces", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
       manifestRegistry: {
         plugins: [
-          {
+          createPluginManifestRecordFixture({
             id: "llama-cpp",
             providers: ["llama-cpp"],
             contracts: { embeddingProviders: ["local"] },
-          },
+          }),
         ],
       },
     });
