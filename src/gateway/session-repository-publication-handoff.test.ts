@@ -20,20 +20,17 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-  isGitHubPublicationExecutionOwner,
-} from "./github-publication-store.js";
+  ensureGitHubPublicationStoreFixture as ensureGitHubPublicationStore,
+  claimGitHubPublicationExecutionFixture as claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStoreFixture as createGitHubPublicationExecutionStore,
+  insertRepositoryGitHubPublicationFixture as insertRepositoryGitHubPublication,
+  claimRepositoryGitHubPublicationFixture as claimRepositoryGitHubPublication,
+  readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication,
+} from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
-import {
-  insertRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-  claimRepositoryGitHubPublication,
-  readRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
@@ -419,7 +416,7 @@ it.each([
         initial,
         ...execution,
         identity: { prepare: async () => identity, isCurrent: () => true },
-        validateCustody: () => isGitHubPublicationExecutionOwner(requestId, "local-instance"),
+        validateCustody: () => currentOwner,
         validateAuthority: () => {
           requester.assertCurrent();
           return true;

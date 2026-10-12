@@ -27,6 +27,8 @@ no new GitHub-specific SDK subpath.
 | `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
 | `listUnreportedResults`     | `await listUnreportedResultsAsync` |
 | `markReported`              | `await markReportedAsync`          |
+| `read`                      | `await readAsync`                  |
+| `personalStatus`            | `await personalStatusAsync`        |
 
 The same Gateway context exposes personal connection operations through
 `githubOAuthService.personal`. Replace
@@ -95,13 +97,12 @@ one destination transaction. The source remains reserved until that transaction
 settles. Async completion includes installation of its committed facts. Keep the
 requester's owner alive until the operation and its cleanup settle.
 
-Legacy requester assertions may read or mutate SQLite. The service selects their
-native compatibility route before invoking them; it does not serialize closures
-or invoke arbitrary host policy from inside a reserved worker transaction.
-Migrating to V2 changes that callback ordering: preparation precedes reservation,
-and typed predicates authorize commit. It does not preserve arbitrary
-transaction-local callback visibility. A failed or uncertain worker operation
-never retries through the legacy route or replays an accepted external effect.
+Publication no longer runs a native compatibility path. Legacy publication
+methods warn and fail with the replacement method name; they never fall back to
+synchronous SQLite. Migrate to V2 before calling publication. Preparation precedes
+reservation, and typed predicates authorize commit; arbitrary transaction-local
+callback visibility is not supported. A failed or uncertain worker operation never
+replays an accepted external effect.
 
 Await deferral and reporting before dependent reads or shutdown. Reporting and
 claim deferral each update the relevant publication kinds in one worker transaction. Accepted
@@ -119,12 +120,13 @@ without source reservations. A checkpoint becoming available or a session being
 restored after the check may require a new publication request; the original
 content and recorded GitHub effects remain intact.
 
-The deprecated methods retain their released signatures and completion timing;
-synchronous mutations still commit before returning. Actual legacy use emits one
-warning per plugin and the `github-publication` family per Gateway process,
+Deprecated publication methods retain their TypeScript signatures to make the
+migration discoverable, but fail explicitly at invocation. Actual legacy use emits
+one warning per plugin and the `github-publication` family per Gateway process,
 through the shared SDK warning helper. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
-major**. No schema, stored-data, retention, or update migration is required.
+major**. Personal OAuth compatibility methods described above retain their existing
+completion behavior. No schema, stored-data, retention, or update migration is required.
 
 ## Replace native SQLite runtime writes
 

@@ -346,7 +346,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       if (read.personal.kind !== "eligible") {
         throw new Error("GitHub publication was not found for this session and caller.");
       }
-      const result = service.personalStatus(
+      const result = await service.personalStatusAsync(
         read.personal.action,
         session,
         options.params.requestId,

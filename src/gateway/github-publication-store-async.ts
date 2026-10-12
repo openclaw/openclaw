@@ -20,10 +20,8 @@ import type {
 } from "../state/github-publication-worker.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
-import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import type { GitHubPublicationEffectTransition } from "./github-publication-execution-effects.js";
 import type { GitHubPublicationSourceCapability } from "./github-publication-source.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
 
 /** Native callers retain live memory authority; durable execution predicates stay in the worker. */
 export type GitHubPublicationTransitionAuthority = {
@@ -151,18 +149,10 @@ export async function claimPersonalGitHubPublicationAsync(
   );
   return {
     row: { ...claimed, gateway_instance_id: instanceId, execution_id: executionId },
-    // Retained final-effect guard until legacy synchronous writers are removed.
+    // The coordinator owns this claim under workspace exclusion until settlement.
     ownsExecution() {
       scope.assertCurrent();
-      const current = readPersonalGitHubPublication(row.owner_profile_id, {
-        requestId: row.request_id,
-      });
-      return (
-        current?.status === "publishing" &&
-        current.gateway_instance_id === instanceId &&
-        current.execution_id === executionId &&
-        current.request_digest === row.request_digest
-      );
+      return true;
     },
     ...effects(async (transition) => {
       return requireRow(
@@ -191,13 +181,7 @@ export async function claimRepositoryGitHubPublicationAsync(
     row: { ...claimed, gateway_instance_id: instanceId, execution_id: executionId },
     ownsExecution() {
       scope.assertCurrent();
-      const current = readRepositoryGitHubPublication(row.request_id);
-      return (
-        current?.status === "publishing" &&
-        current.gateway_instance_id === instanceId &&
-        current.execution_id === executionId &&
-        current.request_digest === row.request_digest
-      );
+      return true;
     },
     ...effects(async (transition) => {
       return requireRow(

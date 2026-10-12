@@ -100,7 +100,7 @@ async function historyFixture() {
     placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
   });
   const publish = (idempotencyKey: string) =>
-    coordinator.requestForSession({ agentId: "main", sessionKey: SESSION_KEY, idempotencyKey });
+    coordinator.requestForSessionV2({ agentId: "main", sessionKey: SESSION_KEY, idempotencyKey });
   const state = async () => ({
     head: await workspace.git("rev-parse", "HEAD"),
     index: await fs.readFile(path.join(workspace.cwd, ".git", "index")),

@@ -1,34 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import type { GitHubPublicationDeferral } from "../state/github-publication-worker.types.js";
 import {
   listGitHubPublicationsForClaimInDatabase,
   listSharedGitHubPublicationsInDatabase,
   readGitHubPublicationRequest,
-} from "./github-publication-store.js";
-import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication.kernel.js";
-import {
-  projectWorkerSessionTurnClaim,
-  type WorkerSessionTurnClaim,
-} from "./worker-environments/placement-record.js";
+} from "./github-publication-store.worker.js";
+import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication-read.worker.js";
+import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
+import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import { readWorkerPlacementsInDatabase } from "./worker-environments/placement-row-codec.js";
 import { listPendingWorkerWorkspaceResultsInDatabase } from "./worker-environments/placement-workspace-result.js";
-
-export function matchesRepositoryGitHubPublicationClaim(
-  row: RepositoryGitHubPublicationRow,
-  claim: WorkerSessionTurnClaim,
-): boolean {
-  return (
-    row.environment_id !== null &&
-    row.owner_epoch !== null &&
-    row.session_id === claim.sessionId &&
-    row.claim_id === claim.claimId &&
-    row.run_id === claim.runId &&
-    row.placement_generation === claim.placementGeneration &&
-    row.environment_id === (claim.owner.environmentId ?? null) &&
-    row.owner_epoch === (claim.owner.ownerEpoch ?? null)
-  );
-}
 
 /** Selection shares the destination transaction with deferral, including pending-result custody. */
 export function selectGitHubPublicationDeferralsInDatabase(

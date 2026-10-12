@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { personalGitHubRequestDigest } from "../../gateway/github-personal-publication-store.js";
 import {
-  insertPersonalGitHubPublication,
-  personalGitHubRequestDigest,
-  readPersonalGitHubPublication,
+  insertPersonalGitHubPublicationInDatabase,
+  readPersonalGitHubPublicationInDatabase,
   type PersonalGitHubPublicationRow,
-} from "../../gateway/github-personal-publication-store.js";
+} from "../../gateway/github-personal-publication-store.worker.js";
 import { readGitHubPublicationSessionLifecycle } from "../../state/github-publication-session-lifecycles.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 
 export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: string) {
@@ -48,9 +52,13 @@ export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: 
     reported_at_ms: null,
   };
   row.request_digest = personalGitHubRequestDigest(row);
-  insertPersonalGitHubPublication(row, "generation-1", () => {});
+  runOpenClawStateWriteTransaction((database) =>
+    insertPersonalGitHubPublicationInDatabase(database, row, "generation-1", () => {}),
+  );
   return () => ({
-    receipt: readPersonalGitHubPublication(owner, { requestId: row.request_id }),
+    receipt: readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
+      requestId: row.request_id,
+    }),
     lifecycle: readGitHubPublicationSessionLifecycle({
       publicationKind: "personal",
       requestId: row.request_id,
