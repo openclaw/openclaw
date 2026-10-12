@@ -56,7 +56,10 @@ import {
 } from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -94,6 +97,10 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Private credential directories must remain outside the configured Gateway owner. */
+  preparedModelRuntimeMode?: "isolated-read-only";
+  /** Duration of dispatch through the selected runtime, excluding model/auth preparation. */
+  onRequestComplete?: (durationMs: number) => void;
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
@@ -378,7 +385,11 @@ async function runIsolatedCompletionOwned(
     return resolved;
   };
   assertCurrent();
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  const isolatedReadOnly = input.preparedModelRuntimeMode === "isolated-read-only";
+  const acquireRuntime = isolatedReadOnly
+    ? acquireReadOnlyPreparedModelRuntime
+    : acquireAgentRunPreparedModelRuntime;
+  const lease = await acquireRuntime(
     {
       config: requestConfig,
       agentId,
@@ -386,6 +397,7 @@ async function runIsolatedCompletionOwned(
       workspaceDir: requestedWorkspaceDir,
       preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
       runtimePluginPurpose: "isolated-completion",
+      ...(isolatedReadOnly ? { loadRuntimePlugins: true } : {}),
     },
     {
       catalogMode: "static",
@@ -467,6 +479,7 @@ async function runIsolatedCompletionOwned(
         assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
+        onRequestComplete: request.onRequestComplete,
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,

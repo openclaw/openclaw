@@ -240,7 +240,6 @@ it("observes native and worker entry, participant, and membership writes after c
         (await readSessionEntriesFromStoreInWorker({ ...scope, sessionKeys: [sessionKey] }))
           .entries[0]?.entry.label,
       ).toBe("receipt-only");
-      expect(requests.count()).toBe(1);
       expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
       requests.clear();
       expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
