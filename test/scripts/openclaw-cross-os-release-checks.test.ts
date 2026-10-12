@@ -106,6 +106,7 @@ import {
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
+import { formatError } from "../../scripts/lib/cross-os-release-checks/shared.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
@@ -425,6 +426,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     },
   ])("keeps cross-OS summaries UTF-16 safe: $caseName", ({ input, expected }) => {
     expect(trimForSummary(input)).toBe(expected);
+  });
+
+  it("names every inner failure of a lane AggregateError within the summary", () => {
+    const cleanup = new AggregateError(
+      [new Error("schtasks /End failed"), new Error("host lease release failed")],
+      "Managed-service cleanup and host-lease release both failed.",
+    );
+    const error = new AggregateError(
+      [new Error("Command timed out: openclaw gateway stop --help"), cleanup],
+      "Installer release check and managed-service cleanup both failed.",
+    );
+
+    const summary = trimForSummary(formatError(error));
+    for (const message of [
+      "Installer release check and managed-service cleanup both failed.",
+      "Command timed out: openclaw gateway stop --help",
+      "schtasks /End failed",
+      "host lease release failed",
+    ]) {
+      expect(summary).toContain(message);
+    }
   });
 
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
