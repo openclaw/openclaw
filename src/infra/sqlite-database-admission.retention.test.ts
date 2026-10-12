@@ -13,11 +13,16 @@ import {
   captureSqliteDatabaseAdmissions,
   installSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissions,
+  readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseWriteTokenForPath,
   retireSqliteDatabaseAdmissionForPath,
+  retainSqliteDatabaseAdmissionLocation,
   trackSqliteDatabaseAdmissionWorker,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
+import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "./sqlite-worker-operation-admission.js";
 import {
   captureRetainedNativeWorkerSource,
@@ -77,9 +82,41 @@ it("retires the final closed handle's facts while preserving open siblings and d
   }
 });
 
+it("keeps committed and pending row-cache tokens distinct across readmission", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-tokens-"), "proof.sqlite");
+  const database = createDatabase(location);
+  database.close();
+  let previous: string | undefined;
+  try {
+    for (const value of [43, 44]) {
+      database.open();
+      admitSqliteSchema(database);
+      let pending: string | undefined;
+      withSqlitePostCommitPublications(database, () =>
+        runSqliteImmediateTransactionSync(database, () => {
+          database.prepare("UPDATE proof SET value = ?").run(value);
+          pending = readSqliteDatabasePendingWriteToken(database);
+        }),
+      );
+      const committed = readSqliteDatabaseWriteTokenForPath(location);
+      expect(committed).toBe(pending);
+      expect(committed).not.toBe(previous);
+      expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value });
+      previous = committed;
+      database.close();
+    }
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
 it("releases a connection reference when initial admission exchange fails", () => {
   const location = path.join(tempDirs.make("sqlite-admission-open-failure-"), "proof.sqlite");
-  const database = createDatabase(location);
+  createDatabase(location).close();
+  retainSqliteDatabaseAdmissionLocation(location);
   try {
     expect(() =>
       withSqliteDatabaseAdmissionExchange(
@@ -89,12 +126,8 @@ it("releases a connection reference when initial admission exchange fails", () =
         () => openNodeSqliteDatabase(location),
       ),
     ).toThrow("admission relay closed");
-    database.close();
     expect(recordsFor(location)).toEqual([]);
   } finally {
-    if (database.isOpen) {
-      database.close();
-    }
     retireSqliteDatabaseAdmissionForPath(location);
   }
 });

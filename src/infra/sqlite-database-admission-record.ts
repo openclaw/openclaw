@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
@@ -69,9 +68,7 @@ export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmi
 }
 
 export function isSqliteDatabaseAdmissionRetired(record: Admission): boolean {
-  return (
-    Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired) !== 0
-  );
+  return readSqliteDatabaseGeneration(record, "retired") !== 0;
 }
 
 export function isSqliteDatabaseAdmissionFactCurrent(
@@ -94,19 +91,20 @@ export function readSqliteDatabaseFactRevision(
   record: Admission,
   schemaDependent: boolean | undefined,
 ): number {
-  return Atomics.load(
-    new Int32Array(record.generation),
-    schemaDependent
-      ? SqliteDatabaseGenerationSlot.schemaRevision
-      : SqliteDatabaseGenerationSlot.factRevision,
-  );
+  return readSqliteDatabaseGeneration(record, schemaDependent ? "schemaRevision" : "factRevision");
 }
 
-export function readSqliteDatabaseRecordWriteRevision(record: Admission): number {
-  return Atomics.load(
-    new Int32Array(record.generation),
-    SqliteDatabaseGenerationSlot.writeRevision,
-  );
+export function readSqliteDatabaseGeneration(
+  record: Admission,
+  slot: keyof typeof SqliteDatabaseGenerationSlot,
+): number {
+  return Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot[slot]);
+}
+export function advanceSqliteDatabaseGeneration(
+  record: Admission,
+  slot: keyof typeof SqliteDatabaseGenerationSlot,
+): number {
+  return Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot[slot], 1);
 }
 export function publishSqliteDatabaseFact(
   record: Admission,
@@ -120,7 +118,7 @@ export function publishSqliteDatabaseFact(
   }
   if (key.writer === "host") {
     // Missing-key consumers must stop reusing absence before the postimage replaces it.
-    Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision, 1);
+    advanceSqliteDatabaseGeneration(record, "hostRevision");
   }
   const previous = record.facts.get(key.name);
   if (previous) {
@@ -135,11 +133,7 @@ export function publishSqliteDatabaseFact(
     publication,
     current,
   });
-  Atomics.add(
-    new Int32Array(record.generation),
-    SqliteDatabaseGenerationSlot.publicationRevision,
-    1,
-  );
+  advanceSqliteDatabaseGeneration(record, "publicationRevision");
   return true;
 }
 
@@ -151,38 +145,26 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
-  readonly connections = new WeakMap<DatabaseSync, Admission>();
-  private readonly referenced = new WeakSet<DatabaseSync>();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
   readonly descriptors = new Map<string, number>();
   private revision = 0;
 
-  retainConnection(database: DatabaseSync, record: Admission): void {
+  changeReferences(record: Admission, change: 1 | -1): boolean {
     let references = record.references.get(threadId);
     if (!references) {
       references = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
       record.references.set(threadId, references);
     }
-    Atomics.add(new Int32Array(references), 0, 1);
-    this.connections.set(database, record);
-    this.referenced.add(database);
-    this.publish(record);
-  }
-
-  releaseConnection(database: DatabaseSync): Admission | undefined {
-    const record = this.connections.get(database);
-    // Corruption can be reported after close; the weak association still revokes live siblings.
-    if (record && this.referenced.delete(database)) {
-      const references = record.references.get(threadId);
-      if (references) {
-        Atomics.sub(new Int32Array(references), 0, 1);
-      }
-      this.retireUnreferenced(record);
-      this.publish(record);
-      return record;
+    const count = Atomics.add(new Int32Array(references), 0, change) + change;
+    if (count !== (change === 1 ? 1 : 0)) {
+      return false;
     }
-    return undefined;
+    if (change === -1) {
+      this.retireUnreferenced(record);
+    }
+    this.publish(record);
+    return true;
   }
 
   private retireUnreferenced(record: Admission): void {
@@ -213,12 +195,8 @@ export class SqliteDatabaseAdmissionRegistry {
         record.references.delete(owner);
         this.retireUnreferenced(record);
       }
-      Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
-      Atomics.add(
-        new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.unscopedWriteRevision,
-        1,
-      );
+      advanceSqliteDatabaseGeneration(record, "writeRevision");
+      advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
     }
     this.publish();
   }
@@ -278,20 +256,12 @@ export class SqliteDatabaseAdmissionRegistry {
 
   publish(record?: Admission): void {
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
-    for (const [identity, snapshot] of this.published) {
-      if (isSqliteDatabaseAdmissionRetired(snapshot)) {
-        if (
-          Atomics.load(
-            new Int32Array(snapshot.generation),
-            SqliteDatabaseGenerationSlot.retired,
-          ) === 1
-        ) {
+    for (const [identity, current] of this.records) {
+      if (isSqliteDatabaseAdmissionRetired(current)) {
+        if (readSqliteDatabaseGeneration(current, "retired") === 1) {
           this.descriptors.delete(identity);
         }
-        if (this.records.get(identity)?.generationId === snapshot.generationId) {
-          this.forget(identity);
-        }
-        this.published.delete(identity);
+        this.forget(identity);
       }
     }
     if (record && !isSqliteDatabaseAdmissionRetired(record)) {
@@ -303,10 +273,7 @@ export class SqliteDatabaseAdmissionRegistry {
         references: new Map(record.references),
         hostRevision:
           threadId === 0
-            ? Atomics.load(
-                new Int32Array(record.generation),
-                SqliteDatabaseGenerationSlot.hostRevision,
-              )
+            ? readSqliteDatabaseGeneration(record, "hostRevision")
             : record.hostRevision,
       });
     }
@@ -386,11 +353,7 @@ export class SqliteDatabaseAdmissionRegistry {
           continue;
         }
         if (threadId === 0) {
-          Atomics.add(
-            new Int32Array(record.generation),
-            SqliteDatabaseGenerationSlot.writeScopeCount,
-            1,
-          );
+          advanceSqliteDatabaseGeneration(record, "writeScopeCount");
         }
         record.writeScopes.set(key, revision);
         changed = true;
@@ -405,8 +368,7 @@ export class SqliteDatabaseAdmissionRegistry {
         threadId !== 0 &&
         incoming.hostRevision !== undefined &&
         incoming.hostRevision !== record.hostRevision &&
-        incoming.hostRevision ===
-          Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
+        incoming.hostRevision === readSqliteDatabaseGeneration(record, "hostRevision")
       ) {
         record.hostRevision = incoming.hostRevision;
         changed = true;

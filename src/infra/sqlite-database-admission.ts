@@ -14,7 +14,8 @@ import {
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
   readSqliteDatabaseFactRevision,
-  readSqliteDatabaseRecordWriteRevision as readWriteRevision,
+  readSqliteDatabaseGeneration,
+  advanceSqliteDatabaseGeneration,
   publishSqliteDatabaseFact,
   isSqliteDatabaseAdmissionRetired as isRetired,
   isSqliteDatabaseAdmissionFactCurrent as valid,
@@ -45,6 +46,7 @@ export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   registry: new SqliteDatabaseAdmissionRegistry(),
+  connections: new WeakMap<DatabaseSync, Admission>(),
   openedIdentities: new WeakMap<DatabaseSync, string>(),
   unproven: new WeakSet<DatabaseSync>(),
   suspended: new WeakSet<DatabaseSync>(),
@@ -113,8 +115,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   }
   const key = identity(observed);
   const previous = state.registry.records.get(key);
-  const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
-  if (retainedPrevious) {
+  if (previous && !isRetired(previous)) {
     state.registry.observeLocation(location, key);
     return;
   }
@@ -224,7 +225,7 @@ export function prepareSqliteDatabaseAdmission(
 }
 
 export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: string): void {
-  state.registry.connections.delete(database);
+  state.connections.delete(database);
   state.openedIdentities.delete(database);
   state.unproven.delete(database);
   const location = database.location();
@@ -255,7 +256,7 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (!database.isOpen || expected === undefined || state.unproven.has(database)) {
     return undefined;
   }
-  const retained = state.registry.connections.get(database);
+  const retained = state.connections.get(database);
   if (retained) {
     // A retained descriptor cannot change its physical file when the path is replaced.
     return isRetired(retained) ? undefined : retained;
@@ -276,11 +277,14 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
 }
 
 function retainConnection(database: DatabaseSync, record: Admission): void {
-  state.registry.retainConnection(database, record);
+  state.connections.set(database, record);
+  if (!state.registry.changeReferences(record, 1)) {
+    return;
+  }
   try {
     exchange(record);
   } catch (error) {
-    state.registry.releaseConnection(database);
+    state.registry.changeReferences(record, -1);
     state.openedIdentities.delete(database);
     throw error;
   }
@@ -288,14 +292,13 @@ function retainConnection(database: DatabaseSync, record: Admission): void {
 
 /** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
 export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
-  const record = state.registry.releaseConnection(database);
-  state.openedIdentities.delete(database);
-  state.local.delete(database);
-  if (record) {
-    if (isRetired(record)) {
+  const record = state.connections.get(database);
+  if (state.openedIdentities.delete(database) && record) {
+    state.local.delete(database);
+    if (state.registry.changeReferences(record, -1)) {
       state.localSchemaRevisions.delete(record.identity);
+      exchange(record);
     }
-    exchange(record);
   }
 }
 
@@ -336,8 +339,7 @@ export function getSqliteDatabaseAdmission<T>(
       if (
         database.isTransaction ||
         threadId === 0 ||
-        record.hostRevision ===
-          Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.hostRevision)
+        record.hostRevision === readSqliteDatabaseGeneration(record, "hostRevision")
       ) {
         return undefined;
       }
@@ -345,22 +347,13 @@ export function getSqliteDatabaseAdmission<T>(
       fact = record.facts.get(key.name);
       return fact && valid(record, fact) ? key.read(fact.value) : undefined;
     }
-    const revision = Atomics.load(
-      new Int32Array(record.generation),
-      SqliteDatabaseGenerationSlot.publicationRevision,
-    );
+    const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
     const misses = state.misses.get(record) ?? new Map<string, number>();
     state.misses.set(record, misses);
     if (!database.isTransaction && misses.get(key.name) !== revision) {
       exchange(record);
       fact = record.facts.get(key.name);
-      misses.set(
-        key.name,
-        Atomics.load(
-          new Int32Array(record.generation),
-          SqliteDatabaseGenerationSlot.publicationRevision,
-        ),
-      );
+      misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
     }
   }
   return fact && valid(record, fact) ? key.read(fact.value) : undefined;
@@ -424,7 +417,7 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   scopedWrites.finish(database, record);
   if (record) {
-    Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
+    advanceSqliteDatabaseGeneration(record, "writeRevision");
   }
 }
 
@@ -440,7 +433,7 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
       ? (state.localWriteRevisions.get(database) ?? 0)
       : undefined;
   }
-  return readWriteRevision(record);
+  return readSqliteDatabaseGeneration(record, "writeRevision");
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */
@@ -573,11 +566,7 @@ export function discardSqliteDatabaseTransactionAdmissions(database: DatabaseSyn
 export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void {
   const record = admission(database, false);
   if (record) {
-    const previous = Atomics.add(
-      new Int32Array(record.generation),
-      SqliteDatabaseGenerationSlot.schemaRevision,
-      1,
-    );
+    const previous = advanceSqliteDatabaseGeneration(record, "schemaRevision");
     const ddlRevision = state.ddlRevisions.get(database) ?? 0;
     for (const fact of state.local.get(database)?.values() ?? []) {
       if (fact.schemaDependent && fact.revision === previous && fact.ddlRevision === ddlRevision) {
@@ -599,24 +588,21 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
   }
 }
 
-export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
-  // A close failure can report corruption after native disposal; keep revocation on that file.
-  const record = state.registry.connections.get(database) ?? admission(database);
+function revoke(record: Admission | undefined): void {
   if (record) {
-    const cell = new Int32Array(record.generation);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
-    state.local.delete(database);
+    advanceSqliteDatabaseGeneration(record, "schemaRevision");
+    advanceSqliteDatabaseGeneration(record, "factRevision");
   }
 }
 
+export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
+  // A close failure can report corruption after native disposal; keep revocation on that file.
+  revoke(state.connections.get(database) ?? admission(database));
+  state.local.delete(database);
+}
+
 export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
-  const record = pathAdmission(location);
-  if (record) {
-    const cell = new Int32Array(record.generation);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
-  }
+  revoke(pathAdmission(location));
 }
 
 /** Explicit removal or maintenance calls this only after its owner has joined native consumers. */
@@ -656,10 +642,7 @@ export function retireSqliteDatabaseAdmissionForPath(
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
   const record = admission(database);
   if (record) {
-    return Atomics.load(
-      new Int32Array(record.generation),
-      SqliteDatabaseGenerationSlot.schemaRevision,
-    );
+    return readSqliteDatabaseGeneration(record, "schemaRevision");
   }
   const fileIdentity = state.openedIdentities.get(database);
   return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
