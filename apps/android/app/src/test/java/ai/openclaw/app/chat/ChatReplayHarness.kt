@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewaySession
 import androidx.room3.Room
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +44,8 @@ internal fun CoroutineScope.createChatController(
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
   onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
+  loadGatewayImageArtifact: suspend (gatewayId: String?, sessionKey: String, agentId: String?, artifactId: String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  loadGatewayInboundImage: suspend (gatewayId: String?, sessionKey: String, agentId: String?, source: String) -> GatewayLoadedImage? = { _, _, _, _ -> null },
   requestGateway: suspend (method: String, paramsJson: String?) -> String = { method, _ -> emptyChatGatewayResponse(method) },
 ): ChatController {
   val scopedRequest =
@@ -75,6 +78,8 @@ internal fun CoroutineScope.createChatController(
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
     onAssistantReplyFinalized = onAssistantReplyFinalized,
+    loadGatewayImageArtifact = loadGatewayImageArtifact,
+    loadGatewayInboundImage = loadGatewayInboundImage,
   )
 }
 

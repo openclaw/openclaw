@@ -799,6 +799,19 @@ class GatewaySession(
     return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
   }
 
+  /** [basePath] is the accepted Control UI mount; null falls back to the socket's context path. */
+  internal suspend fun loadInboundImage(
+    expectedEndpointStableId: String?,
+    basePath: String?,
+    sessionKey: String,
+    agentId: String?,
+    source: String,
+  ): GatewayLoadedImage? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val image = conn.loadInboundImage(basePath, sessionKey, agentId, source)
+    return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
+  }
+
   suspend fun loadMediaArtifact(
     expectedEndpointStableId: String?,
     sessionKey: String,
@@ -1003,6 +1016,7 @@ class GatewaySession(
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
     private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private val inboundImageLoader by lazy { GatewayInboundImageLoader(client) }
     private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
@@ -1163,6 +1177,22 @@ class GatewaySession(
         headers = mediaTransportHeaders(),
         credentials = controlUiReadCredentials,
         withEnqueue = withEnqueue,
+      )
+
+    suspend fun loadInboundImage(
+      basePath: String?,
+      sessionKey: String,
+      agentId: String?,
+      source: String,
+    ): GatewayLoadedImage? =
+      inboundImageLoader.load(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = basePath ?: target.endpoint.contextPath,
+        source = source,
+        sessionKey = sessionKey,
+        agentId = agentId,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
       )
 
     fun bufferedMedia(

@@ -270,6 +270,106 @@ class GatewaySessionCustomHeadersTest {
   }
 
   @Test
+  fun sentImagesLoadThroughAssistantMediaRouteWithReadCredentialsAndBounds() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val requests = ConcurrentLinkedQueue<RecordedRequest>()
+      val imageBytes = byteArrayOf(5, 6, 7, 8)
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path == "/socket") {
+                  return MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                      override fun onOpen(
+                        webSocket: WebSocket,
+                        response: Response,
+                      ) {
+                        webSocket.send(CONNECT_CHALLENGE_FRAME)
+                      }
+
+                      override fun onMessage(
+                        webSocket: WebSocket,
+                        text: String,
+                      ) {
+                        val frame = Json.parseToJsonElement(text).jsonObject
+                        if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                          val id = frame.getValue("id").jsonPrimitive.content
+                          webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"auth":{"deviceToken":"issued-device-token","role":"operator","scopes":["operator.read"]}}}""")
+                        }
+                      }
+                    },
+                  )
+                }
+                requests.add(request)
+                if (request.getHeader("Authorization") != "Bearer issued-device-token") return MockResponse().setResponseCode(401)
+                return if (request.requestUrl?.queryParameter("source")?.contains("large") == true) {
+                  MockResponse().setHeader("Content-Type", "image/jpeg").setChunkedBody(Buffer().write(ByteArray(12 * 1024 * 1024 + 1)), 65_536)
+                } else {
+                  MockResponse().setHeader("Content-Type", "image/jpeg").setBody(Buffer().write(imageBytes))
+                }
+              }
+            }
+          start()
+        }
+      val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = false, contextPath = "/socket")
+      val session =
+        GatewaySession(
+          scope = sessionScope,
+          identityStore = testDeviceIdentityStore(RuntimeEnvironment.getApplication()),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+          customHeadersProvider = { error("Cleartext transport must not read custom headers") },
+        )
+      try {
+        session.connect(
+          endpoint = endpoint,
+          token = "shared-token",
+          bootstrapToken = null,
+          password = null,
+          tls = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android-test", "Android Test", "1.0.0-test", "android", "ui", "sent-image-test", "android", "test"),
+            ),
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val source = "media://inbound/photo---af3c4068.jpg"
+        val loaded = session.loadInboundImage(endpoint.stableId, null, "agent:main:node-1", "main", source)
+        assertArrayEquals(imageBytes, loaded?.bytes)
+        assertEquals("image/jpeg", loaded?.mimeType)
+        val request = requests.single()
+        assertEquals("/socket/__openclaw__/assistant-media", request.requestUrl?.encodedPath)
+        assertEquals(source, request.requestUrl?.queryParameter("source"))
+        assertEquals("agent:main:node-1", request.requestUrl?.queryParameter("sessionKey"))
+        assertEquals("main", request.requestUrl?.queryParameter("agentId"))
+        assertEquals("image/*", request.getHeader("Accept"))
+
+        assertArrayEquals(imageBytes, session.loadInboundImage(endpoint.stableId, "/ui", "main", null, source)?.bytes)
+        assertEquals("/ui/__openclaw__/assistant-media", requests.last().requestUrl?.encodedPath)
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "media://inbound/large.jpg"))
+        val before = requests.size
+        assertNull(session.loadInboundImage(endpoint.stableId, null, "main", null, "/home/user/photo.jpg"))
+        assertEquals(before, requests.size)
+      } finally {
+        session.disconnect()
+        sessionScope.cancel()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() = runBlocking { assertManagedMediaDownload(contextPath = "") }
 
   @Test
