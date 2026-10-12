@@ -412,11 +412,9 @@ describe("Gateway chat RPCs", () => {
             typeof content === "string" ? content : expectDefined(content[0], "history text").text;
           expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
         }
-        if (index === 0) {
-          expect(userTexts[0]).not.toContain("/think high");
-        } else {
-          expect(userTexts[0]).toContain("/think high");
-        }
+        // Replay uses the recorded model-prompt projection (#167938): the consumed
+        // directive stays out of both the original request and its later replay.
+        expect(userTexts[0]).not.toContain("/think high");
       }
     },
   );
