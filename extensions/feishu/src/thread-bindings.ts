@@ -45,9 +45,20 @@ type FeishuThreadBindingManager = {
   stop: () => void;
 };
 
+type FeishuThreadBindingManagerOwnership = {
+  /** Live monitor generations sharing this manager's adapter registration. */
+  owners: number;
+};
+
 type FeishuThreadBindingsState = {
   managersByAccountId: Map<string, FeishuThreadBindingManager>;
   bindingsByAccountConversation: Map<string, FeishuThreadBindingRecord>;
+  /**
+   * Reload generations share one manager; only the generation that releases the
+   * last ownership may retire the adapter. Lazily initialized because a
+   * duplicated module graph may reuse state created before this field existed.
+   */
+  ownershipByManager?: WeakMap<FeishuThreadBindingManager, FeishuThreadBindingManagerOwnership>;
 };
 
 const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindingsState");
@@ -92,14 +103,27 @@ function toSessionBindingRecord(
   });
 }
 
+/**
+ * Acquires the account's binding manager for one monitor generation, creating it
+ * when absent. Every call takes an ownership that its `stop()` must release;
+ * read-only lookups use {@link getFeishuThreadBindingManager} instead.
+ */
 export function createFeishuThreadBindingManager(params: {
   accountId?: string;
   cfg: OpenClawConfig;
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
-  const { managersByAccountId, bindingsByAccountConversation } = getState();
+  const bindingState = getState();
+  const { managersByAccountId, bindingsByAccountConversation } = bindingState;
+  const ownershipByManager = (bindingState.ownershipByManager ??= new WeakMap());
   const existing = managersByAccountId.get(accountId);
   if (existing) {
+    // A replacement monitor adopts the live manager before the departing
+    // monitor settles. That delayed cleanup must not retire an adapter the
+    // replacement still answers through, so each create takes an ownership.
+    const ownership = ownershipByManager.get(existing) ?? { owners: 0 };
+    ownership.owners += 1;
+    ownershipByManager.set(existing, ownership);
     return existing;
   }
 
@@ -230,15 +254,23 @@ export function createFeishuThreadBindingManager(params: {
       return removed;
     },
     stop: () => {
-      // A repeated shutdown must not remove a replacement manager's live bindings.
-      if (managersByAccountId.get(accountId) === manager) {
-        for (const key of bindingsByAccountConversation.keys()) {
-          if (key.startsWith(`${accountId}:`)) {
-            bindingsByAccountConversation.delete(key);
-          }
-        }
-        managersByAccountId.delete(accountId);
+      const ownership = ownershipByManager.get(manager);
+      if (!ownership) {
+        // Already retired by the last owner; a repeated shutdown must not touch
+        // a replacement manager's live bindings or registration.
+        return;
       }
+      if (ownership.owners > 1) {
+        ownership.owners -= 1;
+        return;
+      }
+      ownershipByManager.delete(manager);
+      for (const key of bindingsByAccountConversation.keys()) {
+        if (key.startsWith(`${accountId}:`)) {
+          bindingsByAccountConversation.delete(key);
+        }
+      }
+      managersByAccountId.delete(accountId);
       unregisterSessionBindingAdapter({
         channel: "feishu",
         accountId,
@@ -305,6 +337,7 @@ export function createFeishuThreadBindingManager(params: {
 
   registerSessionBindingAdapterV2(sessionBindingAdapter);
 
+  ownershipByManager.set(manager, { owners: 1 });
   managersByAccountId.set(accountId, manager);
   return manager;
 }

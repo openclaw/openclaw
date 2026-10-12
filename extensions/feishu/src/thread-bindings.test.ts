@@ -2,7 +2,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl } from "./thread-bindings.js";
+import {
+  createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl,
+  getFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -268,10 +271,47 @@ describe("Feishu thread bindings", () => {
 
     manager.stop();
 
-    expect(createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" })).toBe(
-      restarted,
-    );
+    expect(getFeishuThreadBindingManager("default")).toBe(restarted);
     expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(replacement);
+  });
+
+  it("keeps the account adapter registered while a replacement owner holds the manager", async () => {
+    const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    const conversation = {
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_reload_root",
+    };
+    const binding = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:binding:feishu:default:reload",
+      targetKind: "session",
+      conversation,
+      placement: "current",
+    });
+
+    // A replacement monitor adopts the live manager before the departing
+    // monitor's delayed cleanup runs.
+    const replacement = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    expect(replacement).toBe(manager);
+    manager.stop();
+
+    expect(
+      getSessionBindingService().getCapabilities({ channel: "feishu", accountId: "default" }),
+    ).toEqual({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    });
+    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(binding);
+
+    replacement.stop();
+
+    expect(
+      getSessionBindingService().getCapabilities({ channel: "feishu", accountId: "default" })
+        .adapterAvailable,
+    ).toBe(false);
+    expect(getSessionBindingService().resolveByConversation(conversation)).toBeNull();
   });
 
   it.each(["refresh", "session", "kind"] as const)(
