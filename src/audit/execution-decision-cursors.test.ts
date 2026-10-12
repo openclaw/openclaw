@@ -22,7 +22,7 @@ import {
 import {
   bindExecutionOwnerLifecycleMetadata,
   ensureExecutionOwnerLifecycleBindingSchema,
-} from "./execution-owner-lifecycle-binding.test-support.js";
+} from "./execution-owner-lifecycle-binding-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const now = 200;

@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 export const EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE =
   "execution_owner_lifecycle_bindings" as const;
 type ExecutionOwnerLifecycleKind = "cron";
@@ -9,6 +15,51 @@ type ExecutionOwnerLifecycleDatabase = Pick<
   OpenClawStateDatabase,
   "execution_owner_lifecycle_bindings"
 >;
+
+/** Only an enabled binding write allocates this existing optional table. */
+export function ensureExecutionOwnerLifecycleBindingSchema(db: DatabaseSync): void {
+  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  db.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE),
+  );
+}
+
+/** The first admitted execution owns this diagnostic link for the receipt's lifetime. */
+export function bindExecutionOwnerLifecycleMetadata(params: {
+  db: DatabaseSync;
+  ownerKind: ExecutionOwnerLifecycleKind;
+  ownerId: string;
+  binding: { contextId: string; executionId: string };
+}): "bound" | "already-bound" | "mismatch" {
+  const database = getNodeSqliteKysely<ExecutionOwnerLifecycleDatabase>(params.db);
+  const inserted = executeSqliteQuerySync(
+    params.db,
+    database
+      .insertInto(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
+      .values({
+        owner_kind: params.ownerKind,
+        owner_id: params.ownerId,
+        context_id: params.binding.contextId,
+        execution_id: params.binding.executionId,
+      })
+      .onConflict((conflict) => conflict.columns(["owner_kind", "owner_id"]).doNothing()),
+  );
+  if (Number(inserted.numAffectedRows ?? 0n) === 1) {
+    return "bound";
+  }
+  const current = executeSqliteQueryTakeFirstSync(
+    params.db,
+    database
+      .selectFrom(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
+      .select(["context_id", "execution_id"])
+      .where("owner_kind", "=", params.ownerKind)
+      .where("owner_id", "=", params.ownerId),
+  );
+  return current?.context_id === params.binding.contextId &&
+    current.execution_id === params.binding.executionId
+    ? "already-bound"
+    : "mismatch";
+}
 
 /** Removes exact owner metadata without allocating the opt-in table. */
 export function deleteExecutionOwnerLifecycleMetadata(params: {

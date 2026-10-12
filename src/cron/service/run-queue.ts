@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -472,6 +473,7 @@ async function launchCronRun(
   pending.removeCancellation?.();
   pending.started = true;
   pending.activation.resolve();
+  let executionBinding: Promise<void> | undefined;
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
@@ -484,6 +486,39 @@ async function launchCronRun(
       runReceiptContext: pending.context,
       executionIdentity: {
         ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+        async onPostAdmission(admitted) {
+          const token = admitted.executionIdentityToken;
+          if (!token) {
+            return;
+          }
+          // Trigger and payload admissions share one diagnostic link, never receipt authority.
+          executionBinding ??= Promise.resolve()
+            .then(async () => {
+              const binding = parseExecutionIdentityAdmissionToken(token);
+              if (binding.runId !== admitted.operationalRunInstance.runId) {
+                throw new Error("Cron execution identity does not match its admitted run");
+              }
+              const retained = await runOpenClawStateWorkerOperation(pending.context, (scope) =>
+                scope.execute({
+                  type: "cron.bindReceiptExecution",
+                  input: {
+                    receiptId: entry.runReceipt.receiptId,
+                    binding: { contextId: binding.contextId, executionId: binding.executionId },
+                  },
+                }),
+              );
+              if (!retained) {
+                throw new Error("Cron execution identity binding was not retained");
+              }
+            })
+            .catch((error: unknown) => {
+              state.deps.log.warn(
+                { err: String(error), jobId: entry.job.id },
+                "cron: failed to retain execution identity binding",
+              );
+            });
+          await executionBinding;
+        },
       },
     });
   } catch (error) {

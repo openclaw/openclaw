@@ -13,6 +13,10 @@ export type CronStateWorkerOperations = CronRunHistoryWorkerOperations &
   CronRunQueueOperations &
   CronSchedulerOperations &
   CronStoreSaveWorkerOperations & {
+    "cron.bindReceiptExecution": {
+      input: { receiptId: string; binding: { contextId: string; executionId: string } };
+      output: boolean;
+    };
     "cron.registerQuarantine": {
       input: CronQuarantineRegistration;
       output: void;

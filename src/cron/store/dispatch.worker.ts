@@ -81,7 +81,12 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       mutation = loaded;
     });
   }
-  if (["cron.markDeliveryStarted", "cron.removeStaleFamily"].includes(String(type)) && !receipts) {
+  if (
+    ["cron.markDeliveryStarted", "cron.removeStaleFamily", "cron.bindReceiptExecution"].includes(
+      String(type),
+    ) &&
+    !receipts
+  ) {
     return loadReceipts().then((loaded) => {
       receipts = loaded;
     });
@@ -123,6 +128,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.mutateJobs":
     case "cron.recordRun":
     case "cron.markDeliveryStarted":
+    case "cron.bindReceiptExecution":
     case "cron.finalizeRuns":
     case "cron.removeStaleFamily":
     case "cron.loadMutable":
@@ -213,11 +219,14 @@ export function executeCronStateCommand(
       }
       return finalization.finalizeCronRunsInWorker(database, command.input);
     case "cron.markDeliveryStarted":
+    case "cron.bindReceiptExecution":
     case "cron.removeStaleFamily":
       if (!receipts) {
         throw new Error("Cron receipts worker is not prepared");
       }
       switch (command.type) {
+        case "cron.bindReceiptExecution":
+          return receipts.bindCronRunReceiptExecutionInWorker(database, command.input);
         case "cron.markDeliveryStarted":
           return receipts.markCronDeliveryStartedInWorker(database, command.input);
         case "cron.removeStaleFamily":

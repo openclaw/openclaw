@@ -57,7 +57,7 @@ function createCronDatabase(retainedBinding = true) {
     )
     .run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
   if (retainedBinding) {
-    // Historical rows remain inspectable after Cron stops producing these bindings.
+    // Released rows remain inspectable alongside newly bound scheduled runs.
     oldReader
       .prepare(
         `INSERT INTO execution_owner_lifecycle_bindings (
