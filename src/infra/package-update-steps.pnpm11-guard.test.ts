@@ -263,7 +263,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const pathBinDir = path.join(base, "path-pnpm-home", "bin");
         const callerProjectDir = path.join(base, "caller-project");
         const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
-        const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+        const newPackageRoot = path.join(globalRoot, "hash-openclaw", "node_modules", "openclaw");
         await fs.mkdir(ownerBinDir, { recursive: true });
         await writePackageRoot(oldPackageRoot, "1.0.0");
         await fs.writeFile(
@@ -394,6 +394,12 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
                 path.join(stageGlobalRoot, "hash-openclaw"),
                 "dir",
               );
+              stagedPackageRoot = path.join(
+                stageGlobalRoot,
+                "hash-openclaw",
+                "node_modules",
+                "openclaw",
+              );
             } else if (name === "pnpm-package-preinstall") {
               expect(input).toBeUndefined();
               expect(argv).toEqual([
@@ -486,11 +492,10 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         const globalRoot = path.join(globalDir, "v11");
         const globalBinDir = path.join(base, "pnpm-home", "bin");
         const oldInstallRoot = path.join(globalRoot, "old");
-        const newInstallRoot = path.join(globalRoot, "new");
         const oldPackageRoot = path.join(oldInstallRoot, "node_modules", "openclaw");
-        const newPackageRoot = path.join(newInstallRoot, "node_modules", "openclaw");
         const sharedPackageRoot = path.join(base, "store", "openclaw");
         const activeLink = path.join(globalRoot, "hash-openclaw");
+        const newPackageRoot = path.join(activeLink, "node_modules", "openclaw");
         await Promise.all([
           fs.mkdir(path.dirname(oldPackageRoot), { recursive: true }),
           writePackageRoot(sharedPackageRoot, "1.0.0"),
