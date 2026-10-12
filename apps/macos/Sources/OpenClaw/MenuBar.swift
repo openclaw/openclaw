@@ -127,6 +127,12 @@ struct OpenClawApp: App {
             }
             SidebarCommands()
             CommandMenu("Navigate") {
+                Button("Systems") {
+                    AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
+                }
+
+                Divider()
+
                 if self.state.nativeExperienceEnabled {
                     Button("Command Palette…") {
                         WebChatManager.shared.showCommandPalette()
