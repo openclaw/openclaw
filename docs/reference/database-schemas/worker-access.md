@@ -5306,6 +5306,24 @@ it. Callers revalidate after preparation, and assertions reread profile facts
 after source callbacks. External plugin authority callbacks retain their existing
 synchronous contract and may have their own storage dependencies.
 
+Gateway role policy, theme requests, preference notifications, and session
+pull-request subscriptions use the profile catalog retained by the session
+projection. Startup prepares that catalog before request dispatch and scheduled
+cron work. Committed profile changes update the same owner; role policy has no
+separate assignment cache. Theme writes and PR disclosure still check current
+identity at their effect boundary. Accepted operator work retains its independent
+profile authority after the originating transport completes.
+
+This does not make every shared profile query worker-only. Synchronous SDK
+catalog projectors (`createSessionCatalogSourceActorProjector` and
+`createSessionCatalogGitHubLinker`) still read verified GitHub identity rows.
+Cold display, alias, and personal-bootstrap readers also serve standalone SDK
+callers and native participant recording. The channel identity resolver retains
+native CLI/update authorization reads, while profile schema admission and Doctor
+repairs keep their one-shot transactions. These shared kernels retain their
+documented inventory tiers; the Gateway's resident request paths do not require
+those cold reads. Schemas, stored bytes, and update behavior are unchanged.
+
 Session metadata and membership facts are prepared through the existing session
 worker. Their canonical writers publish committed changes before observers, and
 unknown or unavailable facts leave publication recovery pending until preparation

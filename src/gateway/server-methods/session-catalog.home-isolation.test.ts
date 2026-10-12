@@ -12,7 +12,6 @@ import { createSessionRowProjectionFixture } from "../session-row-projection.tes
 
 // HOME policy uses the real home path, but this fixture must not open its profile database.
 vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
 }));
 
