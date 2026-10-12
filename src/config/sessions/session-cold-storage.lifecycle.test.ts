@@ -47,6 +47,7 @@ import {
   prepareConversationIdentities,
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
@@ -932,9 +933,11 @@ describe("cold current transcript lifecycle", () => {
   it("keeps an existing child skip independent of a missing parent archive", async () => {
     const fixture = await createColdCurrentSession();
     const childKey = "agent:main:existing-child";
-    await replaceSessionEntry(
+    const childEntry = { sessionId: "existing-child", updatedAt: 2 };
+    await applySessionEntryOperation(
       { ...fixture.scope, sessionKey: childKey },
-      { sessionId: "existing-child", updatedAt: 2 },
+      { kind: "fields", patch: childEntry },
+      { fallbackEntry: childEntry, replaceEntry: true, skipMaintenance: true },
     );
     await fs.unlink(fixture.archivePath);
     const before = fixture.snapshot();
