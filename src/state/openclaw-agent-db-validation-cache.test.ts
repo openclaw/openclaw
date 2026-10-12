@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -52,6 +53,41 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it.each(["path", "root"] as const)(
+    "shares reopened proof through a directory symlink and revokes it by alias %s",
+    async (revocation) => {
+      await withReceiptFixture(true, (database, options) => {
+        const directory = path.dirname(database.path);
+        const aliasDirectory = path.join(directory, "reader-alias");
+        fs.symlinkSync(directory, aliasDirectory, "junction");
+        const alias = {
+          ...database,
+          path: path.join(aliasDirectory, path.basename(database.path)),
+        };
+        expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        const receipt = getOpenClawAgentDatabaseValidation(database)!;
+        closeOpenClawAgentDatabaseByPath(database.path);
+        const reopened = openOpenClawAgentDatabase(options);
+
+        expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBe(receipt);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(alias);
+        expect(adopt(receipt.identity, structuredClone(receipt))).toBe(true);
+        expect(getOpenClawAgentDatabaseValidation(reopened)).toBe(receipt);
+        expect(hasOpenClawAgentCanonicalValidation(reopened)).toBe(true);
+        expect(alias.path).toContain("reader-alias");
+
+        if (revocation === "root") {
+          clearOpenClawAgentDatabaseValidationCache(aliasDirectory);
+        } else {
+          invalidateOpenClawAgentDatabaseValidation(alias.path);
+        }
+        expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(0);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        expect(hasOpenClawAgentCanonicalValidation(reopened)).toBe(false);
+      });
+    },
+  );
+
   it("does not publish an uncommitted durable receipt into a cold reader cache", async () => {
     await withReceiptFixture(true, (database, options) => {
       expect(() =>
@@ -98,7 +134,10 @@ describe("canonical proof on physical database validation", () => {
           expect(adopt(receipt.identity, receipt)).toBe(true);
         }
         closeOpenClawAgentDatabaseByPath(database.path);
+        const blockedDirectory = path.join(source.dir, "not-a-directory");
+        fs.writeFileSync(blockedDirectory, "synthetic non-directory");
         const candidates = [
+          { path: path.join(blockedDirectory, "unreadable.sqlite") },
           { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
         ];
 
@@ -449,15 +488,20 @@ describe("canonical proof on physical database validation", () => {
       await withReceiptFixture(true, (database) => {
         expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
         const serialized = database.db.serialize();
-        database.db.exec("BEGIN IMMEDIATE");
-        try {
-          database.db.prepare("SELECT session_key FROM session_nodes").get();
-          expect(() => database.db.deserialize(serialized)).toThrow();
-          expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
-          expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
-        } finally {
-          database.db.exec("ROLLBACK");
-        }
+        const originalRows = database.db.prepare("SELECT session_key FROM session_nodes").all();
+        const originalLocation = database.db.location();
+        // Node finalizes active statements before deserialize; a completed get()
+        // or an open transaction is not a portable native refusal. An unattached
+        // database name fails in SQLite before replacing the admitted main store.
+        expect(() => database.db.deserialize(serialized, { dbName: "unattached-fixture" })).toThrow(
+          expect.objectContaining({ code: "ERR_SQLITE_ERROR" }),
+        );
+        expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+        expect(database.db.location()).toBe(originalLocation);
+        expect(database.db.prepare("SELECT session_key FROM session_nodes").all()).toEqual(
+          originalRows,
+        );
       });
     },
   );

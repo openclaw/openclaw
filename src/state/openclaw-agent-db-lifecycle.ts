@@ -20,6 +20,10 @@ import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
 } from "../infra/sqlite-wal.js";
+import {
+  inspectDatabasePathIdentitySync,
+  normalizeDatabasePath,
+} from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -586,6 +590,38 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
     await drainPendingAgentDatabaseOpens(selection);
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });
+}
+
+/** Drain physical aliases through their captured lexical close owners before rollback. */
+export async function closeOpenClawAgentDatabaseAliasesByPathAsync(
+  pathname: string,
+): Promise<void> {
+  const resolvedPath = path.resolve(pathname);
+  const selected = cache.databases.get(resolvedPath);
+  const owned = selected && findOpenClawAgentDatabaseIdentity(selected);
+  // A retargeted locator must select its admitted owner, not its current destination.
+  // Without that owner, only a canonical path can discover an unlisted local alias.
+  const observed = owned ? undefined : inspectDatabasePathIdentitySync(resolvedPath);
+  const identity =
+    typeof owned?.identity === "string"
+      ? { key: `file:${owned.identity}`, birthtime: owned.birthtime }
+      : observed?.canonicalPath === normalizeDatabasePath(resolvedPath)
+        ? observed
+        : undefined;
+  const paths = new Set([resolvedPath]);
+  for (const database of cache.databases.values()) {
+    const captured = findOpenClawAgentDatabaseIdentity(database);
+    if (
+      typeof captured?.identity === "string" &&
+      identity?.key === `file:${captured.identity}` &&
+      identity.birthtime === captured.birthtime
+    ) {
+      paths.add(database.path);
+    }
+  }
+  for (const capturedPath of paths) {
+    await closeOpenClawAgentDatabaseByPathAsync(capturedPath);
+  }
 }
 
 /** Read a database's durable role and agent owner without mutating it. */
