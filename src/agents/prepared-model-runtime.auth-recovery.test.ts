@@ -128,7 +128,7 @@ async function listModels(config: OpenClawConfig) {
 
 describe("configured plugin generation recovery", () => {
   it.each([true])(
-    "retains exact thinking policy across a stale mark (borrowed Gateway registry=%s)",
+    "retains exact thinking policy until registry replacement (borrowed Gateway registry=%s)",
     async (borrowed) => {
       const provider = "stale-policy-fixture";
       const entry = { provider, id: "reasoner", name: "Reasoner", reasoning: true };
@@ -209,7 +209,7 @@ describe("configured plugin generation recovery", () => {
           // Committing the Gateway successor, not staling the catalog, closes the lender.
           gateway.publish(ambient);
           expect(isPluginRegistryRetired(registry)).toBe(true);
-          expect(readThinking()?.defaultLevel).toBe("high");
+          expect(readThinking).toThrow(PluginInstanceUnavailableError);
           await disposePluginRegistryInstances(registry);
         }
       } finally {
