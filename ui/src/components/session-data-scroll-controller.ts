@@ -30,7 +30,6 @@ export class SessionDataScrollController {
         });
       }
     }
-    this.observation?.schedule();
   }
 
   update(_element: HTMLElement): void {

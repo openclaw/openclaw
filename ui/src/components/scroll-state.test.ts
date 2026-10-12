@@ -5,21 +5,70 @@ import { scrollState } from "./scroll-state.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 
 let container: HTMLDivElement;
-let resized: ResizeObserverCallback;
+let fonts: EventTarget;
+let previousFonts: PropertyDescriptor | undefined;
+const observers = new Map<
+  ResizeObserver,
+  { callback: ResizeObserverCallback; targets: Set<Element> }
+>();
+const intersections = new Map<Element, IntersectionObserverCallback>();
+const unseen = new Set<Element>();
+function visibility(element: Element, visible: boolean) {
+  intersections.get(element)?.(
+    [{ target: element, isIntersecting: visible } as IntersectionObserverEntry],
+    {} as IntersectionObserver,
+  );
+}
+function layoutFrame() {
+  for (const element of unseen) {
+    visibility(element, true);
+  }
+  unseen.clear();
+  vi.advanceTimersToNextFrame();
+  for (const [observer, { callback, targets }] of observers) {
+    if (targets.has(document.documentElement)) callback([], observer);
+  }
+}
+function resize(element: Element) {
+  for (const [observer, { callback, targets }] of observers) {
+    if (targets.has(element)) callback([{ target: element } as ResizeObserverEntry], observer);
+  }
+}
 const observe = vi.fn();
 const unobserve = vi.fn();
 
 beforeEach(() => {
+  previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  fonts = new EventTarget();
+  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
   vi.stubGlobal(
     "ResizeObserver",
     class {
       constructor(callback: ResizeObserverCallback) {
-        resized = callback;
+        observers.set(this as ResizeObserver, { callback, targets: new Set() });
       }
-      observe = observe;
-      unobserve = unobserve;
-      disconnect = vi.fn();
+      observe = (target: Element) => {
+        observe(target);
+        observers.get(this as ResizeObserver)!.targets.add(target);
+      };
+      unobserve = (target: Element) => {
+        unobserve(target);
+        observers.get(this as ResizeObserver)!.targets.delete(target);
+      };
+      disconnect = () => observers.get(this as ResizeObserver)!.targets.clear();
+    },
+  );
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(private callback: IntersectionObserverCallback) {}
+      observe = (target: Element) => {
+        intersections.set(target, this.callback);
+        unseen.add(target);
+      };
+      unobserve = (target: Element) => intersections.delete(target);
+      disconnect = () => intersections.clear();
     },
   );
   container = document.createElement("div");
@@ -28,6 +77,14 @@ beforeEach(() => {
 afterEach(() => {
   render(nothing, container);
   container.remove();
+  if (previousFonts) {
+    Object.defineProperty(document, "fonts", previousFonts);
+  } else {
+    Reflect.deleteProperty(document, "fonts");
+  }
+  observers.clear();
+  intersections.clear();
+  unseen.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -43,6 +100,7 @@ function geometry(element: HTMLElement, reads: string[], name: string) {
       },
     },
     clientHeight: { configurable: true, value: 100 },
+    checkVisibility: { configurable: true, value: () => !element.hidden },
   });
 }
 
@@ -68,7 +126,10 @@ describe("scroll state observation", () => {
     });
     await Promise.resolve();
     expect(order).toEqual([]);
+    elements.forEach((element) => visibility(element, true));
     vi.advanceTimersToNextFrame();
+    expect(order).toEqual([]);
+    layoutFrame();
     expect(order).toEqual(["read-0", "read-1", ...Array<string>(6).fill("write")]);
     expect(
       elements.map((element) => ({
@@ -84,7 +145,7 @@ describe("scroll state observation", () => {
     elements[0]!.dispatchEvent(new Event("scroll"));
     elements[0]!.dispatchEvent(new Event("scroll"));
     expect(order).toEqual([]);
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     expect(order).toEqual(["read-0"]);
   });
 
@@ -92,25 +153,57 @@ describe("scroll state observation", () => {
     render(html`<div ${scrollState()}></div>`, container);
     const element = container.firstElementChild as HTMLElement;
     geometry(element, [], "read");
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     element.scrollTop = 100;
-    resized(
-      [
-        {
-          target: element,
-          borderBoxSize: [],
-          contentBoxSize: [],
-          devicePixelContentBoxSize: [],
-          contentRect: new DOMRectReadOnly(),
-        },
-      ],
-      {} as ResizeObserver,
-    );
+    resize(element);
     expect(element.dataset.atEnd).toBe("false");
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     expect(element.dataset.atEnd).toBe("true");
     render(nothing, container);
     expect(unobserve).toHaveBeenCalledWith(element);
+  });
+
+  it("tracks visible and intrinsic growth without measuring unchanged or offscreen content", async () => {
+    const view = (label: string) =>
+      html`<div ${scrollState()}>
+        <span>${label}<img /></span>
+      </div>`;
+    render(view("One"), container);
+    const element = container.firstElementChild as HTMLElement;
+    const reads: string[] = [];
+    geometry(element, reads, "read");
+    layoutFrame();
+    await Promise.resolve();
+    layoutFrame();
+    reads.length = 0;
+    render(view("One"), container);
+    await Promise.resolve();
+    layoutFrame();
+    expect(reads).toEqual([]);
+
+    render(view("Two"), container);
+    await Promise.resolve();
+    layoutFrame();
+    expect(reads).toEqual(["read"]);
+    reads.length = 0;
+
+    visibility(element, false);
+    render(view("Three"), container);
+    await Promise.resolve();
+    layoutFrame();
+    expect(reads).toEqual([]);
+    visibility(element, true);
+    layoutFrame();
+    expect(reads).toEqual(["read"]);
+
+    reads.length = 0;
+    element.querySelector("img")!.dispatchEvent(new Event("load"));
+    layoutFrame();
+    expect(reads).toEqual(["read"]);
+    reads.length = 0;
+    fonts.dispatchEvent(new Event("loadingdone"));
+    layoutFrame();
+    expect(reads).toEqual(["read"]);
   });
 
   it("shares a frame with the sidebar and never reads from its update entry point", () => {
@@ -124,12 +217,12 @@ describe("scroll state observation", () => {
       sidebar.synchronize(container);
       sidebar.update(element);
       expect(reads).toEqual([]);
-      vi.advanceTimersToNextFrame();
+      layoutFrame();
       expect(reads).toEqual(["read"]);
       expect(sidebar.state).toBe("top");
       element.scrollTop = 50;
       sidebar.update(element);
-      vi.advanceTimersToNextFrame();
+      layoutFrame();
       expect(sidebar.state).toBe("middle");
       expect(notify).toHaveBeenCalledTimes(2);
     } finally {

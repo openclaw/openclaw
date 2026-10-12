@@ -61,6 +61,9 @@ function measurementClock() {
       const pending = [...frames.values()];
       frames.clear();
       pending.forEach((callback) => callback(0));
+      for (const observer of observers) {
+        if (observer.targets.has(document.documentElement)) observer.callback([], observer);
+      }
     },
     resize(target: Element) {
       for (const observer of observers) {

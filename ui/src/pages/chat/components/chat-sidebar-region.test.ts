@@ -175,9 +175,26 @@ describe("chat sidebar region", () => {
   });
 
   it("coalesces committed geometry and retires disconnected measurements", async () => {
+    let resized = () => {};
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resized = () => callback([], this as ResizeObserver);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const layoutFrame = () => {
+      vi.advanceTimersToNextFrame();
+      resized();
+    };
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     onTestFinished(() => {
       vi.useRealTimers();
+      vi.unstubAllGlobals();
     });
     const region = await createRegion();
     region.narrow = true;
@@ -197,7 +214,7 @@ describe("chat sidebar region", () => {
     shell.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, (event) => {
       commits.push((event as CustomEvent<{ widthChanged: boolean }>).detail.widthChanged);
     });
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     measure.mockClear();
     commits.length = 0;
 
@@ -207,7 +224,7 @@ describe("chat sidebar region", () => {
     }
     expect(measure).not.toHaveBeenCalled();
     expect(commits).toEqual([]);
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     expect(measure).toHaveBeenCalledTimes(1);
     expect(commits).toEqual([false]);
 
@@ -216,14 +233,14 @@ describe("chat sidebar region", () => {
     sideWidth = 800;
     region.layout = { ...region.layout };
     await region.updateComplete;
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     expect(commits).toEqual([false, true]);
 
     measure.mockClear();
     region.layout = { ...region.layout };
     await region.updateComplete;
     shell.remove();
-    vi.advanceTimersToNextFrame();
+    layoutFrame();
     expect(measure).not.toHaveBeenCalled();
   });
 

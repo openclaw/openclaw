@@ -7,6 +7,21 @@ installPopoverPolyfill();
 if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
   vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
+  // JSDOM has no layout delivery. Geometry tests supply controlled observers;
+  // ordinary rendering tests only need their subscription lifecycle.
+  for (const name of ["ResizeObserver", "IntersectionObserver"]) {
+    if (!(name in globalThis)) {
+      Object.defineProperty(globalThis, name, {
+        configurable: true,
+        writable: true,
+        value: class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      });
+    }
+  }
 }
 
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued

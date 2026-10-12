@@ -53,7 +53,6 @@ class ScrollStateDirective extends AsyncDirective {
       this.trackScroll = trackScroll;
     }
     this.connect();
-    this.observation?.schedule();
     return nothing;
   }
 
