@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import ai.openclaw.app.i18n.nativeString
@@ -112,9 +113,10 @@ internal fun prepareChatHistory(
   messages: List<ChatMessage>,
   sessionKey: String,
   mainSessionKey: String,
+  completedQuestions: List<ChatQuestionPrompt> = emptyList(),
 ): PreparedChatHistory {
   val toolScopes = toolScopes(messages)
-  val rows = buildTranscriptTimeline(messages, toolScopes)
+  val rows = buildTranscriptTimeline(messages, toolScopes, completedQuestions)
   val latestUser =
     rows.asReversed().firstNotNullOfOrNull { item ->
       (item as? ChatTimelineItem.Message)?.message?.takeIf {
@@ -158,10 +160,12 @@ internal fun PreparedChatHistory.buildTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
+  val nowMs = System.currentTimeMillis()
+  val activeQuestions = questions.filter { it.status(nowMs) in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) }
   val sourceItems =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
-      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
+      activeQuestions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
@@ -227,8 +231,11 @@ internal fun ChatMessage.isForwardedBoundary(): Boolean =
 private fun buildTranscriptTimeline(
   messages: List<ChatMessage>,
   toolScopes: List<String>,
+  completedQuestions: List<ChatQuestionPrompt>,
 ): List<ChatTimelineItem> {
   val toolsByMessage = projectTranscriptToolActivity(messages)
+  val historicalQuestions = completedQuestions.sortedBy { it.record.createdAtMs }
+  var questionIndex = 0
   return buildList {
     val completedTools = mutableListOf<TranscriptTool>()
     var completedToolsKey: String? = null
@@ -251,6 +258,14 @@ private fun buildTranscriptTimeline(
     }
 
     messages.forEachIndexed { index, message ->
+      // Use source timestamps before transcript projection groups tool rows.
+      val timestamp = message.timestampMs
+      if (timestamp != null) {
+        while (questionIndex < historicalQuestions.size && historicalQuestions[questionIndex].record.createdAtMs <= timestamp) {
+          flushToolActivity()
+          add(ChatTimelineItem.QuestionPrompt(historicalQuestions[questionIndex++]))
+        }
+      }
       if (toolScope != toolScopes[index] || message.startsToolScope()) {
         flushToolActivity()
         toolScope = toolScopes[index]
@@ -301,6 +316,8 @@ private fun buildTranscriptTimeline(
       }
     }
     flushToolActivity()
+    // Retain cards even when their corresponding messages are not loaded.
+    historicalQuestions.drop(questionIndex).forEach { add(ChatTimelineItem.QuestionPrompt(it)) }
   }
 }
 

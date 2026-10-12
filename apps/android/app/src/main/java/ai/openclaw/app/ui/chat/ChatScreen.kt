@@ -29,6 +29,7 @@ import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
@@ -1773,7 +1774,15 @@ private fun ChatMessageList(
   header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
   composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
-  val history = remember(messages, sessionKey, mainSessionKey) { prepareChatHistory(messages, sessionKey, mainSessionKey) }
+  val completedQuestions =
+    remember(questions) {
+      val nowMs = System.currentTimeMillis()
+      questions.filter { it.status(nowMs) !in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) }
+    }
+  val history =
+    remember(messages, sessionKey, mainSessionKey, completedQuestions) {
+      prepareChatHistory(messages, sessionKey, mainSessionKey, completedQuestions)
+    }
   val indicatorVisible = activeRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
   val workingRun =

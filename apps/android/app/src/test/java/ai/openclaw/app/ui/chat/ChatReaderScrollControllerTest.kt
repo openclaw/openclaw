@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
@@ -477,7 +478,12 @@ class ChatReaderScrollControllerTest {
   private fun emptyTimeline(): ChatTimeline = timeline()
 
   private fun questionTimeline(question: ChatQuestionPrompt): ChatTimeline =
-    prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
+    prepareChatHistory(
+      emptyList(),
+      "agent:main:main",
+      mainSessionKey = "agent:main:main",
+      completedQuestions = listOf(question).filter { it.status() !in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) },
+    ).buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
