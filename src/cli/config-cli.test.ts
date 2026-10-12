@@ -907,6 +907,28 @@ describe("config cli", () => {
       });
     });
 
+    it("preserves trailing spaces in provider file paths written to config", async () => {
+      setGatewaySnapshot();
+
+      await runConfigSet(
+        "secrets.providers.vaultfile",
+        "--provider-source",
+        "file",
+        "--provider-path",
+        "/tmp/vault.json ",
+        "--provider-mode",
+        "json",
+      );
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.secrets?.providers?.vaultfile).toEqual({
+        source: "file",
+        path: "/tmp/vault.json ",
+        mode: "json",
+      });
+    });
+
     it.each([
       [
         "leading equals",
