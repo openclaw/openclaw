@@ -1,0 +1,15 @@
+{
+  "componentId": "configured-workspace",
+  "pathClass": "CONFIGURED_WORKSPACE",
+  "logicalName": "Configured Workspace",
+  "declarationRule": "agents.defaults.workspace",
+  "declaredValue": "C:\\Users\\maicon\\.openclaw\\workspace",
+  "declarationSource": "openclaw.json",
+  "lifecycle": "configurable",
+  "startupRequirementRule": true,
+  "capabilityDependencies": ["joint-methodology"],
+  "taskDependencyRules": [],
+  "fallbackPolicy": null,
+  "validationPolicy": { "requireExists": true, "requireReadable": true },
+  "notes": "Valid configured-workspace declaration."
+}
