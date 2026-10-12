@@ -175,14 +175,24 @@ export function projectGatewaySessionRunState(params: {
       fields.lastRunError ??=
         "Restart recovery could not reach the parent. Inspect the child session before continuing.";
     }
+    // A lifecycle start after the spawn run ended belongs to a follow-up turn; do not refill
+    // its cleared terminal fields from the finished spawn run.
+    const fallbackEndedAt =
+      typeof fields.startedAt === "number" &&
+      typeof endedAt === "number" &&
+      fields.startedAt > endedAt
+        ? undefined
+        : endedAt;
     fields.startedAt =
       (liveSubagentRunActive ? undefined : fields.startedAt) ??
       getSubagentSessionStartedAt(subagentRun);
-    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? endedAt);
+    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? fallbackEndedAt);
     fields.runtimeMs = liveSubagentRunActive
       ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (fields.runtimeMs ??
-        (typeof endedAt === "number" ? getSubagentSessionRuntimeMs(subagentRun, now) : undefined));
+        (typeof fallbackEndedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
+          : undefined));
   }
   return { subagentRun, subagentOwner, fields };
 }

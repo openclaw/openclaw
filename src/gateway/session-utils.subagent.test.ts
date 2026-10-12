@@ -243,6 +243,44 @@ describe("session list subagent metadata", () => {
     expect(result.sessions[0]?.endedAt).toBe(now - 200);
   });
 
+  test("keeps follow-up turn timing instead of the finished spawn run", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:follow-up";
+    await addSubagentRunForTests({
+      runId: "run-spawn",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      createdAt: now - 60_000,
+      startedAt: now - 59_000,
+      endedAt: now - 55_787,
+      outcome: { status: "ok" },
+    });
+    const list = (entry: Partial<SessionEntry>) =>
+      listSubagentSessions({
+        [childSessionKey]: {
+          sessionId: "sess-follow-up",
+          updatedAt: now,
+          spawnedBy: "agent:main:main",
+          ...entry,
+        } as SessionEntry,
+      }).then((result) => result.sessions.find((session) => session.key === childSessionKey));
+
+    // Lifecycle start cleared endedAt/runtimeMs for the follow-up turn.
+    const running = await list({ startedAt: now - 30_000 });
+    expect(running?.startedAt).toBe(now - 30_000);
+    expect(running?.endedAt).toBeUndefined();
+    expect(running?.runtimeMs).toBeUndefined();
+
+    const finished = await list({
+      startedAt: now - 30_000,
+      endedAt: now - 1_000,
+      runtimeMs: 29_000,
+      status: "done",
+    });
+    expect(finished?.endedAt).toBe(now - 1_000);
+    expect(finished?.runtimeMs).toBe(29_000);
+  });
+
   test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
