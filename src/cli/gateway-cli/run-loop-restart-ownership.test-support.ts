@@ -15,6 +15,11 @@ import {
 
 export function registerGatewayRestartOwnershipTests({
   consumeGatewayRestartIntentPayload,
+  consumeGatewayRestartAuthorization,
+  createSignaledLoopHarness,
+  markGatewayRestartHandled,
+  rollbackGatewayRestartSignalAdmission,
+  isGatewayWorkAdmissionClosed,
   readCgroup,
   systemctl,
   consumeGatewayRestartIntent,
@@ -31,6 +36,41 @@ export function registerGatewayRestartOwnershipTests({
   restartGatewayProcessWithFreshPid,
   commitManagedServiceUpdateHandoff,
 }: UpdateRespawnFixtures) {
+  it.each([false, true])(
+    "handles unreadable restart intent without changing local authorization (authorized=%s)",
+    async (authorized) => {
+      consumeGatewayRestartAuthorization.mockReturnValueOnce(authorized);
+      consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
+        new Error("OpenClaw state ownership could not be verified after sleep"),
+      );
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, exited } = await createSignaledLoopHarness();
+        vi.useFakeTimers();
+        try {
+          captureSignal("SIGUSR2")();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
+          expect(rollbackGatewayRestartSignalAdmission).not.toHaveBeenCalled();
+          expect(isGatewayWorkAdmissionClosed()).toBe(false);
+          expect(start).toHaveBeenCalledTimes(authorized ? 2 : 1);
+          if (authorized) {
+            expect(close).toHaveBeenCalledWith(
+              expect.objectContaining({ reason: "gateway restarting" }),
+            );
+            expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
+          } else {
+            expect(close).not.toHaveBeenCalled();
+          }
+        } finally {
+          captureSignal("SIGINT")();
+          await vi.advanceTimersByTimeAsync(0);
+          await expect(exited).resolves.toBe(0);
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it.each(
     [false, true].flatMap((noRespawn) =>
       [false, true].map((cleanupCompletes) => ({ noRespawn, cleanupCompletes })),
