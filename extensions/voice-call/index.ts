@@ -65,40 +65,25 @@ type VoiceCallRuntimeGeneration = {
 };
 
 type VoiceCallRuntimeRegistration = {
-  epoch: number;
   generation: VoiceCallRuntimeGeneration;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
 };
 
-type VoiceCallRuntimeSlot =
-  | {
-      state: "starting";
-      owner: VoiceCallRuntimeGeneration;
-      promise: Promise<VoiceCallRuntime>;
-    }
-  | {
-      state: "running";
-      owner: VoiceCallRuntimeGeneration;
-      runtime: VoiceCallRuntime;
-    }
-  | {
-      state: "stopping";
-      owner: VoiceCallRuntimeGeneration;
-      promise: Promise<void>;
-    };
+type VoiceCallRuntimeSlot = {
+  owner: VoiceCallRuntimeGeneration;
+  promise: Promise<VoiceCallRuntime>;
+  stopPromise?: Promise<void>;
+};
 
 type VoiceCallRuntimeCoordinator = {
   current?: VoiceCallRuntimeRegistration;
-  epochCounter: number;
   slot?: VoiceCallRuntimeSlot;
 };
 
 class VoiceCallRuntimeLifecycleError extends Error {}
 
 function getVoiceCallRuntimeCoordinator(): VoiceCallRuntimeCoordinator {
-  return resolveGlobalSingleton(VOICE_CALL_RUNTIME_COORDINATOR_KEY, () => ({
-    epochCounter: 0,
-  }));
+  return resolveGlobalSingleton(VOICE_CALL_RUNTIME_COORDINATOR_KEY, () => ({}));
 }
 
 function activateVoiceCallRuntimeGeneration(
@@ -106,14 +91,6 @@ function activateVoiceCallRuntimeGeneration(
   registration: VoiceCallRuntimeRegistration,
   generation: VoiceCallRuntimeGeneration,
 ): void {
-  if (
-    registration.epoch < (coordinator.current?.epoch ?? 0) ||
-    registration.generation !== generation
-  ) {
-    throw new VoiceCallRuntimeLifecycleError(
-      "Voice call runtime generation was superseded; use the current plugin registration",
-    );
-  }
   if (generation.retired) {
     throw new VoiceCallRuntimeLifecycleError(
       "Voice call runtime generation is retired; use the current plugin registration",
@@ -132,22 +109,16 @@ function stopVoiceCallRuntimeGeneration(
   generation: VoiceCallRuntimeGeneration,
 ): Promise<void> {
   const ownedSlot = coordinator.slot?.owner === generation ? coordinator.slot : undefined;
-  if (!ownedSlot || ownedSlot.state === "stopping") {
-    return ownedSlot?.promise ?? Promise.resolve();
+  if (!ownedSlot) {
+    return Promise.resolve();
   }
-  const stopPromise = Promise.resolve().then(async () => {
-    const runtime = ownedSlot.state === "running" ? ownedSlot.runtime : await ownedSlot.promise;
-    await runtime.stop();
-  });
-  const stoppingSlot = { state: "stopping" as const, owner: generation, promise: stopPromise };
-  if (coordinator.slot === ownedSlot) {
-    coordinator.slot = stoppingSlot;
-  }
-  return stopPromise.finally(() => {
-    if (coordinator.slot === stoppingSlot) {
-      coordinator.slot = undefined;
-    }
-  });
+  return (ownedSlot.stopPromise ??= ownedSlot.promise
+    .then((runtime) => runtime.stop())
+    .finally(() => {
+      if (coordinator.slot === ownedSlot) {
+        coordinator.slot = undefined;
+      }
+    }));
 }
 
 export default definePluginEntry({
@@ -161,7 +132,6 @@ export default definePluginEntry({
 
     const runtimeCoordinator = getVoiceCallRuntimeCoordinator();
     const runtimeRegistration: VoiceCallRuntimeRegistration = {
-      epoch: ++runtimeCoordinator.epochCounter,
       generation: { retired: false },
       ensureRuntime: () => ensureRegisteredRuntime(),
     };
@@ -191,73 +161,46 @@ export default definePluginEntry({
         );
       }
 
-      while (true) {
+      const previous = runtimeCoordinator.slot;
+      if (previous && (previous.owner !== runtimeGeneration || previous.stopPromise)) {
+        await stopVoiceCallRuntimeGeneration(runtimeCoordinator, previous.owner);
         activateRuntimeGeneration(runtimeGeneration);
-        const slot = runtimeCoordinator.slot;
-        if (slot) {
-          if (slot.owner !== runtimeGeneration) {
-            if (slot.owner.retired) {
-              await stopVoiceCallRuntimeGeneration(runtimeCoordinator, slot.owner);
-              continue;
-            }
-            throw new VoiceCallRuntimeLifecycleError(
-              "A previous voice call runtime generation is still active; retry after it stops",
-            );
-          }
-
-          if (slot.state === "running") {
-            return slot.runtime;
-          }
-          if (slot.state === "stopping") {
-            await slot.promise;
-            continue;
-          }
-
-          let createdRuntime: VoiceCallRuntime;
-          try {
-            createdRuntime = await slot.promise;
-          } catch (err) {
-            if (runtimeCoordinator.slot === slot) {
-              runtimeCoordinator.slot = undefined;
-            }
-            throw err;
-          }
-          activateRuntimeGeneration(runtimeGeneration);
-          if (runtimeCoordinator.slot !== slot) {
-            continue;
-          }
-          runtimeCoordinator.slot = {
-            state: "running",
-            owner: runtimeGeneration,
-            runtime: createdRuntime,
-          };
-          return createdRuntime;
-        }
-
+      }
+      if (!runtimeCoordinator.slot) {
         const scheduler = runtimeGeneration.scheduler;
         if (!scheduler || scheduler.signal.aborted) {
           throw new VoiceCallRuntimeLifecycleError(
             "Voice call service is not running; start the Gateway and retry",
           );
         }
-        const runtimePromise = createVoiceCallRuntime({
-          scheduler,
-          config,
-          coreConfig: api.config as OpenClawConfig,
-          fullConfig: api.config,
-          agentRuntime: api.runtime.agent,
-          stateRuntime: api.runtime.state,
-          ttsRuntime: api.runtime.tts,
-          deliveryRuntime: api.runtime,
-          runInServiceContext: runtimeGeneration.runInServiceContext,
-          logger: api.logger,
-        });
         runtimeCoordinator.slot = {
-          state: "starting",
           owner: runtimeGeneration,
-          promise: runtimePromise,
+          promise: createVoiceCallRuntime({
+            scheduler,
+            config,
+            coreConfig: api.config as OpenClawConfig,
+            fullConfig: api.config,
+            agentRuntime: api.runtime.agent,
+            stateRuntime: api.runtime.state,
+            ttsRuntime: api.runtime.tts,
+            deliveryRuntime: api.runtime,
+            runInServiceContext: runtimeGeneration.runInServiceContext,
+            logger: api.logger,
+          }),
         };
       }
+      const slot = runtimeCoordinator.slot;
+      let runtime: VoiceCallRuntime;
+      try {
+        runtime = await slot.promise;
+      } catch (err) {
+        if (runtimeCoordinator.slot === slot && !slot.stopPromise) {
+          runtimeCoordinator.slot = undefined;
+        }
+        throw err;
+      }
+      activateRuntimeGeneration(runtimeGeneration);
+      return runtime;
     };
     const ensureRegisteredRuntime = async (
       runtimeGeneration = runtimeRegistration.generation,

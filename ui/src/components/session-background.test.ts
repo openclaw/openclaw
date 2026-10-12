@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -10,14 +11,21 @@ import type {
   ApplicationTheme,
 } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
-import { createApplicationGateway } from "../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../test-helpers/application-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
-vi.mock("../app/server-prefs-profile.ts", () => ({
+vi.mock("../app/server-prefs-profile.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app/server-prefs-profile.ts")>()),
   resolveProfileAppearancePrefs: () => (profilePreferences.ready ? {} : null),
 }));
 
@@ -48,6 +56,7 @@ function fixture(resourceBasePath = "/control") {
     mode: "dark",
     resolvedMode: "dark",
     serverSelection: null,
+    appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
     refresh: () => listeners.forEach((notify) => notify()),
@@ -67,13 +76,14 @@ function fixture(resourceBasePath = "/control") {
 }
 
 function mountBackground(context: ApplicationContext) {
-  const background = new SessionBackground();
+  const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
   background.surface = "new-session";
   const surface = document.createElement("div");
   surface.className = "new-session-page";
   surface.append(background);
   document.body.append(surface);
+  mountSolid(() => background, { container: surface });
   return background;
 }
 
@@ -113,9 +123,52 @@ it("keeps absent preferences distinct from None and independent disabled surface
   });
 });
 
+it.each(["Lit provider", "Solid provider"])(
+  "inherits %s preferences and subscriptions until an explicit context overrides them",
+  async (providerKind) => {
+    const inherited = fixture();
+    let background: SessionBackground;
+    if (providerKind === "Lit provider") {
+      const provider = createApplicationContextProvider(inherited.context);
+      document.body.append(provider);
+      background = document.createElement("openclaw-session-background") as SessionBackground;
+      background.surface = "new-session";
+      mountSolid(() => background, { container: provider });
+    } else {
+      const provider = createSolidApplicationContextProvider(inherited.context);
+      const view = mountSolid(
+        () => createComponent(SessionBackground, { surface: "new-session" }),
+        { wrapper: provider.wrapper },
+      );
+      background = view.container.querySelector<SessionBackground>("openclaw-session-background")!;
+    }
+    await waitForSolid(() =>
+      expect(background.querySelector("img")?.getAttribute("src")).toBe("blob:background-a"),
+    );
+    inherited.settings.background = selectBackgroundSource({ kind: "theme" });
+    inherited.notify();
+    await waitForSolid(() =>
+      expect(background.querySelector(".session-background__image--theme")).not.toBeNull(),
+    );
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
+
+    const explicit = fixture();
+    explicit.settings.background = selectBackgroundSource({ kind: "none" });
+    background.context = explicit.context;
+    await waitForSolid(() =>
+      expect(background.querySelector(".session-background__image")).toBeNull(),
+    );
+    inherited.settings.background = selectBackgroundSource({ kind: "custom", assetId: "asset-b" });
+    inherited.notify();
+    await background.updateComplete;
+    expect(background.querySelector(".session-background__image")).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  },
+);
+
 it("does not request or render artwork on an initially disabled or hidden surface", async () => {
   const { context } = fixture();
-  const background = new SessionBackground();
+  const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
   document.body.append(background);
   await background.updateComplete;
@@ -150,13 +203,13 @@ it("does not read custom bytes or render theme URLs when accessibility suppresse
 it("recomputes custom image contrast only when painted palette tokens change, not slider intent", async () => {
   const { context, settings, notify } = fixture();
   const background = mountBackground(context);
-  await vi.waitFor(() => expect(getCanvasContext).toHaveBeenCalledTimes(1));
+  await waitForSolid(() => expect(getCanvasContext).toHaveBeenCalledTimes(1));
   settings.background = { ...settings.background, visibility: 0.8 };
   notify();
   await background.updateComplete;
   expect(getCanvasContext).toHaveBeenCalledTimes(1);
   background.style.setProperty("--muted", "rgb(140 140 140)");
-  background.requestUpdate();
+  notify();
   await background.updateComplete;
   expect(getCanvasContext).toHaveBeenCalledTimes(2);
 });
@@ -180,6 +233,7 @@ it("preserves full bundled Theme strength at the default visibility without canv
   await background.updateComplete;
   expect(opacity()).toBe("0.5");
   background.remove();
+  await Promise.resolve();
   expect(surface.hasAttribute("data-background-painted")).toBe(false);
   expect(getCanvasContext).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
@@ -228,7 +282,7 @@ it("discards a profile switch during response body reading", async () => {
     isCurrent: () => true,
   });
   const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-  await vi.waitFor(() => expect(readBody).toHaveBeenCalled());
+  await waitForSolid(() => expect(readBody).toHaveBeenCalled());
   gateway.publish({ ...state, selfUser: { id: "profile-b" } });
   body.resolve(new Blob(["image"], { type: "image/jpeg" }));
   await rejection;
@@ -287,7 +341,7 @@ it("preserves the explicit same-origin development proxy mount", async () => {
 it("revokes a mounted image immediately on logout and does not restore it on reconnect without identity", async () => {
   const { context, gateway, state } = fixture();
   const background = mountBackground(context);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(background.querySelector("img")?.getAttribute("src")).toBe("blob:background-a"),
   );
   gateway.publish({ ...state, selfUser: null, phase: "connecting" });
@@ -306,12 +360,12 @@ it("retains draft siblings and revokes artwork when the pane hides or preference
   wrapper.className = "new-session-page";
   const draft = document.createElement("textarea");
   draft.value = "Unsent draft";
-  const background = new SessionBackground();
+  const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
   background.surface = "new-session";
   wrapper.append(background, draft);
   document.body.append(wrapper);
-  await vi.waitFor(() => expect(background.querySelector("img")).not.toBeNull());
+  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
   expect(wrapper.hasAttribute("data-background-custom")).toBe(true);
   background.presented = false;
   await background.updateComplete;
@@ -332,12 +386,12 @@ it("retains draft siblings and revokes artwork when the pane hides or preference
 it("retires the prior client even when the profile and gateway URL are unchanged", async () => {
   const { context, gateway, state } = fixture();
   const background = mountBackground(context);
-  await vi.waitFor(() => expect(background.querySelector("img")).not.toBeNull());
+  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
   createObjectUrl.mockReturnValue("blob:background-new-client");
   gateway.publish({ ...state, client: {} as GatewayBrowserClient });
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
   expect(background.querySelector("img")?.getAttribute("src")).toBeNull();
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(background.querySelector("img")?.getAttribute("src")).toBe("blob:background-new-client"),
   );
   expect(fetch).toHaveBeenCalledTimes(2);
@@ -402,7 +456,7 @@ it("does not restore a private mirror before profile hydration, including unchan
   expect(background.hasAttribute("data-custom")).toBe(false);
   profilePreferences.ready = true;
   notify();
-  await vi.waitFor(() => expect(background.querySelector("img")).not.toBeNull());
+  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
   profilePreferences.ready = false;
   notify();
   expect(background.querySelector("img")?.getAttribute("src")).toBeNull();
@@ -419,11 +473,11 @@ it.each(["new-session", "session", "preview"] as const)(
       showInSessions: true,
       visibility: 1,
     };
-    const background = new SessionBackground();
+    const background = document.createElement("openclaw-session-background") as SessionBackground;
     background.context = context;
     background.surface = surface;
     document.body.append(background);
-    await vi.waitFor(() => expect(background.querySelector("img")).not.toBeNull());
+    await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
     expect(background.querySelector("img")?.style.opacity).toBe("0");
     settings.background = { ...settings.background, visibility: 0.5 };
     notify();
@@ -440,7 +494,7 @@ it("also keeps bundled Full bleed artwork beneath the permanent overlay", async 
     presentation: "full-bleed",
     visibility: 1,
   };
-  const background = new SessionBackground();
+  const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
   background.surface = "preview";
   document.body.append(background);
@@ -459,7 +513,7 @@ it("also keeps bundled Full bleed artwork beneath the permanent overlay", async 
 it("allows a temporary settings preview without changing disabled placements", async () => {
   const { context, settings } = fixture();
   settings.background = { ...settings.background, showOnNewSession: false, showInSessions: false };
-  const background = new SessionBackground();
+  const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
   background.surface = "preview";
   background.preferenceOverride = {
@@ -468,7 +522,7 @@ it("allows a temporary settings preview without changing disabled placements", a
     visibility: 0.8,
   };
   document.body.append(background);
-  await vi.waitFor(() => expect(background.querySelector("img")).not.toBeNull());
+  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
   expect(settings.background.showOnNewSession).toBe(false);
   expect(settings.background.showInSessions).toBe(false);
   background.presented = false;

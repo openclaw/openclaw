@@ -13,10 +13,14 @@ import {
   withMSTeamsRequestDeadline,
 } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { ensureUserAgentHeader } from "../user-agent.js";
 import { resolveUnrepresentedHtmlAttachmentIds } from "./html.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
+  applyAuthorizationHeaderForUrl,
+  encodeGraphShareId,
   extractInlineImageReferences,
+  GRAPH_ROOT,
   isAdvertisedFileAttachment,
   isDownloadableAttachment,
   isRedirectStatus,
@@ -43,6 +47,7 @@ type DownloadCandidate =
       fileHint?: string;
       contentTypeHint?: string;
       sourceId?: string;
+      graphReference?: boolean;
     }
   | {
       kind: "data";
@@ -52,8 +57,12 @@ type DownloadCandidate =
     }
   | { kind: "unavailable"; mediaKind: MSTeamsInboundMedia["kind"]; sourceId?: string };
 
-function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
+function resolveDownloadCandidate(
+  att: MSTeamsAttachmentLike,
+  graphReferenceToken?: string,
+): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
+  const graphReference = graphReferenceToken !== undefined && contentType === "reference";
   const name = normalizeOptionalString(att.name) ?? "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
@@ -80,7 +89,9 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     };
   }
 
-  const contentUrl = normalizeOptionalString(att.contentUrl) ?? "";
+  const contentUrl = graphReference
+    ? (att.contentUrl ?? "")
+    : (normalizeOptionalString(att.contentUrl) ?? "");
   if (!contentUrl) {
     return null;
   }
@@ -90,19 +101,26 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
   // an HTML landing page rather than the file bytes. Rewrite them to the
   // Graph shares endpoint so the auth fallback attaches a Graph-scoped token
   // and the response is the real file content.
-  const sharesUrl = tryBuildGraphSharesUrlForSharedLink(contentUrl);
+  const sharesUrl = graphReference
+    ? `${GRAPH_ROOT}/shares/${encodeGraphShareId(contentUrl)}/driveItem/content`
+    : tryBuildGraphSharesUrlForSharedLink(contentUrl);
   const resolvedUrl = sharesUrl ?? contentUrl;
   // Graph shares returns raw bytes without a declared content type we can
   // trust for routing — let the downloader infer MIME from the buffer.
-  const resolvedContentTypeHint = sharesUrl ? undefined : contentType;
+  const resolvedContentTypeHint = graphReference
+    ? "application/octet-stream"
+    : sharesUrl
+      ? undefined
+      : contentType;
 
   return {
     kind: "remote",
     mediaKind: resolveMSTeamsMediaKind({ contentType, fileName: name }),
     url: resolvedUrl,
-    fileHint: name || undefined,
+    fileHint: graphReference ? (att.name ?? undefined) : name || undefined,
     contentTypeHint: resolvedContentTypeHint,
     sourceId: att.id?.trim() || undefined,
+    graphReference,
   };
 }
 
@@ -184,6 +202,7 @@ async function fetchWithAuthFallback(params: {
   resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
   deadline?: MSTeamsRequestDeadline;
+  bearerToken?: string;
 }): Promise<Response> {
   const fetchAttempt = (fetchFn: typeof fetch | undefined, requestInit?: RequestInit) =>
     safeFetchWithPolicy({
@@ -194,6 +213,16 @@ async function fetchWithAuthFallback(params: {
       resolveFn: params.resolveFn,
       timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
+  if (params.bearerToken !== undefined) {
+    const headers = ensureUserAgentHeader(params.requestInit?.headers);
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url: params.url,
+      authAllowHosts: params.policy.authAllowHosts,
+      bearerToken: params.bearerToken,
+    });
+    return fetchAttempt(params.fetchFn, { ...params.requestInit, headers });
+  }
   const firstAttempt = await fetchAttempt(params.fetchFn, params.requestInit);
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -250,6 +279,8 @@ export async function downloadMSTeamsAttachments(params: {
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
+  /** Already-acquired Graph token for reference attachments from a Graph message. */
+  graphReferenceToken?: string;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) {
@@ -265,7 +296,7 @@ export async function downloadMSTeamsAttachments(params: {
     .filter(isAdvertisedFileAttachment)
     .map((attachment) => {
       const candidate = isDownloadableAttachment(attachment)
-        ? resolveDownloadCandidate(attachment)
+        ? resolveDownloadCandidate(attachment, params.graphReferenceToken)
         : null;
       return (
         candidate ?? {
@@ -347,7 +378,7 @@ export async function downloadMSTeamsAttachments(params: {
         filePathHint: candidate.fileHint ?? candidate.url,
         maxBytes: params.maxBytes,
         contentTypeHint: candidate.contentTypeHint,
-        kind: candidate.mediaKind,
+        kind: candidate.graphReference ? undefined : candidate.mediaKind,
         preserveFilenames: params.preserveFilenames,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
@@ -360,9 +391,17 @@ export async function downloadMSTeamsAttachments(params: {
             resolveFn: params.resolveFn,
             policy,
             deadline: params.deadline,
+            bearerToken: candidate.graphReference ? params.graphReferenceToken : undefined,
           }),
       });
     } catch (err) {
+      if (candidate.graphReference) {
+        params.logger?.warn?.("msteams SharePoint reference download failed", {
+          error: coerceErrorMessage(err),
+          name: candidate.fileHint,
+        });
+        return undefined;
+      }
       const msg = coerceErrorMessage(err);
       params.logger?.warn?.(
         `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,

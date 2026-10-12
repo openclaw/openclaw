@@ -29,10 +29,7 @@ import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.js";
-import {
-  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
-  readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
 import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
@@ -56,7 +53,7 @@ import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-e
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { inspectGatewayOwnerLeaseForMaintenance } from "../infra/gateway-owner-lease.worker.js";
+import { inspectGatewayOwnerLease } from "../infra/gateway-owner-lease.worker.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
@@ -113,9 +110,9 @@ import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.w
 import { readStateStream } from "./openclaw-state-read-stream.js";
 import type {
   OpenClawStateReadReply,
+  OpenClawStateReadRequest,
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
-import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
@@ -124,13 +121,12 @@ import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 
 serveOwnedWorkerTasks(
-  async function read(input, channel, control): Promise<OpenClawStateReadReply> {
+  async function read(message, channel, control): Promise<OpenClawStateReadReply> {
+    // SAFETY: Only the typed state-read pool sends requests on this private worker port.
+    const input = message as OpenClawStateReadRequest;
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
-      if (!isReadRequest(input)) {
-        throw new Error("Shared-state reader requires a captured state location and read command");
-      }
       const prepared = stateReadRegistry.prepare(input.command.type);
       if (prepared) {
         return prepared.then(() => read(input, channel, control));
@@ -158,10 +154,14 @@ serveOwnedWorkerTasks(
             }),
           );
         }
-        if (command.type === "doctor.gatewayOwnerLease.read") {
-          const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
-            sourceAdmitted = true;
-          });
+        if (command.type === "gatewayOwnerLease.read") {
+          const lease = inspectGatewayOwnerLease(
+            input,
+            () => {
+              sourceAdmitted = true;
+            },
+            command.schemaMaintenance,
+          );
           return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
         const locationArgs = [
@@ -480,12 +480,6 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
-              };
-            }
-            if (command.type === "githubRepository.request") {
-              return {
-                type: command.type,
-                row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
               };
             }
             if (

@@ -7,6 +7,10 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "../config/sessions/session-collaboration-scope.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
@@ -112,6 +116,7 @@ export async function persistHeartbeatOutcome(params: {
   occurredAt: number;
   env?: NodeJS.ProcessEnv;
   incognito?: SessionCollaborationScope["incognito"];
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<void> {
   if (params.response.notify || params.response.outcome === "no_change") {
     return;
@@ -149,9 +154,13 @@ export async function claimHeartbeatOutcomeForRun(params: {
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   incognito?: SessionCollaborationScope["incognito"];
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<PersistedHeartbeatOutcome | undefined> {
   const { assertCurrent } = params;
-  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
+  const memory = getSessionActorStorageBinding(params);
+  const incognito = memory
+    ? undefined
+    : (params.incognito ?? captureIncognitoSessionOperation(params));
   const row = await runHeartbeatOutcomeOperation(
     { ...params, incognito },
     {
@@ -171,10 +180,35 @@ export async function claimHeartbeatOutcomeForRun(params: {
 async function runHeartbeatOutcomeOperation(
   params: Parameters<typeof resolveSqliteScope>[0] & {
     incognito?: SessionCollaborationScope["incognito"];
+    sessionActor?: SessionActorStorageBinding;
   },
   command: SqliteWorkerCommand<HeartbeatOutcomeWorkerOperations>,
   assertCurrent: () => void = () => undefined,
 ): Promise<HeartbeatOutcomeRow | undefined> {
+  const memory = getSessionActorStorageBinding(params);
+  if (memory) {
+    const authority = {
+      ...memory.authority,
+      assertCurrent() {
+        assertCurrent();
+        memory.authority.assertCurrent();
+      },
+    };
+    const result =
+      command.type === "persist"
+        ? await memory.actor.storage!.mutate(
+            { type: "session.heartbeat.persist", input: command.input },
+            authority,
+          )
+        : await memory.actor.storage!.mutate(
+            { type: "session.heartbeat.claim", input: command.input },
+            authority,
+          );
+    if (result.kind === "rolled-back") {
+      throw new Error(result.error.message);
+    }
+    return result.value;
+  }
   const resolved = toDatabaseOptions(resolveSqliteScope(params));
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -312,7 +346,10 @@ export async function claimHeartbeatContextForUserRun(
     return undefined;
   }
   const { assertCurrent } = params;
-  const incognito = params.incognito ?? captureIncognitoSessionOperation(params);
+  const memory = getSessionActorStorageBinding(params);
+  const incognito = memory
+    ? undefined
+    : (params.incognito ?? captureIncognitoSessionOperation(params));
   if (!assertCurrent) {
     throw new Error("Heartbeat outcome context requires an active admitted run");
   }

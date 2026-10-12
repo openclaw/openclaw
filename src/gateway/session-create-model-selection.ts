@@ -35,6 +35,29 @@ import type {
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
 
+/** Keep automatic selection provenance distinct from an explicit model pin. */
+export function projectSessionCreateSpawnModelSelection(params: {
+  entry: SessionEntry;
+  creation: CreateGatewaySessionParams["creation"];
+  requestedModel?: string;
+  createdNewEntry: boolean;
+}): Partial<SessionEntry> {
+  // Match the requested model before using the patch owner's canonical selection.
+  const selection = params.creation?.spawnModelAutoSelection;
+  if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
+    return {};
+  }
+  return {
+    modelOverrideSource: "auto",
+    ...(selection.hasFallbackOrigin
+      ? {
+          modelOverrideFallbackOriginProvider: params.entry.providerOverride,
+          modelOverrideFallbackOriginModel: params.entry.modelOverride,
+        }
+      : {}),
+  };
+}
+
 export function resolveSessionCreateModelInputError(
   params: Pick<
     CreateGatewaySessionParams,
@@ -218,7 +241,7 @@ export async function prepareSessionCreateDefaultAccount(params: {
     return selected;
   }
   const model = selected.selection;
-  const linked = resolveUserLinkedAuthProfile({
+  const linked = await resolveUserLinkedAuthProfile({
     cfg: resolveModelProviderAuthConfig({
       config: params.cfg,
       provider: model.provider,

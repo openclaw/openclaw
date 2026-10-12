@@ -7,20 +7,20 @@ import {
   markConversationDeliveryReplied,
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
-import {
-  resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
-} from "../../config/sessions/conversation-registry.js";
-import {
-  appendTranscriptEventSync,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
+import { prepareConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionStoreCandidateIdentities } from "../../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../../config/sessions/session-store-target-inventory.js";
+import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { claimPendingConversationTurnReply } from "../../sessions/conversation-turns.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
@@ -65,6 +65,9 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   const replyToId =
     normalizeOptionalString(params.ctx.ReplyToIdFull) ??
     normalizeOptionalString(params.ctx.ReplyToId);
+  if (!replyToId) {
+    return false;
+  }
   const threadId =
     params.ctx.MessageThreadId == null
       ? undefined
@@ -76,12 +79,42 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   };
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
-  const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
-  const sessionEntry = loadSessionEntryReadOnly({
-    ...scope,
-    sessionKey,
-    readConsistency: "latest",
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const databaseIdentities = new Set(
+    [
+      ...captureSessionStoreCandidateIdentities(
+        captureSessionStoreReadCandidates(storePath),
+      ).values(),
+    ].map((identity) => identity.key),
+  );
+  const storeSessionKey = resolveSqliteSessionKey(sessionKey, agentId);
+  let identityChanged = false;
+  // A reset during the first worker read must not become this reply's new lifecycle.
+  const unsubscribe = onSessionIdentityMutation((mutation) => {
+    if (
+      typeof mutation.databaseIdentity === "string" &&
+      databaseIdentities.has(`file:${mutation.databaseIdentity}`) &&
+      (mutation.previous.sessionKeys.includes(storeSessionKey) ||
+        (mutation.kind !== "delete" && mutation.current.sessionKeys.includes(storeSessionKey)))
+    ) {
+      identityChanged = true;
+    }
   });
+  let scope: Awaited<ReturnType<typeof prepareConversationRegistryScope>>;
+  let sessionEntry: Awaited<ReturnType<typeof readSessionEntryReadOnlyInWorker>>;
+  try {
+    scope = await prepareConversationRegistryScope({ agentId, config: params.cfg });
+    sessionEntry = await readSessionEntryReadOnlyInWorker(
+      { ...scope, sessionKey, readConsistency: "latest" },
+      () => {
+        if (identityChanged) {
+          throw new Error("session changed before captured reply persistence");
+        }
+      },
+    );
+  } finally {
+    unsubscribe();
+  }
   if (!sessionEntry) {
     return false;
   }
@@ -124,9 +157,6 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     timestamp,
   });
   if (!claim) {
-    if (!replyToId) {
-      return false;
-    }
     const operation =
       (await findConversationTurnDeliveryByReplyTarget(scope, {
         conversationRef: conversation.conversationRef,
@@ -187,55 +217,45 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
       claim.assertCurrent,
     );
     replyCommitted = true;
-    return await runConversationDatabaseWrite(scope, (writeScope) => {
-      claim.assertCurrent();
-      const current = loadSessionEntryReadOnly({
-        ...writeScope,
-        sessionKey,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== claim.sessionId ||
-        current.lifecycleRevision !== sessionEntry.lifecycleRevision
-      ) {
-        throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
-      }
-      const artifactId = `conversation-turn-reply-${claim.turnId}`;
-      // The tool result owns model context. A side artifact keeps an audit trail
-      // without inserting a user row between an active tool call and its result.
-      let persisted = false;
-      try {
-        const appendResult = appendTranscriptEventSync(
-          { ...writeScope, sessionId: sessionEntry.sessionId, sessionKey },
-          {
-            type: "custom",
-            id: artifactId,
-            customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
-            appendMode: "side",
-            timestamp: timestamp ?? Date.now(),
-            data: {
-              turnId: claim.turnId,
-              conversationRef: conversation.conversationRef,
-              ...replyTarget,
-              message: persistedMessage,
-            },
+    claim.assertCurrent();
+    const artifactId = `conversation-turn-reply-${claim.turnId}`;
+    // The tool result owns model context. A side artifact keeps an audit trail
+    // without inserting a user row between an active tool call and its result.
+    let persisted = false;
+    try {
+      persisted = await appendPreparedTranscriptEvent(
+        {
+          ...scope,
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          expectedOwner: {
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
           },
-        );
-        persisted = appendResult.ok && appendResult.value;
-        if (!appendResult.ok) {
-          logVerbose(
-            `captured conversation turn reply audit persistence failed: ${appendResult.error.code}`,
-          );
-        }
-      } catch (error) {
-        logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
-      }
-      if (!persisted) {
-        logVerbose("captured conversation turn reply audit artifact was not persisted");
-      }
-      claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
-      return true;
-    });
+        },
+        {
+          type: "custom",
+          id: artifactId,
+          customType: CONVERSATION_TURN_REPLY_CUSTOM_TYPE,
+          appendMode: "side",
+          timestamp: timestamp ?? Date.now(),
+          data: {
+            turnId: claim.turnId,
+            conversationRef: conversation.conversationRef,
+            ...replyTarget,
+            message: persistedMessage,
+          },
+        },
+        claim.assertCurrent,
+      );
+    } catch (error) {
+      logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
+    }
+    if (!persisted) {
+      logVerbose("captured conversation turn reply audit artifact was not persisted");
+    }
+    claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
+    return true;
   } catch (error) {
     claim.release();
     logVerbose(`conversation turn reply capture failed: ${String(error)}`);

@@ -98,6 +98,8 @@ export type RunManagedCommandOptions = ManagedCommandOptions & {
   abortKillGraceMs?: number;
   cleanupDrainTimeoutMs?: number;
   onSignal?: (signal: NodeJS.Signals) => void;
+  /** For callers that immediately terminate themselves after receiving the result. */
+  waitForCleanupRelease?: boolean;
 };
 
 type ManagedCommandOutcome =
@@ -528,7 +530,10 @@ export async function waitForManagedProcessGroupExit(
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
-export async function runManagedCommand(options: RunManagedCommandOptions): Promise<number> {
+export async function runManagedCommand({
+  waitForCleanupRelease = false,
+  ...options
+}: RunManagedCommandOptions): Promise<number> {
   const command = {
     ...options,
     args: options.args?.slice(),
@@ -542,11 +547,14 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
   command.signal?.throwIfAborted();
   let receivedSignal: NodeJS.Signals | undefined;
   let childStarted = false;
+  let settling = false;
   const admission = new AbortController();
   const rememberSignal = (received: NodeJS.Signals) => {
     receivedSignal ??= received;
-    if (!childStarted) {
+    if (!childStarted || settling) {
       command.onSignal?.(received);
+    }
+    if (!childStarted) {
       admission.abort();
     }
   };
@@ -577,8 +585,12 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
     joined = !hasUnjoinedWork(error);
     outcome = { error };
   }
+  settling = true;
   try {
-    releaseCleanup?.(joined);
+    const released = releaseCleanup?.(joined, waitForCleanupRelease);
+    if (waitForCleanupRelease) {
+      await released;
+    }
   } finally {
     managedChildren.delete(rememberSignal);
     removeSignalHandlersIfIdle();
@@ -591,7 +603,9 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
       }
       return signalExitCode(receivedSignal ?? error.signal);
     }
-    if (receivedSignal && hasProcessErrorCode(error, "ABORT_ERR")) {
+    // A caller can abort in its own OS signal handler. Preserve its cancellation
+    // result instead of treating the same signal as an unhandled interruption.
+    if (receivedSignal && !command.signal?.aborted && hasProcessErrorCode(error, "ABORT_ERR")) {
       return signalExitCode(receivedSignal);
     }
     throw error;

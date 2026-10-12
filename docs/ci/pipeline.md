@@ -340,14 +340,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
-`cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
-WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
-`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
-byte sizes, and releases inspector snapshot metadata when sessions close.
-It retains the previous worker heap-cap, module-resolution, test-deadline,
-GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
+The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a`.
+This build shares source buffers on `node:vm` cache hits, refactors module
+resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
+and external strings across Workers, releases Worker-local event-name state,
+and skips the preliminary full collection at Worker shutdown. WebKit fixes
+stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
+fixes Linux foreign-stack suspension deadlocks.
+It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
+inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
+test-deadline, GC cadence, and idle-worker fixes. The release publishes the four
+Darwin/Linux targets; Darwin executables are Developer ID signed and notarized.
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
@@ -814,15 +820,22 @@ distinct commit; security review evaluates the affected PRs automatically.
 Each guard updates one PR comment with affected files, review guidance, the
 current revision, and the remaining action. The sensitive-change label remains
 after approval so reviewers can still identify the affected responsibility.
-Trusted `issue_comment` events reevaluate approval commands and edits or
-deletions of approval comments automatically. Edits inspect both the previous
-and current text so removing a command still revokes approval. Ordinary comment
-activity does not reevaluate the guards or change their statuses. Command mentions
-in prose, quotes, or code fences are not approval comments. The workflow filters
-ordinary comments before allocating a runner; a command mention can start the
-lightweight resolver, which validates the syntax before scheduling review.
-Both guards share one review job, and comment events do not rerun the test suite.
-Evaluation uses trusted repository code and GitHub metadata without
+Approval commands and edits or deletions of approval comments reevaluate the
+guards automatically. Edits inspect both the previous and current text so removing
+a command still revokes approval. Ordinary comment activity does not reevaluate
+the guards or change their statuses. Command mentions in prose, quotes, or code
+fences are not approval comments.
+
+GitHub starts one Actions run per subscribing workflow for every comment, before
+job conditions apply, so Security Review does not subscribe to `issue_comment`.
+The shared ClawSweeper Dispatch listener owns comment admission: its
+`security-review-command` job filters ordinary comments before allocating a
+runner, parses a command mention with the same approval parser, and dispatches
+`security-review.yml` for that pull request. Security Review accepts that
+`workflow_dispatch` only from repository automation (`github-actions[bot]`); the
+input names the pull request, and authorization is always read from live
+comments. Both guards share one review job, and comment events do not rerun the
+test suite. Evaluation uses trusted repository code and GitHub metadata without
 executing contributor code or comment text.
 
 The hard tier lives only in `.github/CODEOWNERS`: security policy, ownership,

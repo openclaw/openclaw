@@ -87,6 +87,42 @@ describe("custodian page nudges", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a focused question answer usable across unrelated Gateway events", async () => {
+    const initialReply = createDeferred<SystemAgentChatResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(initialReply.promise)
+      .mockResolvedValue(chatReply("Continuing."));
+    const { context, emitGatewayEvent } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+    initialReply.resolve(
+      chatReply("Choose the next step.", {
+        question: {
+          id: "focused-choice",
+          header: "Next step",
+          question: "What should happen next?",
+          options: [
+            { label: "Continue", reply: "continue", recommended: true },
+            { label: "Pause", reply: "pause" },
+          ],
+        },
+      }),
+    );
+    await initialReply.promise;
+    await page.updateComplete;
+    const answer = page.querySelector<HTMLButtonElement>('[data-option-value="Pause"]')!;
+    answer.focus();
+    expect(document.activeElement).toBe(answer);
+
+    emitGatewayEvent({ event: "health", payload: { channels: {} } });
+    await page.updateComplete;
+
+    expect(document.activeElement).toBe(answer);
+    answer.click();
+    await page.updateComplete;
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: "pause" });
+  });
+
   it("shows a channel-error nudge but ignores routine events", async () => {
     const { page, emitGatewayEvent, emitHealth } = await mountCaretaker();
 

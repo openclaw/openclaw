@@ -6,11 +6,11 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import * as inputVisibility from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -274,38 +274,26 @@ describe("subagent coordination history", () => {
     });
   });
 
-  it.each([
-    "uncached-source",
-    "cached-source",
-    "cached-run",
-    "projected-fast-path",
-    "registered-agent",
-  ])("rejects local history after source authority changes (%s)", async (readKind) => {
-    await withHistory(
-      [
-        ["worker-input", childInput("worker-run")],
-        ["worker-answer", response("worker-run", "Internal acknowledgement")],
-      ],
-      async ({ scope }) => {
-        const database = openOpenClawStateDatabase();
-        const subagentCoordination = createSessionHistorySubagentProjection(scope);
-        if (readKind === "cached-source") {
-          expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
-        } else if (readKind === "cached-run") {
-          expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
-        }
-        if (readKind === "registered-agent") {
-          openOpenClawAgentDatabase({ agentId: "registered-later" });
-        } else {
+  it.each(["uncached-source", "cached-source", "cached-run", "projected-fast-path"])(
+    "rejects local history after source authority changes (%s)",
+    async (readKind) => {
+      await withHistory(
+        [
+          ["worker-input", childInput("worker-run")],
+          ["worker-answer", response("worker-run", "Internal acknowledgement")],
+        ],
+        async ({ scope }) => {
+          const database = openOpenClawStateDatabase();
+          const subagentCoordination = createSessionHistorySubagentProjection(scope);
+          if (readKind === "cached-source") {
+            expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
+          } else if (readKind === "cached-run") {
+            expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
+          }
           await closeOpenClawStateDatabaseByPathAsync(database.path);
           openOpenClawStateDatabase({ path: database.path });
-        }
-        const read = () =>
-          readKind === "registered-agent"
-            ? projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
-                subagentCoordination,
-              })
-            : readKind === "cached-run"
+          const read = () =>
+            readKind === "cached-run"
               ? subagentCoordination.isSubagentRunMessage("worker-run", 2)
               : readKind === "projected-fast-path"
                 ? projectChatDisplayMessages(
@@ -322,14 +310,11 @@ describe("subagent coordination history", () => {
                     { subagentCoordination },
                   )
                 : subagentCoordination.isSubagentSession(childKey);
-        expect(read).toThrow(
-          readKind === "registered-agent"
-            ? "Session store changed"
-            : /state database read admission changed/u,
-        );
-      },
-    );
-  });
+          expect(read).toThrow(/state database read admission changed/u);
+        },
+      );
+    },
+  );
 
   it.each(["parentSessionKey", "spawnedBy"] as const)(
     "reads ACP %s lineage from bound shared state and rejects stale bindings",

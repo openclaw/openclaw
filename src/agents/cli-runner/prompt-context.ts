@@ -8,6 +8,7 @@ import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cl
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
@@ -33,6 +34,7 @@ async function buildCliTurnAppendContext(
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
     requesterProfileId?: string;
+    configuredTimezone?: string;
   },
 ): Promise<string> {
   const { resolveSystemPromptUsage } = await import("./helpers.js");
@@ -61,6 +63,12 @@ async function buildCliTurnAppendContext(
     interruptedInputContext
       ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
       : undefined,
+    labelRuntimeContextText(
+      buildTemporalContextText({
+        configuredTimezone: params.configuredTimezone,
+        sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
+      }),
+    ),
     mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
     resolveSystemPromptUsage(params)
@@ -201,14 +209,18 @@ function prependCliSessionDriftUserContext(
 export function createCliCurrentPromptRenderer(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
+  inlineContext?: string,
 ) {
   const context = prependCliSessionDriftUserContext(
     params.currentInboundContext,
     reusableCliSession,
   );
   return (prompt: string, preferResumableText = false) =>
-    annotateInterSessionPromptText(
-      buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
-      params.inputProvenance,
+    composeCliPromptContext(
+      annotateInterSessionPromptText(
+        buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
+        params.inputProvenance,
+      ),
+      { prependContext: inlineContext },
     );
 }

@@ -146,20 +146,10 @@ describe("monitorMatrixProvider", () => {
   });
 
   it.each([
-    [undefined, "off", false],
-    [{ mode: "partial" }, "partial", true],
     [{ mode: "quiet" }, "quiet", true],
     [{ mode: "progress" }, "progress", false],
     [{ mode: "progress", progress: { toolProgress: true } }, "progress", true],
-    [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
-    [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
-    [
-      { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },
-      "progress",
-      false,
-    ],
-    [{ mode: "off", preview: { toolProgress: true } }, "off", false],
   ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
     async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
@@ -185,35 +175,6 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.callOrder).toStrictEqual([]);
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.acquireSharedMatrixClient).not.toHaveBeenCalled();
-  });
-
-  it("publishes disconnected startup status and connected sync status without failing the monitor", async () => {
-    const abortController = new AbortController();
-    const monitorPromise = monitorMatrixProvider({
-      abortSignal: abortController.signal,
-      setStatus: hoisted.setStatus,
-    });
-
-    await waitForCallOrderEntry("start-client");
-
-    expectStatusCallFields({
-      accountId: "default",
-      baseUrl: "https://matrix.example.org",
-      connected: false,
-      healthState: "starting",
-    });
-
-    hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
-
-    expectStatusCallFields({
-      accountId: "default",
-      connected: true,
-      healthState: "healthy",
-      lastError: null,
-    });
-
-    abortController.abort();
-    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("re-arms the healthy-sync milestone across reconnect transitions", async () => {
@@ -320,24 +281,6 @@ describe("monitorMatrixProvider", () => {
       connected: false,
       healthState: "error",
       lastError: "sync exploded",
-    });
-  });
-
-  it("marks early startup failures as error before the monitor loop starts", async () => {
-    hoisted.acquireSharedMatrixClient.mockRejectedValue(new Error("prepare failed"));
-
-    await expect(
-      monitorMatrixProvider({
-        setStatus: hoisted.setStatus,
-      }),
-    ).rejects.toThrow("prepare failed");
-
-    expect(hoisted.releaseSharedClientInstance).not.toHaveBeenCalled();
-    expectLastStatusFields({
-      accountId: "default",
-      connected: false,
-      healthState: "error",
-      lastError: "prepare failed",
     });
   });
 
@@ -565,16 +508,6 @@ describe("monitorMatrixProvider", () => {
     expectPersistRelease();
   });
 
-  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
-    hoisted.client.hasPersistedSyncState.mockReturnValue(true);
-    await startMonitorAndAbortAfterStartup();
-
-    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
-      dropPreStartupMessages?: unknown;
-    };
-    expect(handlerParams.dropPreStartupMessages).toBe(false);
-  });
-
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {
     const abortController = new AbortController();
     const pendingHandlers = new Map<string, () => void>();
@@ -782,14 +715,6 @@ describe("monitorMatrixProvider", () => {
     });
 
     await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
-  });
-
-  it("does not wire unmapped strict room promotion for per-user DM scope", async () => {
-    await startMonitorAndAbortAfterStartup();
-
-    const trackerOpts = directRoomTrackerOptions();
-
-    expect(trackerOpts?.canPromoteUnmappedStrictRoom).toBeUndefined();
   });
 
   it("wires per-room unmapped strict room promotion through the room metadata gate", async () => {

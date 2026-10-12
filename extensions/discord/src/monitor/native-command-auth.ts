@@ -1,5 +1,6 @@
 import {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,7 +48,7 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export function createDiscordNativeCommandAuthority(params: {
+export async function createDiscordNativeCommandAuthority(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
@@ -59,7 +60,7 @@ export function createDiscordNativeCommandAuthority(params: {
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = resolveCommandAuthorization(params).assertOwnerCurrent;
+  const assertAdmittedOwner = (await resolveCommandAuthorizationAsync(params)).assertOwnerCurrent;
   const readAuthorization = () => {
     const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
     const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
@@ -422,7 +423,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       commandArgs: {},
     });
     if (
-      !resolveCommandAuthorization({ ctx: ctxPayload, cfg, commandAuthorized: true }).senderIsOwner
+      !(await resolveCommandAuthorizationAsync({ ctx: ctxPayload, cfg, commandAuthorized: true }))
+        .senderIsOwner
     ) {
       return false;
     }

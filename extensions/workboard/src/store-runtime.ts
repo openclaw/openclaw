@@ -27,26 +27,42 @@ export class WorkboardStoreRuntime {
   private closePromise: Promise<void> | undefined;
   private sealed = false;
   protected cardsRevision: WorkboardChange = { epoch: randomUUID(), revision: 1 };
-  sessionsRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
+  private sessionBoardRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
+  private writeToken: string | undefined;
   private revision = 0;
-  private externalDataVersion: number | undefined;
   private readonly listeners = new Set<(change: WorkboardChange) => void>();
   private readonly initialization: Promise<void>;
 
   constructor(
-    private readonly readDataVersion?: () => number | Promise<number>,
     private readonly closePersistence?: () => void | Promise<void>,
-    ready?: Promise<number>,
+    ready?: Promise<void>,
     private readonly runWithWriteAuthority?: WorkboardWriteAuthority,
+    private readonly readWriteToken?: () => string | undefined,
   ) {
-    this.initialization = Promise.resolve(ready ?? readDataVersion?.()).then((version) => {
-      this.externalDataVersion = version;
-    });
+    this.initialization = ready ?? Promise.resolve();
     void this.initialization.catch(() => {});
   }
 
   ready(): Promise<void> {
     return this.runOperation(() => undefined);
+  }
+
+  get sessionsRevision(): WorkboardChange {
+    this.refreshWriteReceipt();
+    return this.sessionBoardRevision;
+  }
+
+  protected refreshWriteReceipt(): string | undefined {
+    if (!this.readWriteToken) {
+      return "local";
+    }
+    const current = this.readWriteToken();
+    if (current === undefined || current !== this.writeToken) {
+      this.writeToken = current;
+      this.invalidateCards();
+      this.invalidateSessionBoards();
+    }
+    return current;
   }
 
   async runOperation<T>(run: () => T | Promise<T>): Promise<T> {
@@ -141,14 +157,23 @@ export class WorkboardStoreRuntime {
     sessions = false,
   ): Promise<T> {
     return this.runOperation(async () => {
-      const result = await run();
-      if (changed(result)) {
+      try {
+        const result = await run();
+        if (changed(result)) {
+          this.invalidateCards();
+          if (sessions) {
+            this.invalidateSessionBoards();
+          }
+        }
+        return result;
+      } catch (error) {
+        // A rejected reply may follow a commit. Retire cached facts without replaying the write.
         this.invalidateCards();
         if (sessions) {
           this.invalidateSessionBoards();
         }
+        throw error;
       }
-      return result;
     });
   }
 
@@ -158,31 +183,14 @@ export class WorkboardStoreRuntime {
   }
 
   invalidateSessionBoards(): void {
-    this.sessionsRevision = {
-      ...this.sessionsRevision,
-      revision: this.sessionsRevision.revision + 1,
+    this.sessionBoardRevision = {
+      ...this.sessionBoardRevision,
+      revision: this.sessionBoardRevision.revision + 1,
     };
   }
 
   announceChangeEpoch(): void {
     this.emit();
-  }
-
-  reconcileExternalChanges(): Promise<boolean> {
-    return this.runOperation(async () => {
-      if (!this.readDataVersion) {
-        return false;
-      }
-      const current = await this.readDataVersion();
-      if (current === this.externalDataVersion) {
-        return false;
-      }
-      this.externalDataVersion = current;
-      this.invalidateCards();
-      this.invalidateSessionBoards();
-      this.emit();
-      return true;
-    });
   }
 
   protected async enqueueMutation<T>(
@@ -227,17 +235,18 @@ export class WorkboardStoreRuntime {
 
   private invalidateCards(): void {
     // Every list includes all board summaries, so even a board-scoped payload
-    // depends on the whole store revision, including foreign SQLite commits.
+    // depends on the whole store revision published by the owning writer.
     this.cardLists.clear();
     this.cardsRevision = { ...this.cardsRevision, revision: this.cardsRevision.revision + 1 };
   }
 
   private emit(): void {
+    this.refreshWriteReceipt();
     const change = {
       epoch: this.cardsRevision.epoch,
       revision: ++this.revision,
       cardsRevision: this.cardsRevision.revision,
-      sessionsRevision: this.sessionsRevision.revision,
+      sessionsRevision: this.sessionBoardRevision.revision,
     };
     for (const listener of this.listeners) {
       try {

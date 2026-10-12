@@ -25,6 +25,7 @@ export function resolveReplySessionRolloverState(
     ttsAuto: entry.ttsAuto,
     responseUsage: entry.responseUsage,
     ...selectSessionModelOverride(preservedSelection),
+    communication: preservedSelection.communication,
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,

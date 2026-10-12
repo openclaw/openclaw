@@ -20,6 +20,7 @@ import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
 } from "./anthropic-compaction-replay.js";
 import { buildAnthropicRequest, prepareAnthropicRequest } from "./anthropic-messages.js";
 import {
@@ -373,7 +374,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
         ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
         : undefined;
-      let usedCompactionReplay = false;
+      let replayedCompaction: AnthropicCompactionBlock | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -397,7 +398,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           !isOAuthToken && supportsAnthropicServerSideFallback(model),
           claudeCodeVersion,
         );
-        usedCompactionReplay = builtParams.usedCompactionReplay;
+        replayedCompaction = builtParams.replayedCompaction;
         const { params, headers } = await prepareAnthropicRequest(
           builtParams.params,
           model,
@@ -442,8 +443,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             } else {
               output.content = output.content.filter((block) => block.type !== "toolCall");
             }
-            if (usedCompactionReplay && isAnthropicReplayRejection(output)) {
-              suppressAnthropicCompaction(output, model, options);
+            if (replayedCompaction && isAnthropicReplayRejection(output)) {
+              suppressAnthropicCompaction(output, model, options, replayedCompaction);
             }
             for (const block of output.content) {
               delete (block as AnthropicStreamBlock).index;

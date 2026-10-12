@@ -342,7 +342,7 @@ describe("ensureSandboxWorkspace", () => {
     await expect(fs.readFile(agentsPath, "utf-8")).resolves.toBe("seeded-agents");
   });
 
-  it("reports when sandbox seed publication cannot use hard links", async () => {
+  it("seeds complete bootstrap bytes without hard-link support", async () => {
     const root = tempDirs.make("openclaw-sandbox-workspace-");
     const seed = path.join(root, "seed");
     const sandbox = path.join(root, "sandbox");
@@ -358,8 +358,10 @@ describe("ensureSandboxWorkspace", () => {
         withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
           ensureSandboxWorkspace(sandbox, seed, true),
         ),
-      ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
-      await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
+      ).resolves.toBeUndefined();
+      expect(await fs.readFile(agentsPath, "utf8")).toBe("seeded-agents");
+      expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+      expect(await fs.readdir(sandbox)).toEqual([DEFAULT_AGENTS_FILENAME]);
     } finally {
       linkSpy.mockRestore();
     }

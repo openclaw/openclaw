@@ -19,7 +19,7 @@ import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistan
 import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 
 /** Public-reader lifecycle only: login probe, live refresh, and copy controls; never the operator app, socket, or roster. */
-export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
+const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
   const link=document.getElementById("session-login");
   function hasClientCredential(){
     if(link?.dataset.gatewayPath===undefined)return false;

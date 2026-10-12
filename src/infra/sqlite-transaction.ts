@@ -461,11 +461,8 @@ function settleSqliteTransactionSync<T>(
   };
   let commitStarted = false;
   try {
-    // BEGIN may wait for a foreign writer. Admit its committed schema inside
-    // rollback protection, then share that snapshot's facts with all kernels.
-    const result = reservedSourceFence
-      ? operation()
-      : runSqliteReadOperationSync(db, operation, "fresh");
+    // Share admitted schema inside rollback protection unless the source fence already owns it.
+    const result = reservedSourceFence ? operation() : runSqliteReadOperationSync(db, operation);
     assertSyncTransactionResult(result);
     assertTransactionUsable(db);
     commitStarted = true;
@@ -516,6 +513,22 @@ export function runSqliteDeferredTransactionSync<T>(
   );
 }
 
+/** Read-only composition reuses the caller's snapshot and rollback owner. */
+export function runSqliteReadSnapshotSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  assertTransactionUsable(db);
+  if (!db.isTransaction) {
+    return runSqliteDeferredTransactionSync(db, operation, options);
+  }
+  const result = runSqliteReadOperationSync(db, operation);
+  assertSyncTransactionResult(result);
+  assertTransactionUsable(db);
+  return result;
+}
+
 export function runSqliteImmediateTransactionSync<T>(
   db: DatabaseSync,
   operation: () => T,
@@ -527,26 +540,38 @@ export function runSqliteImmediateTransactionSync<T>(
   );
 }
 
-/** Admit the borrowed worker connection after BEGIN and before its physical commit. */
+/**
+ * Execute one complete statement, then publish its receipts. Prepare inputs before
+ * calling; the callback must not do fallible work after the native statement.
+ * Existing transactions retain their savepoint and outer publication owner.
+ */
+export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T {
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () => {
+    if (db.isTransaction) {
+      return runSqliteTransactionSync(db, statement, "immediate");
+    }
+    const result = runSqliteReadOperationSync(db, statement);
+    assertSyncTransactionResult(result);
+    return result;
+  });
+}
+
+/** Obtain host admission before taking the writer lock; revalidate before physical commit. */
 export function runSqliteWorkerTransactionSync<T>(
   context: SqliteWorkerDatabaseContext,
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteImmediateTransactionSync(
-    context.database,
-    () => {
-      context.admit("transaction");
-      return operation();
+  assertTransactionUsable(context.database);
+  context.admit("transaction");
+  return runSqliteImmediateTransactionSync(context.database, operation, {
+    ...options,
+    withCommit(commit) {
+      context.admit("commit");
+      return options?.withCommit ? options.withCommit(commit) : commit();
     },
-    {
-      ...options,
-      withCommit(commit) {
-        context.admit("commit");
-        return options?.withCommit ? options.withCommit(commit) : commit();
-      },
-    },
-  );
+  });
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */

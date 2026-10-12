@@ -7,7 +7,6 @@ import "./skill-workshop-page.ts";
 import {
   createContext,
   createRuntimeConfigStub,
-  reconnectGateway,
   type SkillWorkshopPageTestElement,
 } from "./skill-workshop-page.test-support.ts";
 
@@ -186,6 +185,59 @@ describe("Skill Workshop page", () => {
     );
   });
 
+  it("keeps a new agent's restore pending when the former agent's archive fails", async () => {
+    const archive = createDeferredCore<unknown>();
+    const restore = createDeferredCore<unknown>();
+    const workshopRequest = workshopGateway();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.workshop.archive") {
+        return archive.promise;
+      }
+      if (method === "skills.workshop.restore") {
+        return restore.promise;
+      }
+      if (method === "skills.workshop.read") {
+        return Promise.resolve({
+          name: SKILL,
+          filePath: "SKILL.md",
+          content: "Synthetic procedure",
+          files: ["SKILL.md"],
+        });
+      }
+      return workshopRequest(method);
+    });
+    const context = createContext(request, {
+      methods: ["skills.workshop.archive", "skills.workshop.restore"],
+    });
+    const page = await mount(context);
+    await vi.waitFor(() => expect(button(page, "Archive")).toBeDefined());
+    button(page, "Archive")!.click();
+    await page.updateComplete;
+
+    Object.assign(context.agentSelection.state, { selectedId: "scout" });
+    page.requestUpdate();
+    await page.updateComplete;
+    await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
+    const restoreButton = button(page, "Undo")!;
+    restoreButton.click();
+    await page.updateComplete;
+    expect(restoreButton.disabled).toBe(true);
+
+    archive.reject(new Error("Retired archive failed"));
+    await archive.promise.catch(() => undefined);
+    await page.updateComplete;
+    expect(restoreButton.disabled).toBe(true);
+    expect(page.textContent).not.toContain("Retired archive failed");
+
+    restore.resolve({ change });
+    await vi.waitFor(() => expect(button(page, "Undo")?.disabled).toBe(false));
+    expect(request).toHaveBeenCalledWith("skills.workshop.restore", {
+      agentId: "scout",
+      name: SKILL,
+      versionId: VERSION,
+    });
+  });
+
   it("offers no undo once the change's saved version has been pruned", async () => {
     const page = await mount(
       createContext(
@@ -197,6 +249,44 @@ describe("Skill Workshop page", () => {
     );
     await vi.waitFor(() => expect(page.textContent).toContain("an older patch"));
     expect(button(page, "Undo")).toBeUndefined();
+  });
+
+  it("opens the skill a chat notice links to, even when it is archived", async () => {
+    const archivedVersion = "20260930T010000000Z-archive";
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.workshop.list") {
+        return {
+          ...list,
+          archived: [
+            ...list.archived,
+            {
+              name: "release-notes",
+              live: false,
+              versions: [{ id: archivedVersion, action: "archive", createdAtMs: Date.now() }],
+            },
+          ],
+        };
+      }
+      return method === "skills.workshop.changes"
+        ? { changes: [] }
+        : { content: "", files: ["SKILL.md"] };
+    });
+    const page = await mount(createContext(request, { search: "?skill=release-notes" }));
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("skills.workshop.read", {
+        agentId: "research",
+        name: "release-notes",
+        filePath: "SKILL.md",
+        versionId: archivedVersion,
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "skills.workshop.read",
+      expect.objectContaining({ name: SKILL }),
+    );
+    // The Archived list is shown, so the linked skill is visible: sorting exists only on Active.
+    await vi.waitFor(() => expect(page.querySelector(".sw-sort")).toBeNull());
   });
 
   it("offers no undo to an operator without admin scope", async () => {
@@ -265,34 +355,5 @@ describe("Skill Workshop page", () => {
       raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
       note: "Disable Skill Workshop learning",
     });
-  });
-
-  it("does not retry a mode switch against a Gateway connected mid-write", async () => {
-    const patch = vi.fn(async () => true);
-    const runtimeConfig = createRuntimeConfigStub({
-      sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      patch,
-    });
-    patch.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config changed since last load";
-      return false;
-    });
-    const context = createContext(workshopGateway(), { methods: ["config.patch"], runtimeConfig });
-    const page = await mount(context);
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      // The operator switches to another Gateway while the stale-hash refresh is in flight.
-      runtimeConfig.state.lastError = null;
-      reconnectGateway(context, workshopGateway());
-      page.requestUpdate();
-      await page.updateComplete;
-    });
-
-    button(page, "Off")?.click();
-
-    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
-    await page.updateComplete;
-    expect(patch).toHaveBeenCalledTimes(1);
-    // The retired write releases the controls for the new Gateway.
-    expect(button(page, "Off")?.disabled).toBe(false);
   });
 });

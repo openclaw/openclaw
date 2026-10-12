@@ -100,9 +100,9 @@ export function createStatusSessionStoreReader(
               const projection = options.projection;
               if (projection) {
                 do {
-                  await projection.ensureMaterialized();
+                  await projection.prepareSelection();
                   assertCurrent();
-                } while (projection.needsMaterialization);
+                } while (projection.needsSelectionPreparation());
               }
               summary = projection
                 ? summarizeProjectionRows(projection, database.path, agentIds, recentLimit)

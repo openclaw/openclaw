@@ -1,4 +1,5 @@
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
@@ -91,9 +92,14 @@ import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
+type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** The host owns continuation policy when this factory builds only part of its tool surface. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
+};
+
 // Both SDK paths assemble the same options; only compatibility resolves delegate policy synchronously.
 function* assembleOpenClawCodingTools(
-  options?: OpenClawCodingToolsOptions,
+  options?: InternalCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
@@ -360,15 +366,6 @@ function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
-  const sessionEventToolsAllow: string[] = [];
-  const wrapGatewayCaller = createCodingToolsGatewayCaller({
-    options,
-    agentId: executionAgentId,
-    sessionKey: executionSessionKey,
-    accountId: gatewayCaller.accountId,
-    capabilityProfile,
-    sessionEventToolsAllow,
-  });
   const pluginToolOptions = {
     ...options,
     agentSessionKey: options?.sessionKey,
@@ -631,8 +628,18 @@ function* assembleOpenClawCodingTools(
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   });
-  sessionEventToolsAllow.push(...finalizedTools.map((tool) => tool.name));
-  return finalizedTools.map(wrapGatewayCaller);
+  return finalizedTools.map(
+    createCodingToolsGatewayCaller({
+      options,
+      agentId: executionAgentId,
+      sessionKey: executionSessionKey,
+      accountId: gatewayCaller.accountId,
+      capabilityProfile,
+      sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
+        toolsAllow: finalizedTools.map((tool) => tool.name),
+      },
+    }),
+  );
 }
 
 /** @deprecated Use createOpenClawCodingToolsInternalAsync for runtime construction. */
@@ -649,7 +656,7 @@ export function createOpenClawCodingToolsInternal(
 
 /** Internal preparation data stays outside the public harness factory options. */
 export async function createOpenClawCodingToolsInternalAsync(
-  options?: OpenClawCodingToolsOptions,
+  options?: InternalCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },

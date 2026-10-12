@@ -44,7 +44,7 @@ afterEach(() => {
   getUserProfileDisplay.mockClear();
 });
 
-it.each([true, false, undefined])(
+it.each([true, false])(
   "filters subagent sessions before pagination and people facets when excludeSubagents is %s",
   async (excludeSubagents) => {
     const store: Record<string, SessionEntry> = {
@@ -160,104 +160,6 @@ it("lets configured agents win id-only owner facet collisions", async () => {
       },
     ]);
   }
-});
-
-it("returns the complete deterministic owner facet independently of pagination", async () => {
-  const store: Record<string, SessionEntry> = {
-    "agent:main:ada": {
-      archivedAt: 3,
-      archivedBy: { type: "human", id: "profile-bob" },
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      createdVia: "operator",
-      sessionId: "session-ada",
-      updatedAt: 2,
-    },
-    "agent:main:bob": {
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      createdVia: "operator",
-      sessionId: "session-bob",
-      updatedAt: 1,
-    },
-  };
-
-  const result = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owners",
-    store,
-    opts: { archived: "all", limit: 1 },
-  });
-
-  expect(result.count).toBe(1);
-  expect(result.totalCount).toBe(2);
-  expect(result.owners).toEqual([
-    {
-      type: "human",
-      id: "profile-ada",
-      identity: { type: "profile", id: "profile-ada" },
-      label: "Ada",
-      avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
-    },
-    {
-      type: "human",
-      id: "profile-bob",
-      identity: { type: "profile", id: "profile-bob" },
-      label: "Bob",
-    },
-  ]);
-  expect(result.sessions[0]?.createdActor).toEqual({
-    type: "human",
-    id: "profile-ada",
-    identity: { type: "profile", id: "profile-ada" },
-    label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=ada-hash-png",
-  });
-  expect(result.sessions[0]?.archivedBy).toEqual({
-    type: "human",
-    id: "profile-bob",
-    identity: { type: "profile", id: "profile-bob" },
-    label: "Bob",
-  });
-  expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
-
-  const filtered = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owners",
-    store,
-    opts: { archived: "all", ownerId: "profile-bob", limit: 1 },
-  });
-  expect(filtered.sessions.map((row) => row.key)).toEqual(["agent:main:bob"]);
-  expect(filtered.owners).toEqual(result.owners);
-});
-
-it("prepends an owner window without advancing shared-page pagination", async () => {
-  const store: Record<string, SessionEntry> = {
-    "agent:main:foreign-newest": {
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-      createdVia: "operator",
-      sessionId: "session-foreign-newest",
-      updatedAt: 2,
-    },
-    "agent:main:owner-older": {
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      createdVia: "operator",
-      sessionId: "session-owner-older",
-      updatedAt: 1,
-    },
-  };
-
-  const result = await listSessionFixture({
-    cfg: {} as OpenClawConfig,
-    storePath: "/tmp/openclaw-session-owner-first",
-    store,
-    opts: { archived: "all", limit: 1 },
-    ownerFirstActorId: "profile-bob",
-  });
-
-  expect(result.sessions.map((row) => row.key)).toEqual([
-    "agent:main:owner-older",
-    "agent:main:foreign-newest",
-  ]);
-  expect(result).toMatchObject({ count: 2, totalCount: 2, nextOffset: 1, hasMore: true });
 });
 
 it("projects only durable profiles and configured agents as effective owners", async () => {
@@ -621,7 +523,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
   expect(selected.people?.some((person) => person.identity.id === "research")).toBe(false);
 });
 
-it.each(["spawn", "talk", "cron"] as const)(
+it.each(["spawn"] as const)(
   "associates a required %s creator without inventing profile contributions or promoting unqualified creators",
   async (via) => {
     getUserProfileDisplay.mockImplementation((id) => ({

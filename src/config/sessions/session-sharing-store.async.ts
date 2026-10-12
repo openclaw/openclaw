@@ -26,6 +26,7 @@ import {
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { readResidentUserProfileAliases } from "../../state/user-profile-list.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -34,6 +35,8 @@ import { publishSessionSharingMemberChange } from "./session-accessor.sqlite-ent
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import type { SessionActorMemoryCollaborationCommand } from "./session-actor-memory-collaboration-contract.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -98,6 +101,25 @@ function toIncognitoCollaborationCommand(
   throw new Error("Incognito collaboration command requires its dedicated owner");
 }
 
+function toMemoryCollaborationCommand(
+  command: SqliteWorkerCommand<SessionSharingWorkerOperations>,
+  scope: SessionCollaborationScope,
+): SessionActorMemoryCollaborationCommand {
+  if (command.type === "category.prepare" || command.type === "category.apply") {
+    throw new Error("Memory categories require the category owner composition");
+  }
+  const { scope: _scope, ...input } = command.input;
+  const profileAliases =
+    command.type === "participant" && command.input.params.identity.type === "profile"
+      ? [...readResidentUserProfileAliases(command.input.params.identity.id, { env: scope.env })]
+      : undefined;
+  return {
+    type: `session.collaboration.${command.type}`,
+    input: { ...input, ...(profileAliases ? { profileAliases } : {}) },
+    // SAFETY: Only the command prefix changes; input and result remain paired by the same suffix.
+  } as SessionActorMemoryCollaborationCommand;
+}
+
 export async function runSessionCollaborationWrite<
   Key extends keyof SessionSharingWorkerOperations,
   T,
@@ -120,6 +142,43 @@ export async function runSessionCollaborationWrite<
     scope: SessionAccessScope,
   ) => Promise<void | SessionSharingWorkerOperations[Key]["input"]>,
 ): Promise<T> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const actorCommand = toMemoryCollaborationCommand(command, scope);
+    let value: T | undefined;
+    const outcome = await memory.actor.storage!.mutate(
+      actorCommand,
+      {
+        assertCurrent: () => {
+          assertCurrent();
+          memory.authority.assertCurrent();
+        },
+        authorize: (stage, facts, publication) =>
+          memory.authority.authorize(stage, facts, publication),
+      },
+      {
+        committed(result) {
+          value = publish(
+            // SAFETY: toMemoryCollaborationCommand preserves this Key's input/result pair.
+            result.value as SessionSharingWorkerOperations[Key]["output"],
+            {
+              agentId: memory.agentId,
+              storePath: memory.path,
+              sessionKey: memory.actor.target.sessionKey,
+            },
+            undefined,
+          );
+        },
+      },
+    );
+    if (outcome.kind === "rolled-back" || outcome.failure) {
+      const failure = outcome.kind === "rolled-back" ? outcome.error : outcome.failure!;
+      const error = new Error(failure.message);
+      error.name = failure.name;
+      throw error;
+    }
+    return value!;
+  }
   const resolved = resolveSqliteScope(scope);
   const resolvedOptions = toDatabaseOptions(resolved);
   const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
@@ -336,8 +395,8 @@ export async function runSessionCollaborationWrite<
               },
             );
             try {
-              await worker.run(async (operation) => {
-                if (prepare) {
+              if (prepare) {
+                await worker.run(async (operation) => {
                   const prepared = await prepare(
                     {
                       async execute(prepareCommand, executeOptions) {
@@ -357,12 +416,17 @@ export async function runSessionCollaborationWrite<
                   if (prepared) {
                     capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
                   }
-                }
+                  assertQueuedCurrent();
+                  mutationDispatched = capturedCommand.type !== "category.prepare";
+                  await operation.execute(capturedCommand);
+                  resultReceived = true;
+                }, assertQueuedCurrent);
+              } else {
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";
-                await operation.execute(capturedCommand);
+                await worker.execute(capturedCommand, assertQueuedCurrent);
                 resultReceived = true;
-              }, assertQueuedCurrent);
+              }
               if (!publicationState.result) {
                 throw new SqliteWorkerError(
                   "Session collaboration omitted its native commit receipt",

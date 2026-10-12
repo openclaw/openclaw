@@ -17,8 +17,9 @@ import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { updateChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
-import { getChatRunOwner } from "./history-merge.ts";
+import { getChatRunOwner, getChatRunProjection } from "./history-merge.ts";
 import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -226,6 +227,8 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
       // One visible compaction per run: older items and retry completions must
       // not replace a newer operation restored or received on the live stream.
       identity = `compaction:${payload.runId}`;
+    } else if (payload.stream === "thinking") {
+      identity = `thinking:${payload.runId}`;
     } else if (payload.stream === "item") {
       const itemId =
         toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
@@ -486,6 +489,28 @@ export function handleAgentEvent(
     if (runId) {
       (host.knownAgentRunIds ??= new Set()).add(runId);
     }
+  }
+
+  if (payload.stream === "thinking") {
+    const run = getChatRunProjection(host, payload.runId);
+    const ownsRun =
+      host.chatRunId === payload.runId ||
+      (!host.chatRunId &&
+        host.chatQueue?.some(
+          (item) => item.sendState === "sending" && item.sendRunId === payload.runId,
+        ));
+    if (
+      !ownsRun ||
+      !acceptsToolStreamSession(host, payload) ||
+      (run && run.status !== "streaming")
+    ) {
+      return false;
+    }
+    const changed = updateChatReasoning(host, payload);
+    if (changed && payload.data.phase !== "persisted") {
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
+    return changed;
   }
 
   if (

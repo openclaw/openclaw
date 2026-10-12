@@ -256,7 +256,7 @@ function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolea
 
 function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) {
   vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
-    ({ channel }: { channel: string }) => {
+    async ({ channel }: { channel: string }) => {
       const registry = createEmptyPluginRegistry();
       if (channel === "external-chat") {
         if (params?.includeSetupWizard) {
@@ -375,7 +375,9 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
       installed: true,
     })),
     // Allow tests to simulate an empty plugin registry during setup.
-    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
+    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(async () =>
+      createEmptyPluginRegistry(),
+    ),
   };
 });
 

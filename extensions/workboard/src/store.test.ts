@@ -239,39 +239,7 @@ describe("WorkboardStore", () => {
     await expect(store.get(card.id)).resolves.toBeUndefined();
   });
 
-  it("emits when another sqlite connection commits", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-change-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const readerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    const writerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    try {
-      const reader = new WorkboardStore(readerStores.cards, {
-        ...sqliteTestAuxStores(readerStores),
-        dataVersion: readerStores.dataVersion,
-      });
-      const writer = new WorkboardStore(writerStores.cards, {
-        ...sqliteTestAuxStores(writerStores),
-        dataVersion: writerStores.dataVersion,
-      });
-      const changes = vi.fn();
-      reader.subscribeChanges(changes);
-
-      expect(await reader.reconcileExternalChanges()).toBe(false);
-      await writer.create({ title: "External" });
-      expect(await reader.reconcileExternalChanges()).toBe(true);
-      expect(await reader.reconcileExternalChanges()).toBe(false);
-      expect(changes).toHaveBeenCalledOnce();
-      await expect(reader.list()).resolves.toEqual([
-        expect.objectContaining({ title: "External" }),
-      ]);
-    } finally {
-      await writerStores.close();
-      await readerStores.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("reports committed reference cleanup revisions after a concurrent peer edit", async () => {
+  it("reports a reference cleanup conflict without overwriting a concurrent peer edit", async () => {
     await using harness = createConcurrentSqliteHarness("openclaw-workboard-delete-references-");
     const parent = await harness.host.create({ title: "Selected parent" });
     const child = await harness.host.create({ title: "Selected child" });
@@ -297,28 +265,12 @@ describe("WorkboardStore", () => {
     });
     cleanup.resume();
     const result = await outcome;
-    expect(result).not.toHaveProperty("error");
-    const current = await harness.host.get(child.id);
-    expect(current?.metadata?.links?.some((link) => link.targetCardId === parent.id) ?? false).toBe(
-      false,
-    );
-
-    expect(current?.metadata?.comments).toEqual(beforeCleanup.metadata?.comments);
-    expect(current?.metadata?.links).toEqual(
-      beforeCleanup.metadata?.links?.filter((link) => link.targetCardId !== parent.id),
-    );
-    expect(result).toEqual({
-      value: {
-        deleted: true,
-        referenceUpdates: [
-          {
-            id: child.id,
-            previousUpdatedAt: beforeCleanup.updatedAt,
-            updatedAt: current?.updatedAt,
-          },
-        ],
-      },
+    expect(result).toMatchObject({
+      error: { name: "WorkboardCardConflictError", current: beforeCleanup },
     });
+    const current = await harness.host.get(child.id);
+    expect(current).toEqual(beforeCleanup);
+    await expect(harness.host.get(parent.id)).resolves.toBeUndefined();
     await expect(harness.host.get(unrelated.id)).resolves.toEqual(unrelated);
     await expect(
       harness.operation.delete(child.id, { expectedUpdatedAt: current?.updatedAt }),
@@ -353,41 +305,8 @@ describe("WorkboardStore", () => {
     },
   );
 
-  it("hydrates metadata once and preserves a foreign edit on CAS retry", async () => {
-    await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-cas-");
-    const { operation, host, paused } = harness;
-    const base = await host.create({ title: "Metadata update" });
-    const lookup = vi.spyOn(paused.store, "lookup");
-    const write = vi.spyOn(paused.store, "registerIfUpdatedAt");
-    const append = (text: string) => operation.addWorkerLog(base.id, { message: text });
-
-    await append("First entry");
-    expect(lookup).toHaveBeenCalledTimes(1);
-    lookup.mockClear();
-    write.mockClear();
-    const pause = paused.pauseNextWrite();
-    const pending = append("Retried entry");
-    await pause.reached;
-    const foreign = await host.update(base.id, {
-      title: "Foreign title",
-      metadata: { comments: [{ id: "foreign-comment", body: "Keep me", createdAt: 1 }] },
-    });
-    pause.resume();
-    const updated = await pending;
-
-    expect(write).toHaveBeenCalledTimes(2);
-    expect(await write.mock.results[0]!.value).toBe(false);
-    expect(await write.mock.results[1]!.value).toBe(true);
-    expect(lookup).toHaveBeenCalledTimes(3);
-    expect(updated.title).toBe("Foreign title");
-    expect(updated.metadata?.comments).toEqual(foreign.metadata?.comments);
-    const entries = updated.metadata?.workerLogs?.map((entry) => entry.message);
-    expect(entries).toEqual(["First entry", "Retried entry"]);
-    await expect(host.get(base.id)).resolves.toEqual(updated);
-  });
-
   it.each(["delete", "claim"] as const)(
-    "rejects metadata after a foreign %s instead of overwriting it",
+    "rejects metadata after a foreign %s wins the comparison",
     async (change) => {
       await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-guard-");
       const { operation, host, paused } = harness;
@@ -404,48 +323,12 @@ describe("WorkboardStore", () => {
       }
       const foreign = await host.get(base.id);
       pause.resume();
-      expect(await pending).toMatchObject({
-        message:
-          change === "delete" ? `card not found: ${base.id}` : expect.stringMatching(/claim/),
-      });
-      await expect(host.get(base.id)).resolves.toEqual(foreign);
-    },
-  );
-
-  it.each(["hold", "invalid status"] as const)(
-    "checks a foreign revision before reporting a stale %s error",
-    async (failure) => {
-      await using harness = createConcurrentSqliteHarness("openclaw-workboard-policy-race-");
-      const { operation, host, paused } = harness;
-      const base = await host.create({ title: "Scheduled", status: "scheduled" });
-      const captured = createDeferred<void>();
-      const resume = createDeferred<void>();
-      const lookup = paused.store.lookup.bind(paused.store);
-      vi.spyOn(paused.store, "lookup").mockImplementationOnce(async (id) => {
-        const entry = await lookup(id);
-        captured.resolve();
-        await resume.promise;
-        return entry;
-      });
-      const pending = operation.move(
-        base.id,
-        failure === "hold" ? "ready" : "invalid-status",
-        2000,
-        undefined,
-        failure === "hold" ? {} : { expectedUpdatedAt: base.updatedAt },
+      expect(await pending).toMatchObject(
+        change === "delete"
+          ? { message: `card not found: ${base.id}` }
+          : { name: "WorkboardCardConflictError" },
       );
-      await captured.promise;
-      const newer = await host.update(base.id, { status: "todo", title: "Hold removed" });
-      resume.resolve();
-      if (failure === "hold") {
-        await expect(pending).resolves.toMatchObject({ title: "Hold removed", status: "ready" });
-      } else {
-        await expect(pending).rejects.toMatchObject({
-          name: "WorkboardCardConflictError",
-          current: newer,
-        });
-        await expect(host.get(base.id)).resolves.toEqual(newer);
-      }
+      await expect(host.get(base.id)).resolves.toEqual(foreign);
     },
   );
 
@@ -462,69 +345,8 @@ describe("WorkboardStore", () => {
     await expect(store.get(base.id)).resolves.toEqual(newer);
   });
 
-  it.each(["move", "lifecycle"] as const)(
-    "recomputes a %s write after a concurrent editor commit",
-    async (owner) => {
-      await using harness = createConcurrentSqliteHarness(`openclaw-workboard-${owner}-race-`);
-      const { operation: first, host: second, paused } = harness;
-      const sessionKey = "agent:main:dashboard:cas-race";
-      const base = await first.create({
-        title: "Original title",
-        status: owner === "move" ? "todo" : "running",
-        ...(owner === "lifecycle"
-          ? {
-              sessionKey,
-              runId: "run-cas",
-              execution: {
-                id: "exec-cas",
-                kind: "agent-session",
-                mode: "autonomous",
-                status: "running",
-                sessionKey,
-                runId: "run-cas",
-                startedAt: 1,
-                updatedAt: 1,
-              },
-            }
-          : {}),
-      });
-      const pause = paused.pauseNextWrite();
-      const ownerWrite =
-        owner === "move"
-          ? first.move(base.id, "blocked", 2000)
-          : first.syncLifecycle(base.id, {
-              targetStatus: "review",
-              executionStatus: "review",
-              sourceUpdatedAt: base.updatedAt + 1_000,
-              stale: undefined,
-              now: base.updatedAt + 1_000,
-            });
-
-      await pause.reached;
-      await second.update(
-        base.id,
-        { title: "Concurrent editor title" },
-        { expectedUpdatedAt: base.updatedAt },
-      );
-      pause.resume();
-      await ownerWrite;
-
-      const current = await first.get(base.id);
-      expect(current?.title).toBe("Concurrent editor title");
-      if (owner === "move") {
-        expect(current).toMatchObject({ status: "blocked", position: 2000 });
-      } else {
-        expect(current).toMatchObject({
-          status: "review",
-          execution: { status: "review" },
-          metadata: { lifecycleStatusSourceUpdatedAt: base.updatedAt + 1_000 },
-        });
-      }
-    },
-  );
-
   it.each([false, true])(
-    "converges cross-host session captures with archived=%s",
+    "preserves the winning cross-host session capture with archived=%s",
     async (archived) => {
       await using harness = createConcurrentSqliteHarness("openclaw-workboard-capture-");
       const { operation: first, host: second, paused } = harness;
@@ -536,11 +358,9 @@ describe("WorkboardStore", () => {
         await second.archive(captured.id, true);
       }
       const pause = archived ? paused.pauseNextWrite() : undefined;
-      const pending = first.captureSession({
-        title: "Captured by host A",
-        sessionKey,
-        boardId: "ops",
-      });
+      const pending = first
+        .captureSession({ title: "Captured by host A", sessionKey, boardId: "ops" })
+        .catch((error: unknown) => error);
       if (pause) {
         await pause.reached;
       }
@@ -550,18 +370,22 @@ describe("WorkboardStore", () => {
         boardId: "other",
       });
       pause?.resume();
-      const left = await pending;
-      expect(left.id).toBe(right.id);
-      expect(left.id).toMatch(
+      const result = await pending;
+      if (archived) {
+        expect(result).toMatchObject({ name: "WorkboardCardConflictError", current: right });
+      } else {
+        expect(result).toEqual(right);
+      }
+      await expect(first.get(right.id)).resolves.toEqual(right);
+      expect(right.id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
-      expect(left).toEqual(right);
       if (archived) {
-        expect(left.metadata?.archivedAt).toBeUndefined();
+        expect(right.metadata?.archivedAt).toBeUndefined();
       } else {
-        expect(["ops", "other"]).toContain(left.metadata?.automation?.boardId);
+        expect(["ops", "other"]).toContain(right.metadata?.automation?.boardId);
       }
-      await expect(first.list()).resolves.toEqual([left]);
+      await expect(first.list()).resolves.toEqual([right]);
     },
   );
 
@@ -3264,166 +3088,24 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("reverts completed parent state while preserving a concurrent parent edit", async () => {
-    await using harness = createConcurrentSqliteHarness("openclaw-workboard-parent-rollback-");
-    const { operation, host, paused } = harness;
-    const createdParent = await operation.create({ title: "Parent", status: "ready" });
-    const claimed = await operation.claim(createdParent.id, { ownerId: "worker" });
-    const parent = claimed.card;
-    const reusedChild = await operation.create({
-      title: "Existing child",
-      idempotencyKey: "child-key",
-    });
-    const pause = paused.pauseAfterMatchingWrite(
-      (key, value) => key === parent.id && value?.card.status === "done",
-    );
-    const decomposition = operation.decompose(
-      parent.id,
-      {
-        summary: "Task-owned decomposition",
-        children: [{ title: "Existing child", idempotencyKey: "child-key" }],
-      },
-      { ownerId: "worker", token: claimed.token },
-    );
-
-    await pause.reached;
-    await host.update(parent.id, { notes: "Concurrent parent edit" });
-    pause.resume();
-
-    await expect(decomposition).rejects.toThrow(/changed while you were editing/);
-    const rolledBackParent = await host.get(parent.id);
-    expect(rolledBackParent?.status).toBe(parent.status);
-    expect(rolledBackParent?.notes).toBe("Concurrent parent edit");
-    expect(rolledBackParent?.completedAt).toBeUndefined();
-    expect(rolledBackParent?.metadata).toEqual(parent.metadata);
-    expect(rolledBackParent?.events?.map((event) => event.kind)).toEqual([
-      ...(parent.events?.map((event) => event.kind) ?? []),
-      "edited",
-    ]);
-    expectSameCardState(await host.get(reusedChild.id), reusedChild);
-  });
-
-  it.each(["reused child", "new child"] as const)(
-    "reverts decomposition-owned links while preserving a concurrent %s edit",
-    async (target) => {
-      await using harness = createConcurrentSqliteHarness("openclaw-workboard-child-rollback-");
-      const { operation, host, paused } = harness;
-      const parent = await operation.create({ title: "Parent" });
-      const reusedChild =
-        target === "reused child"
-          ? await operation.create({ title: "Existing child", idempotencyKey: "child-key" })
-          : undefined;
-      const pause = paused.pauseAfterMatchingWrite((_key, value) => {
-        const card = value?.card;
-        if (!card || (target === "reused child" && card.id !== reusedChild?.id)) {
-          return false;
-        }
-        if (target === "new child" && card.title !== "New child") {
-          return false;
-        }
-        return Boolean(
-          card.metadata?.links?.some(
-            (link) => link.type === "parent" && link.targetCardId === parent.id,
-          ),
-        );
-      });
-      const decomposition = operation.decompose(parent.id, {
-        children: [
-          reusedChild
-            ? { title: "Existing child", idempotencyKey: "child-key" }
-            : { title: "New child" },
-          { notes: "Missing title" },
-        ],
-      });
-
-      await pause.reached;
-      const child = reusedChild ?? (await host.list()).find((card) => card.title === "New child");
-      expect(child).toBeDefined();
-      await host.update(child!.id, { notes: `Concurrent ${target} edit` });
-      pause.resume();
-
-      await expect(decomposition).rejects.toThrow(/title is required/);
-      expectSameCardState(await host.get(parent.id), parent);
-      const rolledBackChild = await host.get(child!.id);
-      expect(rolledBackChild?.notes).toBe(`Concurrent ${target} edit`);
-      expect(rolledBackChild?.metadata?.links).toBeUndefined();
-      expect(rolledBackChild?.metadata?.automation).toMatchObject(
-        target === "reused child"
-          ? { idempotencyKey: "child-key" }
-          : { createdByCardId: parent.id },
-      );
-      expect(rolledBackChild?.events?.map((event) => event.kind)).toEqual(["created", "edited"]);
-    },
-  );
-
-  it("reverts a partial link while preserving a concurrent child edit", async () => {
-    await using harness = createConcurrentSqliteHarness("openclaw-workboard-link-rollback-");
+  it("leaves an edited card intact when compensating a failed decomposition", async () => {
+    await using harness = createConcurrentSqliteHarness("openclaw-workboard-compensation-");
     const { operation, host, paused } = harness;
     const parent = await operation.create({ title: "Parent" });
-    const child = await operation.create({ title: "Child" });
+    const child = await operation.create({ title: "Child", idempotencyKey: "child" });
     const pause = paused.pauseAfterMatchingWrite(
-      (key, value) =>
-        key === parent.id &&
-        Boolean(
-          value?.card.metadata?.links?.some(
-            (link) => link.type === "child" && link.targetCardId === child.id,
-          ),
-        ),
+      (key, value) => key === child.id && Boolean(value?.card.metadata?.links?.length),
     );
-    const linking = operation.linkCards(parent.id, child.id);
-
+    const pending = operation.decompose(parent.id, {
+      children: [{ title: "Child", idempotencyKey: "child" }, { notes: "Missing title" }],
+    });
     await pause.reached;
-    await host.update(child.id, { notes: "Concurrent child edit" });
+    const edited = await host.update(child.id, { notes: "Keep this edit" });
     pause.resume();
 
-    await expect(linking).rejects.toThrow(/changed while you were editing/);
+    await expect(pending).rejects.toThrow(/title is required/);
+    await expect(host.get(child.id)).resolves.toEqual(edited);
     expectSameCardState(await host.get(parent.id), parent);
-    await expect(host.get(child.id)).resolves.toMatchObject({
-      notes: "Concurrent child edit",
-    });
-    expect((await host.get(child.id))?.metadata?.links).toBeUndefined();
-    expect((await host.get(child.id))?.events?.map((event) => event.kind)).toEqual([
-      ...(child.events?.map((event) => event.kind) ?? []),
-      "edited",
-    ]);
-  });
-
-  it("reverts task-owned links while preserving a concurrently adopted child", async () => {
-    await using harness = createConcurrentSqliteHarness("openclaw-workboard-create-rollback-");
-    const { operation, host, paused } = harness;
-    const firstParent = await operation.create({ title: "First parent" });
-    const secondParent = await operation.create({ title: "Second parent" });
-    const pause = paused.pauseAfterMatchingWrite(
-      (key, value) =>
-        key === secondParent.id &&
-        Boolean(
-          value?.card.metadata?.links?.some(
-            (link) => link.type === "child" && link.targetCardId !== undefined,
-          ),
-        ),
-    );
-    const creation = operation.create({
-      title: "New child",
-      parents: [firstParent.id, secondParent.id],
-    });
-
-    await pause.reached;
-    const child = (await host.list()).find((card) => card.title === "New child");
-    expect(child).toBeDefined();
-    await host.update(child!.id, { notes: "Concurrent child edit" });
-    pause.resume();
-
-    await expect(creation).rejects.toThrow(/changed while you were editing/);
-    await expect(host.get(child!.id)).resolves.toMatchObject({
-      notes: "Concurrent child edit",
-    });
-    expect((await host.get(child!.id))?.metadata?.links).toBeUndefined();
-    expect((await host.get(child!.id))?.events?.map((event) => event.kind)).toEqual([
-      "created",
-      "edited",
-    ]);
-    expectSameCardState(await host.get(firstParent.id), firstParent);
-    expectSameCardState(await host.get(secondParent.id), secondParent);
   });
 
   it("preserves a linked-create failure when card compensation also fails", async () => {

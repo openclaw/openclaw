@@ -72,20 +72,14 @@ export function createWorkerTaskHost(
       }
       if (owner.retainedTransport) {
         const { port1, port2 } = new MessageChannel();
-        try {
-          const native = createRetainedNativeWorker(
-            url,
-            workerOptions,
-            source,
-            owner.nativeResource,
-            { host: port1, worker: port2 },
-          );
-          return { worker: native, native };
-        } catch (error) {
-          port1.close();
-          port2.close();
-          throw error;
-        }
+        const native = createRetainedNativeWorker(
+          url,
+          workerOptions,
+          source,
+          owner.nativeResource,
+          { host: port1, worker: port2 },
+        );
+        return { worker: native, native };
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
     },

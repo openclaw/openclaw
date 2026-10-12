@@ -26,7 +26,6 @@ import {
   registerAgentCreationCommitTests,
   resolveMockWorkspaceDir,
   type MockAgentEntry,
-  type MockConfig,
 } from "./agents-mutate.test-support.js";
 const mocks = vi.hoisted(() => ({
   sharedAuthStoreOwnership: { location: "legacy-main" } as {
@@ -36,7 +35,7 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
-  pruneAgentConfig: vi.fn((_cfg: MockConfig, _agentId: string) => ({
+  pruneAgentConfig: vi.fn((_cfg: ReturnType<typeof mergeAgentConfig>, _agentId: string) => ({
     config: {},
     removedBindings: 0,
   })),
@@ -329,6 +328,11 @@ vi.mock("../../state/agent-deletion-journal.js", () => ({
 vi.mock("../../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalForCreation: async () => mocks.readAgentDeletionJournal(),
   readAgentDeletionRecoveryHoldsInWorker: async () => [],
+}));
+
+// mock-isolation: Handler fixtures stage storage outcomes without owning an agent database worker.
+vi.mock("../../state/openclaw-agent-execution.js", () => ({
+  prepareOpenClawAgentDatabaseExecution: async () => {},
 }));
 
 vi.mock("../../state/agent-provenance.js", async (importOriginal) => ({

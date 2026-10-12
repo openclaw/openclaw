@@ -3,12 +3,16 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { ensureAuthProfileStore, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodexAccountUsage } from "./account-usage.js";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { readCodexAppServerUsage } from "./app-server/request.js";
 
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  ensureAuthProfileStore: vi.fn(),
+}));
 vi.mock("./app-server/auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileStore: vi.fn(),
 }));
@@ -52,7 +56,8 @@ describe("codex.accountUsage", () => {
         "openai:api": { type: "api_key", provider: "openai", key: "api-key-placeholder" },
       },
     };
-    vi.mocked(resolveCodexAppServerAuthProfileStore).mockImplementation(() => store);
+    vi.mocked(resolveCodexAppServerAuthProfileStore).mockImplementation(async () => store);
+    vi.mocked(ensureAuthProfileStore).mockImplementation(() => store);
     vi.mocked(readCodexAppServerUsage).mockResolvedValue(usage(20));
     registerGatewayMethod.mockImplementation((_method, registered) => {
       handler = registered;

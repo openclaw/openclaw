@@ -14,7 +14,10 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -357,18 +360,20 @@ describe("committed session mutation authorization", () => {
           throw new Error("Expected session mutation authorization");
         }
         const owner = openOpenClawAgentDatabase({ agentId: "main" });
-        inWriterTransaction(owner.db, () => {
-          if (opened === "before") {
+        runOpenClawAgentWriteTransaction(
+          () => {
+            if (opened === "before") {
+              expect(() => authorization.assertCurrent()).not.toThrow();
+            }
+            setCanonicalSqliteSessionMainKey(owner, "work");
+            owner.db
+              .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+              .run("agent:main:unrecorded-parent", "agent:main:main");
             expect(() => authorization.assertCurrent()).not.toThrow();
-          }
-          setCanonicalSqliteSessionMainKey(owner, "work");
-          owner.db
-            .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
-            .run("agent:main:unrecorded-parent", "agent:main:main");
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          owner.db.exec("COMMIT");
-        });
+            expect(() => authorization.assertCurrent()).not.toThrow();
+          },
+          { agentId: "main" },
+        );
 
         // A policy change never makes this valid target depend on an invalid sibling.
         inWriterTransaction(owner.db, () => {

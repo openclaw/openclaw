@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -15,6 +16,7 @@ import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
+import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -27,9 +29,9 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
+  createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
-  resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
   type SessionTranscriptTurnPersistOptions,
@@ -105,7 +107,8 @@ type InternalSessionTranscriptDeliveryMirror =
     }
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-    };
+    }
+  | SkillWorkshopChangeNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -378,6 +381,8 @@ type SessionTranscriptAssistantAppendOptions = {
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
+  command?: { text: string; idempotencyKey: string };
 };
 
 export async function appendAssistantMessageToSessionTranscript(
@@ -420,11 +425,13 @@ export async function appendAssistantMessageToSessionTranscript(
       ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-      model: OPENCLAW_DELIVERY_MIRROR_MODEL,
+      model: params.command ? "command" : OPENCLAW_DELIVERY_MIRROR_MODEL,
       usage: makeZeroUsageSnapshot(),
       stopReason: "stop" as const,
       timestamp: Date.now(),
-      ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
+      ...(!params.command && params.deliveryMirror
+        ? { openclawDeliveryMirror: params.deliveryMirror }
+        : {}),
     },
   });
 }
@@ -480,14 +487,29 @@ async function appendExactAssistantMessageWithSource(
           ).entry,
           normalizedKey: actorKey,
         }
-      : resolveSessionEntrySelection({
-          ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-          sessionKey,
-          storePath,
-        });
+      : await withSessionEntryReadOnlyInWorker(
+          {
+            ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+            sessionKey,
+            storePath,
+          },
+          () => params.assertCurrent?.(),
+          async (read, owner) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return {
+              existing: read.value,
+              normalizedKey: resolveSqliteSessionKey(
+                sessionKey,
+                owner.scope?.agentId ?? storeAgentId,
+              ),
+            };
+          },
+        );
   incognito?.authority.assertCurrent();
   params.assertCurrent?.();
-  const entry = resolved.existing;
+  let entry = resolved.existing;
   if (
     (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) ||
     (params.expectedLifecycleRevision !== undefined &&
@@ -500,6 +522,20 @@ async function appendExactAssistantMessageWithSource(
       code: "session-rebound",
       reason: `session rebound for sessionKey: ${sessionKey}`,
     };
+  }
+  if (!entry && params.command) {
+    const created = await createSessionEntryWithTranscript(
+      { agentId: storeAgentId, sessionKey: resolved.normalizedKey, storePath },
+      ({ existingEntry }) => ({
+        ok: true,
+        entry: existingEntry ?? { sessionId: randomUUID(), updatedAt: Date.now() },
+      }),
+      { commitGuard: params.assertCurrent },
+    );
+    if (!created.ok) {
+      return { ok: false, reason: created.error };
+    }
+    entry = created.entry;
   }
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
@@ -562,6 +598,19 @@ async function appendExactAssistantMessageWithSource(
     onMessageCommitted: params.onMessageCommitted,
     touchSessionEntry: true,
     messages: [
+      ...(params.command
+        ? [
+            {
+              message: {
+                role: "user" as const,
+                content: [{ type: "text" as const, text: params.command.text }],
+                timestamp: Date.now(),
+                idempotencyKey: params.command.idempotencyKey,
+              },
+              idempotencyLookup: "scan" as const,
+            },
+          ]
+        : []),
       {
         message: preparedUnkeyedMessage,
         ...(params.eventId ? { eventId: params.eventId } : {}),
@@ -618,7 +667,13 @@ async function appendExactAssistantMessageWithSource(
       ...(anchor ? { anchor } : {}),
     };
   }
-  const appendedResult = turn.messages[0];
+  const appendedResult = turn.messages.find(
+    ({ message: persistedMessage }) =>
+      typeof persistedMessage === "object" &&
+      persistedMessage !== null &&
+      "role" in persistedMessage &&
+      persistedMessage.role === "assistant",
+  );
   if (!appendedResult) {
     return {
       ok: false,

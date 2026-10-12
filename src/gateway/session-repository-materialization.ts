@@ -1,7 +1,10 @@
 import os from "node:os";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -20,9 +23,11 @@ import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
 } from "./github-publication-git-transport.js";
+import { readRepositoryGitHubPublicationBranchAsync } from "./github-publication-store-async.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
 import { readRepositoryGitHubPublicationBranch } from "./github-repository-publication-store.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
@@ -38,7 +43,26 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
 }): Promise<void> {
-  const initial = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  return withGatewaySessionEntryReadOnly(
+    {
+      cfg: params.cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      assertActive: params.assertCurrent,
+    },
+    async (initial) => materializeCapturedRepositoryWorkspace(params, initial),
+  );
+}
+
+async function materializeCapturedRepositoryWorkspace(
+  params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
+  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+): Promise<void> {
+  const metadata = captureSessionEntryMetadataRead({
+    agentId: params.agentId,
+    sessionKey: initial.canonicalKey,
+    storePath: initial.storePath,
+  });
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
   }
@@ -64,13 +88,13 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       `Repository workspace does not match the configured GitHub host (${githubHost}); restore its GitHub configuration before retrying the Gateway move`,
     );
   }
-  const branch = () =>
-    readRepositoryGitHubPublicationBranch({
-      workspaceId,
-      branch: repository.branch,
-      pushRepository: `${remote.owner}/${remote.repo}`,
-    });
-  const selected = branch();
+  const branchInput = {
+    workspaceId,
+    branch: repository.branch,
+    pushRepository: `${remote.owner}/${remote.repo}`,
+  };
+  const branch = () => readRepositoryGitHubPublicationBranch(branchInput);
+  const selected = await readRepositoryGitHubPublicationBranchAsync(branchInput);
   const published = selected.head;
   if (selected.unsettled) {
     throw new Error(
@@ -88,7 +112,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };
-  const assertEntry = (current: typeof initial.entry) => {
+  const assertEntry = (current: Partial<NonNullable<typeof initial.entry>> | undefined) => {
     if (
       current?.sessionId !== params.sessionId ||
       current.lifecycleRevision !== initial.entry?.lifecycleRevision ||
@@ -107,6 +131,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     fields: ["sessionId", "lifecycleRevision"],
     expected: initial.entry,
     assertCurrent: () => {
+      if (metadata) {
+        assertEntry(metadata.readCurrent());
+        return;
+      }
       const current = loadGatewaySessionEntryReadOnly(params.sessionKey, {
         agentId: params.agentId,
       });

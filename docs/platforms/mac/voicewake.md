@@ -9,7 +9,7 @@ title: "Voice wake (macOS)"
 
 ## Requirements
 
-Voice Wake and push-to-talk require macOS 26 or newer. Their device controls
+Voice Wake and push-to-talk require macOS 26.2 or newer. Their device controls
 appear in **Dashboard → Settings → Talk → This Mac**, which reports when voice
 features are unavailable on this Mac.
 

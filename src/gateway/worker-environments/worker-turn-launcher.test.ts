@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -11,6 +11,7 @@ import {
   installSessionPlacementAdmissionProvider,
   prepareSessionPlacementSandbox,
   resolveSessionPlacementRuntimeOverride,
+  sessionPlacementUsesWorkerInference,
 } from "../../agents/session-placement-admission.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
@@ -28,6 +29,7 @@ import { loadSessionEntryForAdmission } from "../../config/sessions/session-acce
 import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
@@ -50,6 +52,8 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher local placement", () => {
   let localProvider: ReturnType<typeof createWorkerSessionTurnPlacementProvider>;
   beforeEach(async () => {
@@ -59,7 +63,7 @@ describe("worker turn launcher local placement", () => {
       placements,
     });
   });
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it("reads absent sandbox placement without caller-thread SQL", async () => {
     const provider = createWorkerSessionTurnPlacementProvider({
@@ -87,6 +91,49 @@ describe("worker turn launcher local placement", () => {
       uninstall();
     }
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "uses current %s placement facts for worker inference without caller-thread SQL",
+    async (executionMode) => {
+      const environment = {
+        ...attachedEnvironment(),
+        providerId: "device",
+        profileSnapshot: { settings: { inference: "worker" } },
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: { ...unusedEnvironments(), get: () => environment },
+        placements,
+      });
+      const uninstall = installSessionPlacementAdmissionProvider(provider);
+      const identity = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" };
+      const sql = observeMainThreadSql();
+      try {
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+        await seedActivePlacement(executionMode);
+        sql.clear();
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(
+          executionMode === "worker-turn",
+        );
+        for (const mismatch of [
+          { sessionId: "other-session" },
+          { sessionKey: "agent:main:other" },
+          { agentId: "other-agent" },
+        ]) {
+          expect(await sessionPlacementUsesWorkerInference({ ...identity, ...mismatch })).toBe(
+            false,
+          );
+        }
+        environment.ownerEpoch += 1;
+        expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+        uninstall();
+      }
+      expect(await sessionPlacementUsesWorkerInference(identity)).toBe(false);
+    },
+  );
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "uses only the matching %s placement as a runtime default",
@@ -496,7 +543,6 @@ describe("worker turn launcher local placement", () => {
           }
           return entry;
         });
-      const claimTurn = vi.spyOn(placements, "claimTurn");
       const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
       try {
         await expect(
@@ -513,13 +559,14 @@ describe("worker turn launcher local placement", () => {
             () => controller.signal.throwIfAborted(),
           ),
         ).rejects.toThrow(
-          change === "caller revocation" ? revoked.message : "placement authority changed",
+          change === "caller revocation"
+            ? revoked.message
+            : `Local turn rejected for session ${SESSION_ID} in placement requested`,
         );
-        expect(claimTurn).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim ?? null).toBeNull();
         expect(runLocal).not.toHaveBeenCalled();
       } finally {
         heldRead.mockRestore();
-        claimTurn.mockRestore();
       }
     },
   );

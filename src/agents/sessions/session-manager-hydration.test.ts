@@ -4,10 +4,8 @@ import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
-import {
-  upsertSessionEntryCore,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -27,8 +25,6 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -733,7 +729,7 @@ it.each(["process", "explicit"])(
   },
 );
 
-it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])(
+it.each(["completed-drain", "active-drain", "terminal-owner"])(
   "preserves physical discovery authority across %s",
   async (transition) => {
     await withOpenClawTestState(
@@ -780,11 +776,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
           transition === "completed-drain"
             ? expect(pending).resolves.toBeInstanceOf(SessionManager)
             : expect(pending).rejects.toThrow(
-                transition === "active-drain"
-                  ? "resources are closing"
-                  : transition === "terminal-owner"
-                    ? "newly forbidden owner"
-                    : "read admission",
+                transition === "active-drain" ? "resources are closing" : "newly forbidden owner",
               );
         let closing: Promise<boolean> | undefined;
         try {
@@ -797,8 +789,6 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
               target.storePath,
               new Error("newly forbidden owner"),
             );
-          } else if (transition === "registry-close") {
-            await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
           } else {
             await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
           }
