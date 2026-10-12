@@ -509,12 +509,13 @@ discarding earlier owners. Replacement releases them after admitted work settles
 Native admission runs outside the 180-second catalog refresh deadline, so a slow
 filesystem does not repeatedly discard and recapture the same package. Each verified
 native namespace member advances a counter, forwarded through the existing worker
-task channel at most once per second unless the active plugin changes. The parent allows admission
+task channel at most once per second, with verification start/end transitions forwarded immediately. The parent allows admission
 to continue while that counter advances. After 180 seconds without progress, it
 records a failure naming the plugin and native reference verification stage and
 closes the worker without automatically recapturing that inventory. Reload the
 plugin or restart the Gateway to retry. Parent probes and queued requests remain
 bounded; provider discovery starts its own 180-second deadline after admission.
+When native verification finishes, later import/preparation timeouts keep the normal worker recovery path.
 Inventory retirement and shutdown still close the worker.
 After successful physical cleanup, retired plugin instances release their registry
 references while preserving revocation. Native module exports no longer retain the

@@ -16,6 +16,7 @@ import {
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import { getPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
@@ -42,7 +43,10 @@ describe("prepared native model catalog worker boundary", () => {
   });
 });
 
-async function createGatewayNativeAdmissionFixture(gateCount: number) {
+async function createGatewayNativeAdmissionFixture(
+  gateCount: number,
+  holdImport?: "before" | "after",
+) {
   const fixture = await createCatalogFixture(makeTempDir, 0);
   const pluginRoot = path.join(fixture.root, "plugin");
   const dependency = path.join(pluginRoot, "node_modules", "native-fixture");
@@ -66,6 +70,10 @@ async function createGatewayNativeAdmissionFixture(gateCount: number) {
   const admissionMarker = path.join(fixture.root, "native-admissions.txt");
   const providerHold = path.join(fixture.root, "provider-hold");
   const authHold = path.join(fixture.root, "auth-hold");
+  const importHold = path.join(fixture.root, "import-hold");
+  if (holdImport) {
+    fs.writeFileSync(importHold, "");
+  }
   const broadcastName = `catalog-admission:${fixture.root}`;
   fs.writeFileSync(
     path.join(pluginRoot, "index.cjs"),
@@ -76,6 +84,12 @@ const receipts = new BroadcastChannel(${JSON.stringify(broadcastName)});
 receipts.unref();
 let native;
 if (threadId !== ${threadId}) {
+  if (${JSON.stringify(holdImport)} === "before" && fs.existsSync(${JSON.stringify(importHold)})) {
+    fs.unlinkSync(${JSON.stringify(importHold)});
+    const gate = new Int32Array(new SharedArrayBuffer(8));
+    receipts.postMessage(gate.buffer);
+    Atomics.wait(gate, 0, 0);
+  }
   const realpath = fs.realpathSync;
   const link = fs.linkSync;
   const symlink = fs.symlinkSync;
@@ -111,6 +125,12 @@ if (threadId !== ${threadId}) {
   try {
     native = require("native-fixture");
     fs.appendFileSync(${JSON.stringify(admissionMarker)}, JSON.stringify({ event: "admitted", filename: __filename, native }) + "\\n");
+    if (${JSON.stringify(holdImport)} === "after" && fs.existsSync(${JSON.stringify(importHold)})) {
+      fs.unlinkSync(${JSON.stringify(importHold)});
+      const gate = new Int32Array(new SharedArrayBuffer(8));
+      receipts.postMessage(gate.buffer);
+      Atomics.wait(gate, 0, 0);
+    }
   } finally {
     fs.realpathSync = realpath;
     fs.linkSync = link;
@@ -146,7 +166,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   });
 } };`,
   );
-  const entered = Array.from({ length: gateCount }, () =>
+  const entered = Array.from({ length: gateCount + Number(Boolean(holdImport)) }, () =>
     createDeferred<Int32Array<SharedArrayBuffer>>(),
   );
   const gates: Int32Array<SharedArrayBuffer>[] = [];
@@ -200,9 +220,12 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   );
   const snapshot = fleet.snapshots[0]!;
   const failures: Error[] = [];
+  const recovered = createDeferred();
   let waiting: ReturnType<typeof createDeferred<ModelCatalogSnapshot>> | undefined;
   unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-    if (event.phase === "catalog-failed") {
+    if (event.phase === "published" && !snapshot.isCurrent()) {
+      recovered.resolve();
+    } else if (event.phase === "catalog-failed") {
       failures.push(event.error);
       waiting?.reject(event.error);
     } else if (event.phase === "catalog-published" && snapshot.isCurrent()) {
@@ -214,6 +237,13 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   });
   return {
     snapshot,
+    recovered: recovered.promise,
+    currentSnapshot: () =>
+      getPreparedModelRuntimeSnapshot({
+        agentId: fleet.agentIds[0]!,
+        agentDir: fleet.entries[fleet.agentIds[0]!]!.agentDir,
+        config: fleet.config,
+      }),
     failures,
     entered,
     release,
@@ -380,3 +410,40 @@ it("records a stalled native admission without restarting its Gateway capture", 
     await fixture.close();
   }
 });
+
+it.for(["before", "after"] as const)(
+  "recovers a catalog worker stalled $0 native verification",
+  async (holdImport, { signal }) => {
+    const fixture = await createGatewayNativeAdmissionFixture(0, holdImport);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = fixture.refresh();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fixture.entered[0]!.promise,
+          first.completed,
+          "Plugin import did not enter",
+        ),
+        signal,
+      );
+      await checkpoint();
+      await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
+      await expect(withinTest(first.completed, signal)).rejects.toMatchObject({
+        name: "WorkerTaskError",
+        code: "timeout",
+      });
+      await withinTest(first.foreground, signal);
+      await withinTest(fixture.recovered, signal);
+      expect(fixture.snapshot.isCurrent()).toBe(false);
+      const recovered = fixture.currentSnapshot();
+      expect(recovered?.isCurrent()).toBe(true);
+      const catalog = await withinTest(recovered!.loadFullModelCatalog!({ refresh: true }), signal);
+      expect(catalog.entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "native-admitted" }),
+      );
+    } finally {
+      vi.useRealTimers();
+      await fixture.close();
+    }
+  },
+);

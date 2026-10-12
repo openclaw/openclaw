@@ -595,13 +595,19 @@ if (parentPort) {
     }
     let reportAfter = 0;
     let reportedPlugin: string | undefined;
+    let reportedActive: boolean | undefined;
     const reportProgress = (notification: unknown) => {
       // SAFETY: The native-reference owner publishes this internal diagnostic payload.
       const progress = notification as NativeReferenceProgress;
       const now = performance.now();
-      if (now >= reportAfter || progress.pluginId !== reportedPlugin) {
+      if (
+        now >= reportAfter ||
+        progress.pluginId !== reportedPlugin ||
+        progress.active !== reportedActive
+      ) {
         reportAfter = now + 1_000;
         reportedPlugin = progress.pluginId;
+        reportedActive = progress.active;
         channel?.notify(progress);
       }
     };

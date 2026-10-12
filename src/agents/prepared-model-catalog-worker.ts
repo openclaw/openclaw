@@ -44,6 +44,7 @@ import type {
 import {
   PreparedModelCatalogAdmissionStalledError,
   PreparedModelCatalogGenerationMismatchError,
+  createPreparedModelCatalogPreparationTimeout,
 } from "./prepared-model-catalog.errors.js";
 import {
   setPreparedModelFullCatalogAuth,
@@ -479,8 +480,8 @@ export function createPreparedModelCatalogWorker(
           assertCurrent();
           // The existing budget now bounds idle admission, renewed only by verified members.
           expire = () => {
-            const failure = new PreparedModelCatalogAdmissionStalledError(
-              progress?.pluginId,
+            const failure = createPreparedModelCatalogPreparationTimeout(
+              progress?.active ? progress.pluginId : undefined,
               PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
             );
             borrower.notifyRecovery(failure);

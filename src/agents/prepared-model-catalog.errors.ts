@@ -1,3 +1,5 @@
+import { WorkerTaskError } from "@openclaw/worker-runtime";
+
 export class PreparedModelCatalogConfigReplacedError extends Error {
   constructor(agentDir: string) {
     super(`prepared model catalog owner config was replaced during the read (${agentDir})`);
@@ -25,4 +27,14 @@ export class PreparedModelCatalogGenerationMismatchError extends Error {
     );
     this.name = "PreparedModelCatalogGenerationMismatchError";
   }
+}
+
+/** Only observed native verification stalls retire admission without automatic recovery. */
+export function createPreparedModelCatalogPreparationTimeout(
+  pluginId: string | undefined,
+  idleMs: number,
+) {
+  return pluginId
+    ? new PreparedModelCatalogAdmissionStalledError(pluginId, idleMs)
+    : new WorkerTaskError("worker task timed out", "timeout");
 }
