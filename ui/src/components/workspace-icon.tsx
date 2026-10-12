@@ -10,8 +10,7 @@ type WorkspaceIconProps = {
   connectionId: string | undefined;
 };
 
-export type WorkspaceIconElement = SolidBridgeElement<WorkspaceIconProps>;
-export const WorkspaceIcon = defineSolidBridge<WorkspaceIconProps>(
+defineSolidBridge<WorkspaceIconProps>(
   "openclaw-workspace-icon",
   (props, host) => {
     host.style.display = "contents";
@@ -59,3 +58,9 @@ export const WorkspaceIcon = defineSolidBridge<WorkspaceIconProps>(
     },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-workspace-icon": SolidBridgeElement<WorkspaceIconProps>;
+  }
+}

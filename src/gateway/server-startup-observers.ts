@@ -92,6 +92,11 @@ export async function runGatewayStartupObservers(params: {
   try {
     await runWithGatewayIndependentRootWorkAdmission(
       async () => {
+        const context = params.resolveGatewayContext();
+        if (context && !params.signal.aborted && !params.isClosing?.()) {
+          const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
+          await resumeAgentDeletions(context, params.signal);
+        }
         await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
           // Restored wakes start their admission budget at dispatch. Join reader startup
           // first, including maintenance that shares compute with foreground admission.

@@ -29,11 +29,11 @@ import {
   assertCronRunReceiptCurrentInDatabase,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.test-support.js";
 
 it("rechecks unrepaired delivery in the current row before activating a prepared run", async () => {

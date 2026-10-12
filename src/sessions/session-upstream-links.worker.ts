@@ -21,9 +21,6 @@ export function executeSessionUpstreamCommand(
   command: SqliteWorkerCommand<SessionUpstreamWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): boolean | "deleted" | "absent" | "changed" {
-  if (command.type === "sessionUpstream.current") {
-    return isSessionStateUpstreamCurrentInDatabase(options.database.db, command.input);
-  }
   if (command.type === "sessionUpstream.upsert" || command.type === "sessionUpstream.delete") {
     return runOpenClawStateWriteTransaction(({ db }) => {
       const assertSource = () => {

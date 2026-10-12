@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
 import { getRuntimeConfig } from "../config/config.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
@@ -64,6 +65,75 @@ export async function withGatewayWorkerSessionAdmission<T>(
 ): Promise<T> {
   const getConfig = params.getConfig ?? getRuntimeConfig;
   const scope = params.identity;
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    if (
+      !entry ||
+      entry.sessionId !== scope.sessionId ||
+      entry.archivedAt !== undefined ||
+      (params.expectedEntry && entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)
+    ) {
+      throw new WorkerPlacementAdmissionTargetError("Worker session source is unavailable; retry.");
+    }
+    const fields = [
+      ...new Set<keyof SessionEntry>([
+        "sessionId",
+        "lifecycleRevision",
+        "archivedAt",
+        ...(params.retainEntryFields ?? []),
+      ]),
+    ];
+    const controller = new AbortController();
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, controller.signal])
+      : controller.signal;
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new WorkerPlacementAdmissionTargetError(
+          "Worker session admission scope was released.",
+        );
+      }
+      params.signal?.throwIfAborted();
+      params.authorize?.();
+      const current = memory.actor.snapshot(memory.authority)?.entry;
+      if (!current || fields.some((field) => !isDeepStrictEqual(current[field], entry[field]))) {
+        throw new WorkerPlacementAdmissionTargetError(
+          "Session changed during worker admission; retry.",
+        );
+      }
+      return current;
+    };
+    const admission = await beginSessionWorkAdmission({
+      scope: memory.path,
+      identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
+      onInterrupt: (reason) => controller.abort(reason),
+      signal,
+      assertAllowed: () => {
+        assertCurrent();
+      },
+    });
+    try {
+      return await admission.run(() =>
+        run({
+          target: {
+            agentId: memory.agentId,
+            canonicalKey: scope.sessionKey,
+            storePath: memory.path,
+            storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
+          },
+          entry,
+          assertCurrent,
+          signal,
+          onCommitted: () => {},
+        }),
+      );
+    } finally {
+      active = false;
+      admission.release();
+    }
+  }
   const actorBinding = captureIncognitoSessionBinding(scope);
   const metadata = captureSessionEntryMetadataRead(scope);
   const actorClaim = actorBinding?.actor.sessions.captureCurrent(scope.sessionKey);
@@ -140,6 +210,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
   try {
     // Reserve before asynchronous source acquisition so Stop can retire queued ingress.
     admission = await beginSessionWorkAdmission({
+      agentId: scope.agentId,
       scope: configuredPath,
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
       onInterrupt: (reason) => controller.abort(reason),
@@ -343,7 +414,8 @@ export function createGatewayWorkerDispatchAdmission(
     // The requested acknowledgment can release the RPC while dispatch still owns setup.
     const releaseCaller = retainGatewayDeviceRevocation(authorize);
     try {
-      const actorBinding = captureIncognitoSessionBinding(identity);
+      const memory = getSessionActorStorageBinding(identity);
+      const actorBinding = memory ? undefined : captureIncognitoSessionBinding(identity);
       const admit = async () => {
         // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
         const sourceAuthorize = captureExternalSessionCommitGuard(authorize);
