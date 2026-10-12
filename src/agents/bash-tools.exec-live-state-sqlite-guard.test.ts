@@ -163,14 +163,6 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
           { stateDir, workdir: root },
         ),
       ).resolves.toBe("live-state-sqlite");
-      // Tilde URI spelling resolves like bare ~/… for parity (shell does not
-      // expand mid-string tilde, but the guard now normalizes it anyway).
-      await expect(
-        detectUnsafeExecControlShellCommand('sqlite3 "file:~/.openclaw/state/openclaw.sqlite"', {
-          stateDir,
-          workdir: root,
-        }),
-      ).resolves.toBe("live-state-sqlite");
       // A $HOME URI outside the active state dir stays allowed.
       await expect(
         detectUnsafeExecControlShellCommand(
@@ -178,6 +170,21 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
           { stateDir, workdir: root },
         ),
       ).resolves.toBeNull();
+      // Relative file: URIs keep fileURLToPath semantics (root-relative), so a
+      // private copy reached after `cd` is not newly refused by this change.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `cd ${quote(root)} && sqlite3 "file:data/app.db?mode=ro" "SELECT 1"`,
+          { stateDir, workdir: path.join(root, "elsewhere") },
+        ),
+      ).resolves.toBeNull();
+      // A variable-bearing URI resolves the state directory even after a cd.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `cd ${quote(root)} && sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro"`,
+          { stateDir, workdir: path.join(root, "elsewhere") },
+        ),
+      ).resolves.toBe("live-state-sqlite");
     });
   });
 

@@ -183,34 +183,42 @@ function parseSqliteDatabaseTokens(argv: string[]): string[] {
   return databaseTokens;
 }
 
+// Recognized variable-bearing file: URI bodies whose variables the shell
+// expands even inside double quotes. Other file: URIs (absolute, relative,
+// opaque, tilde) keep fileURLToPath semantics.
+const SQLITE_URI_RECOGNIZED_VARIABLE_BODY =
+  /^\$(?:\{?OPENCLAW_STATE_DIR\}?|\{?HOME\}?)(?=$|[\\/])/u;
+
 function expandSqliteDatabaseToken(token: string, stateDir: string): string | null {
   let expanded = token.trim();
   if (!expanded || expanded === ":memory:") {
     return null;
   }
-  if (expanded.toLowerCase().startsWith("file:")) {
-    const uriBody = expanded.slice("file:".length);
-    if (uriBody.startsWith("/")) {
-      // Absolute file URL: keep fileURLToPath semantics (host/percent handling).
-      try {
-        expanded = fileURLToPath(expanded);
-      } catch {
-        const filename = uriBody.split(/[?#]/u, 1)[0] ?? "";
-        if (!filename) {
-          return null;
-        }
-        try {
-          expanded = decodeURIComponent(filename);
-        } catch {
-          expanded = filename;
-        }
-      }
-    } else {
-      // Opaque or variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
-      // is not an absolute file URL: fileURLToPath would prefix the literal
-      // variable with "/" and hide it from expansion. Strip the scheme and any
-      // query/fragment, percent-decode, then run the variable expansions below.
-      const filename = uriBody.split(/[?#]/u, 1)[0] ?? "";
+  const fileUriBody = expanded.toLowerCase().startsWith("file:")
+    ? expanded.slice("file:".length)
+    : null;
+  if (fileUriBody !== null && SQLITE_URI_RECOGNIZED_VARIABLE_BODY.test(fileUriBody)) {
+    // A recognized variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
+    // is not an absolute file URL: fileURLToPath would prefix the literal
+    // variable with "/" and hide it from expansion. Strip the scheme and any
+    // query/fragment, percent-decode, then run the variable expansions below.
+    const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+    if (!filename) {
+      return null;
+    }
+    try {
+      expanded = decodeURIComponent(filename);
+    } catch {
+      expanded = filename;
+    }
+  } else if (fileUriBody !== null) {
+    // Absolute, relative, opaque, and tilde file: URIs keep fileURLToPath
+    // semantics (host/percent handling, root-relative resolution) so their
+    // allow/refuse behavior is unchanged by this guard.
+    try {
+      expanded = fileURLToPath(expanded);
+    } catch {
+      const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
       if (!filename) {
         return null;
       }
