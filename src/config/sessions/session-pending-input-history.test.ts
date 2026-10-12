@@ -4,7 +4,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type {
   SqliteWorkerOperations,
@@ -25,9 +25,9 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   registerSessionPendingInputOwner,
   releaseSessionPendingInputOwner,
-  type SessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 
 it("serves empty pending history from its counted snapshot in one data read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

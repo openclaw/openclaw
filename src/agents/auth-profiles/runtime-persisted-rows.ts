@@ -3,6 +3,7 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AuthProfileRowRead } from "./types.js";
 
 type RowsReader = {
+  identity?: string;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
 };
@@ -11,7 +12,7 @@ type RowsReader = {
 export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string) => string) {
   const entries = new Map<
     string,
-    { writeToken: string; revision: string; rows: AuthProfileRowRead }
+    { identity: string | undefined; writeToken: string; revision: string; rows: AuthProfileRowRead }
   >();
   return {
     clear(databasePath?: string) {
@@ -31,6 +32,7 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
           const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
           if (
             writeToken !== undefined &&
+            entry?.identity === reader.identity &&
             entry?.revision === revision &&
             entry.writeToken === writeToken
           ) {
@@ -49,7 +51,7 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
             readSqliteDatabaseWriteTokenForPath(databasePath) === writeToken
           ) {
             freezeJsonSnapshot(rows);
-            entries.set(databasePath, { writeToken, revision, rows });
+            entries.set(databasePath, { identity: reader.identity, writeToken, revision, rows });
             // Bound retained credential owners; eviction never changes read authority.
             while (entries.size > 64) {
               entries.delete(entries.keys().next().value!);

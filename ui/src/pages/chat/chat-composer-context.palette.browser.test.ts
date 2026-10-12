@@ -1,8 +1,9 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../styles/chat/layout.css";
-import { renderContextNotice } from "./components/chat-composer-context.ts";
+import { ContextNotice } from "./components/chat-composer-context.tsx";
 import { syncChatPickerOverlay } from "./components/chat-picker-overlay.ts";
 
 const rootStyle = document.documentElement.style;
@@ -20,15 +21,18 @@ describe("mounted context usage palette", () => {
       container.className = "agent-chat__input";
       rootStyle.setProperty("--warn", "#d97706");
       rootStyle.setProperty("--danger", "#dc2626");
-      render(
-        renderContextNotice({
-          key: "main",
-          kind: "direct",
-          updatedAt: null,
-          totalTokens: percent,
-          contextTokens: 100,
-        }),
-        container,
+      mountSolid(
+        () =>
+          createComponent(ContextNotice, {
+            session: {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              totalTokens: percent,
+              contextTokens: 100,
+            },
+          }),
+        { container },
       );
       document.body.append(container);
       const details = container.querySelector("details")!;

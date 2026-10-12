@@ -9,6 +9,7 @@ import type { ConfigWriteOptions } from "../../config/io.js";
 import type { ProviderAuthProfile, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
+import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = {
   agentDir?: string;
@@ -503,6 +504,15 @@ describe("modelsAuthLoginCommand", () => {
     restoreStdin = null;
   });
 
+  registerModelsAuthAuthorityTests({
+    mocks,
+    createRuntime,
+    runModelsAuthLoginFlowCore,
+    setProviderAuthResult: (result) => {
+      runProviderAuth.mockResolvedValueOnce(result);
+    },
+  });
+
   function useCoderAgentConfig() {
     currentConfig = {
       agents: {
@@ -727,38 +737,6 @@ describe("modelsAuthLoginCommand", () => {
       modelPolicy: { allow: ["other/current"] },
     });
   });
-
-  it.each(["cancelled", "revoked"] as const)(
-    "does not complete a saved login when authority is %s during a rejected refresh",
-    async (reason) => {
-      const controller = new AbortController();
-      let current = true;
-      const onModelAccessRequested = vi.fn();
-      await expect(
-        runModelsAuthLoginFlowCore({
-          provider: "openai",
-          runtime: createRuntime(),
-          prompter: mocks.createClackPrompter(),
-          signal: controller.signal,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("Login authority ended.");
-            }
-          },
-          refreshAfterLogin: async () => {
-            if (reason === "cancelled") {
-              controller.abort(new Error("Login authority ended."));
-            } else {
-              current = false;
-            }
-            throw new Error("Auth publication failed.");
-          },
-          onModelAccessRequested,
-        }),
-      ).rejects.toThrow("Login authority ended.");
-      expect(onModelAccessRequested).not.toHaveBeenCalled();
-    },
-  );
 
   it("identifies a config failure after credentials are saved and preserves its cause", async () => {
     const cause = new Error("config write failed");
@@ -1455,6 +1433,7 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
       preserveApiKeyMetadata: true,
+      resetFailureState: true,
       validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
@@ -1489,6 +1468,7 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/main",
       preserveApiKeyMetadata: true,
+      resetFailureState: true,
       validateCurrentCredential: expect.any(Function),
     });
     expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({

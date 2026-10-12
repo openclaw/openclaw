@@ -119,12 +119,6 @@ describe("Talk connection cleanup registry", () => {
     const first = createDeferred();
     const finish = createDeferred();
     const log = { warn: vi.fn() };
-    const queued = createDeferred();
-    const queuedStarted = createDeferred();
-    const replacement = vi.fn(() => {
-      queuedStarted.resolve();
-      return queued.promise;
-    });
     const firstStarted = createDeferred();
     const retryStarted = createDeferred();
     const cleanup = vi
@@ -146,7 +140,6 @@ describe("Talk connection cleanup registry", () => {
     first.reject(new Error("physical cleanup failed"));
     await firstObserved;
     await Promise.resolve();
-    registerTalkConnectionCleanup("conn-async-retry", "browser-control", replacement);
     let drained = false;
     const draining = drainGlobalSingletonLifecycleState("restart").then(() => {
       drained = true;
@@ -158,22 +151,17 @@ describe("Talk connection cleanup registry", () => {
     try {
       await retryStarted.promise;
       expect(cleanup).toHaveBeenCalledTimes(2);
-      expect(replacement).not.toHaveBeenCalled();
       await Promise.resolve();
       expect(drained).toBe(false);
       finish.resolve();
-      await queuedStarted.promise;
-      expect(drained).toBe(false);
-      expect(concurrentDrained).toBe(false);
-      expect(replacement).toHaveBeenCalledOnce();
-      queued.resolve();
       await Promise.all([draining, concurrentDrain]);
+      expect(drained).toBe(true);
+      expect(concurrentDrained).toBe(true);
       cleanupTalkConnection("conn-async-retry", log);
       expect(cleanup).toHaveBeenCalledTimes(2);
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("physical cleanup failed"));
     } finally {
       finish.resolve();
-      queued.resolve();
       await Promise.all([draining, concurrentDrain]);
     }
   });

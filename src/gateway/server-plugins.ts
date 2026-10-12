@@ -11,7 +11,7 @@ import type {
   PluginLoadOptions,
   PluginRuntimeRecovery,
 } from "../plugins/loader-types.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -353,7 +353,7 @@ function createGatewayPluginRuntimeBindings(
   };
 }
 
-export function loadGatewayPlugins(params: {
+export async function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
@@ -435,10 +435,10 @@ export function loadGatewayPlugins(params: {
         resolvePluginSubagentOverridePolicies(resolvedConfig),
       )
     : undefined;
-  let pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  let pluginRegistry: Awaited<ReturnType<typeof loadOpenClawPluginsAsync>>;
   try {
     pluginRegistry = gatewayRuntimeBindings
-      ? loadOpenClawPlugins({
+      ? await loadOpenClawPluginsAsync({
           ...buildPluginRuntimeLoadOptions(loadContext),
           activate: false,
           runtimeSideEffects: true,

@@ -43,6 +43,8 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
 
+Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
+
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
 Reconnect bootstrap reads also pause together: agent identity, session subscriptions, session groups, pending questions, and the session list. An announced restart or suspension holds these reads until readiness or a new connection resumes loading. If a restart rejection arrives without an announcement, one delayed probe at a time checks for recovery after at least a minute, in case the restart is canceled. Writes are never replayed by this mechanism.
@@ -80,6 +82,8 @@ If a narration subscription encounters a retryable failure or times out, it retr
 Failed narration releases use the same backoff, including while the tab is hidden. If a session is needed again, its queued release is canceled and its subscription is renewed safely. Closing the Gateway connection cancels release retries.
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
+
+Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 

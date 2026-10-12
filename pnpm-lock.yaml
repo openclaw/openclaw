@@ -193,7 +193,7 @@ overrides:
   file-type: 22.1.1
   form-data: 4.0.6
   ip-address: 10.7.3
-  mailauth@7.1.0>nodemailer: 10.0.13
+  mailauth@7.1.0>nodemailer: 10.0.14
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
@@ -246,8 +246,8 @@ importers:
         specifier: 1.8.1
         version: 1.8.1
       '@earendil-works/pi-tui':
-        specifier: 1.0.0
-        version: 1.0.0
+        specifier: 1.0.2
+        version: 1.0.2
       '@google/genai':
         specifier: 2.27.0
         version: 2.27.0(@modelcontextprotocol/sdk@1.32.0(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
@@ -285,8 +285,8 @@ importers:
         specifier: 0.3.4
         version: 0.3.4
       '@trycua/cua-driver':
-        specifier: 0.32.0
-        version: 0.32.0
+        specifier: 0.33.1
+        version: 0.33.1
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -855,14 +855,14 @@ importers:
         specifier: 0.12.0
         version: 0.12.0
       '@solidjs/web':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
       solid-js:
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -871,8 +871,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
 
   extensions/cerebras:
     devDependencies:
@@ -1015,8 +1015,8 @@ importers:
         specifier: 0.26.0
         version: 0.26.0
       '@trycua/cua-driver':
-        specifier: 0.32.0
-        version: 0.32.0
+        specifier: 0.33.1
+        version: 0.33.1
       rastermill:
         specifier: 0.4.0
         version: 0.4.0
@@ -1144,8 +1144,8 @@ importers:
         specifier: 0.4.1
         version: 0.4.1
       mdast-util-from-markdown:
-        specifier: 2.0.3
-        version: 2.0.3(supports-color@10.2.2)
+        specifier: 2.1.0
+        version: 2.1.0(supports-color@10.2.2)
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -1228,8 +1228,8 @@ importers:
         specifier: 0.26.0
         version: 0.26.0
       mdast-util-from-markdown:
-        specifier: 2.0.3
-        version: 2.0.3(supports-color@10.2.2)
+        specifier: 2.1.0
+        version: 2.1.0(supports-color@10.2.2)
       mdast-util-gfm-table:
         specifier: 2.0.0
         version: 2.0.0(supports-color@10.2.2)
@@ -1391,14 +1391,14 @@ importers:
   extensions/imap:
     dependencies:
       imapflow:
-        specifier: 2.2.1
-        version: 2.2.1
+        specifier: 2.2.4
+        version: 2.2.4
       mailauth:
         specifier: 7.1.0
         version: 7.1.0
       mailparser:
-        specifier: 3.9.33
-        version: 3.9.33
+        specifier: 3.9.34
+        version: 3.9.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1658,8 +1658,8 @@ importers:
   extensions/memory-wiki:
     dependencies:
       mdast-util-from-markdown:
-        specifier: 2.0.3
-        version: 2.0.3(supports-color@10.2.2)
+        specifier: 2.1.0
+        version: 2.1.0(supports-color@10.2.2)
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2484,11 +2484,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workboard-contract
       '@solidjs/web':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       solid-js:
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       typebox:
         specifier: 1.3.34
         version: 1.3.34
@@ -2506,8 +2506,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -2518,14 +2518,14 @@ importers:
   extensions/x:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       linkify-it:
         specifier: 6.1.0
         version: 6.1.0
       solid-js:
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       tlds:
         specifier: 1.261.0
         version: 1.261.0
@@ -2537,8 +2537,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -2711,8 +2711,8 @@ importers:
         specifier: 3.0.0
         version: 3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.2)
       mdast-util-from-markdown:
-        specifier: 2.0.3
-        version: 2.0.3(supports-color@10.2.2)
+        specifier: 2.1.0
+        version: 2.1.0(supports-color@10.2.2)
       mdast-util-gfm-table:
         specifier: 2.0.0
         version: 2.0.0(supports-color@10.2.2)
@@ -2925,8 +2925,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
-        specifier: 0.3.8
-        version: 0.3.8
+        specifier: 0.3.9
+        version: 0.3.9
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -2955,11 +2955,11 @@ importers:
         specifier: 4.6.2
         version: 4.6.2
       '@solidjs/signals':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       '@solidjs/web':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       '@tanstack/lit-virtual':
         specifier: 3.14.2
         version: 3.14.2(lit@3.3.3)
@@ -3000,21 +3000,21 @@ importers:
         specifier: 1.4.0
         version: 1.4.0
       solid-js:
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       zod:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.13
-        version: 2.0.0-rc.13
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       '@solidjs/testing-library':
         specifier: 1.0.0-beta.3
-        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(solid-js@2.0.0-rc.13)
+        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)
       '@solidjs/vite-plugin':
-        specifier: 3.0.0-next.47
-        version: 3.0.0-next.47(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        specifier: 3.0.0-next.49
+        version: 3.0.0-next.49(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)(supports-color@10.2.2)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       '@types/markdown-it':
         specifier: 14.2.0
         version: 14.2.0
@@ -3811,8 +3811,8 @@ packages:
     resolution: {integrity: sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==}
     engines: {node: '>=22.12.0'}
 
-  '@earendil-works/pi-tui@1.0.0':
-    resolution: {integrity: sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw==}
+  '@earendil-works/pi-tui@1.0.2':
+    resolution: {integrity: sha512-ElfzjnckohEjzHK5Q5iOpqLpQ1YbM/c/XmjBdPVR5k4uoorQPnny5BtT+rvC0cAjVVCUOHWAWppust7FAaEsOQ==}
     engines: {node: '>=22.19.0'}
 
   '@emnapi/core@1.11.3':
@@ -4934,8 +4934,8 @@ packages:
     resolution: {integrity: sha512-tLpVEBUEcFS4YtT43DwM4R8XqPNcJxJzIb23+v8Lyj0vElEHUox2t5+4buv0OiSZ3r3EsVXe5odI3FZDZWcHqg==}
     engines: {node: '>=22'}
 
-  '@openclaw/libterminal@0.3.8':
-    resolution: {integrity: sha512-0OtQ9gAqOpz2015syG4O8ofXUbcFq8qJKUW4rx/JpDGk1e8D/L3WDmSYKAddcKaczfvi9DfBNkpT3PiKAZ/nUA==}
+  '@openclaw/libterminal@0.3.9':
+    resolution: {integrity: sha512-1bqkn/Bo11XwVcspzcLMAnRNpSHzTy650k1f+UggQKNFxX8YOR3hLpB8U0tzRHRHp3vI5eEAWa7G3X1EBT6dCQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       node-pty: '>=1.0.0'
@@ -5975,8 +5975,8 @@ packages:
     resolution: {integrity: sha512-V+NlX5931RwVamZhhEfZekMdcvXDKdMAmHW1AuGaykVQsNyBOq3bpmGpoKRBDCYgFWKIufJ0Dcg3m4cYhvUy6g==}
     engines: {node: '>= 10'}
 
-  '@solidjs/babel-plugin@2.0.0-rc.13':
-    resolution: {integrity: sha512-VaNysg2V5gu1leatjxBeRPvj1wTEB1LQ1bKuPABKBGztz/Vjr6bHUYEV2cC1mFuEyNJBaNrAiGv0+5Vpbl8Pug==}
+  '@solidjs/babel-plugin@2.0.0-rc.14':
+    resolution: {integrity: sha512-zMbK1GMHnChgfnalS5Q6rwPeQ9UoC7snavzes90R7+6J+8Fa7Yq4AfgqrfaAKYAjlpMgT0E8AmVwYCdIvSsG/A==}
     peerDependencies:
       '@babel/core': ^7.20.12
       '@tsrx/core': 0.1.63
@@ -5989,13 +5989,29 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
+    resolution: {integrity: sha512-WiOnnVov6XfT7QG9OrgqWfoJMrUYYbjO88qMzJ09tijV6Phu+BoeK2J3I0B3IpPPrOTMQ2mXpcwdvnSLuAtWdw==}
+    cpu: [arm64]
+    os: [darwin]
+
   '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
     resolution: {integrity: sha512-jIyzyn/fYHmzikOaskiqmkc8FusXMaxl1Z6huh7lEeHaZsl9NIdzzAIxq8j/EJFByvoCyfQitggRTuubGNblpA==}
     cpu: [x64]
     os: [darwin]
 
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
+    resolution: {integrity: sha512-pW1kmlbkRLjLBnsDL+lF8LKrdjK141uCYt2RFNcodud/JOqIWTMK3v+zULeJelqbQX78CjhQ5xz0V2ApKb6UsA==}
+    cpu: [x64]
+    os: [darwin]
+
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
     resolution: {integrity: sha512-cGIX7ZWTyw3Qdpd5ZqJtHdb2vQkAtZlkTgy919dMldjoRqDwQIRlqCmH35kaH/IUBlhuG224BoP4twqK9GYyGw==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
+    resolution: {integrity: sha512-2d8F8x4sBae7DQHi9wholdzHir8UsHVHpPRPj4NRr4seD5rWkpIbQ3Pwk/9FMZoM4KZmCZ+6+SInQm7iGALgTw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
@@ -6006,8 +6022,18 @@ packages:
     os: [linux]
     libc: [glibc]
 
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
+    resolution: {integrity: sha512-dXt4PJeEKSD07X/k5PcsFczxJLof72hEw3aVu8S0WBWh+KTYjYx9tg3Hnnl0KntR61PyphUjwIOICsWWsgKQTA==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
     resolution: {integrity: sha512-nNOMOFxanzfM2wNbSXyekMtGazyOcM3ja+P7tk0NJYTAo2MYmRTY/HUDdFRDluk6Nc5aehu87I7AVMRj5l1WXw==}
+    engines: {node: '>=14.0.0'}
+
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
+    resolution: {integrity: sha512-cTaAmM7Ca6JisgvnqsLT9Fce4sDmonCaTvBb5eF2iEfdt8htFZ2Z9RlUEK2yG6LxCN89/K/vZLbI7giLA4HUjw==}
     engines: {node: '>=14.0.0'}
 
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
@@ -6015,11 +6041,19 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
+    resolution: {integrity: sha512-JosTalJd6Pgb8mjNgPCEauQSOi647Vlm2mS0qvO3hYLvzcrODmrYsHIY1/DqbI1FxQdc9vUOKJ5zCHvhjlScuA==}
+    cpu: [x64]
+    os: [win32]
+
   '@solidjs/compiler@2.0.0-rc.13':
     resolution: {integrity: sha512-OveR/xhLKo8MTJO/53jgjHuBW54c6/a9B/jiSjDrBeQ3JSbODUxQ8t58WBSlHaxyowPd27TwhVkLo3zeT1YqMQ==}
 
-  '@solidjs/signals@2.0.0-rc.13':
-    resolution: {integrity: sha512-4+pRdrAHtfyE9BUJWBup3TpzJojJjgW2mV1vm/Jik4tWa5epxXB/YrLkwqP1v8+S9XjyKKZu5BSLqmcpswMYeQ==}
+  '@solidjs/compiler@2.0.0-rc.14':
+    resolution: {integrity: sha512-eCTVcxXl1UHOisRMYg+hABwiiTkfTmSkaOFtAb8bjzeqpLlju3lo6pT2qWPfUbrvnslbNGnLZd+HZSIVgZu9VQ==}
+
+  '@solidjs/signals@2.0.0-rc.14':
+    resolution: {integrity: sha512-s3v1wpPcX3wfNO0WUERrPrXS+qqJ4ylzH9QTIRKqrgcMVeLEOXgFa3hZrhEoVTp+lVAgido2NH6GCI79twe2fg==}
     engines: {node: '>=22.12.0'}
 
   '@solidjs/testing-library@1.0.0-beta.3':
@@ -6029,14 +6063,14 @@ packages:
       '@solidjs/web': '>=2.0.0-0'
       solid-js: '>=2.0.0-0'
 
-  '@solidjs/vite-plugin@3.0.0-next.47':
-    resolution: {integrity: sha512-vcsZbXkTCt2RalJmUPp25iz+7KYGriP9w54BLf5uIJ0xDf5woTN92WdlDCh0udZV/Zb2xw2qrWQA977QeuScJw==}
+  '@solidjs/vite-plugin@3.0.0-next.49':
+    resolution: {integrity: sha512-s50Tz24Nh061/lTSvG6VyVIAraQ4gYnnwjUCe2XfDAHY2jD85vYIckJiH1XV4ZnF4I79PaOsSoa7HhzZGO99+w==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       '@solidjs/start-devtools': ^1.0.0-next.2
-      '@solidjs/web': ^2.0.0-rc.13
+      '@solidjs/web': ^2.0.0-rc.14
       '@testing-library/jest-dom': ^5.16.6 || ^5.17.0 || ^6.0.0 || ^7.0.0
-      solid-js: ^2.0.0-rc.13
+      solid-js: ^2.0.0-rc.14
       vite: ^8.0.0 || ^9.0.0
     peerDependenciesMeta:
       '@solidjs/start-devtools':
@@ -6049,6 +6083,12 @@ packages:
     engines: {node: '>=22.12.0'}
     peerDependencies:
       solid-js: ^2.0.0-rc.13
+
+  '@solidjs/web@2.0.0-rc.14':
+    resolution: {integrity: sha512-MhHqUoVBdgAG7EZOANx7Y5SuCFH7sBxzt9uBSYLpJxE503tqoi7pX1UhV7PWxw4LvmPe1PZkdkSOZ8BLchZkhQ==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      solid-js: ^2.0.0-rc.14
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -6111,40 +6151,40 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@trycua/cua-driver-darwin-arm64@0.32.0':
-    resolution: {integrity: sha512-wSUwXMj/KJPi+SEy3PfrN94p2ji8TOlIxQn4kPw8GG0NtiVqtfdOA7kOcjLZZeeJdTlS/r0PKKlghG+5JrC9PQ==}
+  '@trycua/cua-driver-darwin-arm64@0.33.1':
+    resolution: {integrity: sha512-rEGhMSp2gpayNXbiyVRFah63IArQjKj0ay6bW2xrmioFgrGzdvOODjA87qHu9NeDzC3U9e2eUWlD9rDOtucjFg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@trycua/cua-driver-darwin-x64@0.32.0':
-    resolution: {integrity: sha512-9Q61a7XHSPycuT0fTQtmTT+fbXkVEL05iHgaRv+OtYHTyzJG1KVpTjntJsSlaQgD7NVl1uAapumZ9gMmvrOhuQ==}
+  '@trycua/cua-driver-darwin-x64@0.33.1':
+    resolution: {integrity: sha512-SX9BXQDBSdCV/4ryu630CfiFIs5+LkERoDnjj9lvzIm0TpHbdGDxiB2Ron38TTH/9HNqGoWeERolMswKlvGvVg==}
     cpu: [x64]
     os: [darwin]
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.32.0':
-    resolution: {integrity: sha512-E3fJdJYnfguFbEK9VRqqVnT8yMZZKTSxZz08kmF7DAXnKNQ7mfQTdqNeC1qCrx5JuIRyPp7dyBCTQdUAVqEAaA==}
+  '@trycua/cua-driver-linux-arm64-gnu@0.33.1':
+    resolution: {integrity: sha512-NS6vgw4J1k6FG/YSCt1aQLyrtbn8+DDnZIAl8yYb3lU2dtjL38ujjkOMWQYJdOKLsONdiwRJM+QIE+c9Q98kEQ==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-linux-x64-gnu@0.32.0':
-    resolution: {integrity: sha512-br78WwTofTHMAq7HZgKUDYvjLXZsLF2tUX5lKniJ20D6GXq41m5PHakuFBRAJFvA6wAdpoqZE7TsrMxnFbyMog==}
+  '@trycua/cua-driver-linux-x64-gnu@0.33.1':
+    resolution: {integrity: sha512-oO4uiGeMt9B0SEtqSeOH1fjnB9MwTpuGi7gsCOMlI5CRZKO5yNI6JgTAlYrQICUj6zPwRML/YJ/WJTJA8WQ0sg==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.32.0':
-    resolution: {integrity: sha512-HrxAEGWTf5IO5PudG8apCUW3wnJFTYnCAxfR4PKDzRWBcFdc/fEPW4S3qrYL7i8St8gLPoPSasOgAmLm2InxBQ==}
+  '@trycua/cua-driver-win32-arm64-msvc@0.33.1':
+    resolution: {integrity: sha512-kXUewJKMGN5T/vEU+XHAZyFSB9KEcS3W62WMy8fY3t23TqO0OkpVvmNpc5HsV6sfxeAxlfgXMeCt4OUl0xkXVQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@trycua/cua-driver-win32-x64-msvc@0.32.0':
-    resolution: {integrity: sha512-gOcMNjdL42z1QhRFz8ZMIkfmsLWqsqE72RChO9NSj9eeH8XNK31RKZv+KONhCxfL9Hq1sfM2dgozQ33qxFiYlQ==}
+  '@trycua/cua-driver-win32-x64-msvc@0.33.1':
+    resolution: {integrity: sha512-4ruq91+UJqPQPvwmMB2CHJLFXratdRg2M3Sj4XASJrz0E1exbsG7sGxxPwqcIJ5pAJlXDe5LJtXDZfM84SH21A==}
     cpu: [x64]
     os: [win32]
 
-  '@trycua/cua-driver@0.32.0':
-    resolution: {integrity: sha512-lg53Ayp2PuI7RdI7NvHerD7Y8/EzSZnfxHkBd9E2xei3XkP4tcmZaVAu10qK9jkAhhTTIwz0wC6pe4IJDza18A==}
+  '@trycua/cua-driver@0.33.1':
+    resolution: {integrity: sha512-Hp3bBOgQenBcvYJ1amOMq17ltW5l4BEH8R6bZAYkedkrmkT3Hk2FEgsUqLokBpawMB2xL1ud6q1xk/RJ7ZEysg==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -8291,8 +8331,8 @@ packages:
     resolution: {integrity: sha512-/8UvqAPU9DGTI9k4mxtf49U37Isfwr8Uts96+SBHIkFxPJnHS0Ew4f00sM4Scd8V8EjM0jUNtVDdv1kPdt35lg==}
     engines: {node: '>= 4'}
 
-  imapflow@2.2.1:
-    resolution: {integrity: sha512-d7/sRGEtexA8e0Y71sN0rKfB2yWgZMHY8JqCbk17arRLGicjX1LpBuxPH+wowOIA5sVWs7U//B6S+mKfrBtT6w==}
+  imapflow@2.2.4:
+    resolution: {integrity: sha512-+bPRoCs7qMGys74jVkQW94FmBPiXLflo/AKmArriu0L/MjnrcT4hZNaykiGFuuHACoTg03OyQghRYdgnD+KlGw==}
     engines: {node: '>=20.0.0'}
 
   immediate@3.0.6:
@@ -8880,8 +8920,8 @@ packages:
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  mailparser@3.9.33:
-    resolution: {integrity: sha512-+ZYhApN4f7B8+jokb7VZeml8lxYHixVJ3tJTB5iPG9/MJpy8YmBHGdy+AWJ9dmtUX6t0xlu4rxwj1b7eWCvbDA==}
+  mailparser@3.9.34:
+    resolution: {integrity: sha512-A43Mtua8Oe4LBQ5obGSehIg46vuY8lX68nwOYU41+Px5quVk7Pk+YL37xtkw+G7JlT7VIMhbJl2EGsycj3lrwQ==}
     engines: {node: '>=20.0.0'}
 
   make-fetch-happen@16.0.1:
@@ -8968,6 +9008,9 @@ packages:
 
   mdast-util-from-markdown@2.0.3:
     resolution: {integrity: sha512-W4mAWTvSlKvf8L6J+VN9yLSqQ9AOAAvHuoDAmPkz4dHf553m5gVj2ejadHJhoJmcmxEnOv6Pa8XJhpxE93kb8Q==}
+
+  mdast-util-from-markdown@2.1.0:
+    resolution: {integrity: sha512-KRLgmPaP2H1ul2bpoJkOS+9pAcDAAj9Nu1mqLnh8NLeJG5tlvj42TH80PIGBpROWlRXLk0lDrWNuZCFy/tsB4A==}
 
   mdast-util-gfm-table@2.0.0:
     resolution: {integrity: sha512-78UEvebzz/rJIxLvE7ZtDd/vIQ0RHv+3Mh5DR96p7cS7HsBhYIICDBCu8csTNWNO6tBWfqXPWekRuj2FNOGOZg==}
@@ -9267,8 +9310,8 @@ packages:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
     engines: {node: '>=18'}
 
-  nodemailer@10.0.13:
-    resolution: {integrity: sha512-SzG86OlvcW/NNhUFC6uROMwRTL4n7MswfQqC/T8mhkmnY1YVa23zUEMYi4ijSeXSl9GLz9ZeTJDUatEDuY5FeQ==}
+  nodemailer@10.0.14:
+    resolution: {integrity: sha512-eJoLFKg55fesSlzUekmfOv/SBXh4KUYT8oiQc2RLP0tfG0rbNMJBK7wgHJwXTJwqyKlSJMz9UzDZ4v+aHEvo8g==}
     engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
@@ -10131,6 +10174,10 @@ packages:
 
   solid-js@2.0.0-rc.13:
     resolution: {integrity: sha512-62bYOI4JZ15KOqL5eReKyWSwAXrGb0fbX8SDnHsbJk2UX+SzSyy1gobas2cxW/0BXcobGfQ1V6ffPyQkMIBdoQ==}
+    engines: {node: '>=22.12.0'}
+
+  solid-js@2.0.0-rc.14:
+    resolution: {integrity: sha512-fmaqUHgbITf18Hedur6gPnaPE4GrdPgkTbLujHqM5Vl5jxWf9rxwFh6hZMXQs+Kg1pu8KYuOMfqnuSizFQ9I6Q==}
     engines: {node: '>=22.12.0'}
 
   sonic-boom@4.2.1:
@@ -12175,7 +12222,7 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@earendil-works/pi-tui@1.0.0':
+  '@earendil-works/pi-tui@1.0.2':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.11
@@ -13181,7 +13228,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.26.0
       jszip: 3.10.2
 
-  '@openclaw/libterminal@0.3.8':
+  '@openclaw/libterminal@0.3.9':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
 
@@ -14114,7 +14161,7 @@ snapshots:
       - '@emnapi/core'
       - '@emnapi/runtime'
 
-  '@solidjs/babel-plugin@2.0.0-rc.13(@babel/core@7.29.7(supports-color@10.2.2))':
+  '@solidjs/babel-plugin@2.0.0-rc.14(@babel/core@7.29.7(supports-color@10.2.2))':
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/helper-module-imports': 7.18.6
@@ -14126,13 +14173,25 @@ snapshots:
   '@solidjs/compiler-darwin-arm64@2.0.0-rc.13':
     optional: true
 
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
+    optional: true
+
   '@solidjs/compiler-darwin-x64@2.0.0-rc.13':
+    optional: true
+
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
     optional: true
 
   '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.13':
     optional: true
 
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
+    optional: true
+
   '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.13':
+    optional: true
+
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
     optional: true
 
   '@solidjs/compiler-wasm32-wasi@2.0.0-rc.13':
@@ -14142,7 +14201,17 @@ snapshots:
       '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
+    dependencies:
+      '@emnapi/core': 1.11.3
+      '@emnapi/runtime': 1.11.3
+      '@napi-rs/wasm-runtime': 1.2.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
+    optional: true
+
   '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.13':
+    optional: true
+
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
     optional: true
 
   '@solidjs/compiler@2.0.0-rc.13':
@@ -14154,24 +14223,33 @@ snapshots:
       '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.13
       '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.13
 
-  '@solidjs/signals@2.0.0-rc.13': {}
+  '@solidjs/compiler@2.0.0-rc.14':
+    optionalDependencies:
+      '@solidjs/compiler-darwin-arm64': 2.0.0-rc.14
+      '@solidjs/compiler-darwin-x64': 2.0.0-rc.14
+      '@solidjs/compiler-linux-arm64-gnu': 2.0.0-rc.14
+      '@solidjs/compiler-linux-x64-gnu': 2.0.0-rc.14
+      '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.14
+      '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.14
 
-  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(solid-js@2.0.0-rc.13)':
+  '@solidjs/signals@2.0.0-rc.14': {}
+
+  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)':
     dependencies:
-      '@solidjs/web': 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+      '@solidjs/web': 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       '@testing-library/dom': 10.4.2
-      solid-js: 2.0.0-rc.13
+      solid-js: 2.0.0-rc.14
 
-  '@solidjs/vite-plugin@3.0.0-next.47(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
+  '@solidjs/vite-plugin@3.0.0-next.49(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)(supports-color@10.2.2)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@babel/core': 7.29.7(supports-color@10.2.2)
-      '@solidjs/babel-plugin': 2.0.0-rc.13(@babel/core@7.29.7(supports-color@10.2.2))
-      '@solidjs/compiler': 2.0.0-rc.13
-      '@solidjs/web': 2.0.0-rc.13(solid-js@2.0.0-rc.13)
+      '@solidjs/babel-plugin': 2.0.0-rc.14(@babel/core@7.29.7(supports-color@10.2.2))
+      '@solidjs/compiler': 2.0.0-rc.14
+      '@solidjs/web': 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       '@types/babel__core': 7.20.5
       merge-anything: 5.1.7
-      solid-js: 2.0.0-rc.13
+      solid-js: 2.0.0-rc.14
       vite: 8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitefu: 1.1.3(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     transitivePeerDependencies:
@@ -14183,6 +14261,12 @@ snapshots:
       seroval: 1.6.8
       seroval-plugins: 1.6.8(seroval@1.6.8)
       solid-js: 2.0.0-rc.13
+
+  '@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14)':
+    dependencies:
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
+      solid-js: 2.0.0-rc.14
 
   '@stablelib/base64@1.0.1': {}
 
@@ -14240,35 +14324,35 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@trycua/cua-driver-darwin-arm64@0.32.0':
+  '@trycua/cua-driver-darwin-arm64@0.33.1':
     optional: true
 
-  '@trycua/cua-driver-darwin-x64@0.32.0':
+  '@trycua/cua-driver-darwin-x64@0.33.1':
     optional: true
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.32.0':
+  '@trycua/cua-driver-linux-arm64-gnu@0.33.1':
     optional: true
 
-  '@trycua/cua-driver-linux-x64-gnu@0.32.0':
+  '@trycua/cua-driver-linux-x64-gnu@0.33.1':
     optional: true
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.32.0':
+  '@trycua/cua-driver-win32-arm64-msvc@0.33.1':
     optional: true
 
-  '@trycua/cua-driver-win32-x64-msvc@0.32.0':
+  '@trycua/cua-driver-win32-x64-msvc@0.33.1':
     optional: true
 
-  '@trycua/cua-driver@0.32.0':
+  '@trycua/cua-driver@0.33.1':
     dependencies:
       '@ubjs/core': 0.31.0-3
       '@ubjs/node': 0.31.0-3
     optionalDependencies:
-      '@trycua/cua-driver-darwin-arm64': 0.32.0
-      '@trycua/cua-driver-darwin-x64': 0.32.0
-      '@trycua/cua-driver-linux-arm64-gnu': 0.32.0
-      '@trycua/cua-driver-linux-x64-gnu': 0.32.0
-      '@trycua/cua-driver-win32-arm64-msvc': 0.32.0
-      '@trycua/cua-driver-win32-x64-msvc': 0.32.0
+      '@trycua/cua-driver-darwin-arm64': 0.33.1
+      '@trycua/cua-driver-darwin-x64': 0.33.1
+      '@trycua/cua-driver-linux-arm64-gnu': 0.33.1
+      '@trycua/cua-driver-linux-x64-gnu': 0.33.1
+      '@trycua/cua-driver-win32-arm64-msvc': 0.33.1
+      '@trycua/cua-driver-win32-x64-msvc': 0.33.1
 
   '@tufjs/canonical-json@2.0.0': {}
 
@@ -16621,7 +16705,7 @@ snapshots:
 
   ignore@7.0.12: {}
 
-  imapflow@2.2.1:
+  imapflow@2.2.4:
     dependencies:
       '@zone-eu/mailsplit': 5.4.19
       encoding-japanese: 2.4.0
@@ -17196,12 +17280,12 @@ snapshots:
       ipaddr.js: 2.5.0
       joi: 18.2.9
       libmime: 5.4.4
-      nodemailer: 10.0.13
+      nodemailer: 10.0.14
       punycode.js: 2.3.1
       tldts: 7.4.15
       undici: 8.11.2
 
-  mailparser@3.9.33:
+  mailparser@3.9.34:
     dependencies:
       '@zone-eu/mailsplit': 5.4.19
       encoding-japanese: 2.4.0
@@ -17210,7 +17294,7 @@ snapshots:
       iconv-lite: 0.7.3
       libmime: 5.4.6
       linkify-it: 5.0.2
-      nodemailer: 10.0.13
+      nodemailer: 10.0.14
       punycode.js: 2.3.1
       tlds: 1.261.0
 
@@ -17326,12 +17410,29 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  mdast-util-from-markdown@2.1.0(supports-color@10.2.2):
+    dependencies:
+      '@types/mdast': 4.0.4
+      '@types/unist': 3.0.3
+      decode-named-character-reference: 1.3.0
+      devlop: 1.1.0
+      mdast-util-to-string: 4.0.0
+      micromark: 4.0.3(supports-color@10.2.2)
+      micromark-util-decode-numeric-character-reference: 2.0.2
+      micromark-util-decode-string: 2.0.1
+      micromark-util-normalize-identifier: 2.0.1
+      micromark-util-symbol: 2.0.1
+      micromark-util-types: 2.0.3
+      unist-util-stringify-position: 4.0.0
+    transitivePeerDependencies:
+      - supports-color
+
   mdast-util-gfm-table@2.0.0(supports-color@10.2.2):
     dependencies:
       '@types/mdast': 4.0.4
       devlop: 1.1.0
       markdown-table: 3.0.4
-      mdast-util-from-markdown: 2.0.3(supports-color@10.2.2)
+      mdast-util-from-markdown: 2.1.0(supports-color@10.2.2)
       mdast-util-to-markdown: 2.1.3
     transitivePeerDependencies:
       - supports-color
@@ -17824,7 +17925,7 @@ snapshots:
 
   node-releases@2.0.57: {}
 
-  nodemailer@10.0.13: {}
+  nodemailer@10.0.14: {}
 
   normalize-path@3.0.0: {}
 
@@ -18672,7 +18773,14 @@ snapshots:
 
   solid-js@2.0.0-rc.13:
     dependencies:
-      '@solidjs/signals': 2.0.0-rc.13
+      '@solidjs/signals': 2.0.0-rc.14
+      csstype: 3.2.3
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
+
+  solid-js@2.0.0-rc.14:
+    dependencies:
+      '@solidjs/signals': 2.0.0-rc.14
       csstype: 3.2.3
       seroval: 1.6.8
       seroval-plugins: 1.6.8(seroval@1.6.8)

@@ -1,3 +1,4 @@
+import { createSessionActorMemoryCollaborationState } from "./session-actor-memory-collaboration-state.js";
 import {
   selectSessionActorMemoryWindow,
   type SessionActorMemoryState,
@@ -7,12 +8,14 @@ import {
   normalizeSessionEntryTimestamp,
 } from "./session-entry-json.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
+import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Apply logical-node preservation before selecting the actor's transcript window. */
 export function installSessionActorMemoryEntry(
   state: SessionActorMemoryState,
   entry: SessionEntry,
+  options: { providerReviewMutation?: boolean; consumePendingReset?: boolean } = {},
 ): SessionEntry {
   const previous = state.hot.entry;
   let next: SessionEntry = normalizeSessionEntryTimestamp({ ...entry, incognito: true });
@@ -23,7 +26,15 @@ export function installSessionActorMemoryEntry(
   next.createdAt ??= previous?.updatedAt ?? Date.now();
   const sameWindow = previous?.sessionId === next.sessionId;
   const sameLifecycle = sameWindow && previous?.lifecycleRevision === next.lifecycleRevision;
-  next.providerReview = sameLifecycle ? previous?.providerReview : undefined;
+  if (!options.providerReviewMutation) {
+    next.providerReview = sameLifecycle ? previous?.providerReview : undefined;
+  }
+  if (next.providerReview?.sessionId !== next.sessionId) {
+    delete next.providerReview;
+  }
+  if (!options.consumePendingReset && sameLifecycle && previous?.updatedAt === 0) {
+    next.updatedAt = 0;
+  }
   if (sameLifecycle && previous?.compactionQualityDegraded) {
     next.compactionQualityDegraded = true;
   }
@@ -43,7 +54,9 @@ export function installSessionActorMemoryEntry(
     delete next.visibility;
   }
   selectSessionActorMemoryWindow(state, next);
+  state.sourceCreatedAt ??= resolveSessionWindowCreatedAt(next, next.updatedAt);
   if (previous && !sameWindow) {
+    state.collaboration = createSessionActorMemoryCollaborationState();
     state.hot.members = [];
     state.hot.participants = [];
     delete state.hot.entry!.participants;

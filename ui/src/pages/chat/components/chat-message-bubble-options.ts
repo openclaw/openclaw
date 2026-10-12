@@ -21,6 +21,7 @@ export type GroupedMessageOptions = {
   presented?: boolean;
   transcriptVisible?: PresentationValue;
   boardProvider?: BoardProvider;
+  widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
   agentId?: string;
   duplicateCount?: number;
   showReasoning: boolean;

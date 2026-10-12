@@ -1,5 +1,6 @@
 import type { CommittedCompactionAppend } from "../../agents/sessions/session-compaction-persistence.js";
 import { captureSessionManagerIncognitoBinding } from "../../agents/sessions/session-manager-incognito-scope.js";
+import { createSessionManagerMemoryDatabase } from "../../agents/sessions/session-manager-memory.js";
 import {
   receiveSessionManagerCommit,
   SessionEntryCommittedError,
@@ -17,6 +18,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import {
   captureSessionTranscriptTargetBinding,
@@ -65,90 +67,91 @@ export async function persistCompactionBoundaryWithSessionEntryAsync(
     initialWriter?.assertActive();
   };
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(captured));
-  const actor = captureSessionManagerIncognitoBinding(captured)?.actor;
+  const binding = captureSessionManagerIncognitoBinding(captured);
+  const actor =
+    binding && ("kind" in binding ? createSessionManagerMemoryDatabase(binding) : binding.actor);
   const transcriptByteCompactionLatch = { ...params.transcriptByteCompactionLatch };
-  return await trackAsyncWork(() =>
-    runOpenClawAgentWriteAdmission(
-      options,
-      async () => {
-        assertCurrent();
-        if (isIncognitoSessionKey(captured.sessionKey) && !actor) {
-          // Incognito retains its host-owned transaction until the worker activation cutover.
-          return persistCompactionBoundaryWithSessionEntrySync(captured, {
-            prepared,
-            transcriptByteCompactionLatch,
-          });
-        }
-        const { withSessionMetadataWorker } = await runInDetachedAsyncContext(
-          () => import("../../agents/sessions/session-manager-metadata-runtime.js"),
-        );
-        assertCurrent();
-        const persist = (database: OpenClawAgentDatabase | IncognitoSessionActor) =>
-          withSessionMetadataWorker(
-            options,
-            database,
-            assertCurrent,
-            async (worker) => {
-              const { env: _env, ...target } = captured;
-              const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
-              const acknowledged = await receiveSessionManagerCommit(
-                "session.transcript.compactionBoundary",
-                () =>
-                  worker.execute({
-                    type: "session.transcript.compactionBoundary",
-                    input: {
-                      scope: actor ? { ...target, storePath: actor.path } : target,
-                      prepared: {
-                        ...prepared,
-                        scope: actor
-                          ? { ...preparedTarget, storePath: actor.path }
-                          : preparedTarget,
-                      },
-                      transcriptByteCompactionLatch,
-                      ...(initialWriter && !initialWriter.committedFence
-                        ? { initialWriterRunId: initialWriter.writerRunId }
-                        : {}),
-                    },
-                  }),
-              );
-              const receipt = acknowledged.value;
-              try {
-                if (receipt.initialEntry?.fence && !("db" in database)) {
-                  initialWriter?.recordCommitted(receipt.initialEntry.fence);
-                }
-              } finally {
-                if (receipt.initialEntry?.identity && !("db" in database)) {
-                  publishCommittedSessionIdentity(
-                    captured.agentId,
-                    database.identity.incarnation,
-                    receipt.initialEntry.identity.previous,
-                    receipt.initialEntry.identity.current,
-                  );
-                }
-              }
-              if (acknowledged.failure) {
-                throw new SessionEntryCommittedError(
-                  receipt.committed.result.id,
-                  captured,
-                  receipt.committed.after,
-                  acknowledged.failure,
-                );
-              }
-              if (receipt.projectionNeedsReconcile) {
-                startSessionTranscriptIndexReconcile({
-                  ...options,
-                  preferredSessionId: captured.sessionId,
-                });
-              }
-              return receipt.committed;
-            },
-            { initialWriter },
+  const persistBoundary = async () => {
+    assertCurrent();
+    if (isIncognitoSessionKey(captured.sessionKey) && !actor) {
+      // Incognito retains its host-owned transaction until the worker activation cutover.
+      return persistCompactionBoundaryWithSessionEntrySync(captured, {
+        prepared,
+        transcriptByteCompactionLatch,
+      });
+    }
+    const { withSessionMetadataWorker } = await runInDetachedAsyncContext(
+      () => import("../../agents/sessions/session-manager-metadata-runtime.js"),
+    );
+    assertCurrent();
+    const persist = (
+      database: OpenClawAgentDatabase | IncognitoSessionActor | SessionManagerIncognitoDatabase,
+    ) =>
+      withSessionMetadataWorker(
+        options,
+        database,
+        assertCurrent,
+        async (worker) => {
+          const { env: _env, ...target } = captured;
+          const { env: _preparedEnv, ...preparedTarget } = prepared.scope;
+          const acknowledged = await receiveSessionManagerCommit(
+            "session.transcript.compactionBoundary",
+            () =>
+              worker.execute({
+                type: "session.transcript.compactionBoundary",
+                input: {
+                  scope: actor ? { ...target, storePath: actor.path } : target,
+                  prepared: {
+                    ...prepared,
+                    scope: actor ? { ...preparedTarget, storePath: actor.path } : preparedTarget,
+                  },
+                  transcriptByteCompactionLatch,
+                  ...(initialWriter && !initialWriter.committedFence
+                    ? { initialWriterRunId: initialWriter.writerRunId }
+                    : {}),
+                },
+              }),
           );
-        return actor
-          ? await persist(actor)
-          : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
-      },
-      true,
-    ),
+          const receipt = acknowledged.value;
+          try {
+            if (receipt.initialEntry?.fence && "sessions" in database) {
+              initialWriter?.recordCommitted(receipt.initialEntry.fence);
+            }
+          } finally {
+            if (receipt.initialEntry?.identity && "sessions" in database) {
+              publishCommittedSessionIdentity(
+                captured.agentId,
+                database.identity.incarnation,
+                receipt.initialEntry.identity.previous,
+                receipt.initialEntry.identity.current,
+              );
+            }
+          }
+          if (acknowledged.failure) {
+            throw new SessionEntryCommittedError(
+              receipt.committed.result.id,
+              captured,
+              receipt.committed.after,
+              acknowledged.failure,
+            );
+          }
+          if (receipt.projectionNeedsReconcile) {
+            startSessionTranscriptIndexReconcile({
+              ...options,
+              preferredSessionId: captured.sessionId,
+            });
+          }
+          return receipt.committed;
+        },
+        { initialWriter },
+      );
+    return actor
+      ? await persist(actor)
+      : await withOpenClawAgentDatabaseRuntime(options, persist, assertCurrent);
+  };
+  return await trackAsyncWork(() =>
+    binding && "kind" in binding
+      ? persistBoundary()
+      : runOpenClawAgentWriteAdmission(options, persistBoundary, true),
   );
 }

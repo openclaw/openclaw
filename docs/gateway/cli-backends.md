@@ -218,6 +218,13 @@ priority. Omitted or truncated notes are marked. Notes may repeat because CLI
 bindings do not track which OpenClaw notes the native session has consumed.
 Transient runtime context and notes excluded from model context are not replayed.
 
+Claude Code registers OpenClaw MCP tools as `mcp__openclaw__<name>` and can
+defer them behind ToolSearch. The Claude CLI backend explains this mapping in
+the system prompt only when OpenClaw MCP tools are exposed to the invocation.
+Message delivery guidance is included only when `message` is exposed: it uses `mcp__openclaw__message`, and a deferred tool
+can be loaded with `select:mcp__openclaw__<name>`. This helps fresh sessions
+discover the delivery tool when a conversation requires message-tool-only replies.
+
 Keep Claude Code updated, especially if OpenClaw reports an incompatible
 installed executable:
 

@@ -67,6 +67,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): {
+  identity: string | undefined;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
@@ -198,7 +199,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  return { read, assertCurrent, dispose };
+  return {
+    identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    read,
+    assertCurrent,
+    dispose,
+  };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
