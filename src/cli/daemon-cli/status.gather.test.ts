@@ -994,6 +994,57 @@ describe("gatherDaemonStatus", () => {
     expect(output.errors).toContain(`this OpenClaw command is version ${VERSION}`);
   });
 
+  it.each([
+    { label: "rebuilt under the running Gateway", onDisk: "build-on-disk", restart: true },
+    { label: "matching the loaded build", onDisk: "build-2026.5.6", restart: false },
+  ])(
+    "compares the loaded build id against the one on disk ($label)",
+    async ({ onDisk, restart }) => {
+      const installRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-build-id-")),
+      );
+      try {
+        await fs.mkdir(path.join(installRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(installRoot, "package.json"),
+          '{"name":"openclaw","version":"2026.5.6"}',
+        );
+        await fs.writeFile(path.join(installRoot, "dist", "index.js"), "gateway");
+        await fs.writeFile(
+          path.join(installRoot, "dist", "build-info.json"),
+          JSON.stringify({ version: "2026.5.6", buildId: onDisk }),
+        );
+        serviceReadCommand.mockResolvedValueOnce({
+          programArguments: [
+            "/bin/node",
+            path.join(installRoot, "dist", "index.js"),
+            "gateway",
+            "--port",
+            "19001",
+          ],
+        });
+
+        const status = await gatherStatus();
+
+        // The probe reports what the process loaded; the layout reports what a restart
+        // would load. Only their divergence means a restart is required.
+        expect(status.gateway?.buildId).toBe("build-2026.5.6");
+        expect(status.gateway?.installedBuildId).toBe(onDisk);
+        expect(status.gateway?.restartRequired).toBe(restart ? true : undefined);
+      } finally {
+        await fs.rm(installRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("omits a build comparison for a Gateway whose install this host cannot read", async () => {
+    const status = await gatherStatus({ rpc: { url: "wss://remote.example:19443" } });
+
+    expect(status.gateway?.buildId).toBe("build-2026.5.6");
+    expect(status.gateway?.installedBuildId).toBeUndefined();
+    expect(status.gateway?.restartRequired).toBeUndefined();
+  });
+
   it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
     const rawUrl =
       "wss://user:password@override.example:18790/ws?token=secret&key=api-key&X-Amz-Signature=signed";
