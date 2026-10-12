@@ -43,6 +43,7 @@ import {
 } from "./group-policy.js";
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
+import { prepareZalouserReplyTables, sanitizeZalouserReplyPayload } from "./reply-text.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
@@ -587,6 +588,12 @@ async function processMessage(
     },
   };
 
+  const markdownTableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: config,
+    channel: "zalouser",
+    accountId: account.accountId,
+  });
+
   await core.channel.inbound.dispatch({
     channel: "zalouser",
     accountId: account.accountId,
@@ -594,22 +601,7 @@ async function processMessage(
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
-      preparePayload: (payload) => {
-        if (payload.text === undefined) {
-          return payload;
-        }
-        return {
-          ...payload,
-          text: core.channel.text.convertMarkdownTables(
-            payload.text,
-            core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
-              accountId: account.accountId,
-            }),
-          ),
-        };
-      },
+      preparePayload: (payload) => prepareZalouserReplyTables(payload, markdownTableMode),
       durable: () => ({
         to: normalizedTo,
       }),
@@ -666,8 +658,9 @@ async function deliverZalouserReply(params: {
   accountId?: string;
 }): Promise<{ visibleReplySent: boolean }> {
   const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
+  const sanitizedPayload = sanitizeZalouserReplyPayload(payload);
   let visibleReplySent = false;
-  const reply = resolveSendableOutboundReplyParts(payload);
+  const reply = resolveSendableOutboundReplyParts(sanitizedPayload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
@@ -691,7 +684,7 @@ async function deliverZalouserReply(params: {
   };
   try {
     await deliverTextOrMediaReply({
-      payload,
+      payload: sanitizedPayload,
       text: reply.text,
       sendText: sendReplyPart,
       sendMedia: async ({ mediaUrl, caption }) => {
