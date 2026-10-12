@@ -13,7 +13,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 type RenderCount = { updates: number; milliseconds: number; instances: number };
-type RenderProbeWindow = Window & { chatBootRenderCounts: Map<string, RenderCount> };
+declare global {
+  interface Window {
+    chatBootRenderCounts: Map<string, RenderCount>;
+  }
+}
 
 const suite = createControlUiE2eSuite({ name: "Chat boot render storm" });
 const sessionKey = "agent:main:render-storm";
@@ -33,7 +37,7 @@ async function nextFrame(page: Page) {
 async function installRenderProbe(page: Page) {
   await page.addInitScript(() => {
     const counts = new Map<string, RenderCount>();
-    (window as RenderProbeWindow).chatBootRenderCounts = counts;
+    window.chatBootRenderCounts = counts;
     const patched = new WeakSet<object>();
     const instances = new WeakSet<object>();
     const define = customElements.define.bind(customElements);
@@ -227,36 +231,7 @@ suite.define(() => {
             JSON.stringify(
               await page.evaluate(() => ({
                 text: document.body.textContent?.slice(-12000),
-                state: (() => {
-                  const pane = document.querySelector("openclaw-chat-pane") as HTMLElement & {
-                    state?: {
-                      connected?: boolean;
-                      sessionKey?: string;
-                      currentSessionId?: string;
-                      chatLoading?: boolean;
-                      chatMessages?: unknown[];
-                      chatError?: unknown;
-                      lastError?: unknown;
-                      connectionEpoch?: number;
-                      sessionsResult?: { sessions: unknown[] };
-                    };
-                  };
-                  const state = pane?.state;
-                  return (
-                    state && {
-                      connected: state.connected,
-                      sessionKey: state.sessionKey,
-                      currentSessionId: state.currentSessionId,
-                      chatLoading: state.chatLoading,
-                      messageCount: state.chatMessages?.length,
-                      chatError: state.chatError,
-                      lastError: state.lastError,
-                      connectionEpoch: state.connectionEpoch,
-                      sessionCount: state.sessionsResult?.sessions.length,
-                    }
-                  );
-                })(),
-                tags: Object.fromEntries((window as RenderProbeWindow).chatBootRenderCounts),
+                tags: Object.fromEntries(window.chatBootRenderCounts),
               })),
             ),
           );
@@ -277,7 +252,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         expect(pageErrors).toEqual([]);
         const measurement = await page.evaluate(() => ({
-          tags: Object.fromEntries((window as RenderProbeWindow).chatBootRenderCounts),
+          tags: Object.fromEntries(window.chatBootRenderCounts),
           closedMenuItems: document.querySelectorAll(
             "openclaw-chat-pane wa-dropdown:not([open]) wa-dropdown-item",
           ).length,
