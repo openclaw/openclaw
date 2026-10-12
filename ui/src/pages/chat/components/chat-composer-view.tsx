@@ -30,6 +30,7 @@ import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerLayout } from "./chat-composer-layout.ts";
 import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { resolveComposerMenus } from "./chat-composer-menus.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
@@ -107,6 +108,7 @@ export function renderChatComposerQueue(props: ChatComposerProps, showAbortableU
 
 export function renderChatComposerView(context: ChatComposerViewContext) {
   const props = untrack(() => context.props);
+  let composerInput: HTMLElement | undefined;
 
   const activeSession = createMemo(() => props.selectedSession);
   const composerControls = createMemo(() => props.composerControls ?? undefined);
@@ -332,8 +334,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 markPointerOpenedChatComposerDropdown(event);
                 focusComposerFromChrome(event, context.canCompose);
               }}
-              ref={context.state.composerInputRef ?? undefined}
+              ref={(node) => {
+                composerInput = node;
+                context.state.composerInputRef?.(node);
+              }}
             >
+              <ComposerLayoutHost composer={props} input={() => composerInput} />
               {context.menus.slashMenuVisible ? (
                 <SlashMenu
                   args={[
@@ -567,6 +573,27 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       </div>
     </>
   );
+}
+
+function ComposerLayoutHost(view: {
+  composer: ChatComposerProps;
+  input: () => HTMLElement | undefined;
+}) {
+  const layout = new ComposerLayout();
+  createRenderEffect(
+    () => ({
+      width: view.composer.chatMessageMaxWidth,
+      onWidthChange: view.composer.onComposerWidthChange,
+    }),
+    (options) => {
+      const input = view.input();
+      if (input) {
+        layout.update(input, options);
+      }
+    },
+  );
+  onCleanup(() => layout.disconnect());
+  return undefined;
 }
 
 function ComposerTextarea(view: {

@@ -487,8 +487,10 @@ describe("composer overflow presentation", () => {
       await expectStableSize("A short editable draft.");
       const draft =
         "A typed line that wraps within the available composer width. ".repeat(8) +
-        "\nA second editable line.";
+        "\nA second editable line.".repeat(40);
       await control.fill(draft);
+      await afterLayout();
+      // The cap follows the multiline shape one measurement after a draft first reaches it.
       await afterLayout();
       expect(textarea.value).toBe(draft);
       expect(props.draft).toBe(draft);
@@ -655,7 +657,7 @@ describe("composer overflow presentation", () => {
     await afterLayout();
     expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
 
-    textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+    textarea.value = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join("\n");
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await afterLayout();
     const capped = textarea.getBoundingClientRect();

@@ -7,6 +7,10 @@ import {
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
 import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import {
+  ComposerLayout,
+  type ComposerLayoutOptions,
+} from "../chat/components/chat-composer-layout.ts";
 import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
 import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.tsx";
 import {
@@ -23,6 +27,9 @@ export class NewSessionComposerTextareaController {
   // An opening gets one cast; typing and async picker updates never reroll it.
   readonly critterVisit = Math.random();
   private textarea: HTMLTextAreaElement | null = null;
+  private input: HTMLElement | null = null;
+  private readonly layout = new ComposerLayout();
+  private layoutOptions: ComposerLayoutOptions = {};
   private placeholderFrame: number | null = null;
   private placeholderStartedAt: number | null = null;
   private placeholderText = "";
@@ -55,6 +62,22 @@ export class NewSessionComposerTextareaController {
       scheduleTextareaHeightAdjustment(nextTextarea);
     }
   };
+
+  readonly inputRef = (element?: Element) => {
+    this.input = element instanceof HTMLElement ? element : null;
+    if (this.input) {
+      this.layout.update(this.input, this.layoutOptions);
+    } else {
+      this.layout.disconnect();
+    }
+  };
+
+  syncLayout(options: ComposerLayoutOptions) {
+    this.layoutOptions = options;
+    if (this.input) {
+      this.layout.update(this.input, options);
+    }
+  }
 
   syncDraft(message: string) {
     // The stable ref measures attachment only. Programmatic restores and
@@ -235,5 +258,7 @@ export class NewSessionComposerTextareaController {
       disconnectTextareaOverflowObserver(this.textarea);
       this.textarea = null;
     }
+    this.layout.disconnect();
+    this.input = null;
   }
 }

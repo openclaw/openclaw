@@ -682,6 +682,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           hello: this.context.gateway.snapshot.hello,
         }),
       ),
+      onComposerWidthChange: (value) => state.applySettings({ chatMessageMaxWidth: value }),
       branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
       resolveArtifactDownload: (params, signal) =>

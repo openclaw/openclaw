@@ -66,6 +66,8 @@ import type { NewSessionModelControl } from "./model-control.ts";
 registerNewSessionSetupEnglish();
 
 type NewSessionComposerOptions = {
+  columnWidth?: string;
+  onColumnWidthChange?: (value: string | undefined) => void;
   agent?: GatewayAgentRow;
   agentId: string;
   attachmentDraft: NewSessionAttachmentDraft;
@@ -338,6 +340,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   });
   const visibleMessage = options.dictationPreview ?? options.message;
   options.textareaController.syncDraft(visibleMessage);
+  options.textareaController.syncLayout({
+    width: options.columnWidth,
+    onWidthChange: options.onColumnWidthChange,
+  });
   const messagePlaceholder = t(
     options.nativeTerminal ? "newSession.nativeTerminalPrompt" : "newSession.messagePlaceholder",
   );
@@ -390,6 +396,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         class="agent-chat__input agent-chat__input--mobile-toolbar${
           options.dictationActive ? " agent-chat__input--dictating" : ""
         }"
+        ${ref(options.textareaController.inputRef)}
         @openclaw-composer-dismiss-invocations=${() => {
           mentionMenu.close();
           emojiMenu.dismiss(options.textareaController.getTextarea());
@@ -467,7 +474,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
                 // SAFETY: this input listener is attached directly to the textarea below.
                 const target = event.target as HTMLTextAreaElement;
-                adjustTextareaHeight(target);
+                adjustTextareaHeight(target, { nativeInput: true });
                 const mentions = mentionMenuHost.getMentions();
                 options.onInput(
                   target.value,
