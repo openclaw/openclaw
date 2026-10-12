@@ -7,6 +7,7 @@ import * as gatewayBindings from "../../src/daemon/managed-gateway-bindings.js";
 import type { ManagedGatewayBinding } from "../../src/daemon/managed-gateway-bindings.js";
 import * as schtasksExec from "../../src/daemon/schtasks-exec.js";
 import * as schtasksProbe from "../../src/daemon/schtasks-state-probe.js";
+import { ServiceInspectionError } from "../../src/daemon/service-inspection-error.js";
 import * as serviceLayout from "../../src/daemon/service-layout.js";
 import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import * as gatewayService from "../../src/daemon/service.js";
@@ -915,6 +916,162 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
         if (result.refuse) {
           expect(result.message).toContain(instanceName);
           expect(result.message).toContain("openclaw update");
+        }
+      });
+    },
+  );
+});
+
+describe("live-gateway-dist-fence verified test preparation (#1421)", () => {
+  const unit = "openclaw-gateway.service";
+  const discovered: ManagedGatewayBinding = {
+    scope: "user",
+    systemdReadTarget: {
+      scope: "user",
+      unitName: unit,
+      unitPath: `/home/runner/.config/systemd/user/${unit}`,
+    },
+    env: { OPENCLAW_SYSTEMD_UNIT: unit },
+  };
+
+  async function runVerified(
+    root: string,
+    fixture: {
+      listBindings?: () => Promise<readonly ManagedGatewayBinding[]>;
+      readState: (binding: ManagedGatewayBinding) => Promise<GatewayServiceState>;
+    },
+  ) {
+    const location = vi
+      .spyOn(systemdFiles, "readSystemdServiceCommandLocation")
+      .mockRejectedValue(new Error("synthetic unreadable command location"));
+    const discover = vi
+      .spyOn(gatewayBindings, "discoverManagedGatewayBindings")
+      .mockImplementation(async (env, options) => [
+        ...(options?.includeInvoking ? [{ env }] : []),
+        ...((await fixture.listBindings?.()) ?? []),
+      ]);
+    const read = vi
+      .spyOn(gatewayService, "readGatewayServiceState")
+      .mockImplementation(async (_service, input = {}) => {
+        const target = input.systemdReadTarget;
+        return fixture.readState({
+          env: input.env ?? {},
+          ...(target ? { scope: target.scope, systemdReadTarget: target } : {}),
+        });
+      });
+    onTestFinished(() => {
+      read.mockRestore();
+      discover.mockRestore();
+      location.mockRestore();
+    });
+    return withMockedPlatform("linux", () =>
+      resolveLiveManagedGatewayDistFence(root, { env: {}, requireVerified: true }),
+    );
+  }
+
+  const managerAbsent = () => new ServiceInspectionError("service-manager-unavailable");
+
+  it("(a) proceeds when the service manager is proven absent and nothing is discovered", async () => {
+    await withTestDir({ prefix: "openclaw-fence-manager-absent-" }, async (root) => {
+      await writeOpenClawPackage(root);
+      const result = await runVerified(root, {
+        readState: async () => {
+          throw managerAbsent();
+        },
+      });
+      expect(result).toEqual({ refuse: false });
+    });
+  });
+
+  it("(b) still refuses when the manager is proven absent but a service definition is discovered", async () => {
+    await withTestDir({ prefix: "openclaw-fence-manager-absent-discovered-" }, async (root) => {
+      await writeOpenClawPackage(root);
+      const result = await runVerified(root, {
+        listBindings: async () => [discovered],
+        readState: async () => {
+          throw managerAbsent();
+        },
+      });
+      expect(result.refuse).toBe(true);
+      if (result.refuse) {
+        expect(result.message).toContain("Cannot verify");
+      }
+    });
+  });
+
+  it.each([
+    [
+      "systemd-user-bus-unavailable",
+      () => new ServiceInspectionError("systemd-user-bus-unavailable"),
+    ],
+    [
+      "systemd-inspection-deadline-exceeded",
+      () => new ServiceInspectionError("systemd-inspection-deadline-exceeded"),
+    ],
+    [
+      "service-manager-access-denied",
+      () => new ServiceInspectionError("service-manager-access-denied"),
+    ],
+    ["an unclassified error", () => new Error("no service manager")],
+  ] as const)("(c) still refuses after %s", async (_name, failure) => {
+    await withTestDir({ prefix: "openclaw-fence-inspection-error-" }, async (root) => {
+      await writeOpenClawPackage(root);
+      const result = await runVerified(root, {
+        readState: async () => {
+          throw failure();
+        },
+      });
+      expect(result.refuse).toBe(true);
+      if (result.refuse) {
+        expect(result.message).toContain("Cannot verify");
+      }
+    });
+  });
+
+  it.each([
+    {
+      name: "inactive",
+      runtime: { status: "stopped", state: "inactive", systemd: { unit } },
+      running: false,
+      refuse: false,
+    },
+    {
+      name: "failed",
+      runtime: { status: "stopped", state: "failed", systemd: { unit, tasksCurrent: 0 } },
+      running: false,
+      refuse: false,
+    },
+    {
+      name: "live",
+      runtime: { status: "running", state: "active", pid: process.pid, systemd: { unit } },
+      running: true,
+      refuse: true,
+    },
+  ] as const)(
+    "(d) applies the liveness check to an unresolvable wrapper ExecStart: $name",
+    async ({ runtime, running, refuse }) => {
+      await withTestDir({ prefix: "openclaw-fence-wrapper-" }, async (root) => {
+        await writeOpenClawPackage(root);
+        const wrapper = path.join(root, "run.sh");
+        await fs.writeFile(wrapper, "#!/bin/sh\nexec node dist/index.js gateway\n");
+        const result = await runVerified(root, {
+          listBindings: async () => [discovered],
+          readState: async (binding) => {
+            if (!binding.systemdReadTarget) {
+              return baseState({
+                installed: false,
+                command: null,
+                loadState: { status: "not-loaded" },
+                runtime: { status: "stopped", missingUnit: true },
+              });
+            }
+            return baseState({ running, command: { programArguments: [wrapper] }, runtime });
+          },
+        });
+        expect(result.refuse).toBe(refuse);
+        if (result.refuse) {
+          expect(result.message).toContain("Cannot verify");
+          expect(result.message).toContain(unit);
         }
       });
     },
