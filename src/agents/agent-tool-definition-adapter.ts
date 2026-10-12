@@ -36,7 +36,9 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  attachInternalToolResultContentSource,
   getInternalToolExecutionPreparer,
+  getInternalToolResultContentSource,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
@@ -257,10 +259,14 @@ async function executeAdaptedToolOperation(params: {
     logError(
       `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
     );
-    return buildToolExecutionErrorResult({
+    const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
     });
+    // A protected network failure keeps its origin after becoming a result here.
+    const contentSource =
+      typeof err === "object" && err !== null ? getInternalToolResultContentSource(err) : undefined;
+    return contentSource ? attachInternalToolResultContentSource(result, contentSource) : result;
   }
 }
 

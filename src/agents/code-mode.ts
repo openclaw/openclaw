@@ -31,6 +31,7 @@ import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { executionTitleSchema } from "./schema/typebox.js";
 import { isToolExecutionAllowed } from "./tool-policy-shared.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
@@ -202,14 +203,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   ) => {
     const result = normalizeCodeModeTimeoutResult(rawResult);
     markCodeModePermissionChangeResult(result, signal);
+    const controlResult = formatToolSearchControlResult(result, runtime, {
+      terminalBatchStatus: result.status,
+      compact: true,
+    });
     return recordCodeModeToolOutcome(
-      {
-        ...formatToolSearchControlResult(result, runtime, {
-          terminalBatchStatus: result.status,
-          compact: true,
-        }),
+      copyInternalToolResultState(controlResult, {
+        ...controlResult,
         ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      },
+      }),
       result,
     );
   };

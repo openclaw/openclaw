@@ -34,6 +34,7 @@ import { combineExecutedToolBatches } from "./tool-batch-completion.js";
 import {
   createErrorToolResult,
   finalizeToolCallOutcome,
+  resolveToolResultContentSource,
   type FinalizedToolCallOutcome,
 } from "./tool-call-outcome.js";
 import {
@@ -1259,10 +1260,8 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      ...(executed.executionStarted &&
-      !executed.callerCancelled &&
-      prepared.tool.resultContentSource
-        ? { resultContentSource: prepared.tool.resultContentSource }
+      ...(executed.executionStarted && !executed.callerCancelled
+        ? resolveToolResultContentSource(prepared.tool, executed.result)
         : {}),
     },
     finalArgs,
