@@ -32,6 +32,16 @@
  *     collided on the old key; must still report 2 on both surfaces.
  *  3. SINGLE control — exactly one refusal. Pins that dropping the dedupe did not
  *     start double-counting a single record through the merge.
+ *  4. RETENTION — predecessor plus lender. A Gateway-mode load (`activate: false`,
+ *     `runtimeSideEffects: true`, the options `src/gateway/server-plugins.ts`
+ *     uses) is activated as the served registry and lends its live record. A
+ *     non-activating prepared load borrows that record, then three successor
+ *     generations each receive BOTH the predecessor (which also lists the lent
+ *     record) and the lender. Retention selects the lender; the successor must
+ *     copy the lender's two genuine refusals exactly once per generation. Before
+ *     the fix the copy matched both sources, so the count grew 2 -> 4 -> 6 -> 8.
+ *     No production caller at this head passes both registries to one load; this
+ *     scenario drives the real `loadOpenClawPlugins` contract directly.
  *
  * The assertions pin, per scenario: the raw registry record count, the compact
  * blocked-hook chip count, the detailed "Blocked plugin hooks: N" count, and
@@ -158,7 +168,7 @@ async function runScenario(params: {
     plugins: { load: { paths: [plugin.file] }, allow: [params.pluginId] },
   } as NonNullable<Parameters<typeof loadAndActivateRootPluginRegistry>[0]>["config"];
 
-  loadAndActivateRootPluginRegistry({ cache: false, workspaceDir: plugin.dir, config });
+  await loadAndActivateRootPluginRegistry({ cache: false, workspaceDir: plugin.dir, config });
 
   const registry = getActivePluginRegistry();
   const rawBlocked = (registry?.blockedHooks ?? []).filter(
@@ -192,8 +202,105 @@ async function runScenario(params: {
   check(`compact and /status plugins agree`, detailedCount, compactCount);
 }
 
+async function runRetentionScenario(): Promise<void> {
+  const { loadOpenClawPlugins } = await import("../src/plugins/loader.js");
+  const { activatePluginRegistry } = await import("../src/plugins/loader-shared.js");
+  const { clearActivePluginRegistry, disposePluginRegistryInstances, getActivePluginRegistry } =
+    await import("../src/plugins/runtime.js");
+  const { collectRuntimePluginHealthSnapshot } =
+    await import("../src/status/status-plugin-health.runtime.js");
+  const { formatCompactPluginHealthLine } = await import("../src/status/status-plugin-health.js");
+
+  console.log(
+    "\n=== RETENTION: successor receives both the borrowing predecessor and the lender ===",
+  );
+  const pluginId = "retained-lender";
+  const plugin = writeRealPlugin({
+    id: pluginId,
+    registerBody: `    api.on("before_agent_reply", () => undefined, { registrationId: "primary", eligibleTriggers: ["mention"] });
+    api.on("before_agent_reply", () => undefined, { registrationId: "secondary", eligibleTriggers: ["reply"] });`,
+  });
+  process.env.OPENCLAW_STATE_DIR = tempDir("proof-136474-state-");
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  const options = {
+    config: {
+      plugins: { allow: [pluginId], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+    },
+    cache: false,
+    workspaceDir: plugin.dir,
+    onlyPluginIds: [pluginId],
+  } satisfies NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>;
+  const registries: ReturnType<typeof loadOpenClawPlugins>[] = [];
+  try {
+    // The Gateway's own load: side-effect runtime, activated as the registry /status serves.
+    const lender = loadOpenClawPlugins({ ...options, activate: false, runtimeSideEffects: true });
+    registries.push(lender);
+    activatePluginRegistry(lender, null, "gateway-bindable");
+    const lenderRecord = lender.plugins.find((record) => record.id === pluginId);
+    const lenderRefusals = lender.blockedHooks.filter((entry) => entry.pluginId === pluginId);
+    check("lender registry produced distinct refusals", lenderRefusals.length, 2);
+    check("served /status registry is the lender", getActivePluginRegistry() === lender, true);
+    const compactLine = formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
+    console.log(`  compact line (served lender): ${compactLine ?? "(none)"}`);
+    check(
+      "compact /status counts the lender's dead handlers",
+      countCompactBlockedHooks(compactLine),
+      2,
+    );
+
+    // Non-activating prepared loads that borrow the lender's live record.
+    const borrowOptions = {
+      ...options,
+      activate: false,
+      preferBuiltPluginArtifacts: true,
+      borrowRegistry: lender,
+    };
+    let predecessor = loadOpenClawPlugins(borrowOptions);
+    registries.push(predecessor);
+    check(
+      "predecessor borrowed the lender's record",
+      predecessor.plugins[0] === lenderRecord,
+      true,
+    );
+    check("predecessor refusal count", predecessor.blockedHooks.length, 2);
+    for (let generation = 1; generation <= 3; generation += 1) {
+      const successor = loadOpenClawPlugins({ ...borrowOptions, previousRegistry: predecessor });
+      registries.push(successor);
+      const sameRecords = successor.blockedHooks.every(
+        (entry, index) => entry === lenderRefusals[index],
+      );
+      console.log(
+        `  generation ${generation}: predecessor lists lent record=${predecessor.plugins.includes(lenderRecord!)}, ` +
+          `successor record is lender's=${successor.plugins[0] === lenderRecord}, ` +
+          `successor blockedHooks=${successor.blockedHooks.length} ` +
+          `[${successor.blockedHooks.map((entry) => `${entry.hookName}/${entry.reason}/${entry.severity}`).join(", ")}]`,
+      );
+      check(
+        `generation ${generation} retained the lender's record`,
+        successor.plugins[0] === lenderRecord,
+        true,
+      );
+      check(
+        `generation ${generation} copies each refusal exactly once`,
+        successor.blockedHooks.length,
+        2,
+      );
+      check(`generation ${generation} refusals are the lender's own records`, sameRecords, true);
+      predecessor = successor;
+    }
+  } finally {
+    await clearActivePluginRegistry();
+    for (const registry of registries.toReversed()) {
+      await disposePluginRegistryInstances(registry);
+    }
+  }
+}
+
 async function main(): Promise<number> {
-  console.log("proof-136474: blocked typed-hook registrations must stay distinct");
+  console.log(
+    "proof-136474: blocked typed-hook registrations must stay distinct and be retained once",
+  );
 
   // Scenario 1 — the regression. Same plugin, same hook, same refusal reason, two
   // genuinely different handlers. Pre-fix the merge collapsed these to one row.
@@ -222,6 +329,9 @@ async function main(): Promise<number> {
     registerBody: `    api.on("before_agent_reply", () => undefined);`,
     expectedBlocked: 1,
   });
+
+  // Scenario 4 — the predecessor-plus-lender retention path.
+  await runRetentionScenario();
 
   console.log(`\n${passed} passed, ${failed} failed (${passed + failed} assertions)`);
   if (failed > 0) {

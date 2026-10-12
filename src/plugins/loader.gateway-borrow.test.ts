@@ -19,7 +19,7 @@ const lenderId = "borrow-lender";
 const freshId = "borrow-fresh";
 const evaluations = Symbol.for("openclaw.test.borrowEvaluations");
 
-function writeProbePlugin(id: string, body = "") {
+function writeProbePlugin(id: string, body = "", registerBody = "") {
   const plugin = writePlugin({
     id,
     body: `const counts = (globalThis[Symbol.for("openclaw.test.borrowEvaluations")] ??= {});
@@ -30,6 +30,7 @@ function writeProbePlugin(id: string, body = "") {
         api.registerTool({ name: ${JSON.stringify(`${id.replaceAll("-", "_")}_probe`)},
           description: "Report the module generation", parameters: { type: "object", properties: {} },
           async execute() { return { content: [{ type: "text", text: String(generation) }] }; } });
+        ${registerBody}
       } };`,
   });
   writeFileSync(
@@ -54,9 +55,9 @@ afterEach(async () => {
 });
 
 /** A Gateway-mode lender plus the options a prepared, non-activating load uses to borrow from it. */
-function setupLender(freshBody?: string) {
+function setupLender(freshBody?: string, lenderRegisterBody?: string) {
   useNoBundledPlugins();
-  const lender = writeProbePlugin(lenderId);
+  const lender = writeProbePlugin(lenderId, "", lenderRegisterBody);
   const fresh = writeProbePlugin(freshId, freshBody);
   const options: PluginLoadOptions = {
     config: {
@@ -187,5 +188,33 @@ it.each([true, false])("never adopts a predecessor's loan (lender supplied: %s)"
   } finally {
     await releaseFirst?.();
     await releaseNext?.();
+  }
+});
+
+it("copies a retained lender's hook refusals once when its predecessor borrowed the same record", () => {
+  // Two genuine registrations of a hook the policy refuses (conversation access unset).
+  const { gateway, gatewayRecord, borrowOptions } = setupLender(
+    undefined,
+    'api.on("before_prompt_build", () => undefined); api.on("before_prompt_build", () => undefined);',
+  );
+  const lenderRefusals = gateway.blockedHooks.filter((entry) => entry.pluginId === lenderId);
+  expect(lenderRefusals).toHaveLength(2);
+  const first = loadOpenClawPlugins({ ...borrowOptions, onlyPluginIds: [lenderId] });
+  registries.push(first);
+  expect(first.plugins[0]).toBe(gatewayRecord);
+  expect(first.blockedHooks).toStrictEqual(lenderRefusals);
+  let predecessor = first;
+  // Each successor sees both the predecessor (which lists the lender's record) and the lender.
+  for (let generation = 0; generation < 3; generation += 1) {
+    const next = loadOpenClawPlugins({
+      ...borrowOptions,
+      onlyPluginIds: [lenderId],
+      previousRegistry: predecessor,
+      borrowRegistry: gateway,
+    });
+    registries.push(next);
+    expect(next.plugins[0]).toBe(gatewayRecord);
+    expect(next.blockedHooks).toStrictEqual(lenderRefusals);
+    predecessor = next;
   }
 });

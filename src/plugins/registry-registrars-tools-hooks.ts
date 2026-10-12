@@ -96,7 +96,9 @@ function formatImplicitConversationAccessBlockDiagnostic(params: {
     `typed hook "${params.hookName}" from non-bundled plugin "${params.pluginId}" was NOT registered: ` +
     `conversation hooks need an explicit grant and ${params.configPath} is unset, so the plugin's ` +
     `handler is inactive even though api.on() reported no error. ` +
-    `Fix: set "${params.configPath}": true in openclaw.json and restart the Gateway. ` +
+    `Fix: set "${params.configPath}": true; the default hybrid config reload applies it to the ` +
+    `running Gateway without a restart (with gateway.reload.mode "off", run ` +
+    `\`openclaw plugins reload ${params.pluginId}\`). ` +
     `To keep the hook blocked without this error, set it to false. ` +
     `Verify with \`openclaw plugins inspect ${params.pluginId} --runtime\` or \`/status plugins\`.`
   );

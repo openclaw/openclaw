@@ -360,6 +360,9 @@ export function loadOpenClawPluginsCore(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
+    // The registry retention selected per plugin. A predecessor borrower and its lender
+    // can both list the same record, so refusal facts must come from this source only.
+    const retainedSources = new Map<string, PluginRegistry>();
     for (const candidate of orderedCandidates) {
       const manifest = manifestBySource.get(candidate.source);
       if (
@@ -467,6 +470,7 @@ export function loadOpenClawPluginsCore(
         }
         if (samePluginLoadInput(retention.input.config.input, preparedConfig.input)) {
           retained.set(manifest.id, retention.record);
+          retainedSources.set(manifest.id, retention.registry);
           if (retention.registry === options.borrowRegistry) {
             markPluginRecordBorrowed(registry, retention.record);
           }
@@ -481,11 +485,12 @@ export function loadOpenClawPluginsCore(
           return record && source.plugins.includes(record);
         }) ?? []),
       );
+    }
+    // Copy each retained plugin's refusals once, from the selected source. Repeat entries
+    // within that source are distinct registrations and are kept as-is.
+    for (const [pluginId, source] of retainedSources) {
       registry.blockedHooks.push(
-        ...(source?.blockedHooks.filter((entry) => {
-          const record = retained.get(entry.pluginId);
-          return record && source.plugins.includes(record);
-        }) ?? []),
+        ...source.blockedHooks.filter((entry) => entry.pluginId === pluginId),
       );
     }
     const selectedMiddlewareOwnerManifests = new Map<

@@ -173,7 +173,10 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
     expect(promptBuildDiagnostic?.message).toContain(
       "plugins.entries.conversation-hooks.hooks.allowConversationAccess",
     );
-    expect(promptBuildDiagnostic?.message).toContain("restart the Gateway");
+    // Hybrid config reload applies the grant live; the explicit path covers reload mode "off".
+    expect(promptBuildDiagnostic?.message).toContain("without a restart");
+    expect(promptBuildDiagnostic?.message).toContain("openclaw plugins reload conversation-hooks");
+    expect(promptBuildDiagnostic?.message).not.toContain("restart the Gateway");
     expect(promptBuildDiagnostic?.message).toContain(
       "openclaw plugins inspect conversation-hooks --runtime",
     );

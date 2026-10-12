@@ -512,7 +512,7 @@ describe("plugins cli inspect", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-beads", "--runtime"]);
 
-    const output = pluginsCliRuntimeLogs.join("\n");
+    const output = logs.join("\n");
     expect(output).toContain("Blocked hooks");
     expect(output).toContain(
       'ERROR before_prompt_build: typed hook "before_prompt_build" was NOT registered: set plugins.entries.openclaw-beads.hooks.allowConversationAccess to true',
