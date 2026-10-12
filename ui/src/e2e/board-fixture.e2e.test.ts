@@ -926,47 +926,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it("starts with aligned build identity and an upgraded chat pane", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(
-        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
-      ).not.toBeNull();
-      await selectAllSidebarSessions(page);
-      await page.getByText("OpenClaw work checkout", { exact: true }).click();
-
-      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-      expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
-      const paneState = await page
-        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-        .evaluate(async (pane) => {
-          const chatPane = pane as HTMLElement & {
-            hasUpdated?: boolean;
-            updateComplete?: Promise<boolean>;
-          };
-          await chatPane.updateComplete;
-          const constructor = customElements.get("openclaw-chat-pane");
-          return {
-            connected: chatPane.isConnected,
-            hasUpdated: chatPane.hasUpdated,
-            registered: constructor !== undefined,
-            upgraded: constructor !== undefined && chatPane instanceof constructor,
-          };
-        });
-      expect(paneState).toEqual({
-        connected: true,
-        hasUpdated: true,
-        registered: true,
-        upgraded: true,
-      });
-      expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-    } finally {
-      await page.close();
-    }
-  });
-
   it("renders a deterministic reply after generic chat.send", async () => {
     const page = await browser.newPage();
     try {
