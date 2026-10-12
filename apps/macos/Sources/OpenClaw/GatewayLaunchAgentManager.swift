@@ -484,7 +484,8 @@ enum GatewayLaunchAgentManager {
         else { return nil }
         let prefix = Array(command[..<service])
         let entry = prefix.dropFirst().drop(while: {
-            $0.hasPrefix("--max-old-space-size=") ||
+            ($0 == "--no-install" && URL(fileURLWithPath: executable).lastPathComponent == "bun") ||
+                $0.hasPrefix("--max-old-space-size=") ||
                 $0.hasPrefix("--max-old-space-size-percentage=") || $0.hasPrefix("--max-heap-size=")
         })
         guard entry.count == 1, let script = entry.first, script.hasPrefix("/") else { return nil }
