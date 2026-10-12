@@ -337,6 +337,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   };
   vi.spyOn(tunnelManager, "start").mockResolvedValue(handle);
   const runtime = createGatewayWorkerPlacementRuntime({
+    initialPlacements: await placements.listAsync(),
     scheduler: createTestGatewayScheduler(),
     placements,
     environments,

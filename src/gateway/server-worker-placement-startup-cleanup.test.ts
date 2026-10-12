@@ -83,13 +83,16 @@ describe("worker placement startup cleanup ownership", () => {
         path: path.join(workerEnvironmentSupport.testState.root, sessionId),
       };
     });
-    const recovery = createPlacementRecoveryActions({
-      placements,
-      environments,
-      failure: createPlacementFailureActions({ placements, environments }),
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
-    });
+    const recovery = createPlacementRecoveryActions(
+      {
+        placements,
+        environments,
+        failure: createPlacementFailureActions({ placements, environments }),
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace }),
+      },
+      before,
+    );
     const starting = recovery.reconcile("startup");
     let sweeping: Promise<void> | undefined;
     try {
@@ -215,6 +218,7 @@ describe("worker placement startup cleanup ownership", () => {
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       const runtime = createGatewayWorkerPlacementRuntime({
+        initialPlacements: await placements.listAsync(),
         scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
@@ -320,6 +324,7 @@ describe("worker placement startup cleanup ownership", () => {
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: await placements.listAsync(),
       scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

@@ -100,7 +100,7 @@ describe("worker placement startup concurrency", () => {
       );
       const adopt = vi.spyOn(placements, "adoptActive");
       const recovery = coordinateWorkerPlacementDispatch(
-        createRecoveryService(placements, environments),
+        await createRecoveryService(placements, environments),
         (_request, run) => run(),
       );
       const uninstall = installWorkerPlacementReconcileGuard({

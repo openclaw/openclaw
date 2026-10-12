@@ -52,7 +52,7 @@ describe("worker placement shutdown replay", () => {
     let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const first = support.createService(provider);
     let shuttingDown = false;
-    const dispatch = createRecoveryService(placements, first, () => shuttingDown);
+    const dispatch = await createRecoveryService(placements, first, () => shuttingDown);
     const transitions: string[] = [];
     const request = { ...REQUEST, executionMode: "remote-exec" as const };
     const rejected = expect(
@@ -99,7 +99,7 @@ describe("worker placement shutdown replay", () => {
     }));
     const attach = vi.spyOn(restarted, "attachSession");
     const recovery = coordinateWorkerPlacementDispatch(
-      createRecoveryService(placements, restarted),
+      await createRecoveryService(placements, restarted),
       (_request, run) => run(),
       createWorkerPlacementInitialRecovery({
         placements,
@@ -163,7 +163,7 @@ describe("worker placement shutdown replay", () => {
       if (owner.state !== "provisioning") {
         throw new Error("recovery fixture requires provisioning");
       }
-      const dispatch = createRecoveryService(placements, environments, () => shutdown);
+      const dispatch = await createRecoveryService(placements, environments, () => shutdown);
       const interrupted = new Error(`recovery interrupted ${"x".repeat(2_000)}`);
       const report = vi.fn();
       const recordError = vi.spyOn(environments, "recordError");
@@ -200,7 +200,7 @@ describe("worker placement shutdown replay", () => {
     new WorkerDispatchTargetChangedError("session runtime changed"),
   ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
@@ -247,7 +247,7 @@ describe("worker placement shutdown replay", () => {
       const environments = support.createService(provider);
       const destroy = vi.spyOn(environments, "destroy");
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const dispatch = createRecoveryService(placements, environments, () => shutdown);
+      const dispatch = await createRecoveryService(placements, environments, () => shutdown);
 
       await expect(dispatch.dispatch({ ...REQUEST, executionMode: "remote-exec" })).rejects.toThrow(
         "provider interrupted",

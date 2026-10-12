@@ -92,6 +92,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const dispatch = coordinateWorkerPlacementDispatch(
       createWorkerPlacementDispatchService({
+        initialPlacements: await placements.listAsync(),
         placements,
         environments,
         runnerAvailability: { read: () => undefined, version: () => 0 },

@@ -265,7 +265,7 @@ describe("worker environment runtime upgrades", () => {
         WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
       ],
     });
-    const recovery = createRecoveryService(h.placements, h.service);
+    const recovery = await createRecoveryService(h.placements, h.service);
     h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
 
     await recovery.reconcile("startup");
@@ -356,7 +356,7 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
-      const fixture = createHarness(support.testState.stateDb, restarted.placements, {
+      const fixture = await createHarness(support.testState.stateDb, restarted.placements, {
         workspacePath: support.testState.root,
       });
       const openWorkspace = async () => {
@@ -424,7 +424,7 @@ describe("worker environment runtime upgrades", () => {
           await reconcileEnvironment(environmentId);
         },
       );
-      const recovery = createHarness(support.testState.stateDb, restarted.placements, {
+      const recovery = await createHarness(support.testState.stateDb, restarted.placements, {
         workspacePath: support.testState.root,
         environmentService: restarted.service,
       });

@@ -393,7 +393,7 @@ describe("sessions.dispatch device targets", () => {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
         // A local row starts at generation one; failed and retried dispatches advance it twice.
-        const harness = createHarness(database, placements, { environmentGeneration: 3 });
+        const harness = await createHarness(database, placements, { environmentGeneration: 3 });
         const nodes = [connectedNode("first", 3), connectedNode("second", 2)];
         vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
           deviceEnvironments(nodes),
@@ -475,11 +475,11 @@ describe("sessions.dispatch device targets", () => {
         try {
           const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
           const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-          const first = createHarness(database, placements, {
+          const first = await createHarness(database, placements, {
             environmentGeneration: 1,
             destroyFails,
           });
-          const second = createHarness(database, placements, { environmentGeneration: 4 });
+          const second = await createHarness(database, placements, { environmentGeneration: 4 });
           const nodes = [connectedNode("first", 2), connectedNode("second", 1)];
           vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
             deviceEnvironments(nodes),
@@ -732,7 +732,7 @@ describe("sessions.dispatch device targets", () => {
       try {
         const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
         const placements = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-        const harness = createHarness(database, placements);
+        const harness = await createHarness(database, placements);
         const runtime = createDeviceWorkerRuntime({
           getPairedDevice: async (deviceId) => pairedNode(deviceId),
         });

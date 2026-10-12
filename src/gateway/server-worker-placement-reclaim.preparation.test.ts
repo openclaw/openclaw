@@ -115,7 +115,7 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(database, placements, {
+  const harness = await createHarness(database, placements, {
     workspacePath: root,
     runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,

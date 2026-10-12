@@ -187,6 +187,7 @@ async function createBuildRecoveryHarness(
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },

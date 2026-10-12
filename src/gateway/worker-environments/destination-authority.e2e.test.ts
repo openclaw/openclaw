@@ -297,6 +297,7 @@ process.stdin.pipe(child.stdin);
                 node: await adapter.getCurrentNode(deviceId),
               }));
               const runtime = createGatewayWorkerPlacementRuntime({
+                initialPlacements: await placements.listAsync(),
                 scheduler,
                 environments,
                 placements,

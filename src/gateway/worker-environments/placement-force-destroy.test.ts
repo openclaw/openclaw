@@ -40,7 +40,7 @@ describe("forced worker environment destruction", () => {
 
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       workspaceOperations,
       workspacePath: root,
     });
@@ -113,7 +113,7 @@ describe("forced worker environment destruction", () => {
     { failure: "tunnel stop", state: "draining" as const },
     { failure: "provider stop", state: "destroying" as const },
   ])("stays successful after $failure failure", async ({ state }) => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: state,
       workspacePath: root,
@@ -135,7 +135,7 @@ describe("forced worker environment destruction", () => {
   });
 
   it("retries remote teardown when a failed rollback journal remains", async () => {
-    const harness = createHarness(database, placementStore, {
+    const harness = await createHarness(database, placementStore, {
       destroyFails: true,
       destroyFailureState: "destroying",
       failAt: "workspace",
@@ -210,7 +210,7 @@ describe("forced destruction across Gateway restart", () => {
           }),
         },
       );
-    const harness = createHarness(support.testState.stateDb, placements, {
+    const harness = await createHarness(support.testState.stateDb, placements, {
       environmentService: await createService(),
       workspacePath: support.testState.root,
     });
@@ -249,7 +249,7 @@ describe("forced destruction across Gateway restart", () => {
     });
     const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
     const tunnel = vi.spyOn(service, "startTunnel");
-    const restarted = createHarness(support.testState.stateDb, placements, {
+    const restarted = await createHarness(support.testState.stateDb, placements, {
       environmentService: service,
       workspacePath: support.testState.root,
     });
@@ -304,7 +304,7 @@ describe("forced destruction across Gateway restart", () => {
           }),
         });
       const service = await createService();
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         environmentService: service,
         workspacePath: support.testState.root,
       });
@@ -339,7 +339,7 @@ describe("forced destruction across Gateway restart", () => {
       const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
       const restartedService = await createService();
       const tunnel = vi.spyOn(restartedService, "startTunnel");
-      const restarted = createHarness(support.testState.stateDb, placements, {
+      const restarted = await createHarness(support.testState.stateDb, placements, {
         environmentService: restartedService,
         workspacePath: support.testState.root,
       });

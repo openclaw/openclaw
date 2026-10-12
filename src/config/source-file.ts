@@ -11,6 +11,7 @@ import {
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { resolveIncludeRoots } from "./paths.js";
 import {
   admitConfigObservationRoots,
@@ -172,39 +173,41 @@ export function createConfigFileAdapter(opts: {
           mode: next.mode,
           pollIntervalMs: resolveFsObservationIntervalMs(),
           signal: next.lifetime.signal,
-          onInvalidate: (hint) => {
-            // Each new baseline has its own read-gap check below.
-            if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
-              return;
-            }
-            const indirect = source.scopes.filter(
-              (scope) => !source.entries.has(nodePath.normalize(scope.path)),
-            );
-            if (
-              source.ready &&
-              indirect.length &&
-              (!hint.changes ||
-                hint.changes.some(
-                  (change) =>
-                    change.type === "structural" &&
-                    indirect.some(
-                      (scope) => nodePath.normalize(scope.path) === nodePath.normalize(change.path),
-                    ),
-                ))
-            ) {
-              opts.onChange();
-              void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
-                handleWatcherError(next, error),
+          onInvalidate: (hint) =>
+            runWithMainThreadTask("fs-watch:config", () => {
+              // Each new baseline has its own read-gap check below.
+              if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
+                return;
+              }
+              const indirect = source.scopes.filter(
+                (scope) => !source.entries.has(nodePath.normalize(scope.path)),
               );
-              return;
-            }
-            if (hint.changes?.length) {
-              retries = 0;
-            }
-            next.stability.dirty(
-              [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
-            );
-          },
+              if (
+                source.ready &&
+                indirect.length &&
+                (!hint.changes ||
+                  hint.changes.some(
+                    (change) =>
+                      change.type === "structural" &&
+                      indirect.some(
+                        (scope) =>
+                          nodePath.normalize(scope.path) === nodePath.normalize(change.path),
+                      ),
+                  ))
+              ) {
+                opts.onChange();
+                void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
+                  handleWatcherError(next, error),
+                );
+                return;
+              }
+              if (hint.changes?.length) {
+                retries = 0;
+              }
+              next.stability.dirty(
+                [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
+              );
+            }),
           onHealth: (health) => {
             if (health.state === "unavailable") {
               handleWatcherError(
