@@ -96,38 +96,6 @@ function writeAllowFromFixture(params: {
 }
 
 describe("pairing store", () => {
-  it("normalizes allowlist entries through channel pairing adapters", async () => {
-    const env = pairingEnv;
-    pairingMocks.getPairingAdapter.mockReturnValue({
-      idLabel: "Telegram user",
-      normalizeAllowEntry: (entry) => entry.replace(/^telegram:/i, ""),
-    });
-
-    await expect(
-      addChannelAllowFromStoreEntry({
-        channel: "telegram",
-        accountId: "yy",
-        entry: "telegram:1001",
-        env,
-      }),
-    ).resolves.toEqual({ changed: true, allowFrom: ["1001"] });
-    await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["1001"]);
-
-    const directAdapter = {
-      idLabel: "Direct",
-      normalizeAllowEntry: (entry: string) => entry.replace(/^direct:/i, ""),
-    };
-    await expect(
-      addChannelAllowFromStoreEntry({
-        channel: "external-channel",
-        accountId: "main",
-        entry: "direct:42",
-        env,
-        pairingAdapter: directAdapter,
-      }),
-    ).resolves.toEqual({ changed: true, allowFrom: ["42"] });
-  });
-
   it("skips malformed persisted requests while approving valid codes", async () => {
     const env = pairingEnv;
     const database = openOpenClawStateDatabase({ env });

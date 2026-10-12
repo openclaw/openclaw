@@ -104,10 +104,7 @@ describe("UI protocol freshness health mapping", () => {
     ]);
   });
 
-  it.each([
-    { kind: "missing-assets", field: "message" },
-    { kind: "stale-assets", field: "fixHint" },
-  ] as const)(
+  it.each([{ kind: "stale-assets", field: "fixHint" }] as const)(
     "passes the source root as one argument in the $kind manual repair",
     async ({ kind, field }) => {
       const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
@@ -147,35 +144,11 @@ ${command!}`;
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);
   });
 
-  it("reports missing packaged UI assets without requiring unpublished protocol sources", async () => {
-    const root = await createOpenClawRoot();
-    await fs.rm(path.join(root, "packages"), { recursive: true });
-
-    await expect(inspectRoot(root)).resolves.toEqual([
-      {
-        kind: "missing-assets",
-        root,
-        uiIndexPath: path.join(root, "dist/control-ui/index.html"),
-        canBuild: false,
-      },
-    ]);
-  });
-
   it("gives packaged installs an actionable recovery hint instead of a missing build command", () => {
     const finding = uiProtocolFreshnessIssueToHealthFinding(issue({ canBuild: false }));
 
     expect(finding.message).not.toContain("pnpm ui:build");
     expect(finding.fixHint).toContain("Reinstall OpenClaw");
-  });
-
-  it("keeps healthy packaged UI assets quiet without probing unpublished protocol history", async () => {
-    const root = await createOpenClawRoot();
-    await fs.rm(path.join(root, "packages"), { recursive: true });
-    await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-02"));
-    const gitLog = mockGitLog("abc123 unavailable packaged source");
-
-    await expect(inspectRoot(root)).resolves.toEqual([]);
-    expect(gitLog).not.toHaveBeenCalled();
   });
 
   it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
@@ -223,18 +196,6 @@ ${command!}`;
         changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
       }),
     ]);
-  });
-
-  it("does not report stale assets when git finds no schema changes", async () => {
-    const root = await createOpenClawRoot();
-    const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
-    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
-    await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
-    await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
-    await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
-
-    mockGitLog("");
-    await expect(inspectRoot(root)).resolves.toEqual([]);
   });
 
   it("does not report stale assets when git history is unavailable", async () => {

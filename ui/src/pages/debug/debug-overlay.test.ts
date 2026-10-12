@@ -70,7 +70,7 @@ describe("DebugOverlay", () => {
       expect(requestCount("sessions.list")).toBe(1);
       expect(requestCount("diagnostics.lanes")).toBe(4);
       expect(requestCount("system.info")).toBe(4);
-      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("40%");
+      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("0.40 cores");
       expect(eventListeners.size).toBe(1);
 
       overlay.querySelector<HTMLButtonElement>('[aria-label="Minimize system busyness"]')!.click();
@@ -81,7 +81,7 @@ describe("DebugOverlay", () => {
       expect(requestCount("sessions.list")).toBe(1);
       expect(requestCount("diagnostics.lanes")).toBe(4);
       expect(requestCount("system.info")).toBe(5);
-      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("50%");
+      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("0.50 cores");
 
       heldRuns.resolve({ sessions: [] });
       await vi.advanceTimersByTimeAsync(0);
@@ -258,7 +258,7 @@ describe("DebugOverlay", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       await vitalUpdated();
 
-      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("120%");
+      expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("1.20 cores");
       expect(normalizedText(overlay.querySelector(".gateway-vital--memory"))).toContain("402 MB");
       expect(normalizedText(overlay.querySelector(".gateway-vital--memory"))).toContain(
         "heap 100 MB",

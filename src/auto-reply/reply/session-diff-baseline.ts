@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import type { SessionInitResult } from "./session-init.types.js";
 
@@ -11,6 +12,10 @@ export async function prepareReplySessionDiffBaseline(params: {
   >;
 }): Promise<void> {
   const { sessionState } = params;
+  if (captureAgentWorkspaceReadiness(sessionState.sessionKey)) {
+    // The workspace owner captures the complete checkout before releasing tools.
+    return;
+  }
   const entry = await ensureSessionDiffBaseline({
     agentId: params.agentId,
     cwd:

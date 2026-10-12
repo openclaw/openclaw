@@ -313,6 +313,7 @@ export async function createServiceChildRelayAdapter(
     state = "closed";
     if (!rootResult && !resultError && !waitError) {
       rootResult = { code: null, signal: requestedSignal ?? null };
+      events.emitExit(rootResult.code, rootResult.signal);
     }
     settleWait();
     cleanup.completion.resolve();

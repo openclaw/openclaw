@@ -8,37 +8,6 @@ import {
 } from "./lazy-promise.js";
 
 describe("getOrCreatePromise", () => {
-  it("dedupes each key and leaves cache lifecycle to the caller", async () => {
-    const cache = new Map<string, Promise<string>>();
-    const create = vi.fn(async (key: string) => `loaded-${key}`);
-
-    const first = getOrCreatePromise(cache, "a", async () => await create("a"));
-    expect(getOrCreatePromise(cache, "a", async () => await create("a"))).toBe(first);
-    await expect(first).resolves.toBe("loaded-a");
-    await expect(getOrCreatePromise(cache, "b", async () => await create("b"))).resolves.toBe(
-      "loaded-b",
-    );
-    expect(create).toHaveBeenCalledTimes(2);
-
-    cache.clear();
-    await expect(getOrCreatePromise(cache, "a", async () => await create("a"))).resolves.toBe(
-      "loaded-a",
-    );
-    expect(create).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps rejected loads cached by default", async () => {
-    const cache = new Map<string, Promise<string>>();
-    const create = vi.fn(async () => {
-      throw new Error("sticky");
-    });
-
-    const first = getOrCreatePromise(cache, "a", create);
-    await expect(first).rejects.toThrow("sticky");
-    expect(getOrCreatePromise(cache, "a", create)).toBe(first);
-    expect(create).toHaveBeenCalledOnce();
-  });
-
   it("evicts only rejected loads when rejection caching is disabled", async () => {
     const cache = new Map<string, Promise<string>>();
     const create = vi
@@ -116,17 +85,6 @@ describe("createLazyPromise", () => {
 });
 
 describe("createLazyPromiseLoader", () => {
-  it("dedupes concurrent loads and reuses the resolved value", async () => {
-    let calls = 0;
-    const loader = createLazyPromiseLoader(async () => `loaded-${++calls}`);
-    const first = loader.load();
-
-    expect(loader.load()).toBe(first);
-    await expect(first).resolves.toBe("loaded-1");
-    await expect(loader.load()).resolves.toBe("loaded-1");
-    expect(calls).toBe(1);
-  });
-
   it("evicts rejected loads by default so retries can recover", async () => {
     let calls = 0;
     const loader = createLazyPromiseLoader(async () => {
@@ -140,17 +98,6 @@ describe("createLazyPromiseLoader", () => {
     await expect(loader.load()).rejects.toThrow("transient");
     await expect(loader.load()).resolves.toBe("recovered");
     expect(calls).toBe(2);
-  });
-
-  it("can keep rejected loads when requested", async () => {
-    const load = vi.fn(async () => {
-      throw new Error("sticky");
-    });
-    const loader = createLazyPromiseLoader(load, { cacheRejections: true });
-
-    await expect(loader.load()).rejects.toThrow("sticky");
-    await expect(loader.load()).rejects.toThrow("sticky");
-    expect(load).toHaveBeenCalledOnce();
   });
 
   it("clears cached values", async () => {

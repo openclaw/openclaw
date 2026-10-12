@@ -110,6 +110,7 @@ export async function withCurrentChatSendRetry(
       session: params.session,
       getRuntimeConfig: params.context.getRuntimeConfig,
       includeMembership: Boolean(params.withPreparedCurrent),
+      includeLifecycle: true,
       consume: (latest, membership, assertSourceCurrent) => {
         const consumeCurrent = () => read(latest);
         if (params.withPreparedCurrent) {

@@ -607,7 +607,7 @@ export function writeSessionEntry(
                 writeNode(sessionNode);
               }
               if (persisted.snapshotsChanged) {
-                writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots);
+                writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots, persisted);
               }
             })
           : undefined;

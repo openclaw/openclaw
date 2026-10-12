@@ -65,16 +65,19 @@ async function syncSandboxSkillsToWorkspace(params: {
   assertCurrent?: () => void;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
-    const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
-      await Promise.all([
-        loadSyncWorkspaceSkills(),
-        import("../../skills/runtime/remote.js"),
-        import("../exec-defaults.js"),
-      ]);
+    const [
+      syncWorkspaceSkills,
+      { getRemoteSkillEligibility },
+      { resolveNodeExecEligibilityAsync },
+    ] = await Promise.all([
+      loadSyncWorkspaceSkills(),
+      import("../../skills/runtime/remote.js"),
+      import("../exec-defaults.js"),
+    ]);
     params.assertCurrent?.();
     await prepareRemoteSkillConnections();
     params.assertCurrent?.();
-    const nodeSkills = resolveNodeExecEligibility({
+    const nodeSkills = await resolveNodeExecEligibilityAsync({
       cfg: params.config,
       sessionKey: params.rawSessionKey,
       agentId: params.agentId,

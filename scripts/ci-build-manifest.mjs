@@ -687,6 +687,8 @@ const uiWebkitOwners = [
   "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
+  "ui/src/lit/presentation-binding.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",

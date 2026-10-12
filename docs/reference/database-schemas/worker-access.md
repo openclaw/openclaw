@@ -34,6 +34,11 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
+Durable heartbeat outcome claims check the current row in their existing worker FIFO.
+Missing outcomes and already committed claims for the same run return without
+another write. New claims keep their atomic conditional update and live commit
+authority check; retries retain the original claim timestamp.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -304,20 +309,42 @@ shows the retained synchronous implementation.
 An operation enters T1-compat only through the reviewed operation registry in
 `scripts/lib/database-worker-compat.mts`. Its declaration must retain
 `@deprecated`, and the source graph must have no bundled value references except
-from other reviewed compatibility boundaries. The check follows import and
+from other proven compatibility boundaries. The check follows import and
 reexport aliases, including SDK barrels, and rejects escaped callbacks and
 namespace values as well as direct calls. Type-only references and pure
 reexports preserve the released SDK surface without becoming runtime callers.
-Tests remain outside this production inventory. Returned-method families and
-shared kernels stay in T1 until their complete caller boundary can be enforced;
-a deprecation marker alone does not move them to T1-compat.
+Tests remain outside this production inventory. A deprecation marker alone does
+not move an API to T1-compat.
+
+Named function kernels reached from those boundaries enter the same symbol
+graph. A kernel is T1-compat only when every reference is a direct call from
+another proven compatibility function or an already classified worker,
+boot/maintenance, or CLI operation. Any ordinary bundled caller makes the kernel
+and its callees live again. Import aliases, namespace access, and dynamic imports
+are checked against declaration identity, not matching names. Escaped callbacks,
+returned-method families, class methods, and unproven factory receivers remain
+T1; this proof does not attempt whole-program points-to analysis.
 
 The same check runs from the inventory generator and the worker ratchet, including
 staged-source checks. Adding a bundled caller fails even if another T1 call is
-removed in the same change. A shared kernel stays T1 unless every native caller
-has a proven compatibility boundary; worker callers alone do not prove that.
+removed in the same change. Shared kernels may have both worker and deprecated
+callers, but no unproven main-thread caller. Worker callers alone do not prove
+that. The generated inventory lists the largest live owners and the lexical
+API/operation at each remaining T1 site, including conservative residuals.
 Boot admission, migrations, Doctor/CLI one-shots, and lock primitives retain their
 existing T2/T3 classifications.
+
+The remaining cutover work includes these live or unproven API families:
+
+| Owner / API                                                   | Why it stays live or unproven                                                                                                                                                                                          |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session store / `getSessionEntry`, `readAcpSessionEntry`      | Codex native execution policy, agent-session creation, and channel binding reconciliation still use synchronous entry points; class methods and runtime facade properties are not covered by the named-function proof. |
+| Codex history / `readCodexSessionContext`                     | The bundled Codex native history reader still calls the synchronous API.                                                                                                                                               |
+| Auth profiles / `findPersistedAuthProfileCredential`          | Auth upsert and Codex OAuth still call it; nested auth-store implementations forwarded through host properties also remain unproven.                                                                                   |
+| Conversation bindings / `inspectSessionBindingByConversation` | Gateway, Telegram, and Matrix routing retain bundled callers.                                                                                                                                                          |
+| Upstream links / `upsertSessionUpstreamLink`                  | The returned session-initialization `link` method still references it.                                                                                                                                                 |
+| Mention Inbox, publication, placement, model accounts         | Deprecated returned methods and class/interface contracts need receiver/escape proof before their shared kernels can be separated.                                                                                     |
+| Skill commands, TTS, proxy capture, session-store namespaces  | Lazy runtime namespaces escape into host API objects; absence of a named direct call is insufficient.                                                                                                                  |
 
 Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
 major, together with obsolete SDK exports and registry entries. Publish release
@@ -425,6 +452,21 @@ Activity recap presentation consumes the watermark prepared with its row. Explic
 recap requests read freshness through the history worker and revalidate access
 before returning the result. The unused synchronous message-by-event-ID accessor
 has been removed; transaction owners retain their existing message lookup kernel.
+
+Memory ingestion awaits `statSessionEntry`, which reuses supplied statistics or
+reads metadata through the existing history worker. Transcript export observers
+and explicit parse-yield callers obtain a snapshot through that worker before
+host-side parsing and callbacks. Full messages cross the worker boundary only
+when the observer needs them; other exports retain their SQL-side projection.
+`statSessionEntrySync` remains deprecated SDK compatibility and warns when it
+performs a host SQLite read.
+
+Bundled run-start callbacks use `onPreparedAgentRunStart` and its required
+transcript facts, prepared asynchronously by the runtime. The released
+`onAgentRunStart` callback remains deprecated and supported; only a legacy
+producer that omits those facts enters the named synchronous watermark adapter.
+Its retirement requires the next Plugin SDK major and explicit breaking-release
+approval. CLI history retains its current final cross-account disclosure guard.
 
 The session S–Z inventory still includes shared native kernels. They must not be
 marked worker-only merely because their ordinary durable callers use workers:
@@ -1171,6 +1213,13 @@ to a worker. There is no schema, stored-byte, retention, durability, permission,
 or update-format change.
 
 ### Current reads and receipt invalidation
+
+Qualified Gateway entry reads request lifecycle timestamps only when a consumer
+needs reset freshness. Metadata, observer, and native model ownership reads use
+the existing single-statement entry facts without a deferred transaction.
+Restart-safe chat admission still requests lifecycle timestamps and retains the
+snapshot that joins entry facts with a legacy transcript-header fallback.
+Schemas, stored bytes, permissions, and update behavior are unchanged.
 
 Current readers consume committed rows without a probe connection, version
 observation, or foreign-commit recertification. Domain owners retain complete
@@ -3683,6 +3732,14 @@ creation, listing, cancellation, matching, and lifecycle maintenance. Schema
 preparation commits separately before the business transaction, preserving first-use
 recovery. Both transactions recheck the original caller at mutation and commit.
 Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unchanged.
+The writer retains the next expiry or rearm deadline per native connection. Calls
+before that deadline skip lifecycle SQL; create, cancel, fire, and failed
+transactions invalidate it. Reopening a connection reloads the deadline. Expiry
+comparison and fired-row numeric validation retain their existing semantics.
+Session snapshot replacement skips absent-field deletion only when the complete
+previous and next field sets prove that nothing was removed. Explicit clearing
+and entry transaction ownership are unchanged. These optimizations change no
+schemas, stored data, retention policy, or update behavior.
 Cold agent opening and lease/bootstrap control retain their existing owners; this
 cut does not claim that all agent-database work has left the host thread.
 
@@ -5965,3 +6022,11 @@ committed timestamp without a follow-up read. Generic synchronous machine-state
 APIs retain other callers pending their owner-level cutover; these changes do not
 classify those callers as worker-only. Schemas, retention, stored bytes, and
 update behavior are unchanged.
+
+### Anchor read watermark facts
+
+An anchor read that already requires the current transcript projection returns its
+watermark from that same projection snapshot. It does not issue a separate retained
+watermark query. Standalone watermark reads and the early context-authority check
+keep their existing database readers. Schema, stored bytes, retention, permissions,
+and update behavior are unchanged.

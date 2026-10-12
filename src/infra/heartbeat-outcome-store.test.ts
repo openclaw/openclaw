@@ -34,6 +34,8 @@ import {
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
 import { readSqliteDatabaseWriteTokenForPath } from "./sqlite-database-admission.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -56,6 +58,35 @@ afterEach(async () => {
 });
 
 describe("heartbeat outcome store", () => {
+  it("claims once without writing absent outcomes, durable retries, or another run's claim", async () => {
+    const env = await createEnv();
+    const target = { agentId: "main", sessionKey: "agent:main:main", env };
+    let commits = 0;
+    sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        commits++;
+      }
+      admit(request, grant);
+    });
+    const claim = (runId: string) => claimHeartbeatOutcomeForRun({ ...target, runId });
+
+    expect(await claim("first-run")).toBeUndefined();
+    expect(commits).toBe(0);
+    await persistHeartbeatOutcome({
+      ...target,
+      runSessionKey: "agent:main:main:heartbeat",
+      occurredAt: 100,
+      response: { outcome: "progress", notify: false, summary: "Recorded progress" },
+    });
+    expect(commits).toBe(1);
+    const claimed = await claim("first-run");
+    expect(claimed).toMatchObject({ summary: "Recorded progress" });
+    expect(commits).toBe(2);
+    expect(await claim("first-run")).toEqual(claimed);
+    expect(await claim("second-run")).toBeUndefined();
+    expect(commits).toBe(2);
+  });
+
   it("leaves the outcome unclaimed when its admitted run retires before worker admission", async () => {
     const env = await createEnv();
     const target = { agentId: "main", sessionKey: "agent:main:main", env };

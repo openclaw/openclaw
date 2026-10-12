@@ -158,7 +158,6 @@ async function prepareNativeSessionRuntime(
       const prepared = await reader.withRead(
         {
           sessionKeys: [admission.sessionKey],
-          lifecycleSessionKey: admission.sessionKey,
           snapshotFields: [],
         },
         assertCallerCurrent,
@@ -176,7 +175,6 @@ async function prepareNativeSessionRuntime(
       {
         agentId: sessionAgentId,
         sessionKeys: [admission.sessionKey],
-        lifecycleSessionKey: admission.sessionKey,
         storePath: admission.storePath,
         includeAuthorization: true,
         snapshotFields: [],

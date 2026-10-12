@@ -3,6 +3,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -94,14 +95,20 @@ it.each(["runtime", "legacy"] as const)(
 );
 
 it.each(["direct", "tool"] as const)(
-  "keeps opaque commit guards native without pinning prepared host guards on %s dispatch",
+  "keeps opaque and prepared commit guards authoritative with worker writes on %s dispatch",
   async (entrypoint) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = { agentId: "main", sessionKey: "agent:main:commit-guard-routing" };
       await upsertSessionEntryCore(scope, { sessionId: "guard-routing-session", updatedAt: 1 });
       const context = createContext();
       for (const kind of ["opaque", "prepared"] as const) {
-        const assertHostCurrent = () => {};
+        let current = true;
+        let revokeDuringUpdate = false;
+        const assertHostCurrent = () => {
+          if (!current) {
+            throw new Error("session commit authority revoked");
+          }
+        };
         const guard =
           kind === "prepared"
             ? Object.assign(assertHostCurrent, {
@@ -124,23 +131,26 @@ it.each(["direct", "tool"] as const)(
               }: GatewayRequestHandlerOptions) => {
                 const sql = observeHostDataSql();
                 try {
-                  const entry = await patchSessionEntryCore(scope, () => ({ label: kind }), {
-                    workerGuard: { source: sessionMutationCommitGuard },
-                  });
-                  // The canonical writer (#167932) upserts session rows natively.
-                  nativeMutation = sql.queries.some((query) =>
-                    /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i.test(query),
+                  const entry = await patchSessionEntryCore(
+                    scope,
+                    () => {
+                      current = !revokeDuringUpdate;
+                      return { label: revokeDuringUpdate ? "must not persist" : kind };
+                    },
+                    { workerGuard: { source: sessionMutationCommitGuard } },
                   );
                   respond(true, { label: entry?.label });
                 } finally {
+                  nativeMutation = sql.queries.some((query) =>
+                    /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i.test(query),
+                  );
                   sql.restore();
                 }
               },
             },
           ]);
-        const result = await withPluginRuntimeGatewayRequestScope(
-          { context, isWebchatConnect: () => false },
-          () =>
+        const invoke = () =>
+          withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
             entrypoint === "tool"
               ? callAgentToolGatewayRequest({
                   method: "sessions.create",
@@ -157,9 +167,13 @@ it.each(["direct", "tool"] as const)(
                     sessionMutationCommitGuard: guard,
                   },
                 ),
-        );
-        expect(result).toEqual({ label: kind });
-        expect(nativeMutation).toBe(kind === "opaque");
+          );
+        await expect(invoke()).resolves.toEqual({ label: kind });
+        expect(nativeMutation).toBe(false);
+        revokeDuringUpdate = true;
+        await expect(invoke()).rejects.toThrow("session commit authority revoked");
+        expect(nativeMutation).toBe(false);
+        expect(await readSessionEntryReadOnlyInWorker(scope)).toMatchObject({ label: kind });
       }
     });
   },

@@ -60,10 +60,11 @@ describe("Gateway CPU attribution", () => {
       },
     };
     await show([earlier, measured, measured]);
-    expect(root.querySelector(".sparkline-tile__value")?.textContent).toContain("258%");
+    expect(root.querySelector(".sparkline-tile__value")?.textContent).toContain("2.58 cores");
     expect(root.querySelector(".sparkline-tile__secondary")?.textContent).toBe("Host 44%");
     expect(root.querySelectorAll(".sparkline-tile__stack")).toHaveLength(3);
     const detail = root.querySelector(".gateway-cpu-detail")!.textContent!;
+    expect(detail).toContain("Build and tool subprocesses are excluded");
     expect(detail).toContain("220%");
     expect(detail).toContain("Event loop busy");
     expect(
@@ -72,7 +73,7 @@ describe("Gateway CPU attribution", () => {
     const chart = root.querySelector<HTMLElement>(".sparkline-tile__chart")!;
     chart.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 0 }));
     await root.querySelector<LitElement>("openclaw-sparkline")!.updateComplete;
-    expect(root.querySelector(".sparkline-tile__value")?.textContent).toContain("54%");
+    expect(root.querySelector(".sparkline-tile__value")?.textContent).toContain("0.54 cores");
     expect(root.querySelector(".sparkline-tile__secondary")?.textContent).toBe("Host 23%");
   });
 

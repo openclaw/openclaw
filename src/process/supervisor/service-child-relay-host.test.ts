@@ -349,6 +349,23 @@ it("publishes root exit before drain, replays it, and acknowledges only the clos
   await expect(extinction).resolves.toBeUndefined();
 });
 
+it("publishes confirmed cancellation when the root result is missing", async () => {
+  const { adapter, emit, endOutput, close } = await createRelay("darwin");
+  const onExit = vi.fn();
+  adapter.onExit(onExit);
+  adapter.kill("SIGKILL");
+  endOutput();
+  emit({ type: "closing", reason: "lineage-closed" });
+  await nextTurn();
+  close();
+  await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
+  expect(onExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+  const lateExit = vi.fn();
+  adapter.onExit(lateExit);
+  expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
+});
+
 it("keeps an observed Windows root result independent of failed extinction", async () => {
   const { adapter, emit, endOutput, close } = await createRelay("win32");
   adapter.kill("SIGTERM");

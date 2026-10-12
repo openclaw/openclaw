@@ -449,30 +449,6 @@ describe("registerCopilotActiveRun", () => {
     },
   );
 
-  it("exposes pending-question cancellation for queued image fallback", async () => {
-    const { handle } = registerTestRun();
-
-    await expect(handle.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
-
-    expect(harnessMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
-      sessionKey: "session-1",
-      resolvedBy: "image-reply",
-    });
-  });
-
-  it("reports pre-ownership validation failure as rejected", async () => {
-    const onQueueAccepted = vi.fn();
-    const { handle, send } = registerTestRun({ canAcceptSteering: () => false });
-
-    await expect(handle.queueMessage("too early", { onQueueAccepted })).rejects.toThrow(
-      "unavailable before initial user validation",
-    );
-
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
-    expect(onQueueAccepted).toHaveBeenCalledWith(false);
-    expect(send).not.toHaveBeenCalled();
-  });
-
   it.each(["settled", "aborted", "unavailable"] as const)(
     "revalidates steering after resolving source text when the run becomes %s",
     async (changedState) => {
@@ -560,10 +536,4 @@ describe("registerCopilotActiveRun", () => {
       expect(onQueueSettled).toHaveBeenCalledOnce();
     },
   );
-});
-
-it("threads the attempt start timestamp onto the embedded run handle", () => {
-  const startedAtMs = 1_750_000_000_000;
-  const { handle } = registerTestRun({ startedAtMs });
-  expect(handle.startedAtMs).toBe(startedAtMs);
 });

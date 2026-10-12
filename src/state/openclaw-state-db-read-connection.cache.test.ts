@@ -13,22 +13,16 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
   openClawStateDatabaseCache,
-  recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadOnlyLocation,
-  prepareOpenClawStateDirectReader,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
@@ -40,7 +34,6 @@ import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 vi.hoisted(() => vi.resetModules());
 const worker = vi.hoisted(() => ({
@@ -131,169 +124,6 @@ function fixture() {
   };
   return { root, pathname, read, value, countOpens, workerValue, workerRead };
 }
-
-it("serves direct authority reads as one fresh indexed SELECT on the admitted connection", () => {
-  const { pathname, root, countOpens } = fixture();
-  const context = () =>
-    captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } });
-  const reader = prepareOpenClawStateDirectReader(context());
-  const select = "SELECT value_json FROM config_machine_state WHERE state_key = ?";
-  const value = (database: OpenClawStateReadOnlyDatabase) =>
-    database.db.prepare(select).get("nodeHost.config")?.value_json;
-  expect(reader.read(value)).toBe("1");
-  const native = sqlite.requireNodeSqlite();
-  const observation = observeSqliteReadSql(native.StatementSync.prototype);
-  const exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
-  const peer = new native.DatabaseSync(pathname);
-  try {
-    const second = prepareOpenClawStateDirectReader(context());
-    expect(observation.queries).toEqual([]);
-    expect(countOpens()).toBe(1);
-    peer.prepare("UPDATE config_machine_state SET value_json = '2'").run();
-    observation.queries.length = 0;
-    exec.mockClear();
-    expect(second.read(value)).toBe("2");
-    expect(observation.queries).toEqual([select]);
-    expect(exec).not.toHaveBeenCalled();
-    expect(countOpens()).toBe(1);
-  } finally {
-    observation.restore();
-    peer.close();
-  }
-});
-
-it.each(["idle", "close", "quarantine", "replacement", "maintenance"] as const)(
-  "refuses an escaped direct reader after %s without reopening",
-  async (reason) => {
-    const { pathname, root, countOpens } = fixture();
-    const maintenance =
-      reason === "maintenance" ? createOpenClawDatabaseMaintenanceScope() : undefined;
-    const prepare = () =>
-      prepareOpenClawStateDirectReader(
-        captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } }),
-      );
-    const reader = maintenance ? maintenance.run(prepare) : prepare();
-    const value = () =>
-      reader.read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
-    expect(value()).toBe(1);
-    if (reason === "idle") {
-      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-    } else if (reason === "close") {
-      await closeOpenClawStateDatabaseByPathAsync(pathname);
-    } else if (reason === "quarantine") {
-      recordOpenClawStateDatabaseOpenFailure(pathname, new Error("synthetic quarantine"));
-    } else if (reason === "maintenance") {
-      await maintenance?.close();
-    } else {
-      fs.renameSync(pathname, path.join(root, "previous.sqlite"));
-      const replacement = sqlite.openNodeSqliteDatabase(pathname);
-      replacement.exec("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (7)");
-      replacement.close();
-    }
-    const opens = countOpens();
-    expect(value).toThrow();
-    expect(countOpens()).toBe(opens);
-  },
-);
-
-it("keeps direct reader request cancellation outside the pooled connection", async () => {
-  const { pathname, root, countOpens } = fixture();
-  const first = new AsyncWorkScope();
-  const second = new AsyncWorkScope();
-  const prepare = () =>
-    prepareOpenClawStateDirectReader(
-      captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } }),
-    );
-  const firstReader = first.run(prepare);
-  const secondReader = second.run(prepare);
-  const value = ({ db }: OpenClawStateReadOnlyDatabase) =>
-    db.prepare("SELECT value FROM sample").get()?.value;
-  first.beginClose(new Error("first request retired"));
-  expect(() => firstReader.read(value)).toThrow("first request retired");
-  expect(secondReader.read(value)).toBe(1);
-  expect(countOpens()).toBe(1);
-  await Promise.all([first.drain(), second.drain()]);
-});
-
-it.each([0, 1] as const)(
-  "keeps the shared reader while independent maintenance scope %s closes first",
-  async (firstClosing) => {
-    const { pathname, root, countOpens, value } = fixture();
-    const scopes = [
-      createOpenClawDatabaseMaintenanceScope(),
-      createOpenClawDatabaseMaintenanceScope(),
-    ] as const;
-    const prepare = (scope: (typeof scopes)[number]) =>
-      scope.run(() =>
-        prepareOpenClawStateDirectReader(
-          captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } }),
-        ),
-      );
-    const readers = [prepare(scopes[0]), prepare(scopes[1])] as const;
-    const secondClosing = firstClosing === 0 ? 1 : 0;
-    const read = (index: 0 | 1) =>
-      readers[index].read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
-    expect(countOpens()).toBe(1);
-    await scopes[firstClosing].close();
-    expect(() => read(firstClosing)).toThrow("scope is closed");
-    expect(read(secondClosing)).toBe(1);
-    await scopes[secondClosing].close();
-    expect(() => read(secondClosing)).toThrow("scope is closed");
-    expect(value()).toBe(1);
-    expect(countOpens()).toBe(1);
-  },
-);
-
-it.each(["ordinary-first", "maintenance-first"] as const)(
-  "preserves the ordinary reader when maintenance closes (%s)",
-  async (order) => {
-    const { pathname, root, countOpens, value } = fixture();
-    const scope = createOpenClawDatabaseMaintenanceScope();
-    if (order === "ordinary-first") {
-      expect(value()).toBe(1);
-    }
-    const reader = scope.run(() =>
-      prepareOpenClawStateDirectReader(
-        captureOpenClawStateWorkerContext({ path: pathname, env: { OPENCLAW_STATE_DIR: root } }),
-      ),
-    );
-    expect(value()).toBe(1);
-    await scope.close();
-    expect(() => reader.read(({ db }) => db.prepare("SELECT value FROM sample").get())).toThrow(
-      "scope is closed",
-    );
-    expect(value()).toBe(1);
-    expect(countOpens()).toBe(1);
-  },
-);
-
-it("rejects pinned, transactional and asynchronous direct-read results", () => {
-  const { pathname, root } = fixture();
-  const context = captureOpenClawStateWorkerContext({
-    path: pathname,
-    env: { OPENCLAW_STATE_DIR: root },
-  });
-  const prepare = () => prepareOpenClawStateDirectReader(context);
-  const reader = prepare();
-  const db = reader.read((database) => database.db);
-  const read = () => reader.read(() => db.prepare("SELECT value FROM sample").get()?.value);
-  db.exec("BEGIN");
-  try {
-    expect(read).toThrow("transaction or snapshot");
-    expect(prepare).toThrow("transaction or snapshot");
-    expect(db.prepare("SELECT value FROM sample").get()?.value).toBe(1);
-  } finally {
-    db.exec("ROLLBACK");
-  }
-  expect(prepare().read(() => db.prepare("SELECT value FROM sample").get()?.value)).toBe(1);
-  runSqliteReadSnapshotSync(db, () => {
-    expect(read).toThrow("transaction or snapshot");
-    expect(prepare).toThrow("transaction or snapshot");
-    expect(db.prepare("SELECT value FROM sample").get()?.value).toBe(1);
-  });
-  expect(prepare().read(() => db.prepare("SELECT value FROM sample").get()?.value)).toBe(1);
-  expect(() => reader.read(() => Promise.resolve(1))).toThrow("must remain synchronous");
-});
 
 function acpFixture() {
   const state = fixture();

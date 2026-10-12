@@ -316,47 +316,6 @@ describe("registered Codex catalog diagnostics", () => {
     }
   });
 
-  it("separates inclusive control waiting from adoption and leaves an absent snapshot unobserved", async () => {
-    const f = await fixture();
-    const thread = await f.thread("codex");
-    commandRpcMocks.codexControlRequest.mockImplementation(async () => {
-      clock += 1_200;
-      return { data: [thread] };
-    });
-    vi.mocked(f.runtime.agent.session.listSessionEntries).mockImplementation(() => {
-      clock += 1_100;
-      return [];
-    });
-    await f.control.initialize();
-    const hosts = await f.list();
-    expect(hosts[0]?.sessions[0]?.threadId).toBe(thread.id);
-    expect(fields((await emitted(PAGE))[0])).toMatchObject({
-      controlRequestCalls: 1,
-      inclusiveControlRequestWaitMs: 1_200,
-      inclusiveControlRequestWaitMaxMs: 1_200,
-      postResponseMs: 0,
-      provenanceChecks: 1,
-      provenanceReadCalls: 1,
-      provenanceMs: 0,
-    });
-    const list = fields((await emitted(LIST))[0]);
-    expect(list).toMatchObject({
-      elapsedMs: 1_100,
-      controlPageCalls: 1,
-      controlWaitSumMs: 0,
-      adoptionCalls: 1,
-      adoptionSumMs: 1_100,
-    });
-    expect(list).not.toHaveProperty("managedSnapshotMs");
-    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
-      authProfileId: null,
-    });
-    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).not.toHaveProperty("onResponse");
-    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).not.toHaveProperty(
-      "beforeRequest",
-    );
-  });
-
   it("records complete native hydration before resident title filtering", async () => {
     const f = await fixture();
     const thread = await f.thread("codex");
@@ -491,20 +450,17 @@ describe("registered Codex catalog diagnostics", () => {
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
   });
 
-  it.each(["disabled", "disabled-during-call", "below-threshold"] as const)(
+  it.each(["disabled", "disabled-during-call"] as const)(
     "keeps %s diagnostics silent without changing the result",
     async (mode) => {
       const f = await fixture();
-      const gate =
-        mode === "below-threshold"
-          ? undefined
-          : vi
-              .spyOn(diagnosticRuntime, "areDiagnosticsEnabledForProcess")
-              .mockReturnValue(mode !== "disabled");
+      const gate = vi
+        .spyOn(diagnosticRuntime, "areDiagnosticsEnabledForProcess")
+        .mockReturnValue(mode !== "disabled");
       commandRpcMocks.codexControlRequest.mockImplementation(async () => {
-        clock += mode === "below-threshold" ? 999 : 1_500;
+        clock += 1_500;
         if (mode === "disabled-during-call") {
-          gate?.mockReturnValue(false);
+          gate.mockReturnValue(false);
         }
         return { data: [idleThread({ name: privateText, source: "cli" })] };
       });

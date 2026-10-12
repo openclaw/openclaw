@@ -101,9 +101,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     throw new Error("Transcript anchor message selection requires prepared display policy");
   }
   const read = (): SessionTranscriptAnchorFacts => {
-    const readWatermark = () =>
-      projection
-        ? { generation: projection.version.generation, maxSeq: projection.version.rawSeq }
+    const readWatermark = (currentProjection = projection) =>
+      currentProjection
+        ? {
+            generation: currentProjection.version.generation,
+            maxSeq: currentProjection.version.rawSeq,
+          }
         : readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId);
     const contextEntry = selection.contextAuthority
       ? (preparedEntry ?? readSessionEntryRow(database, resolved.sessionKey)?.entry)
@@ -175,11 +178,6 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       ...(selection.includeMessagePresence
         ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
         : {}),
-      ...(selection.includeWatermark
-        ? {
-            watermark: contextAuthority?.watermark ?? readWatermark(),
-          }
-        : {}),
       ...(contextAuthority ? { contextAuthority } : {}),
       ...(context ? { contextValidated: true as const } : {}),
       ...(replayValidated ? { replayValidated } : {}),
@@ -201,6 +199,11 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       }
     }
     const readAnchors = (currentProjection?: CurrentTranscriptProjection) => {
+      const watermark = selection.includeWatermark
+        ? {
+            watermark: contextAuthority?.watermark ?? readWatermark(currentProjection),
+          }
+        : {};
       const anchors = new Map<string, TranscriptEntryAnchor | undefined>();
       const readAnchor = (entryId: string) => {
         if (!anchors.has(entryId)) {
@@ -216,7 +219,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       };
       const selected = selection.entryIds.flatMap((entryId) => readAnchor(entryId) ?? []);
       if (selection.afterSeq === undefined) {
-        return { anchors: selected, ...validated, ...sessionFacts, ...header };
+        return { anchors: selected, ...validated, ...watermark, ...sessionFacts, ...header };
       }
       const rows = loadTranscriptEventRowsAfterSeqInDatabase(
         database,
@@ -256,6 +259,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
           ? [...anchors.values()].flatMap((anchor) => anchor ?? [])
           : selected,
         ...validated,
+        ...watermark,
         ...sessionFacts,
         ...header,
         tail: { lastSeq: rows.at(-1)?.seq, entries },

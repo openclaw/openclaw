@@ -5,11 +5,11 @@ import {
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  buildUsageFilterOptions,
   removeQueryToken,
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
+import { buildUsageFilterOptions } from "./view.test-support.ts";
 
 describe("usage query token mutations", () => {
   const quotedLabel = 'label:"Team  Planning"';
