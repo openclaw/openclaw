@@ -77,6 +77,12 @@
 - Prefer grammY primitives and Telegram-native helpers when they model the
   behavior directly. Avoid custom Bot API wrappers for behavior grammY already
   owns.
+- Throttling is bot-token scoped. All Telegram API clients for the same token
+  share one limiter owned by `account-throttler.ts`. The limiter mirrors
+  grammY `apiThrottler()` defaults (upstream does not expose its Bottleneck
+  instances for disposal); the account lifecycle disconnects the retired
+  token's limiter on token rotation and account removal, unless another
+  account still uses the token.
 - Do not silently retry failed topic sends without topic metadata. A
   wrong-surface success is worse than a loud Telegram error.
 - DM topics and forum topics are distinct. `direct_messages_topic_id` and

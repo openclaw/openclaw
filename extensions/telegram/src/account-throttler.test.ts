@@ -1,8 +1,12 @@
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
-import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  getOrCreateAccountThrottler,
+  releaseAccountThrottler,
+  runReplaceableTelegramRequest,
+} from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
@@ -512,4 +516,56 @@ it("uses strict decimal string ids for fair group lanes", async () => {
   await Promise.all([first, sameTopic, otherTopic]);
 
   expect(entered).toEqual(["+10:first", "0x20:hex", "+10:second"]);
+});
+
+describe("releaseAccountThrottler", () => {
+  beforeEach(() => {
+    resetTelegramAccountThrottlersForTest();
+  });
+
+  const ownedFactory =
+    (dispose: () => Promise<void>) =>
+    (): { transformer: TelegramTransform; dispose: () => Promise<void> } => ({
+      transformer: (async (prev, method, payload, signal) =>
+        prev(method, payload, signal)) as TelegramTransform,
+      dispose,
+    });
+
+  it("returns false when the token has no cached throttler", async () => {
+    await expect(releaseAccountThrottler("never-created")).resolves.toBe(false);
+  });
+
+  it("drops the cache entry so the next lookup creates a fresh throttler", async () => {
+    const dispose = vi.fn(async () => {});
+    const first = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
+
+    expect(getOrCreateAccountThrottler("released-token", ownedFactory(dispose))).toBe(first);
+
+    await expect(releaseAccountThrottler("released-token")).resolves.toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const recreated = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
+    expect(recreated).not.toBe(first);
+  });
+
+  it("releases the default grammY-backed throttler for recycling", async () => {
+    const first = getOrCreateAccountThrottler("default-release");
+
+    await expect(releaseAccountThrottler("default-release")).resolves.toBe(true);
+
+    expect(getOrCreateAccountThrottler("default-release")).not.toBe(first);
+  });
+
+  it("keeps releasing other tokens independent", async () => {
+    const disposeA = vi.fn(async () => {});
+    const disposeB = vi.fn(async () => {});
+    getOrCreateAccountThrottler("token-a", ownedFactory(disposeA));
+    getOrCreateAccountThrottler("token-b", ownedFactory(disposeB));
+
+    await expect(releaseAccountThrottler("token-a")).resolves.toBe(true);
+
+    expect(disposeA).toHaveBeenCalledOnce();
+    expect(disposeB).not.toHaveBeenCalled();
+    expect(getOrCreateAccountThrottler("token-b", ownedFactory(disposeB))).toBeDefined();
+  });
 });
