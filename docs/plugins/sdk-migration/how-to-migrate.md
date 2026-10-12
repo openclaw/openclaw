@@ -637,12 +637,15 @@ storage effect; it does not move arbitrary database callbacks to a worker.
 Use `wrapNativeSessionDeletionMutation` when adding live-authority or settlement
 hooks to either participant, so the wrapper preserves its worker ownership.
 
-Direct unbound callbacks retain their synchronous transaction and rollback
-behavior for compatibility, warn once per plugin and native-session-deletion
-family per Gateway process, and will be **removed in the next Plugin SDK
+During durable Gateway deletion, direct unbound callbacks run only after the
+worker acknowledges the session commit; their rollback callback is not used.
+Cleanup failures warn without undoing deletion, and a process exit can leave
+cleanup unfinished. Stopped-owner maintenance and process-local incognito
+deletion retain their native transaction contract. Legacy callbacks warn once
+per plugin and callback family and will be **removed in the next Plugin SDK
 major**. Factory-produced participants and the two harness hooks remain
-supported. This migration changes no schema, stored format, retention, or
-update behavior.
+supported. See [deletion companions](/plugins/sdk-migration/compatibility-policy#harness-deletion-companions).
+This migration changes no schema, stored format, retention, or update behavior.
 
 ## Await session upstream links
 

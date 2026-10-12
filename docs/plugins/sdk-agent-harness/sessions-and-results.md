@@ -62,10 +62,14 @@ For stored native bindings, use `createNativeSessionBindingLifecycleV2` so core
 can commit deletion and rollback through its worker participant. Use
 `createNativeSessionCommitFinalizer` for effects that only run after commit.
 Opaque `run({ commit, rollback })` callbacks remain deprecated compatibility:
-core invokes their synchronous `commit()` at the session row deletion boundary
-and `rollback()` if the transaction fails. Rollback must tolerate a failed or
-unapplied commit. Keep asynchronous subscription cleanup after `run`; do not
-restore bindings for errors after the session transaction committed.
+for durable Gateway deletion, core invokes `commit()` only after the worker
+acknowledges the session commit and does not call `rollback()` for a failed
+database write. Legacy cleanup failures warn without undoing deletion; cleanup
+must tolerate an absent session and be safe to retry after a process exit.
+Stopped-owner maintenance and process-local incognito deletion retain their
+native transaction contract. Keep asynchronous subscription cleanup after `run`;
+do not restore bindings after the session transaction committed. See
+[deletion companions](/plugins/sdk-migration/compatibility-policy#harness-deletion-companions).
 
 Recheck `params.assertCurrent()` after awaited work and immediately before
 mutating native state. The callback belongs to one registered harness lifetime;
