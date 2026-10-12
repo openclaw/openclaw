@@ -593,12 +593,23 @@ describe("Playwright created-page ownership", () => {
 
   function installBrowserMocks() {
     const openPages: Page[] = [];
-    const sessionSend = vi.fn(async (_method: string) => targetInfo);
+    let closed = false;
+    const sessionSend = vi.fn(async (method: string) =>
+      method === "Page.getFrameTree"
+        ? {
+            frameTree: {
+              frame: { id: "FRAME_1", loaderId: "LOADER_1", url: page.url() },
+            },
+          }
+        : targetInfo,
+    );
     const pageMock = {
+      isClosed: () => closed,
       on: vi.fn(),
       context: () => context,
       goto: vi.fn(async () => null),
       close: vi.fn(async () => {
+        closed = true;
         openPages.splice(openPages.indexOf(page), 1);
       }),
       title: async () => "",
@@ -617,6 +628,7 @@ describe("Playwright created-page ownership", () => {
         return page;
       }),
       close: vi.fn(async () => {
+        closed = true;
         openPages.length = 0;
       }),
       newCDPSession: async () => ({ send: sessionSend, detach: async () => {} }),
