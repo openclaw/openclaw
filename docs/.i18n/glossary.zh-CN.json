@@ -968,6 +968,14 @@
     "target": "SSH 后端"
   },
   {
+    "source": "smol backend",
+    "target": "smol 后端"
+  },
+  {
+    "source": "Smol plugin reference",
+    "target": "Smol 插件参考"
+  },
+  {
     "source": "OpenShell backend",
     "target": "OpenShell 后端"
   },

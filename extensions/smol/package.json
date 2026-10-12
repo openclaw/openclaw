@@ -1,0 +1,38 @@
+{
+  "name": "@openclaw/smol-sandbox",
+  "version": "2026.9.9",
+  "description": "OpenClaw sandbox backend that runs each sandbox as a smol machine: a real Linux microVM on the Gateway host (macOS, Linux, Windows) or on smol cloud, with the workspace mounted like the Docker backend and no container runtime required.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/smol-sandbox",
+      "npmSpec": "@openclaw/smol-sandbox",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.9.9"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.9"
+    },
+    "build": {
+      "openclawVersion": "2026.9.9",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
