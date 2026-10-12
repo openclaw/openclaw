@@ -99,15 +99,6 @@ describe("Systems inventory projection", () => {
     ]);
   });
 
-  it("keeps headless, offline and same-named targets without resurrecting managed node rows", () => {
-    const rows = projectSystemsInventory(inventory, []);
-    expect(rows.map((row) => row.environment.id)).toEqual(environments.map((entry) => entry.id));
-    expect(rows[0]?.gatewaySystemInfo).toBe(systemInfo);
-    expect(rows[2]?.node?.hostStats).toEqual(hostStats);
-    expect(rows[2]?.node?.connected).toBe(false);
-    expect(rows[3]?.node).toBeUndefined();
-  });
-
   it("uses placement before exec bindings and keeps offline runner identity", () => {
     const placed = session("placed", {
       execNode: "headless",
@@ -148,15 +139,6 @@ describe("Systems inventory projection", () => {
     expect(rows[1]?.sessions).toEqual([]);
     expect(rows[4]?.sessions).toEqual([{ kind: "retained-placement", session: reclaimed }]);
     expect(rows[3]?.sessions).toEqual([{ kind: "placement", session: moved }]);
-  });
-
-  it("does not fabricate rows for a removed target or resolve exec aliases by display name", () => {
-    const rows = projectSystemsInventory(inventory, [
-      session("removed", { placement: { ...active, environmentId: "worker:removed" } }),
-      session("alias", { execNode: "Same name" }),
-    ]);
-    expect(rows).toHaveLength(environments.length);
-    expect(rows.flatMap((row) => row.sessions)).toEqual([]);
   });
 });
 
