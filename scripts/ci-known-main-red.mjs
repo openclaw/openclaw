@@ -137,6 +137,107 @@ async function jobFailures(api, job, requireComplete = true) {
     : parseStaticFailureReport(log, kind, requireComplete);
 }
 
+export async function readCiRunJobs(options, run) {
+  return runJobs(client(options), run);
+}
+
+/** Attribution is advisory; the stricter gate exemption below keeps its own admission rules. */
+export function createMainFailureClassifier(options) {
+  const api = client(options);
+  let evidence;
+  const baseline = async () => {
+    let run;
+    try {
+      [run] = await latestMainRuns(api, options.repository);
+      if (!run) {
+        return { reason: "No completed scheduled main CI run" };
+      }
+      return { run, jobs: await runJobs(api, run) };
+    } catch {
+      return { run, reason: "Main CI evidence unavailable" };
+    }
+  };
+  const mainSignatures = new Map();
+  return {
+    async classifyJob(job) {
+      evidence ??= baseline();
+      const main = await evidence;
+      const result = {
+        job: job.name,
+        conclusion: job.conclusion,
+        class: "unknown",
+        mainRunId: main.run?.id ?? null,
+        mainJobId: null,
+        reason: main.reason ?? "No matching job on main",
+      };
+      const matches = main.jobs?.filter((candidate) => candidate.name === job.name) ?? [];
+      if (matches.length !== 1) {
+        if (matches.length > 1) {
+          result.reason = "Multiple matching jobs on main";
+        }
+        return result;
+      }
+      const [mainJob] = matches;
+      result.mainJobId = mainJob.id;
+      if (mainJob.status !== "completed") {
+        return { ...result, reason: "Matching main job is incomplete" };
+      }
+      if (mainJob.conclusion === "success") {
+        return { ...result, class: "new", reason: "Matching main job passed" };
+      }
+      if (!["failure", "timed_out"].includes(mainJob.conclusion)) {
+        return { ...result, reason: "Matching main job has no comparable result" };
+      }
+      if (job.status !== "completed" || !["failure", "timed_out"].includes(job.conclusion)) {
+        return { ...result, reason: "PR job has no completed failure" };
+      }
+      const hasSignatures =
+        job.name.startsWith("checks-node-") ||
+        [
+          "Run check shard",
+          "Run changed lint",
+          "Run hosted core test-types stripe",
+          "Run hosted core lint stripe",
+          "Run hosted extension lint stripe",
+        ].some((step) => staticCheck(job.name, step) !== null);
+      if (!hasSignatures) {
+        return {
+          ...result,
+          class: "pre-existing",
+          reason: "Same job failed on main; no signature comparison is available for this job",
+        };
+      }
+      if (job.conclusion === "timed_out" || mainJob.conclusion === "timed_out") {
+        return { ...result, reason: "Timed-out job has no complete failure signatures" };
+      }
+      try {
+        if (!mainSignatures.has(mainJob.id)) {
+          mainSignatures.set(mainJob.id, jobFailures(api, mainJob, false));
+        }
+        const [current, previous] = await Promise.all([
+          jobFailures(api, job, false),
+          mainSignatures.get(mainJob.id),
+        ]);
+        if (current.length === 0 || previous.length === 0) {
+          return { ...result, reason: "Failure signatures unavailable or incomplete" };
+        }
+        const currentSet = new Set(current.map((entry) => JSON.stringify(entry)));
+        const previousSet = new Set(previous.map((entry) => JSON.stringify(entry)));
+        const same =
+          currentSet.size === previousSet.size &&
+          [...currentSet].every((signature) => previousSet.has(signature));
+        return {
+          ...result,
+          class: same ? "pre-existing" : "new",
+          reason: same ? "Failure signatures match main" : "Failure signatures differ from main",
+        };
+      } catch {
+        return { ...result, reason: "Failure signatures unavailable" };
+      }
+    },
+  };
+}
+
 async function readMainFailures(api, run) {
   const jobs = await runJobs(api, run);
   const signatures = [];
@@ -328,17 +429,6 @@ export function createKnownMainRed(options) {
     };
   };
   return {
-    canClassifyJob(job) {
-      return (
-        job.name.startsWith("checks-node-") ||
-        [
-          "Run check shard",
-          "Run hosted core test-types stripe",
-          "Run hosted core lint stripe",
-          "Run hosted extension lint stripe",
-        ].some((step) => staticCheck(job.name, step, true) !== null)
-      );
-    },
     async classifyJob(job) {
       try {
         const signatures = await jobFailures(api, job);

@@ -323,24 +323,15 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
   API and job deadlines remain unchanged.
-  The aggregate preserves failure-triggered PR cancellation through the
-  `pr-fail-fast` cause outputs; superseded runs without a failure cause still
-  skip the aggregate. Canonical PR Node matrices disable native fail-fast on
-  every attempt; reruns complete every leg so inherited main failures leave the
-  remaining admin-landing proof intact. Native fail-fast applies only to PRs in
-  other workflow repositories. Historical runs retain their tested policy. The same-repository
-  PR first-attempt monitor alone has `actions: write` and adds one 4-class registration per
-  eligible PR, or uses hosted Ubuntu under the outage override. Main/manual
-  matrices remain complete. The monitor starts after preflight, observes failures
-  while the installed check planner waits, and uses the planner's successful
-  versioned count step for exact inventory rather than its early reservations.
-  With that inventory and exactly one unfinished job, it retires: no sibling work
-  remains to cancel. The aggregate still awaits and checks the final job;
-  polling bounds and cancellation authority stay unchanged.
-  Existing critical-path routing serves hybrid failures; only the uncovered
-  default/explicit-Blacksmith failure case adds the same 4-class route. Retries,
-  ordinary manual dispatches and the GitHub override retain hosted aggregation.
-  The monitor consumes one existing non-Node reserve slot: the 71-row union
+  PR jobs finish after sibling failures. `pr-failure-report` waits for the
+  planned jobs and reuses `ci-known-main-red.mjs` to classify each failed or
+  timed-out job against the newest completed scheduled main CI run. Matching
+  job names/shards and supported failure signatures are pre-existing; a main
+  pass or different signature is new; missing jobs or evidence are unknown.
+  Its table and JSON output reach `openclaw/ci-gate`; the existing gate result
+  and known-main-red allowance stay unchanged. Superseded-run cancellation,
+  runner routes, concurrency and fanout caps remain unchanged. The report
+  consumes one existing non-Node reserve slot: the 71-row union
   leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
 
 - Automatic canonical hybrid first attempts count every selected hosted row in

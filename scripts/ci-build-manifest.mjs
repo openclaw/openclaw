@@ -1657,9 +1657,8 @@ if (hybridHostedEligible) {
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification),
     "check-plan": count(hostedPlanner && runCheckPlan),
-    "pr-fail-fast": count(
+    "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        manifest.run_checks_node_core_nondist &&
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
@@ -1798,69 +1797,6 @@ if (hybridHostedEligible) {
     `Hybrid hosted rows: ${manifest.hybrid_hosted_base_rows} base, ${manifest.hybrid_hosted_total_rows} total; optional offload ${hybridHostedOffload ? "admitted" : "retained on Blacksmith"}; measured checks ${hybridHostedChecks ? "admitted" : "retained on Blacksmith"}; main checks ${hybridHostedMainChecks ? "admitted" : "retained on Blacksmith"}`,
   );
 }
-
-// The PR monitor must see the whole selected graph before declaring it
-// complete; an early jobs response can omit not-yet-expanded matrices.
-const countPrJobs = (selected, rows = 1) => (selected ? rows : 0);
-manifest.pr_check_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : countPrJobs(manifest.run_check, manifest.check_matrix.include.length) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_core && usesHostedRunnerProfile,
-        manifest.lint_core_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check && manifest.run_lint_extensions && runnerProfile === "hybrid",
-        manifest.lint_extension_matrix.include.length,
-      ) +
-      countPrJobs(
-        manifest.run_check &&
-          usesHostedRunnerProfile &&
-          (!manifest.narrow_check_paths_json || manifest.run_changed_core_type_stripes),
-        manifest.core_type_matrix.include.length,
-      );
-manifest.pr_job_count =
-  workflowEventName !== "pull_request"
-    ? 0
-    : 2 +
-      countPrJobs(sharedSdkDeclarations) +
-      countPrJobs(manifest.run_check_plan) +
-      manifest.pr_check_job_count +
-      [
-        "run_build_artifacts",
-        "run_control_ui_performance",
-        "run_native_i18n",
-        "run_control_ui_i18n",
-        "run_baseline_ratchets",
-        "run_check_docs",
-        "run_skills_python_job",
-        "run_docker_seed_e2e",
-        "run_published_driver_update",
-      ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
-      [
-        ["run_checks_fast_core", "checks_fast_core_matrix"],
-        ["run_plugin_contracts_shards", "plugin_contracts_matrix"],
-        ["run_channel_contracts_shards", "channel_contracts_matrix"],
-        ["run_checks_node_core_nondist", "checks_node_core_nondist_matrix"],
-        ["run_check_additional", "check_additional_matrix"],
-        ["run_checks_windows", "checks_windows_matrix"],
-        ["run_macos_node", "macos_node_matrix"],
-        ["run_android_job", "android_matrix"],
-        ["run_qa_smoke_ci", "qa_smoke_ci_matrix"],
-        ["run_ui_e2e", "ui_e2e_matrix"],
-      ].reduce(
-        (sum, [selected, matrix]) =>
-          sum + countPrJobs(manifest[selected], manifest[matrix].include.length),
-        0,
-      ) +
-      countPrJobs(manifest.run_ui_tests, uiTestShardCount) +
-      countPrJobs(manifest.run_macos_swift, 2) +
-      countPrJobs(manifest.run_ios_build) +
-      (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
-      countPrJobs(manifest.run_android_access_native, 2) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
-      countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(

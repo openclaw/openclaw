@@ -32,15 +32,12 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-First-attempt PR Node matrices let the scoped monitor classify failures before
-cancelling eligible same-repository work. Fork monitoring is read-only. Exact
-known hourly-main test and supported static failures can remain advisory when the PR leaves their
-subjects unchanged and all remaining checks finish. Canonical PR reruns let every
-Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
-run to keep its complete matrix running after a failure. Native matrix fail-fast
-applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
-[failure cancellation](/ci/pipeline#fail-fast-order).
+PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+every failed or timed-out job with the newest completed scheduled main CI run
+and publishes a **pre-existing**, **new**, or **unknown** classification in its
+summary and `openclaw/ci-gate`, with machine-readable JSON output. The existing
+known-main-red allowance and gate result stay unchanged. See
+[job ordering and failure reporting](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -306,7 +303,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| [CI pipeline jobs](/ci/pipeline)                               | The job table, the fail-fast order, and the Control UI size budgets.                                                |
+| [CI pipeline jobs](/ci/pipeline)                               | The job table, job ordering and failure reporting, and the Control UI size budgets.                                 |
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
@@ -321,7 +318,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/ci#pipeline-overview` still resolves. Each entry points at the page that now holds the content.
 
 - <a id="pipeline-overview" />[Pipeline overview](/ci/pipeline#pipeline-overview)
-- <a id="fail-fast-order" />[Fail-fast order](/ci/pipeline#fail-fast-order)
+- <a id="fail-fast-order" />[Job ordering and failure reporting](/ci/pipeline#fail-fast-order)
 - <a id="control-ui-size-budgets" />[Control UI size budgets](/ci/pipeline#control-ui-size-budgets)
 - <a id="watching-pull-request-ci" />[Watching pull request CI](/ci/watching-runs#watching-pull-request-ci)
 - <a id="recover-an-existing-pr-run-first" />[Recover an existing PR run first](/ci/watching-runs#recover-an-existing-pr-run-first)
