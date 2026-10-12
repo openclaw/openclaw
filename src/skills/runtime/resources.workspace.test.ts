@@ -24,6 +24,7 @@ import {
   resolveExplicitSkillResource,
   stampLocalSkillBundleIdentities,
   SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
+  SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS,
   SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY,
 } from "./resources.js";
 
@@ -589,12 +590,13 @@ it("omits an identity whose resource-reader walk cannot be established promptly"
       // unstamped and still arms delivery-time acquisition for its live tree.
       expect(entry.bundleFingerprint).toBeUndefined();
       expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
-      // The armed acquirer observes the same deadline: a second hung walk
-      // omits the delivered identity instead of stalling the settlement.
+      // The armed acquirer observes the opportunistic delivery-time bound:
+      // a second hung walk omits the delivered identity instead of stalling
+      // the settlement by the full preparation budget.
       f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
       const guideText = await fs.readFile(path.join(f.host, "skills", "guide", "SKILL.md"), "utf8");
       const acquired = stamped.deliveredIdentityAcquirers.get(entry)!(guideText);
-      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+      await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
       expect(await acquired).toBeUndefined();
     } finally {
       vi.useRealTimers();

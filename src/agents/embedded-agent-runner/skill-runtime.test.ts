@@ -14,7 +14,7 @@ import {
 import { prepareSkillBundle, readSkillBundleTree } from "../../skills/library/bundle.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import {
-  SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
+  SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS,
   readSkillResourceFiles,
   stampLocalSkillBundleIdentities,
 } from "../../skills/runtime/resources.js";
@@ -583,15 +583,16 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       )!;
       const acquirer = prepared.skillDeliveredIdentityAcquirers?.get(entry);
       expect(acquirer).toBeDefined();
-      // The resource-reader boundary is deadline-bound: a tree walk that
-      // cannot establish the identity promptly omits instead of holding the
-      // serving delivery's settlement.
+      // The delivery-time acquisition is opportunistic: a tree walk that
+      // cannot establish the identity within the short delivery bound omits
+      // instead of holding the serving delivery's settlement by the full
+      // preparation budget.
       readSkillBundleTreeSpy.mockClear();
       readSkillBundleTreeSpy.mockImplementationOnce(() => new Promise<never>(() => {}));
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const acquired = acquirer!("# Pond\ncomplete instructions");
-        await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+        await vi.advanceTimersByTimeAsync(SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS + 1);
         expect(await acquired).toBeUndefined();
       } finally {
         vi.useRealTimers();

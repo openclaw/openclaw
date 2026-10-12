@@ -136,11 +136,19 @@ const localSkillResourceReader: SkillResourceSourceReader = {
  * tree walk that cannot establish the bundle promptly omits the identity
  * instead of holding up turn preparation or a completed delivery. Preparation
  * discovery walks share one budget across all of a preparation's bundles, so
- * a slow reader delays traced turn startup at most once; delivery acquisitions
- * observe the same full budget individually. It never bounds
+ * a slow reader delays traced turn startup at most once. It never bounds
  * resource-integrity reads.
  */
 export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 15_000;
+
+/**
+ * Opportunistic bound on delivery-time identity acquisition: the serving
+ * boundary consults telemetry only while a completed read waits, so a slow or
+ * remote reader gets this small budget per delivery — never the full
+ * preparation budget — and the fingerprint omits instead of delaying the
+ * served instructions by more than this.
+ */
+export const SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS = 250;
 
 /**
  * Bound on in-flight telemetry walks per preparation: discovery and delivery
@@ -335,8 +343,13 @@ export async function stampLocalSkillBundleIdentities(params: {
       // from before a clear or an edit inside it.
       const acquiringKey = cohort === undefined ? directory : `${directory}\u0000${cohort}`;
       const inFlight = caches.acquiring.get(acquiringKey);
+      // Delivery acquisition is opportunistic: it observes the short
+      // delivery-time bound, never the full preparation budget, so a slow
+      // or remote reader delays a completed read by at most that bound —
+      // the fingerprint omits rather than holds up the served instructions.
       const acquisition =
-        inFlight ?? readBundleIdentity(skill, reader, SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS);
+        inFlight ??
+        readBundleIdentity(skill, reader, SKILL_DELIVERED_FINGERPRINT_ACQUISITION_TIMEOUT_MS);
       if (!inFlight) {
         caches.acquiring.set(acquiringKey, acquisition);
         void acquisition.then(() => caches.acquiring.delete(acquiringKey));

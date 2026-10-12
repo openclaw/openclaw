@@ -2452,6 +2452,70 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("drops a skills_read receipt whose acquisition crossed an epoch clear", async () => {
+    const delivery = createSkillDeliveryState();
+    const acquirer = vi.fn(async () => {
+      // The epoch clears while the acquisition is pending: the invocation
+      // started in a cleared generation.
+      delivery.markers.clear();
+      return "fp-crossed-clear";
+    });
+    const skills = [
+      {
+        name: "pond",
+        description: "Pond skill",
+        location: pondLocator,
+        source: { filePath: pondLocator },
+        promptListed: true,
+        acquireDeliveredFingerprint: acquirer,
+        reader: async () => pondInstructions,
+      },
+    ];
+    const tools = createInstalledSkillTools(skills, {
+      skillInstructionDeliveryMarkers: delivery.markers,
+    });
+    const skillsReadTool = tools.find((tool) => tool.name === "skills_read")!;
+    const tool = wrapToolWithBeforeToolCallHook(
+      skillsReadTool,
+      createSkillFingerprintContext({
+        delivery,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "pond" }],
+          resolvedSkills: [
+            {
+              ...createCanonicalFixtureSkill({
+                name: "pond",
+                description: "Pond skill",
+                filePath: pondLocator,
+                baseDir: pondBaseDir,
+                source: "workspace",
+              }),
+            },
+          ],
+        },
+      }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "crossed-clear-skills",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      // The acquisition ran and resolved, but it crossed a clear: a pending
+      // acquisition never bridges the epoch, so no receipt is captured for
+      // the fresh generation to consume.
+      expect(acquirer).toHaveBeenCalledOnce();
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
   it("omits a command fingerprint whose source is not the dispatched command's own", async () => {
     const delivery = createSkillDeliveryState();
     const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));

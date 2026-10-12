@@ -136,7 +136,16 @@ export function createInstalledSkillTools(
           }
           signal?.throwIfAborted();
           skills.find((entry) => entry.name === name)?.assertCurrent?.();
-          if (markers && fingerprint && typeof toolCallId === "string") {
+          if (
+            markers &&
+            fingerprint &&
+            typeof toolCallId === "string" &&
+            // An epoch clear that landed while the acquisition was pending
+            // owns the markers now: this invocation started in a cleared
+            // generation, so it never captures a receipt the next generation
+            // could consume — a pending acquisition never bridges a clear.
+            (invocationCohort === undefined || markers.generation() === invocationCohort)
+          ) {
             // The receipt rides the invocation: the matcher consumes it at
             // emission instead of borrowing a preparation-time snapshot stamp.
             markers.captureInvocationFingerprint(toolCallId, fingerprint);

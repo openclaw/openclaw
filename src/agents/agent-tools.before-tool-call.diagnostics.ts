@@ -425,6 +425,13 @@ export function findSkillUsageMatch(params: {
         // source family never lends its file or stamp to the command.
         exactSource: true,
       });
+      // Direct tool dispatch (tool-dispatch) supplies the session-preparation
+      // snapshot, which no bundle-identity producer stamps: coverage on that
+      // route omits by design — a command fingerprint exists only when this
+      // snapshot's resolved entry itself carries a retained-generation stamp
+      // (the embedded-attempt producer) and the dispatched file matches it.
+      // Adding a stamp there would be a new delivery producer; see the PR's
+      // coverage table for the documented omission.
       const commandFile = canonicalSkillFile(command.skillFile);
       const skillFile = commandFile ?? snapshotMatch?.skillFile;
       // The dispatched command file must be the stamped resolved entry's own
