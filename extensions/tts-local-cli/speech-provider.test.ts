@@ -289,57 +289,64 @@ describe("buildCliSpeechProvider", () => {
     ).toMatchObject({ command: "real-command", voiceId: "af_bella" });
   });
 
-  it("lists voices declared under talk.providers when the request config omits them", async () => {
-    const voices = await buildCliSpeechProvider().listVoices?.({
-      cfg: {
-        talk: {
-          providers: { "tts-local-cli": { command: "x", voices: ["af_jessica", "am_michael"] } },
+  it("lets a Talk selection beat a speaker alias inherited from the TTS default", async () => {
+    const script = createCliFixture();
+    const resolved = buildCliSpeechProvider().resolveTalkConfig?.({
+      cfg: TEST_CFG,
+      // Core normalizes the base record before Talk resolution, so the TTS
+      // default arrives with `speakerVoiceId`, which outranks `voiceId`.
+      baseTtsConfig: {
+        providers: {
+          "tts-local-cli": {
+            ...baseProviderConfig(script, {
+              args: [script, "--out", "{{OutputPath}}", "--voice", "{{VoiceId}}"],
+            }),
+            voices: ["af_jessica", "af_bella"],
+            voiceId: "af_jessica",
+            speakerVoiceId: "af_jessica",
+          },
         },
-      } as never,
-      providerConfig: { command: "x" },
+      },
+      talkProviderConfig: { voiceId: "af_bella" },
+      timeoutMs: 1000,
     });
 
-    expect(voices).toEqual([
+    expect(resolved).toMatchObject({ voiceId: "af_bella" });
+    expect(resolved).not.toHaveProperty("speakerVoiceId");
+    const result = await synthesize(resolved ?? {});
+    expectArgsContainSequence(parseAudioPayload(result).args, ["--voice", "af_bella"]);
+  });
+
+  it("keeps the TTS catalog when a Talk record declares its own voices", async () => {
+    const provider = buildCliSpeechProvider();
+    const ttsProviderConfig = { command: "x", voices: ["af_jessica", "af_bella"] };
+
+    const resolved = provider.resolveTalkConfig?.({
+      cfg: TEST_CFG,
+      baseTtsConfig: { providers: { "tts-local-cli": ttsProviderConfig } },
+      talkProviderConfig: { voices: ["talk-only"], voiceId: "af_bella" },
+      timeoutMs: 1000,
+    });
+
+    // `/voice list` sees the TTS record; Talk synthesis must see the same list.
+    expect(resolved).toMatchObject({ voices: ["af_jessica", "af_bella"], voiceId: "af_bella" });
+    expect(
+      await provider.listVoices?.({ cfg: TEST_CFG, providerConfig: ttsProviderConfig }),
+    ).toEqual([
       { id: "af_jessica", name: "af_jessica" },
-      { id: "am_michael", name: "am_michael" },
-    ]);
-  });
-
-  it("prefers a declared catalog over a selection left in another scope", async () => {
-    const voices = await buildCliSpeechProvider().listVoices?.({
-      cfg: {
-        talk: { providers: { "tts-local-cli": { voices: ["af_bella", "am_michael"] } } },
-      } as never,
-      // A stale voiceId here must not hide the catalog Talk declares.
-      providerConfig: { command: "x", voiceId: "af_jessica" },
-    });
-
-    expect(voices).toEqual([
       { id: "af_bella", name: "af_bella" },
-      { id: "am_michael", name: "am_michael" },
     ]);
   });
 
-  it("prefers voices on the request config over the wider config", async () => {
+  it("does not read voices from other config scopes", async () => {
     const voices = await buildCliSpeechProvider().listVoices?.({
       cfg: {
         talk: { providers: { "tts-local-cli": { voices: ["talk-voice"] } } },
       } as never,
-      providerConfig: { command: "x", voices: ["request-voice"] },
-    });
-
-    expect(voices).toEqual([{ id: "request-voice", name: "request-voice" }]);
-  });
-
-  it("falls back to tts.providers voices when neither the request nor talk declares them", async () => {
-    const voices = await buildCliSpeechProvider().listVoices?.({
-      cfg: {
-        tts: { providers: { "tts-local-cli": { command: "x", voices: ["tts-voice"] } } },
-      } as never,
       providerConfig: { command: "x" },
     });
 
-    expect(voices).toEqual([{ id: "tts-voice", name: "tts-voice" }]);
+    expect(voices).toEqual([]);
   });
 
   it("templates an empty voice id when no voice is configured", async () => {

@@ -37,5 +37,9 @@ own; with neither set, the voice list is empty and `{{VoiceId}}` expands to
 nothing. `voiceId` does not have to appear in `voices` — the list advertises
 choices, while `voiceId` selects what runs.
 
+Declare `voices` here only. `/voice set` stores its choice as
+`talk.providers.tts-local-cli.voiceId`, which Talk playback uses in place of
+the `voiceId` above; a `voices` list under `talk.providers` is ignored.
+
 See [local speech configuration](https://docs.openclaw.ai/tools/tts/configuration)
 for platform-specific examples and supported engines.

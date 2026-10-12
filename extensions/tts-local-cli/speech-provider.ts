@@ -47,42 +47,30 @@ function meaningfulOverrides(cfg: SpeechProviderConfig): SpeechProviderConfig {
   );
 }
 
+/**
+ * The CLI selects by `voiceId` alone. Core speech normalization ranks
+ * `speakerVoiceId` above `voiceId`, so an alias inherited from the base TTS
+ * record would silently undo a Talk selection; drop the aliases and let core
+ * re-derive them from the merged `voiceId`.
+ */
+const SPEAKER_ALIAS_KEYS = new Set(["speakerVoice", "speakerVoiceId", "voice", "voiceName"]);
+
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
   const providers = asOptionalRecord(rawConfig.providers);
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
 /**
- * `listSpeechVoices` builds `providerConfig` from TTS settings, so voices
- * declared under `talk.providers` are invisible to a Talk voice command. Fall
- * back to the wider config so either location populates the catalog.
+ * The TTS provider block owns the catalog, so `/voice list` (which receives
+ * the TTS record) and Talk synthesis (which merges over it) read one list.
  */
-function resolveVoiceCatalog(req: {
-  providerConfig?: SpeechProviderConfig;
-  cfg?: unknown;
-}): string[] {
-  const cfg = asOptionalRecord(req.cfg) ?? {};
-  const scopes = [
-    req.providerConfig ?? {},
-    ...(["talk", "tts"] as const).map((scope) =>
-      resolveCliProviderConfig(asOptionalRecord(cfg[scope]) ?? {}),
-    ),
-  ];
-  // A declared catalog always beats a lone selection: a voiceId left in one
-  // scope must not hide the voices list another scope declares.
-  for (const scope of scopes) {
-    const declared = asStringArray(scope.voices);
-    if (declared?.length) {
-      return declared;
-    }
+function resolveVoiceCatalog(providerConfig: SpeechProviderConfig = {}): string[] {
+  const declared = asStringArray(providerConfig.voices);
+  if (declared?.length) {
+    return declared;
   }
-  for (const scope of scopes) {
-    const selected = typeof scope.voiceId === "string" ? scope.voiceId.trim() : "";
-    if (selected) {
-      return [selected];
-    }
-  }
-  return [];
+  const selected = typeof providerConfig.voiceId === "string" ? providerConfig.voiceId.trim() : "";
+  return selected ? [selected] : [];
 }
 
 function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOUT_MS) {
@@ -397,14 +385,19 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     },
 
     resolveTalkConfig({ baseTtsConfig, talkProviderConfig }): SpeechProviderConfig {
-      return {
+      // A Talk-side `voices` list is ignored: the catalog stays with TTS.
+      const { voices: _talkCatalog, ...talk } = meaningfulOverrides(talkProviderConfig);
+      const merged = {
         ...resolveCliProviderConfig(asOptionalRecord(baseTtsConfig) ?? {}),
-        ...meaningfulOverrides(talkProviderConfig),
+        ...talk,
       };
+      return Object.fromEntries(
+        Object.entries(merged).filter(([key]) => !SPEAKER_ALIAS_KEYS.has(key)),
+      );
     },
 
     async listVoices(req) {
-      return resolveVoiceCatalog(req).map((voice) => ({ id: voice, name: voice }));
+      return resolveVoiceCatalog(req.providerConfig).map((voice) => ({ id: voice, name: voice }));
     },
 
     async synthesize(req) {
