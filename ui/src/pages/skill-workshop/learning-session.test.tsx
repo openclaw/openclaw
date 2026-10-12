@@ -3,11 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import {
-  createContext,
-  type SkillWorkshopPageTestElement,
-} from "./skill-workshop-page.test-support.ts";
-import "./skill-workshop-page.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createContext } from "./skill-workshop-page.test-support.ts";
+import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -16,17 +16,16 @@ async function mountLearningPage() {
     vi.fn(() => new Promise<never>(() => {})),
     { methods: ["sessions.create"] },
   );
-  const page = document.createElement(
-    "openclaw-skill-workshop-page",
-  ) as SkillWorkshopPageTestElement;
-  page.context = context;
-  document.body.append(page);
-  await page.updateComplete;
+  const mounted = mountSolid(() => <SkillWorkshopPage />, {
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
+  });
+  const page = mounted.container.querySelector<HTMLElement>("openclaw-skill-workshop-page")!;
+  await waitForSolid(() => expect(page.querySelector("button")).not.toBeNull());
   const button = Array.from(page.querySelectorAll("button")).find(
     (entry) => entry.textContent?.trim() === "Learn from history",
   );
   expect(button).toBeDefined();
-  return { page, context, button: button! };
+  return { page, context, button: button!, unmount: mounted.unmount };
 }
 
 describe("Workshop learning session", () => {
@@ -69,11 +68,11 @@ describe("Workshop learning session", () => {
   });
 
   it("retains an accepted run without redirecting a replaced Workshop page", async () => {
-    const { page, context, button } = await mountLearningPage();
+    const { unmount, context, button } = await mountLearningPage();
     const creation = createDeferredCore<SessionCreateOutcome | null>();
     context.sessions.createResult = vi.fn(() => creation.promise);
     button.click();
-    page.remove();
+    unmount();
     creation.resolve({
       key: "agent:research:dashboard:7e93881c-0186-4d25-9e99-cdce85cac675",
       initialRun: { status: "started", runId: "learning-run" },

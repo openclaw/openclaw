@@ -299,7 +299,7 @@ function McpAppCatalogContent(props: McpAppCatalogProps & { host: HTMLElement })
   );
 }
 
-defineSolidBridge<McpAppCatalogProps>(
+export const McpAppCatalog = defineSolidBridge<McpAppCatalogProps>(
   "openclaw-mcp-app-catalog",
   (props, host) => <McpAppCatalogContent {...props} host={host} />,
   {
