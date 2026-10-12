@@ -149,7 +149,7 @@ describe("worker environment runtime refresh", () => {
       expect(store.get(environment.environmentId)?.bootstrapReceipt).toEqual(replacement);
       if (placement) {
         expect(
-          createWorkerSessionPlacementStore({ database }).get(placement.sessionId),
+          await createWorkerSessionPlacementStore({ database }).getAsync(placement.sessionId),
         ).toMatchObject({
           workerBundleHash: replacement.bundleHash,
           activeOwnerEpoch: placement.activeOwnerEpoch,
