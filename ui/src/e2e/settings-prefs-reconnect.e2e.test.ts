@@ -1,7 +1,7 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -76,10 +76,7 @@ async function proxyReconnect(
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.phase;
+        return window.openclawControlUi?.snapshot().gatewayPhase;
       }),
     )
     .toBe("reconnecting");
@@ -92,10 +89,7 @@ async function proxyReconnect(
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.phase;
+        return window.openclawControlUi?.snapshot().gatewayPhase;
       }),
     )
     .toBe("connected");
@@ -196,12 +190,10 @@ suite.define(() => {
         }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await expect
           .poll(() =>
-            page.evaluate(() => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: { theme: { settings: { chatSendShortcut: string } } } };
-              };
-              return app.runtime.context.theme.settings.chatSendShortcut;
-            }),
+            evaluateControlUiContext(
+              page,
+              (application) => application.theme.settings.chatSendShortcut,
+            ),
           )
           .toBe("modifier-enter");
         await textarea.press("Enter");
@@ -296,12 +288,10 @@ suite.define(() => {
       await gateway.resolveDeferred("config.patch", committed);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime?: { context: ApplicationContext } }
-            >("openclaw-app");
-            return app?.runtime?.context.runtimeConfig.state.configSnapshot;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot,
+          ),
         )
         .toMatchObject({ config: committed.config, hash: committed.hash });
       await expect.poll(() => readPendingPrefStorage(page)).toEqual([]);

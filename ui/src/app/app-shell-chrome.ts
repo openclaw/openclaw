@@ -82,6 +82,8 @@ import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 let nativeCommandsOwner: AbortController | undefined;
 
 export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
+  readonly element: HTMLElement;
+  readonly isConnected: boolean;
   readonly activeSessionKey: string;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
@@ -129,9 +131,13 @@ export class ShellChromeOwner {
     const options = { signal: this.listeners.signal };
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
-    host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    host.element.addEventListener(
+      COMMAND_PALETTE_TARGET_EVENT,
+      this.handleCommandPaletteTarget,
+      options,
+    );
     for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
-      host.addEventListener(type, () => host.requestUpdate(), options);
+      host.element.addEventListener(type, () => host.requestUpdate(), options);
     }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
@@ -203,9 +209,9 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
+      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host.element) ?? null;
       host.navDrawerOpen = true;
-      moveToastToNavDrawer(host);
+      moveToastToNavDrawer(host.element);
       void host.updateComplete.then(() => {
         if (!host.isConnected || !host.navDrawerOpen) {
           return;
@@ -251,7 +257,7 @@ export class ShellChromeOwner {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.reset();
     }
-    restoreToastFromNavDrawer(host);
+    restoreToastFromNavDrawer(host.element);
     const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
@@ -343,7 +349,7 @@ export class ShellChromeOwner {
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
-          this.restoreFocusTo(visibleNavDrawerToggle(host));
+          this.restoreFocusTo(visibleNavDrawerToggle(host.element));
         });
       }
     });
@@ -370,7 +376,8 @@ export class ShellChromeOwner {
     }
   };
 
-  dismissSidebarTransientMenus = (): boolean => dismissNavigationTransientSurfaces(this.host);
+  dismissSidebarTransientMenus = (): boolean =>
+    dismissNavigationTransientSurfaces(this.host.element);
 
   private readonly handleDocumentKeydownBubble = (event: KeyboardEvent): void => {
     const host = this.host;
@@ -410,7 +417,10 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      handleNavDrawerKeydown(host, event);
+      handleNavDrawerKeydown(
+        Object.assign(host.element, { closeNavDrawer: this.closeNavDrawer }),
+        event,
+      );
       return;
     }
     if (!host.commandPalette && isCommandPaletteShortcut(event)) {
@@ -742,15 +752,13 @@ export class ShellChromeOwner {
     applyCommandPaletteTargetEvent(this.host, event);
 
   readonly nativeNavCollapsed = (): boolean => {
-    const host = this.host;
-    const mobileNavLayout = isMobileNavLayout();
     return (
-      host.onboardingMode ||
-      mobileNavLayout ||
-      (isSettingsTakeover(host.routeState.routeId) && !mobileNavLayout) ||
-      (!host.navDrawerOpen &&
-        !host.desktopNavigationExpanded &&
-        (host.context?.navigation.snapshot.navCollapsed ?? false))
+      this.host.onboardingMode ||
+      isMobileNavLayout() ||
+      isSettingsTakeover(this.host.routeState.routeId) ||
+      (!this.host.navDrawerOpen &&
+        !this.host.desktopNavigationExpanded &&
+        (this.host.context?.navigation.snapshot.navCollapsed ?? false))
     );
   };
 }

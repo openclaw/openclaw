@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
@@ -18,7 +18,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-type ActivityApp = HTMLElement & { runtime: { context: ApplicationContext } };
 let proofDir: string;
 beforeEach(() => {
   if (captureUiProof) {
@@ -51,16 +50,13 @@ suite.define(() => {
           data: { phase: "result", name: "read", toolCallId: id, result: { text: `${id} output` } },
         });
       const navigate = (route: "activity" | "config") =>
-        page.evaluate((routeId) => {
-          const app = document.querySelector<ActivityApp>("openclaw-app");
-          if (!app) {
-            throw new Error("Control UI app is unavailable");
-          }
-          app.runtime.context.navigate(
-            routeId,
-            routeId === "activity" ? { search: "?view=live" } : {},
-          );
-        }, route);
+        evaluateControlUiContext(
+          page,
+          (context, routeId) => {
+            context.navigate(routeId, routeId === "activity" ? { search: "?view=live" } : {});
+          },
+          route,
+        );
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("connect");

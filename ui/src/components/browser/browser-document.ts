@@ -8,7 +8,7 @@ import { BrowserDocumentContent, type BrowserDocumentViewProps } from "./browser
 export { BrowserDocumentContent } from "./browser-document.tsx";
 
 export type BrowserDocumentProps = Omit<BrowserDocumentViewProps, "renderEscape"> & {
-  renderEscape: (label: string) => TemplateResult | typeof nothing;
+  renderEscape: (label: string) => TemplateResult | typeof nothing | HTMLElement | null;
 };
 
 // The unported app shell owns these template ranges until its rendering cutover.

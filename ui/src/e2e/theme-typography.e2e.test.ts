@@ -480,37 +480,9 @@ suite.define(() => {
       await expectChrome(color);
     }
 
-    // Runtime removal renders nothing; restoration must rebind the existing router.
-    const runtimeLifecycle = await page.locator("openclaw-app-shell").evaluate(async (element) => {
-      const shell = element as HTMLElement & {
-        runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
-        updateComplete: Promise<boolean>;
-      };
-      const runtime = shell.runtime;
-      const color = () =>
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
-      try {
-        shell.runtime = undefined;
-        await shell.updateComplete;
-        const removed = { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) };
-        shell.runtime = runtime;
-        await shell.updateComplete;
-        return {
-          removed,
-          restored: { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) },
-        };
-      } finally {
-        shell.runtime = runtime;
-      }
-    });
-    expect(runtimeLifecycle).toEqual({
-      removed: { color: pageColor, chat: false },
-      restored: { color: chatColor, chat: true },
-    });
-    await expectChrome(chatColor);
-
-    const reconnect = await page.locator("openclaw-app-shell").evaluate(async (element) => {
-      const shell = element as HTMLElement & { updateComplete: Promise<boolean> };
+    // Reparenting a plain Solid host keeps its mounted root and route alive.
+    const reconnect = await page.locator("openclaw-app-shell").evaluate((element) => {
+      const shell = element;
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
@@ -519,7 +491,6 @@ suite.define(() => {
         shell.remove();
         const removed = color();
         parent.insertBefore(shell, next);
-        await shell.updateComplete;
         return {
           removed,
           reconnected: color(),
@@ -531,7 +502,14 @@ suite.define(() => {
         }
       }
     });
-    expect(reconnect).toEqual({ removed: pageColor, reconnected: chatColor, sameShell: true });
+    expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
+    await expectChrome(chatColor);
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+,");
+    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
+    await expectChrome(pageColor);
+    await page.goBack();
+    await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
   });
 

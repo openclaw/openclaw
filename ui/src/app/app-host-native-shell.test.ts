@@ -3,9 +3,10 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/macos-titlebar-controls.runtime.ts";
+import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -23,7 +24,7 @@ type ShellNavigationState = {
   handleNativeNewSession: () => void;
   handleNativeNavigate: (event: Event) => void;
   onboarding: boolean;
-  updated: (changedProperties: Map<string, unknown>) => void;
+  afterCommit: () => void;
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
@@ -82,7 +83,7 @@ describe("OpenClaw native shell", () => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const snapshot = { navCollapsed: false };
       const update = vi.fn((next: { navCollapsed: boolean }) => Object.assign(snapshot, next));
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+      const shell = createShellOwner() as unknown as ShellKeyboardState;
       shell.runtime = {
         context: { navigation: { snapshot, update } } as unknown as ApplicationContext,
       };
@@ -119,18 +120,14 @@ describe("OpenClaw native shell", () => {
   );
 
   it("reports readiness only while the native command listener owner is connected", () => {
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      connectedCallback(): void;
-      disconnectedCallback(): void;
-      nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
-    };
+    const shell = createShellOwner();
     const nativeWindow = window as Window & { __OPENCLAW_NATIVE_COMMANDS_READY__?: boolean };
     const states: boolean[] = [];
     const recordState = () =>
       states.push(nativeWindow["__OPENCLAW_NATIVE_COMMANDS_READY__"] === true);
     window.addEventListener("openclaw:native-commands-state", recordState);
     try {
-      shell.connectedCallback();
+      shell.connect();
       window.dispatchEvent(
         new CustomEvent("openclaw:native-history-state", {
           detail: { canGoBack: true, canGoForward: false },
@@ -139,7 +136,7 @@ describe("OpenClaw native shell", () => {
       expect(shell.nativeHistoryState.canGoBack).toBe(true);
       expect(states).toEqual([true]);
 
-      shell.disconnectedCallback();
+      shell.disconnect();
       shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
       window.dispatchEvent(
         new CustomEvent("openclaw:native-history-state", {
@@ -149,7 +146,7 @@ describe("OpenClaw native shell", () => {
       expect(shell.nativeHistoryState.canGoBack).toBe(false);
       expect(states).toEqual([true, false]);
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       window.removeEventListener("openclaw:native-commands-state", recordState);
       Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_COMMANDS_READY__");
     }
@@ -157,7 +154,7 @@ describe("OpenClaw native shell", () => {
 
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = {
       context: {
         navigate,
@@ -179,9 +176,7 @@ describe("OpenClaw native shell", () => {
 
   it("restores the complete prior workspace URL when Escape leaves Settings", () => {
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
+    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
     shell.runtime = {
       context: {
         navigate,
@@ -208,9 +203,7 @@ describe("OpenClaw native shell", () => {
 
   it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
+    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
     shell.runtime = {
       context: {
         navigate,
@@ -244,9 +237,7 @@ describe("OpenClaw native shell", () => {
   it("lets a shadow-root confirmation own Escape without leaving Settings", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
+    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
     shell.runtime = {
       context: {
         navigate,
@@ -282,7 +273,7 @@ describe("OpenClaw native shell", () => {
     const update = vi.fn((next: { navCollapsed: boolean }) => {
       snapshot.navCollapsed = next.navCollapsed;
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
     shell.runtime = {
       context: {
         navigation: { snapshot, update },
@@ -302,7 +293,7 @@ describe("OpenClaw native shell", () => {
       const navigate = vi.fn();
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       Object.defineProperty(shell, "commandPalette", {
         configurable: true,
         value: { openPalette, togglePalette },
@@ -328,7 +319,7 @@ describe("OpenClaw native shell", () => {
     (platform) => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+      const shell = createShellOwner() as unknown as ShellKeyboardState;
       shell.runtime = {
         context: nativeSessionContext(navigate, "research", {
           scopes: ["operator.sessions.write"],
@@ -376,8 +367,7 @@ describe("OpenClaw native shell", () => {
     (guard) => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
-        ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellKeyboardState & ShellNavigationState;
       const context = nativeSessionContext(navigate, "main", {
         ...(guard === "read-only" ? { scopes: ["operator.read"] } : {}),
         ...(guard === "unavailable" ? { methods: [] } : {}),
@@ -412,7 +402,7 @@ describe("OpenClaw native shell", () => {
   it("leaves a rendered modal navigation drawer in control of the New Session chord", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = { context: nativeSessionContext(navigate, "main") };
     const drawer = document.body.appendChild(document.createElement("nav"));
     drawer.className = "shell-nav";
@@ -438,14 +428,15 @@ describe("OpenClaw native shell", () => {
       "matchMedia",
       vi.fn(() => ({ matches: true })),
     );
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
+    const shell = createShellOwner() as unknown as {
+      element: HTMLElement;
       runtime: { context: ApplicationContext };
       viewCallbacks: ShellViewCallbacks;
       navDrawerTrigger: HTMLElement | null;
       navDrawerOpen: boolean;
     };
     shell.runtime = { context: {} as ApplicationContext };
-    const drawerTrigger = shell.appendChild(document.createElement("button"));
+    const drawerTrigger = shell.element.appendChild(document.createElement("button"));
     drawerTrigger.className = "topbar-nav-toggle";
     Object.defineProperty(drawerTrigger, "checkVisibility", { value: () => true });
     const onOpenPalette = vi.fn();
@@ -498,7 +489,7 @@ describe("OpenClaw native shell", () => {
 
   it("retains a native new-session request until a context exists", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
 
     shell.handleNativeNewSession();
 
@@ -517,7 +508,7 @@ describe("OpenClaw native shell", () => {
       { methods: ["sessions.create"], scopes: ["operator.sessions.read"] },
     ]) {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: nativeSessionContext(navigate, "main", options),
       };
@@ -547,7 +538,7 @@ describe("OpenClaw native shell", () => {
     "preserves native destination $basePath$path and acknowledges it",
     ({ path, routeId, search, basePath }) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: { navigate, basePath } as unknown as ApplicationContext,
       };
@@ -570,7 +561,7 @@ describe("OpenClaw native shell", () => {
     "ignores malformed native search %s and keeps the plain route",
     (search) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: {
           navigate,
@@ -593,7 +584,7 @@ describe("OpenClaw native shell", () => {
     "leaves invalid native Dashboard path %s unhandled",
     (path) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: {
           navigate,
@@ -613,7 +604,7 @@ describe("OpenClaw native shell", () => {
 
   it("does not start a native session during onboarding", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
     shell.runtime = {
       context: {
         navigate,
@@ -633,17 +624,17 @@ describe("OpenClaw native shell", () => {
       messageHandlers: { openclawNav: { postMessage } },
     };
     const snapshot = { navCollapsed: false, navWidth: 280 };
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
     shell.runtime = {
       context: {
         navigation: { snapshot },
       } as unknown as ApplicationContext,
     };
 
-    shell.updated(new Map());
-    shell.updated(new Map());
+    shell.afterCommit();
+    shell.afterCommit();
     snapshot.navCollapsed = true;
-    shell.updated(new Map());
+    shell.afterCommit();
 
     expect(postMessage.mock.calls).toEqual([
       [{ type: "nav-state", collapsed: false, width: 280 }],
@@ -653,7 +644,7 @@ describe("OpenClaw native shell", () => {
 
   it("leaves plain Command-Comma to the browser", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = {
       context: {
         navigate,

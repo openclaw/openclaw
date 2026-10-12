@@ -1,7 +1,7 @@
-import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
+import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
+import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
-import "./app/app-host.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -17,6 +17,10 @@ type ViteImportMeta = ImportMeta & {
 };
 
 if (!unsupportedControlUiBrowser) {
+  const root = document.querySelector<HTMLElement>("openclaw-app");
+  if (root) {
+    mountOpenClawApp(root);
+  }
   const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
   const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 

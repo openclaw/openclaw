@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
@@ -48,13 +49,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-    };
-    return app.runtime?.context.gateway.snapshot.phase;
-  });
+async function gatewayPhase(page: Page): Promise<string> {
+  return evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase);
 }
 
 async function captureProof(page: Page, name: string, surface: Locator): Promise<void> {

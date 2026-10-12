@@ -25,8 +25,8 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
@@ -140,12 +140,10 @@ function summarizeChecks(ok: boolean, payload?: unknown, errorCode?: string) {
 }
 
 async function refreshFromBrowser(page: Page) {
-  return page.evaluate(
-    async ({ method, sessionKey: requestedKey }) => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime: { context: { gateway: ApplicationGateway } };
-      };
-      const client = app?.runtime.context.gateway.snapshot.client;
+  return evaluateControlUiContext(
+    page,
+    async (context, { method, sessionKey: requestedKey }) => {
+      const client = context.gateway.snapshot.client;
       if (!client) {
         throw new Error("Control UI Gateway client is unavailable");
       }
@@ -153,7 +151,7 @@ async function refreshFromBrowser(page: Page) {
         sessionKeys: [requestedKey],
         refreshSessionKeys: [requestedKey],
       });
-      return app.runtime.context.gateway.snapshot.hello?.auth?.scopes;
+      return context.gateway.snapshot.hello?.auth?.scopes;
     },
     { method: SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, sessionKey },
   );

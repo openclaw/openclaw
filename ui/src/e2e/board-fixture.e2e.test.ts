@@ -11,8 +11,8 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -164,16 +164,17 @@ async function requestPreviewGateway(
   page: Page,
   requests: Array<{ method: string; params?: unknown }>,
 ): Promise<unknown[]> {
-  return page.evaluate((batch) => {
-    const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
-    );
-    const client = app?.runtime?.context.gateway.snapshot.client;
-    if (!client) {
-      throw new Error("Preview Gateway client is unavailable");
-    }
-    return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
-  }, requests);
+  return evaluateControlUiContext(
+    page,
+    (context, batch) => {
+      const client = context.gateway.snapshot.client;
+      if (!client) {
+        throw new Error("Preview Gateway client is unavailable");
+      }
+      return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
+    },
+    requests,
+  );
 }
 
 describeStandaloneMockServer("standalone Control UI mock server", () => {

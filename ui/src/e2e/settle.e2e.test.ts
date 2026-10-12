@@ -19,19 +19,15 @@ suite.define(() => {
         attachmentNames: JSON.stringify(["selection-comment.txt"]),
         annotationComments: JSON.stringify([finalComment]),
       };
+      const context = {
+        gateway: {
+          connection: { gatewayUrl: "ws://synthetic-gateway" },
+          snapshot: { client: { recoveryScope: "synthetic-credential" } },
+        },
+      };
       const commit = (comment: string) =>
         page.evaluate(
           async ({ expected: draftExpectation, comment: storedComment }) => {
-            Object.assign(document.querySelector("openclaw-app")!, {
-              runtime: {
-                context: {
-                  gateway: {
-                    connection: { gatewayUrl: "ws://synthetic-gateway" },
-                    snapshot: { client: { recoveryScope: "synthetic-credential" } },
-                  },
-                },
-              },
-            });
             const database = await new Promise<IDBDatabase>((resolve, reject) => {
               const request = indexedDB.open("openclaw-control-ui");
               request.addEventListener(
@@ -88,13 +84,13 @@ suite.define(() => {
       await commit(`${finalComment}\nKeep the existing draft.`);
       expect(
         await page.evaluate(isComposerDraftCommitted, {
-          ...expected,
-          annotationComments: null,
+          context,
+          expected: { ...expected, annotationComments: null },
         }),
       ).toBe(true);
-      expect(await page.evaluate(isComposerDraftCommitted, expected)).toBe(false);
+      expect(await page.evaluate(isComposerDraftCommitted, { context, expected })).toBe(false);
       await commit(finalComment);
-      expect(await page.evaluate(isComposerDraftCommitted, expected)).toBe(true);
+      expect(await page.evaluate(isComposerDraftCommitted, { context, expected })).toBe(true);
     });
   });
 

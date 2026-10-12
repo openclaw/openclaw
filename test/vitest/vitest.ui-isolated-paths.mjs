@@ -20,6 +20,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/agents/memory/memory-panel.test.ts",
   "ui/src/pages/chat/chat-outbox-recovery.test.ts",
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
+  "ui/src/pages/chat/chat-page-draft-commit.test.ts",
   "ui/src/pages/chat/chat-page-session-refresh.test.ts",
   "ui/src/pages/chat/chat-page.test.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",

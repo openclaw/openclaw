@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   navigateToControlUiSession,
@@ -106,11 +106,8 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isDisabled()).toBe(false);
         await waitForGatewayRecoveryScope(page);
-        const owner = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          const { gateway: applicationGateway } = app.runtime.context;
+        const owner = await evaluateControlUiContext(page, (application) => {
+          const { gateway: applicationGateway } = application;
           return {
             gatewayUrl: applicationGateway.connection.gatewayUrl,
             recoveryScope: applicationGateway.snapshot.client!.recoveryScope,
@@ -174,21 +171,21 @@ suite.define(() => {
           }
         }
         const readStartup = () =>
-          page.evaluate((key) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            return app.runtime.context.placementStartup.get(key);
-          }, sessionKey);
+          evaluateControlUiContext(
+            page,
+            (application, key) => application.placementStartup.get(key),
+            sessionKey,
+          );
         const failed = await readStartup();
         await expect.poll(() => page.evaluate(() => Date.now())).toBeGreaterThan(failed!.startedAt);
         for (const selectedKey of ["agent:main:another-task", sessionKey]) {
-          await page.evaluate((key) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.gateway.setSessionKey(key);
-          }, selectedKey);
+          await evaluateControlUiContext(
+            page,
+            (application, key) => {
+              application.gateway.setSessionKey(key);
+            },
+            selectedKey,
+          );
           expect(await readStartup()).toEqual(failed);
         }
         await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
@@ -406,12 +403,11 @@ suite.define(() => {
         expect(moduleRequests).toBe(2);
         if (incognito) {
           expect(
-            await page.evaluate((key) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: ApplicationContext };
-              };
-              return app.runtime.context.placementStartup.hasPendingTurn(key);
-            }, privateKey),
+            await evaluateControlUiContext(
+              page,
+              (application, key) => application.placementStartup.hasPendingTurn(key),
+              privateKey,
+            ),
           ).toBe(false);
         }
         if (captureUiProofEnabled) {

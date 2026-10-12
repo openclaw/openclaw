@@ -13,7 +13,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -122,13 +122,10 @@ suite.define(() => {
         await page.exposeFunction("recordRosterEvent", (label: string) => {
           labels.add(label);
         });
-        await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: { gateway: ApplicationGateway } };
-          };
+        await evaluateControlUiContext(page, (context) => {
           // Register after the app's consumers: a raw CDP frame receipt alone
           // does not mean the browser's event handler installed its debounce.
-          app.runtime.context.gateway.subscribeEvents((event) => {
+          context.gateway.subscribeEvents((event) => {
             const payload = event.payload as { session?: { label?: string } } | undefined;
             if (event.event === "sessions.changed" && typeof payload?.session?.label === "string") {
               void window.recordRosterEvent(payload.session.label);

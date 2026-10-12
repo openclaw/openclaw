@@ -35,7 +35,7 @@ import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -302,16 +302,13 @@ suite.define(() => {
             expect(heldInputs.every((input) => input.state === "queued")).toBe(true);
             release.resolve();
             await dispatchOperation;
-            const outcomes = await page.evaluate(
-              async (runIds) => {
-                const app = document.querySelector("openclaw-app") as HTMLElement & {
-                  runtime: {
-                    context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
-                  };
-                };
+            const outcomes = await evaluateControlUiContext(
+              page,
+              async (context, runIds) => {
+                const client = context.gateway.snapshot.client!;
                 return await Promise.all(
                   runIds.map((runId) =>
-                    app.runtime.context.gateway.snapshot.client.request(
+                    client.request(
                       "agent.wait",
                       { runId, timeoutMs: 30_000 },
                       { timeoutMs: 30_000 },

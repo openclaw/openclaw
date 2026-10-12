@@ -4,7 +4,6 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -199,6 +198,30 @@ suite.define(() => {
             },
           },
         });
+        // Observe the mock's real wire response, without reading renderer-owned runtime fields.
+        await page.addInitScript(() => {
+          window.WebSocket = new Proxy(window.WebSocket, {
+            construct(Target, args) {
+              const socket = Reflect.construct(Target, args) as WebSocket;
+              socket.addEventListener("message", (event: MessageEvent) => {
+                if (typeof event.data !== "string") {
+                  return;
+                }
+                const frame = JSON.parse(event.data) as {
+                  type?: string;
+                  payload?: { type?: string };
+                };
+                if (frame.type === "res" && frame.payload?.type === "hello-ok") {
+                  sessionStorage.setItem(
+                    "openclaw.warm-boot-proof.hello",
+                    JSON.stringify(frame.payload),
+                  );
+                }
+              });
+              return socket;
+            },
+          });
+        });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
             (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
@@ -215,16 +238,17 @@ suite.define(() => {
           await expectOwnMessageAlignment(page);
         }
         await waitForPersistedWarmState(page);
-        const hello = await page.evaluate(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          const snapshot = app?.runtime?.context.gateway.snapshot;
-          if (snapshot?.selfUser?.id !== "profile-a" || !snapshot.hello) {
-            throw new Error("Expected the first connection to belong to profile-a");
-          }
-          return snapshot.hello;
-        });
+        const hello: unknown = await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("openclaw.warm-boot-proof.hello") ?? "null"),
+        );
+        if (!isRecord(hello) || !isRecord(hello.auth) || !isRecord(hello.snapshot)) {
+          throw new Error("Expected the mock Gateway's first hello response");
+        }
+        expect(hello.snapshot.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ user: expect.objectContaining({ id: "profile-a" }) }),
+          ]),
+        );
 
         let bootstrapRequests = 0;
         if (profile === "trusted-proxy") {
@@ -268,14 +292,6 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
           });
-          expect(
-            await page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-                  "openclaw-app",
-                )?.runtime?.context.config.current.assistantIdentity.name,
-            ),
-          ).toBe("Observatory");
           expect(bootstrapRequests).toBe(0);
           await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }

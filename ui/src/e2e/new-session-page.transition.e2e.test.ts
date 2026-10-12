@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -427,7 +430,7 @@ suite.define(() => {
       await captureProof(page, "01-chat-route-preparing.png");
       await expectPendingNewSessionPresentation(page);
 
-      await page.evaluate(() => {
+      await evaluateControlUiContext(page, (application) => {
         const frames: SessionTransitionFrames = {
           invalid: 0,
           firstInvalid: null,
@@ -450,10 +453,7 @@ suite.define(() => {
             (!newSessionVisible && !chatVisible)
           ) {
             frames.invalid += 1;
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: ApplicationContext };
-            };
-            const route = app.runtime?.context.router.getState().matches[0];
+            const route = application.router.getState().matches[0];
             frames.firstInvalid ??= {
               activeViewTransition: Boolean(document.activeViewTransition),
               handoffCover,
@@ -490,13 +490,15 @@ suite.define(() => {
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await pendingPreviewModule.request;
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: ApplicationContext };
-        };
-        const route = app.runtime?.context.router.getState().matches[0];
-        return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-      });
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        await page.waitForFunction((application) => {
+          const route = application.router.getState().matches[0];
+          return route?.routeId === "chat" && route.module && route.isFetching === "loader";
+        }, applicationHandle);
+      } finally {
+        await applicationHandle.dispose();
+      }
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -696,12 +698,13 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}new`);
           await page.locator(".new-session-page__message").waitFor();
-          await page.evaluate((nextMode) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.theme.setMode(nextMode);
-          }, mode);
+          await evaluateControlUiContext(
+            page,
+            (context, nextMode) => {
+              context.theme.setMode(nextMode);
+            },
+            mode,
+          );
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
           await gateway.deferNext("sessions.create");
 

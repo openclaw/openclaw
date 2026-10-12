@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -109,19 +109,17 @@ suite.define(() => {
           { match: {}, response: chatSessionListResponse([other]) },
         ],
       });
-      await page.evaluate(async (key) => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context?: ApplicationContext } }
-        >("openclaw-app");
-        const sessions = app?.runtime?.context?.sessions;
-        if (!sessions) {
-          throw new Error("Session capability is missing");
-        }
-        await sessions.refresh({ agentId: "main", force: true });
-        if (sessions.state.result?.sessions.some((row) => row.key === key)) {
-          throw new Error("Research parent must be outside the primary roster");
-        }
-      }, parentKey);
+      await evaluateControlUiContext(
+        page,
+        async (context, key) => {
+          const sessions = context.sessions;
+          await sessions.refresh({ agentId: "main", force: true });
+          if (sessions.state.result?.sessions.some((row) => row.key === key)) {
+            throw new Error("Research parent must be outside the primary roster");
+          }
+        },
+        parentKey,
+      );
       await gateway.setMethodResponse("chat.history", {
         cases: [
           {

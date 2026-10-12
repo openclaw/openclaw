@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -22,11 +22,8 @@ const unrelated = "agent:main:unrelated";
 async function receivedSessions(page: Page): Promise<unknown[]> {
   // Safe observer headlines also reach broad session-list subscribers; raw
   // messages, tool arguments, and side-chat results remain individually scoped.
-  return page.evaluate(() => {
-    const app = document.querySelector<HTMLElement & { runtime: { context: ApplicationContext } }>(
-      "openclaw-app",
-    );
-    return (app?.runtime.context.gateway.eventLog ?? []).flatMap(({ event, payload }) =>
+  return evaluateControlUiContext(page, (context) => {
+    return context.gateway.eventLog.flatMap(({ event, payload }) =>
       ["agent", "chat", "session.tool", "chat.side_result"].includes(event) &&
       payload &&
       typeof payload === "object" &&
@@ -93,15 +90,9 @@ suite.define(() => {
         for (const key of [first, second, narrated]) {
           await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
         }
-        await page.evaluate(() => {
-          const app = document.querySelector<
-            HTMLElement & { runtime: { context: ApplicationContext } }
-          >("openclaw-app");
-          if (!app) {
-            throw new Error("Control UI app is unavailable");
-          }
+        await evaluateControlUiContext(page, (context) => {
           // This page-lifetime observer opts the delivery proof into diagnostic capture.
-          app.runtime.context.gateway.subscribeEventLog(() => undefined);
+          context.gateway.subscribeEventLog(() => undefined);
         });
         const send = async (key: string, runId: string, text: string) => {
           await gateway.emitGatewayEvent("chat", {

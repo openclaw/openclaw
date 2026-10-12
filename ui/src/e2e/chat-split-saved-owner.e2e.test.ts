@@ -1,8 +1,8 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -169,12 +169,7 @@ suite.define(() => {
         const currentUrl = page.url();
         await cells.first().click();
         expect(page.url()).toBe(currentUrl);
-        await page.evaluate(async () => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          await app.runtime.context.revalidate("chat");
-        });
+        await evaluateControlUiContext(page, (context) => context.revalidate("chat"));
         await waitForCommittedChatRoute(page);
         expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
         await openHomeFullPage(page);

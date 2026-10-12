@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -315,10 +315,8 @@ suite.define(() => {
         await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
         // The modal makes the picker inert. Use its selection owner without
         // closing the dialog so this still proves open-draft scope retirement.
-        await page.locator("openclaw-app").evaluate((element) => {
-          // SAFETY: This selector is the initialized app root that owns the runtime.
-          const app = element as HTMLElement & { runtime: ApplicationRuntime };
-          app.runtime.context.settingsAgentSelection.set("main");
+        await evaluateControlUiContext(page, (context) => {
+          context.settingsAgentSelection.set("main");
         });
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
         await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);

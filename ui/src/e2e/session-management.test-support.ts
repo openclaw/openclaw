@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -41,12 +41,7 @@ export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> 
 
 /** Foreground chat startup admits the canonical roster after document load. */
 export async function waitForSessionRosterHydration(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await customElements.whenDefined("openclaw-app");
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { sessions: SessionCapability } };
-    };
-    const sessions = app.runtime.context.sessions;
+  await evaluateControlUiContext(page, async ({ sessions }) => {
     const ready = () =>
       sessions.canonicalListRevision > 0 &&
       sessions.presentation.result !== null &&

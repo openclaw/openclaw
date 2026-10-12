@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -236,12 +236,10 @@ suite.define(() => {
         );
         const composer = () => activePane.locator(".agent-chat__composer-combobox > textarea");
         const navigate = async (agentId: string, catalog = true) => {
-          await page.evaluate(
-            ({ agentId: routeAgentId, search: routeSearch }) => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: ApplicationContext };
-              };
-              app.runtime.context.navigate("chat", {
+          await evaluateControlUiContext(
+            page,
+            (context, { agentId: routeAgentId, search: routeSearch }) => {
+              context.navigate("chat", {
                 pathname: `/chat/${routeAgentId}`,
                 search: routeSearch,
               });
@@ -257,12 +255,7 @@ suite.define(() => {
         const assertOwner = async (agentId: string) => {
           await expect
             .poll(() =>
-              page.evaluate(() => {
-                const app = document.querySelector("openclaw-app") as HTMLElement & {
-                  runtime: { context: ApplicationContext };
-                };
-                return app.runtime.context.agentSelection.state.selectedId;
-              }),
+              evaluateControlUiContext(page, (context) => context.agentSelection.state.selectedId),
             )
             .toBe(agentId);
           await expect
@@ -357,12 +350,10 @@ suite.define(() => {
         await assertOwner("main");
 
         // Ordinary Gateway publication and transport reconnect must retain each pane's owner.
-        const instanceId = await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: { context: ApplicationContext };
-          };
-          return app.runtime.context.gateway.snapshot.client?.instanceId;
-        });
+        const instanceId = await evaluateControlUiContext(
+          page,
+          (context) => context.gateway.snapshot.client?.instanceId,
+        );
         await gateway.emitGatewayEvent("presence", {
           presence: [{ instanceId, user: { id: "fixture-user", name: "Fixture User" } }],
         });

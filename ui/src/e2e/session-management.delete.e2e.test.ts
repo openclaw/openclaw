@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -15,8 +15,6 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
-
-type DraftDeletionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it.each(["delete", "archive"] as const)(
@@ -135,21 +133,20 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
-      await page.waitForFunction(() => {
-        const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-          ?.context.gateway.snapshot.client;
+      const applicationHandle = await getControlUiContextHandle(page);
+      await page.waitForFunction((application) => {
+        const client = application.gateway.snapshot.client;
         return client?.recoveryScopeReady === true && Boolean(client.recoveryScope);
-      });
+      }, applicationHandle);
       const draftStore = await page.evaluateHandle<
         typeof import("../lib/chat/composer-draft-store.runtime.ts")
       >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
       const outboxStore = await page.evaluateHandle<typeof import("../lib/chat/outbox-store.ts")>(
         'import("/src/lib/chat/outbox-store.ts")',
       );
-      const owner = await page.evaluate(
-        async ({ store, outbox, sessionKeys }) => {
-          const client = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-            ?.context.gateway.snapshot.client;
+      const owner = await applicationHandle.evaluate(
+        async (application, { store, outbox, sessionKeys }) => {
+          const client = application.gateway.snapshot.client;
           if (!client?.recoveryScope) {
             throw new Error("Gateway recovery scope unavailable");
           }
@@ -197,24 +194,20 @@ suite.define(() => {
         },
         { store: draftStore, outbox: outboxStore, sessionKeys: keys },
       );
-      const deleteFromRuntime = (sessionKeys: string[]) =>
-        page.evaluate(async (targets) => {
-          const sessions = (document.querySelector("openclaw-app") as DraftDeletionTestApp).runtime
-            ?.context.sessions;
-          if (!sessions) {
-            throw new Error("Session capability unavailable");
-          }
+      const deleteSessions = (sessionKeys: string[]) =>
+        applicationHandle.evaluate(async (application, targets) => {
+          const sessions = application.sessions;
           return targets.length === 1
             ? sessions.delete(targets[0]!, { agentId: "main" })
             : sessions.deleteMany(targets.map((key) => ({ key, agentId: "main" })));
         }, sessionKeys);
 
-      await expect(deleteFromRuntime([retired[0]!])).resolves.toMatchObject({ deleted: true });
-      await expect(deleteFromRuntime(retired.slice(1, 3))).resolves.toMatchObject({
+      await expect(deleteSessions([retired[0]!])).resolves.toMatchObject({ deleted: true });
+      await expect(deleteSessions(retired.slice(1, 3))).resolves.toMatchObject({
         deleted: retired.slice(1, 3),
       });
       await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: false });
-      await expect(deleteFromRuntime([noOp])).resolves.toMatchObject({ deleted: false });
+      await expect(deleteSessions([noOp])).resolves.toMatchObject({ deleted: false });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: retired[3],
         sessionId: `session:${retired[3]}`,
@@ -225,7 +218,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.delete", { ok: true, deleted: true });
       await gateway.deferNext("sessions.delete", { key: replacement });
       const requestsBeforeReplacement = (await gateway.getRequests("sessions.delete")).length;
-      const replacementDelete = deleteFromRuntime([replacement]);
+      const replacementDelete = deleteSessions([replacement]);
       await gateway.waitForRequest("sessions.delete", { after: requestsBeforeReplacement });
       const inFlightRevision = await page.evaluate(
         async ({ store, key, scopeOwner }) => {
@@ -358,6 +351,7 @@ suite.define(() => {
             durable: "post-confirm durable replacement",
           },
         });
+      await applicationHandle.dispose();
     } finally {
       await context.close();
     }

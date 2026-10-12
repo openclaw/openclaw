@@ -19,7 +19,7 @@ suite.define(() => {
       { name: "incognito-settings", incognito: true, turnOff: false, destination: "appearance" },
       { name: "incognito-query", incognito: true, turnOff: false, destination: "new-session" },
       { name: "incognito-off-query", incognito: true, turnOff: true, destination: "new-session" },
-    ]) {
+    ] as const) {
       await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));

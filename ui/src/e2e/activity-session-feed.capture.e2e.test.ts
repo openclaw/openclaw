@@ -1,6 +1,7 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -397,11 +398,8 @@ suite.define(() => {
         await page.reload();
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
 
-        await page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: { navigate: (routeId: string) => void } };
-          };
-          app.runtime?.context.navigate("activity");
+        await evaluateControlUiContext(page, (context) => {
+          context.navigate("activity");
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");

@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
-import type { LitElement } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./app-host.ts";
-import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { createShellOwner, mountShellView, settleShell } from "./app-host-solid.test-support.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import { NAVIGATION_RAIL_WIDTH } from "./navigation-surface.ts";
 import { loadSettings, settingsKeyForGateway } from "./settings.ts";
 
@@ -17,19 +15,19 @@ describe("sidebar preferences across tabs", () => {
       vi.useFakeTimers();
       vi.stubGlobal("requestIdleCallback", vi.fn());
       const runtime = bootstrapApplication();
-      const shell = document.createElement("openclaw-app-shell") as LitElement & {
-        runtime: ApplicationRuntime;
-        routeState: { routeId: "chat" };
-      };
+      const shell = createShellOwner();
       onTestFinished(() => {
-        shell.remove();
+        shell.disconnect();
+        shell.element.remove();
         runtime.stop();
       });
       shell.runtime = runtime;
-      document.body.append(shell);
-      await settleLitElement(shell);
+      document.body.append(shell.element);
+      mountShellView(shell);
+      shell.connect();
+      await settleShell(shell);
       shell.routeState = { routeId: "chat" };
-      await settleLitElement(shell);
+      await settleShell(shell);
       const frame = shell.querySelector<HTMLElement>(".shell");
       const divider = shell.querySelector<HTMLElement>(".sidebar-resizer");
       expect(frame).not.toBeNull();
@@ -44,7 +42,7 @@ describe("sidebar preferences across tabs", () => {
       );
       if (deliverStorageEvent) {
         window.dispatchEvent(new StorageEvent("storage", { key }));
-        await settleLitElement(shell);
+        await settleShell(shell);
         expect(runtime.context.navigation.snapshot.pinnedAgentIds).toEqual(["research"]);
         expect(frame!.style.getPropertyValue("--shell-nav-expanded-width")).toBe(
           `${360 + NAVIGATION_RAIL_WIDTH}px`,
@@ -52,7 +50,7 @@ describe("sidebar preferences across tabs", () => {
       }
 
       divider!.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.25 } }));
-      await settleLitElement(shell);
+      await settleShell(shell);
 
       expect(loadSettings()).toMatchObject({
         navWidth: 320 - NAVIGATION_RAIL_WIDTH,

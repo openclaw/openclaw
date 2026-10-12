@@ -14,8 +14,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -127,14 +127,11 @@ function observeRequests(page: Page) {
 
 async function settleSelection(page: Page) {
   // Observe a rendered frame, then a read on this same real Gateway connection.
-  await page.evaluate(async () => {
+  await evaluateControlUiContext(page, async (context) => {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
-    };
-    await app.runtime.context.gateway.snapshot.client.request("health", {});
+    await context.gateway.snapshot.client!.request("health", {});
   });
 }
 

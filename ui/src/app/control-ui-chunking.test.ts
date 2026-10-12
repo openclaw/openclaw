@@ -91,7 +91,7 @@ describe("Control UI build chunking", () => {
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],
-      ["/repo/ui/src/app/app-host.ts", undefined],
+      ["/repo/ui/src/app/app-host.tsx", undefined],
       ["\0virtual:openclaw-control-ui-locale-config-hints/ru", "locale-config-hints-ru"],
       ["\0virtual:openclaw-control-ui-locale/ru", undefined],
     ] as const) {
@@ -154,9 +154,11 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
+    // Opening state stays cheap; rendering the debug overlay belongs to its lazy graph.
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-contract.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);

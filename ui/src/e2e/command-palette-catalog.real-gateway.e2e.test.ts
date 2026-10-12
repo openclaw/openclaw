@@ -12,7 +12,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -502,37 +502,39 @@ suite.define(() => {
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     const publish = async (page: Page, id: string) => {
-      const publication = await page.evaluateHandle(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          context: ApplicationContext;
-        };
-        const observed = { committed: false };
-        const stop = app.context.gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            observed.committed = true;
-          }
-        });
-        return { observed, stop };
-      });
-      const args = [
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(models(id)),
-        "--strict-json",
-        "--replace",
-      ];
+      const applicationHandle = await getControlUiContextHandle(page);
       try {
-        const result = await instance.cli(args);
-        commands.push({ args, ...result });
-        expect(result.code, result.stderr).toBe(0);
-        // Runtime rows can arrive before this accepted-config event retires them.
-        await expect
-          .poll(() => publication.evaluate(({ observed }) => observed.committed))
-          .toBe(true);
+        const publication = await applicationHandle.evaluateHandle((application) => {
+          const observed = { committed: false };
+          const stop = application.gateway.subscribeEvents((event) => {
+            if (event.event === "config.changed") {
+              observed.committed = true;
+            }
+          });
+          return { observed, stop };
+        });
+        const args = [
+          "config",
+          "set",
+          "models.providers.fixture.models",
+          JSON.stringify(models(id)),
+          "--strict-json",
+          "--replace",
+        ];
+        try {
+          const result = await instance.cli(args);
+          commands.push({ args, ...result });
+          expect(result.code, result.stderr).toBe(0);
+          // Runtime rows can arrive before this accepted-config event retires them.
+          await expect
+            .poll(() => publication.evaluate(({ observed }) => observed.committed))
+            .toBe(true);
+        } finally {
+          await publication.evaluate(({ stop }) => stop());
+          await publication.dispose();
+        }
       } finally {
-        await publication.evaluate(({ stop }) => stop());
-        await publication.dispose();
+        await applicationHandle.dispose();
       }
     };
     try {

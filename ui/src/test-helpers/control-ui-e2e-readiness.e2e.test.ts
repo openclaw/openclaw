@@ -69,7 +69,7 @@ suite.define(() => {
       const key = "agent:main:lazy-readiness-navigation";
       const requests: string[] = [];
       const readinessModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/app/control-ui-readiness-lit.ts",
+        "ui/src/app/control-ui-readiness-solid.ts",
       );
       page.on("request", (request) => {
         if (readinessModule.test(request.url())) {
@@ -99,7 +99,7 @@ suite.define(() => {
         const key = "agent:main:late-readiness";
         const requests: string[] = [];
         const readinessModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/app/control-ui-readiness-lit.ts",
+          "ui/src/app/control-ui-readiness-solid.ts",
         );
         page.on("request", (request) => {
           if (readinessModule.test(request.url())) {

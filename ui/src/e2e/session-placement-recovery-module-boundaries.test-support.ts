@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -66,11 +66,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await expect.poll(() => composer.isDisabled()).toBe(false);
           await waitForGatewayRecoveryScope(page);
-          const owner = await page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            const { gateway: appGateway } = app.runtime.context;
+          const owner = await evaluateControlUiContext(page, (context) => {
+            const appGateway = context.gateway;
             return {
               gatewayUrl: appGateway.connection.gatewayUrl,
               recoveryScope: appGateway.snapshot.client!.recoveryScope,

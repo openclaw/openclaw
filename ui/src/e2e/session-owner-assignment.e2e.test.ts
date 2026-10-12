@@ -211,14 +211,8 @@ suite.define(() => {
           });
           const message = "Owner assignment unavailable. Try again.";
           await gateway.rejectDeferred("sessions.assignOwner", { code: "UNAVAILABLE", message });
-          await page.waitForFunction((expected) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: { sessions: { state: { error: string | null } } } };
-            };
-            return app.runtime.context.sessions.state.error?.includes(expected);
-          }, message);
-          await captureProof(page, `sessions-${width}-rejected`);
           await expectBrowser(roster.getByRole("alert").filter({ hasText: message })).toBeVisible();
+          await captureProof(page, `sessions-${width}-rejected`);
           await expectBrowser(row).toContainText("Owner outcome");
         },
       );

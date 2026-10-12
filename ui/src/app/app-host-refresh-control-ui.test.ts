@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { subscribeBootRecordChanges } from "./boot-record.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -14,7 +15,6 @@ import {
 import { createApplicationUpdateOverlays } from "./overlays-updates.ts";
 import { loadSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
-import "./app-host.ts";
 
 vi.hoisted(() => {
   // Build identity is captured on import, including imports from an earlier shared test.
@@ -31,14 +31,14 @@ vi.hoisted(() => {
   });
 });
 
-type RefreshShell = HTMLElement & {
+type RefreshShell = {
   runtime: ApplicationRuntime;
   refreshControlUi: () => Promise<boolean>;
 };
 
 function createRefreshShell(gateway: ApplicationRuntime["context"]["gateway"]) {
   const snapshot = { controlUiRefreshRequired: true };
-  const shell = document.createElement("openclaw-app-shell") as RefreshShell;
+  const shell = createShellOwner() as RefreshShell;
   shell.runtime = {
     context: { overlays: { snapshot }, gateway },
   } as unknown as ApplicationRuntime;

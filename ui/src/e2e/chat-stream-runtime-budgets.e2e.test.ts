@@ -2,9 +2,12 @@ import { appendFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
-import type { ApplicationContext } from "../app/context.ts";
 import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -585,21 +588,20 @@ suite.define(() => {
       // then join its publication before measuring stream invalidations.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
-      await waitForCommittedState(
-        page,
-        ({ sessionKey }) => {
-          const app = document.querySelector<
-            HTMLElement & { runtime?: { context: ApplicationContext } }
-          >("openclaw-app");
-          return (
-            app?.runtime?.context.sessions.state.result?.sessions.some(
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        await waitForCommittedState(
+          page,
+          ({ application, sessionKey }) =>
+            application.sessions.state.result?.sessions.some(
               (row) =>
                 row.key === sessionKey && row.status === "running" && row.hasActiveRun === true,
-            ) === true
-          );
-        },
-        { sessionKey: "agent:main:main" },
-      );
+            ) === true,
+          { application: applicationHandle, sessionKey: "agent:main:main" },
+        );
+      } finally {
+        await applicationHandle.dispose();
+      }
 
       // The delayed swarm child query publishes roster metadata after first paint.
       // Observe its committed result before measuring stream-driven invalidations.
@@ -609,15 +611,14 @@ suite.define(() => {
       const childScope = requireRecord(childList.params);
       await expect
         .poll(() =>
-          page.evaluate((scope) => {
-            const app = document.querySelector<
-              HTMLElement & {
-                runtime?: { context: ApplicationContext };
-              }
-            >("openclaw-app");
-            const snapshot = app?.runtime?.context.sessions.listSnapshot(scope);
-            return Boolean(snapshot?.result && !snapshot.loading && !snapshot.error);
-          }, childScope),
+          evaluateControlUiContext(
+            page,
+            (application, scope) => {
+              const snapshot = application.sessions.listSnapshot(scope);
+              return Boolean(snapshot?.result && !snapshot.loading && !snapshot.error);
+            },
+            childScope,
+          ),
         )
         .toBe(true);
       await waitForChatScrollIdle(page);

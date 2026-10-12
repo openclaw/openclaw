@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -521,12 +522,7 @@ suite.define(() => {
       await gateway.closeLatest(1001, "new-session scope proof");
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
+          evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("reconnecting");
 
