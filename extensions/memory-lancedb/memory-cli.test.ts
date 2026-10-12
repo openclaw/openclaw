@@ -183,14 +183,16 @@ describe("memory-lancedb CLI filters", () => {
     expect(harness.query).toHaveBeenCalledWith("main", expect.objectContaining({ filter }));
   });
 
-  it.each(["agentId = 'beta'", "importance = 'high'"])(
-    "rejects a filter before storage access: %s",
-    async (filter) => {
-      const harness = createHarness();
-      await expect(
-        harness.program.parseAsync(["node", "openclaw", "ltm", "query", "--filter", filter]),
-      ).rejects.toThrow();
-      expect(harness.query).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "agentId = 'beta'",
+    "category = 'preference' OR agentId = 'beta'",
+    "category = 'preference') OR (1 = 1",
+    "importance = 'high'",
+  ])("rejects a filter before storage access: %s", async (filter) => {
+    const harness = createHarness();
+    await expect(
+      harness.program.parseAsync(["node", "openclaw", "ltm", "query", "--filter", filter]),
+    ).rejects.toThrow();
+    expect(harness.query).not.toHaveBeenCalled();
+  });
 });
