@@ -44,7 +44,6 @@ describe("active-context preflight compaction", () => {
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
-      await instance.startGateway();
 
       const sessionId = randomUUID();
       const storePath = path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite");
@@ -64,6 +63,7 @@ describe("active-context preflight compaction", () => {
       transcript.appendCompaction(SUMMARY_MARKER, retained, 100_000);
       transcript.appendMessage({ role: "user", content: "active tail", timestamp: 3 });
 
+      await instance.startGateway();
       const client = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
@@ -95,14 +95,15 @@ describe("active-context preflight compaction", () => {
           limit: 20,
         });
         expect(JSON.stringify(history.messages ?? [])).toContain(REPLY_MARKER);
-        expect(
-          SessionManager.open(scope, instance.state.workspaceDir)
-            .getEntries()
-            .filter((entry) => entry.type === "compaction"),
-        ).toHaveLength(1);
       } finally {
         await disconnectGatewayClient(client);
       }
+      await instance.stopGateway();
+      expect(
+        SessionManager.open(scope, instance.state.workspaceDir)
+          .getEntries()
+          .filter((entry) => entry.type === "compaction"),
+      ).toHaveLength(1);
     },
   );
 });

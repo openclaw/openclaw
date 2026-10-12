@@ -139,6 +139,7 @@ describe("chat delivery watermark preparation", () => {
         const acquired = await acquireSessionInputActor(
           {
             ...scope,
+            storePath: resolveSessionTranscriptDatabasePath(scope),
             target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
           },
           { assertCurrent() {}, assertReadable() {} },
