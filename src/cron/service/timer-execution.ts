@@ -202,6 +202,8 @@ export async function executeJobCore(
         ? {
             status: "ok" as const,
             summary: heartbeatTask ? "heartbeat task completed" : "heartbeat completed",
+            sessionKey: heartbeatResult.sessionKey,
+            sessionId: heartbeatResult.sessionId,
           }
         : heartbeatResult.status === "failed"
           ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
@@ -300,8 +302,16 @@ async function executeMainSessionCronJob(
       removeQueuedSystemEvent();
       return { status: "error", error: timeoutErrorMessage() };
     }
-    if (handedOff || heartbeatResult.status === "ran") {
+    if (handedOff) {
       return { status: "ok", summary: text };
+    }
+    if (heartbeatResult.status === "ran") {
+      return {
+        status: "ok",
+        summary: text,
+        sessionKey: heartbeatResult.sessionKey,
+        sessionId: heartbeatResult.sessionId,
+      };
     }
     removeQueuedSystemEvent();
     return {

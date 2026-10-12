@@ -195,6 +195,10 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           suppressDefaultToolProgressMessages: true,
           onModelSelected: prepared.replyPrefix.onModelSelected,
           onSessionPrepared: (binding) => {
+            policy.runSession =
+              binding.sessionKey === runSessionKey && binding.storePath === prepared.storePath
+                ? { sessionKey: binding.sessionKey, sessionId: binding.sessionId }
+                : undefined;
             // Capture initialization's exact identity once; later replacements cannot inherit delivery.
             if (
               !policy.prepared.policySessionEntry &&

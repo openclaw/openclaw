@@ -195,6 +195,34 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
+  it.each([{ agents: ["main"] }, { agents: ["main", "ops"] }])(
+    "returns a broadcast transcript binding only for one executed agent: $agents",
+    async ({ agents }) => {
+      runSpy.mockImplementation(async ({ agentId }) => ({
+        status: "ran",
+        durationMs: 1,
+        sessionKey: `agent:${agentId}:main`,
+        sessionId: `executed-${agentId}`,
+      }));
+      start(config("30m", Object.fromEntries(agents.map((agentId) => [agentId, {}]))));
+      const completion = heartbeatWake.requestHeartbeatAndWait({
+        source: "manual",
+        intent: "manual",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const result = await completion;
+      expect(runSpy).toHaveBeenCalledTimes(agents.length);
+      expect(result.status).toBe("ran");
+      if (agents.length === 1) {
+        expect(result).toMatchObject({ sessionKey: "agent:main:main", sessionId: "executed-main" });
+      } else {
+        expect(result).not.toHaveProperty("sessionKey");
+        expect(result).not.toHaveProperty("sessionId");
+      }
+    },
+  );
+
   it("keeps serving interval wakes after runOnce throws an unhandled error", async () => {
     runSpy.mockRejectedValueOnce(new Error("session compaction error"));
     start();

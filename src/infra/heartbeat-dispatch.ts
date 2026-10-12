@@ -77,6 +77,7 @@ type HeartbeatDispatch = {
   wake: ReadyHeartbeatWake;
   prepared: PreparedHeartbeatRun;
   result?: HeartbeatRunResult;
+  runSession?: { sessionKey: string; sessionId: string };
   deliveryError?: string;
   retryUnqueuedDelivery?: boolean;
   execDeliveryOutcome?: "delivered" | "recovery-owned" | "unknown-after-send" | "rejected";
@@ -300,7 +301,7 @@ async function prepareHeartbeatDispatchReply(
     policy.result =
       outcome.kind === "failure"
         ? { status: "failed", reason: outcome.reason }
-        : { status: "ran", durationMs: Date.now() - startedAt };
+        : { status: "ran", durationMs: Date.now() - startedAt, ...policy.runSession };
     return {};
   };
   const stateKey = prepared.outboundPolicySessionKey ?? sessionKey;

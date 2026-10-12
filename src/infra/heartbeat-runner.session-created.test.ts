@@ -463,3 +463,62 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
     }
   },
 );
+
+it("records each isolated execution identity independently of its delivery session", async () => {
+  state = await createOpenClawTestState({
+    label: "heartbeat-execution-identity",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
+  const storePath = path.join(state.root, "sessions.json");
+  const cfg = withFullRuntimeReplyConfig({
+    agents: {
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-5.6-luna" },
+        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+        heartbeat: { every: "5m", target: "none", isolatedSession: true },
+      },
+    },
+    plugins: { enabled: false },
+    session: { store: storePath },
+  });
+  await state.writeConfig(cfg);
+  const sessionKey = await seedMainSessionStore(storePath, cfg, {
+    lastChannel: "telegram",
+    lastProvider: "telegram",
+    lastTo: "12345",
+  });
+  const runAgent = vi
+    .spyOn(embeddedAgent, "runEmbeddedAgent")
+    .mockResolvedValue({ payloads: [{ text: "Handled internally" }], meta: { durationMs: 1 } });
+  const results = [];
+  for (let index = 0; index < 2; index++) {
+    enqueueSystemEvent(`Reminder: execution identity ${index}`, {
+      sessionKey,
+      contextKey: `cron:identity:${index}`,
+    });
+    const result = await runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      source: "cron",
+      reason: `cron:identity:${index}`,
+      deps: { getReplyFromConfig },
+    });
+    expect(result.status).toBe("ran");
+    if (result.status !== "ran") {
+      throw new Error("heartbeat did not execute");
+    }
+    const actual = expectDefined(runAgent.mock.calls[index]?.[0], "actual initialized run input");
+    expect(result).toMatchObject({
+      sessionKey: `${sessionKey}:heartbeat`,
+      sessionId: actual.sessionId,
+    });
+    expect(result.sessionKey).not.toBe(sessionKey);
+    results.push(result);
+  }
+  const first = expectDefined(results[0], "first completed heartbeat");
+  const second = expectDefined(results[1], "second completed heartbeat");
+  expect(first.sessionId).not.toBe(second.sessionId);
+});
