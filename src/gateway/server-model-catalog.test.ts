@@ -431,6 +431,52 @@ describe("gateway prepared model catalog", () => {
     ).rejects.toBe(error);
   });
 
+  it("rejects an ambiguous owner without an authoritative agent identity", async () => {
+    const config = {
+      agents: {
+        entries: {
+          main: {
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/main-workspace",
+          },
+          worker: {
+            agentDir: "/tmp/gateway-agent",
+            workspace: "/tmp/worker-workspace",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        agentId: "worker",
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).rejects.toThrow("did not identify one configured agent");
+  });
+
+  it("returns an equivalent replacement owner without repeating discovery", async () => {
+    const initialConfig = ownerConfig("main", { logging: { level: "info" as const } });
+    const latestConfig = ownerConfig("main", { logging: { level: "info" as const } });
+    const latestSnapshot: ModelCatalogSnapshot = {
+      entries: [{ provider: "openai", id: "latest", name: "Latest" }],
+      routeVariants: [],
+    };
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
+      ownerSnapshot(latestConfig, latestSnapshot),
+    );
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => initialConfig,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.toMatchObject({ config: latestConfig, entries: latestSnapshot.entries });
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("selects the full prepared owner when requested", async () => {
     const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));

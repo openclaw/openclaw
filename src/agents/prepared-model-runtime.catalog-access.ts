@@ -36,6 +36,7 @@ import {
   prepareModelCatalogPublication,
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
+import { createPreparedModelCatalogGenerationRecoveryHandler } from "./prepared-model-runtime.catalog-recovery-handler.js";
 import {
   preparedProviderCatalogCredentials,
   prepareRetainedProviderCatalog,
@@ -139,6 +140,7 @@ export async function createFullModelCatalogAccess(
     },
     params.isPublished,
   );
+  const recoverCatalogGeneration = createPreparedModelCatalogGenerationRecoveryHandler(params);
   const { providerSource, retainedInventory, listChangedProviders } =
     prepareRetainedProviderCatalog(
       params,
@@ -281,7 +283,10 @@ export async function createFullModelCatalogAccess(
         hookRows,
       } = await worker.loadCatalog(
         providerIds,
-        (error) => attempt.failed(error, providers, "provider"),
+        (error) => {
+          attempt.failed(error, providers, "provider");
+          recoverCatalogGeneration(error);
+        },
         refresh,
       );
       assertCurrent();
@@ -477,7 +482,7 @@ export async function createFullModelCatalogAccess(
       // Full inventory acquisition alone discovers additional paired provider credentials.
       const nativeAuth =
         !selection && completed && discoveredProviders.length
-          ? await worker.loadAuth({ providerIds: discoveredProviders })
+          ? await worker.loadAuth({ providerIds: discoveredProviders }, recoverCatalogGeneration)
           : undefined;
       assertCurrent();
       // Provider renewal may finish during native discovery. Commit native observations onto
@@ -561,7 +566,8 @@ export async function createFullModelCatalogAccess(
     assertCurrent,
     readAuth: () =>
       getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth,
-    refreshAuth: worker.loadAuth,
+    refreshAuth: (scope: Parameters<typeof worker.loadAuth>[0]) =>
+      worker.loadAuth(scope, recoverCatalogGeneration),
   };
   const recheckNativeLogin = createNativeLoginRecheck(
     authOwner,

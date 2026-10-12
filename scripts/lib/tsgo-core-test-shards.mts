@@ -120,6 +120,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
   },
   {
+    name: "agents-prepared-runtime",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-prepared-runtime.json",
+  },
+  {
     name: "ui-e2e-chat",
     group: "ui",
     config: "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",

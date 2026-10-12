@@ -72,6 +72,10 @@ type CatalogPoolBorrower = {
   notifyRecovery: (error: Error) => void;
   stop: (error: Error) => Promise<void>;
 };
+const generationMismatchBorrowers = new WeakMap<
+  PreparedModelCatalogGenerationMismatchError,
+  CatalogPoolBorrower
+>();
 type GatewayCatalogPool = {
   cache: ReturnType<typeof getPluginMetadataSnapshotCache>;
   pool: CatalogPool;
@@ -81,7 +85,7 @@ type GatewayCatalogPool = {
   close: (error?: Error) => Promise<void>;
   borrowers: Set<CatalogPoolBorrower>;
   recovery?: Promise<void>;
-  recover: (error: Error) => Promise<void>;
+  recover: (error: Error, options?: { failedOwner?: CatalogPoolBorrower }) => Promise<void>;
   validate?: (result: PreparedModelWorkerResult) => void;
 };
 const gatewayCatalog = resolveGlobalSingleton<{
@@ -139,27 +143,32 @@ async function getGatewayCatalogPool(
       cache,
       envFingerprint: environmentFingerprint,
       borrowers: new Set(),
-      recover: (error) =>
+      recover: (error, options) =>
         admissionStalled
           ? Promise.resolve()
           : (current.recovery ??= (async () => {
               const borrowers = [...current.borrowers];
+              const affectedBorrowers = options?.failedOwner
+                ? borrowers.filter((borrower) => borrower === options.failedOwner)
+                : borrowers;
               if (!signal.aborted) {
-                for (const borrower of borrowers) {
+                for (const borrower of affectedBorrowers) {
                   borrower.notifyRecovery(error);
                 }
               }
               // Fence every old catalog before releasing the native slot. Recovery publishes new
               // prepared owners; it never replays a failed request under its former source generation.
-              const stopping = borrowers.map((borrower) => borrower.stop(error));
+              const stopping = affectedBorrowers.map((borrower) => borrower.stop(error));
               await current.close(error);
               await Promise.all(stopping);
               if (gatewayCatalog.current === current) {
                 gatewayCatalog.current = undefined;
               }
-              const { recoverPreparedModelRuntimeCatalogWorker } =
-                await import("./prepared-model-runtime.js");
-              await recoverPreparedModelRuntimeCatalogWorker(borrowers);
+              if (!options?.failedOwner) {
+                const { recoverPreparedModelRuntimeCatalogWorkerAtRuntime } =
+                  await import("./prepared-model-runtime.catalog-recovery-runtime.js");
+                await recoverPreparedModelRuntimeCatalogWorkerAtRuntime(borrowers);
+              }
             })()),
       close: async (error) => {
         current.closing = true;
@@ -274,6 +283,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
 type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (
     scope: PreparedModelRuntimeAuthScope,
+    onRecovery?: (error: Error) => void,
   ) => Promise<PreparedModelRuntimeAuth & { credentials: Readonly<AuthStorageData> }>;
   loadCatalog: (
     providerIds?: readonly string[],
@@ -332,12 +342,15 @@ export function createPreparedModelCatalogWorker(
   let sharedOwner: GatewayCatalogPool | undefined;
   const mismatch = (
     message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
-  ) =>
-    new PreparedModelCatalogGenerationMismatchError(
+  ) => {
+    const error = new PreparedModelCatalogGenerationMismatchError(
       workerInput.input.agentDir,
       message.generationFingerprint,
       message.reconstructedFingerprint,
     );
+    generationMismatchBorrowers.set(error, borrower);
+    return error;
+  };
   const validate = (message: PreparedModelWorkerResult) => {
     if (!gatewayOwned) {
       assertCurrent();
@@ -541,11 +554,25 @@ export function createPreparedModelCatalogWorker(
         sharedOwner.pool.isClosed &&
         !(failure instanceof PreparedModelRuntimePublicationSupersededError)
       ) {
-        // Recovery can abort parent capture before this request receives a pool. A known
-        // borrower still joins that recovery before exposing the failed old publication.
-        await sharedOwner.recover(failure).catch((recoveryError: unknown) => {
-          process.emitWarning(`Gateway catalog recovery failed: ${String(recoveryError)}`);
-        });
+        const failedOwner =
+          failure instanceof PreparedModelCatalogGenerationMismatchError
+            ? generationMismatchBorrowers.get(failure)
+            : undefined;
+        await sharedOwner
+          .recover(failure, {
+            // A typed mismatch must reach the catalog materialization boundary so it can rebuild
+            // the exact configured owner from current plugin facts. The generic shared-pool
+            // recovery deliberately retains the captured plugin generation, so stop only that
+            // owner. Healthy borrowers can bind their existing owners to the replacement pool.
+            failedOwner,
+          })
+          .catch((recoveryError: unknown) => {
+            process.emitWarning(`Gateway catalog recovery failed: ${String(recoveryError)}`);
+          });
+        if (failedOwner && failedOwner !== borrower) {
+          controller.abort(error);
+          throw error;
+        }
       }
       if (!gatewayOwned && failure instanceof PreparedModelCatalogGenerationMismatchError) {
         // Keep the generation open, but retire only this request's pool: a delayed rejection
@@ -597,7 +624,7 @@ export function createPreparedModelCatalogWorker(
         hookRows: message.hookRows,
       };
     },
-    loadAuth: async ({ providerIds, profileIds }) => {
+    loadAuth: async ({ providerIds, profileIds }, onRecovery) => {
       const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>
         left.localeCompare(right),
       );
@@ -607,11 +634,14 @@ export function createPreparedModelCatalogWorker(
       if (pendingAuth?.key === key) {
         return pendingAuth.promise;
       }
-      const promise = request({
-        kind: "auth-refresh",
-        providerIds: normalizedProviderIds,
-        ...(normalizedProfileIds ? { profileIds: normalizedProfileIds } : {}),
-      })
+      const promise = request(
+        {
+          kind: "auth-refresh",
+          providerIds: normalizedProviderIds,
+          ...(normalizedProfileIds ? { profileIds: normalizedProfileIds } : {}),
+        },
+        onRecovery,
+      )
         .then((message) => {
           if (message.kind !== "auth-refresh") {
             throw new Error("prepared model auth refresh worker returned a catalog result");

@@ -17,6 +17,7 @@ export function isPreparedModelRuntimeMissingOwnerError(
 }
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
+export { PreparedModelCatalogGenerationMismatchError } from "./prepared-model-catalog.errors.js";
 
 export class PreparedModelRuntimePluginGenerationRetiredError extends Error {}
 
