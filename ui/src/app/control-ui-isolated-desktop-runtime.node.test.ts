@@ -31,8 +31,8 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
   );
   const outbox = fileURLToPath(new URL("../lib/chat/outbox-store-projection.ts", import.meta.url));
   // Real manifest entry IDs and payloads above the production group's minimum size.
-  const catalogValue = "catalog-value-".repeat(1500);
-  const outboxValue = "outbox-value-".repeat(1500);
+  const catalogValue = "catalog-value-".repeat(12_000);
+  const outboxValue = "outbox-value-".repeat(12_000);
   const sources = new Map([
     [
       catalog,
