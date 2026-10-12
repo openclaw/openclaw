@@ -63,8 +63,11 @@ export const getCurrentPluginMetadataSnapshotMock: Mock<
 > = vi.fn(() => emptyPluginMetadataSnapshot);
 
 export function mockCompactHooksPluginMetadata(): void {
+  // mock-isolation: Keep plugin discovery and Gateway-owned metadata state outside compaction fixtures.
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
     getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+    // Isolated recovery config reads have no process-owned Gateway snapshot.
+    getCompatibleProcessGatewayPluginMetadataSnapshot: () => undefined,
     isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     createPluginMetadataSnapshotFrame: () =>

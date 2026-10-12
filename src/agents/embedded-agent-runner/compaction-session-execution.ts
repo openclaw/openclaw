@@ -372,7 +372,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         if (limited.length > 0) {
           session.agent.state.messages = limited;
         }
-        const hookRunner = getGlobalHookRunner();
+        const hookRunner = accountingRecorder?.hostOwnsPluginHooks ? null : getGlobalHookRunner();
         const observedTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
@@ -582,7 +582,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               ...sessionTarget,
               sessionId: params.sessionId,
             });
-        if (!memoryTranscript) {
+        if (!memoryTranscript && !accountingRecorder?.hostOwnsPostCompactionSideEffects) {
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,

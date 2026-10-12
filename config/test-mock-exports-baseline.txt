@@ -2325,7 +2325,6 @@
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./server-endpoint-compaction.js","14a65acf96381b0335b2becd638be53b1289fc2012906f2873c6eb6c84c8daa6",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./stream-resolution.js","8271f5e949ad38566716a90c7faecf73a2b2098e4b1024562e9af57bdf27e040",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","./wait-for-idle-before-flush.js","9d6f5f8e9d08a2cb7665789b9fbe051aed7c81c7c911a88eea6fbbe16f8e17ea",1]
-["src/agents/embedded-agent-runner/compact.hooks.metadata.test-support.ts","../../plugins/current-plugin-metadata-snapshot.js","4de9d30184dcdd506aa2cadbf1760e10671d2552c5a154639817c4cd1561e951",1]
 ["src/agents/embedded-agent-runner/compact.hooks.tools.test-support.ts","../../skills/loading/workspace-skill-loader.js","40220b57ce39dad23ca9320c6e60f880ed1c3e0bb180871af1b8ab571ed043de",1]
 ["src/agents/embedded-agent-runner/compact.hooks.tools.test-support.ts","../../skills/loading/workspace-skill-prompt.js","01c0f4f71fe7ee7ea532c8ab77ca55925cb683974e54193f3bd04482c90b20e5",1]
 ["src/agents/embedded-agent-runner/compact.hooks.tools.test-support.ts","../../skills/runtime/env-overrides.js","06339795b3f5aef1a8f395db1b0ea2c1fa94ded6acc39d412487821d5197a9b5",1]

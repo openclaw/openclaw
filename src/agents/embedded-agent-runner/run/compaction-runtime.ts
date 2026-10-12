@@ -180,6 +180,12 @@ export async function compactEmbeddedRunForRecovery(
           owner.withTranscriptWrites(backendParams.abortSignal, () => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                hostOwnsPluginHooks: input.contextEngine.info.ownsCompaction === true,
+                // Overflow recovery leaves refresh to the native delegate;
+                // timeout recovery refreshes the accepted successor itself.
+                hostOwnsPostCompactionSideEffects:
+                  recovery.trigger === "timeout_recovery" &&
+                  input.contextEngine.info.ownsCompaction === true,
                 requestBudget: input.state.compactionRequestBudget,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",

@@ -12,6 +12,10 @@ export type CompactionAccountingReceipt = {
 };
 
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
+  /** The invoking host settles plugin hooks; native internal events still run. */
+  hostOwnsPluginHooks?: boolean;
+  /** The invoking host refreshes its accepted durable successor, not the delegate. */
+  hostOwnsPostCompactionSideEffects?: boolean;
   /** A precheck can require budget recovery while its user request is still pending. */
   pendingRequestState?: "unresolved";
   /** The caller's buffer owns recovery; its portable identity grants no durable access. */
