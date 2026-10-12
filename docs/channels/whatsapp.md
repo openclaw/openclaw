@@ -367,7 +367,7 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 
 The implicit self-number allowance applies only to DMs, not group allowlists.
 
-Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
+Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, supply an identity reply prefix when no response prefix is configured, and keep the linked device's global presence `unavailable` so the phone keeps its notifications. OpenClaw sends `unavailable` on connect and again after every send, after clearing the chat's typing state.
 
 A liveness check sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
