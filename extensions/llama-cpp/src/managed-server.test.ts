@@ -23,10 +23,10 @@ vi.mock("./llama-server-assets.js", async (importOriginal) => ({
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { selectLlamaServerAsset } from "./llama-server-assets.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
+import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
   ensureLlamaCppModel,
   ensureManagedLlamaServerForChat,
-  inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
   reconcileManagedLlamaServer,
 } from "./managed-server.js";
