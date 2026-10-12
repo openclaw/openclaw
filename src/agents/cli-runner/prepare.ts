@@ -138,7 +138,7 @@ import {
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
@@ -1458,10 +1458,10 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
     const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      ? await prepareCliHistoryBoundary(historyParams, authCredential, preparedBackendFinal)
       : undefined;
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
+    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter?.replaysHistory;
     // Native compatibility and transcript account ownership are independent gates.
     const rawTranscriptReseedReason = !historyAllowed
       ? "auth-unknown"
@@ -1533,8 +1533,9 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
-        // Caller-owned memory cannot grant access to persisted interrupted inputs.
-        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
+        // Caller-owned memory cannot grant access to persisted interrupted inputs, and a
+        // turn that runs without saved history does not receive them either.
+        sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [
           turnRuntimeFacts?.relocatable,
           promptBuildHookResult?.appendContext,

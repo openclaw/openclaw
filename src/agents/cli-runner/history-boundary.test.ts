@@ -10,11 +10,9 @@ import {
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
-import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import {
@@ -24,13 +22,11 @@ import {
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
+import { createHistoryBoundaryFixture, history } from "./history-boundary.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "cli-history-boundary-");
@@ -38,95 +34,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function fixture(withHeader = true) {
-  const dir = sessionDirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "history",
-    sessionKey: "agent:main:history",
-    storePath: path.join(dir, "openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  if (withHeader) {
-    appendTranscriptEventSync(target, {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: target.sessionId,
-      cwd: dir,
-      timestamp: new Date(0).toISOString(),
-    });
-  }
-  const manager = () => SessionManager.open(target, dir);
-  let runNumber = 0;
-  const withRun = async <T>(
-    runId: string,
-    action: (params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
-  ) => {
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-test");
-    try {
-      return await action({
-        admittedRunContext: await admission.admit("embedded"),
-        runId,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionFile: target.sessionKey,
-        sessionTarget: target,
-        storePath: target.storePath,
-        provider: "test-cli",
-        model: "test-model",
-        prompt: "current ask",
-        workspaceDir: dir,
-        timeoutMs: 1000,
-        ...overrides,
-      });
-    } finally {
-      admission.close();
-    }
-  };
-  const run = async <T>(
-    epoch: string | undefined,
-    action: (allowed: boolean, params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
-    credential?: AuthProfileCredential,
-  ) => {
-    const runId = "boundary-run-" + ++runNumber;
-    await patchSessionEntryCore(target, (entry) => ({ ...entry, activeWriterRunId: runId }));
-    return await withRun(
-      runId,
-      async (params) => {
-        const writer = await prepareCliHistoryBoundary(params, {
-          credential:
-            credential ??
-            (epoch ? { type: "token", provider: "test-cli", token: epoch } : undefined),
-        });
-        return await runWithCliHistoryWriter(writer, () => action(Boolean(writer), params));
-      },
-      overrides,
-    );
-  };
-  const seed = async () =>
-    await run("epoch-a", async (allowed) => {
-      expect(allowed).toBe(true);
-      manager().appendMessage({ role: "user", content: "A private canary", timestamp: 1 });
-    });
-  return { target, manager, run, seed, withRun };
-}
-
-async function history(allowed: boolean, params: PreparedCliRunContext["params"]) {
-  return buildCliSessionHistoryPrompt({
-    messages: (
-      await loadCliSessionPromptContext({
-        ...params,
-        allowRawTranscriptReseed: true,
-        rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
-      })
-    ).reseedMessages,
-    prompt: "current ask",
-    maxHistoryChars: 8192,
-  });
-}
+const fixture = (withHeader?: boolean) => createHistoryBoundaryFixture(sessionDirs, withHeader);
 
 async function settleNativeBinding(
   params: PreparedCliRunContext["params"],
@@ -164,7 +72,9 @@ describe("CLI transcript account boundary", () => {
       const sql = observeHostDataSql();
       try {
         const writer = await prepareCliHistoryBoundary(params, {
-          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+          type: "token",
+          provider: "test-cli",
+          token: "epoch-a",
         });
         expect(writer).toBeDefined();
         expect(sql.queries, `MAIN SQL observations: ${sql.queries.length}`).toEqual([]);
@@ -217,7 +127,9 @@ describe("CLI transcript account boundary", () => {
           { ...anchor, role: "user", logicalTurnId: "current-input-check" },
           () =>
             prepareCliHistoryBoundary(params, {
-              credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+              type: "token",
+              provider: "test-cli",
+              token: "epoch-a",
             }),
         ),
       ).rejects.toThrow("Current-turn transcript admission identity changed");
@@ -263,7 +175,9 @@ describe("CLI transcript account boundary", () => {
         async (params) => {
           await expect(
             prepareCliHistoryBoundary(params, {
-              credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+              type: "token",
+              provider: "test-cli",
+              token: "epoch-a",
             }),
           ).rejects.toThrow();
           if (change === "append" || change === "rewrite") {
@@ -305,7 +219,9 @@ describe("CLI transcript account boundary", () => {
         );
       await f.withRun("replanned-preparation", async (params) => {
         const writer = await prepareCliHistoryBoundary(params, {
-          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+          type: "token",
+          provider: "test-cli",
+          token: "epoch-a",
         });
         expect(spy).toHaveBeenCalledTimes(2);
         expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
@@ -514,9 +430,7 @@ describe("CLI transcript account boundary", () => {
   it("admits a finished writer's successor while refusing the live writer", async () => {
     const f = await fixture();
     await f.seed();
-    const identity = {
-      credential: { type: "token" as const, provider: "test-cli", token: "epoch-a" },
-    };
+    const identity = { type: "token" as const, provider: "test-cli", token: "epoch-a" };
     await f.withRun("orchestrator-prior", async (params) => {
       await claimAgentSessionWriter(params);
       await f.withRun("direct-cli-blocked", async (direct) => {
@@ -602,7 +516,9 @@ describe("CLI transcript account boundary", () => {
       await f.withRun("direct-cli-recovery", async (params) => {
         await expect(
           prepareCliHistoryBoundary(params, {
-            credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+            type: "token",
+            provider: "test-cli",
+            token: "epoch-a",
           }),
         ).rejects.toThrow("CLI history owner changed before preparation");
       });
@@ -623,7 +539,9 @@ describe("CLI transcript account boundary", () => {
       await f.withRun("direct-cli-recovery", async (params) => {
         params.sessionEntry = loadSessionEntryReadOnly(f.target);
         const writer = await prepareCliHistoryBoundary(params, {
-          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+          type: "token",
+          provider: "test-cli",
+          token: "epoch-a",
         });
         expect(writer).toBeDefined();
         if (!writer) {

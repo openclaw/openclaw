@@ -2,6 +2,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   getCliHistoryWriter,
   advanceCliHistoryBoundary,
+  cliHistoryOwnerHolds,
   type CliHistoryWriterFacts,
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -23,6 +24,7 @@ export function advanceCliHistoryBoundaryInTransaction(
       { first: seq, last: seq },
       writer,
       writer.assertCurrent,
+      writer.confirmsOwner,
     );
   }
 }
@@ -34,6 +36,7 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
   range: { first: number; last: number },
   writer: CliHistoryWriterFacts,
   assertCurrent: () => void,
+  confirmsOwner?: () => boolean,
 ): boolean {
   if (range.last < range.first) {
     return false;
@@ -48,6 +51,9 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     return false;
   }
   assertCurrent();
+  if (!cliHistoryOwnerHolds(writer, confirmsOwner)) {
+    return false;
+  }
   writeSessionEntry(database, scope.sessionKey, next, { previousEntry: entry });
   return true;
 }

@@ -86,7 +86,7 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
     return undefined;
   }
   try {
-    turn.context.assertCurrent?.();
+    (turn.context.assertStreamCurrent ?? turn.context.assertCurrent)?.();
     return turn;
   } catch {
     return undefined;

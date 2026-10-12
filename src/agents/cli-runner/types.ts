@@ -278,7 +278,7 @@ export type PreparedCliRunContext = {
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
-  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
+  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliExecutionHistoryWriter;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;
