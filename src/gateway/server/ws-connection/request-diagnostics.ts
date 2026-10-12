@@ -12,6 +12,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { isCoreGatewayMethodClassified } from "../../methods/core-method-policy.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
@@ -106,7 +107,10 @@ export class GatewayRpcDiagnostics {
     }
     let outcome: "returned" | "threw" = "returned";
     try {
-      await invoke();
+      await runWithMainThreadTask(
+        diagnostics ? `gateway:rpc:${diagnostics.method}` : "gateway:rpc",
+        invoke,
+      );
     } catch (error) {
       outcome = "threw";
       throw error;
