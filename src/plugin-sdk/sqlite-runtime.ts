@@ -61,7 +61,6 @@ export {
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseAsync,
-  withOpenClawAgentDatabaseRuntime,
   withOpenClawAgentDatabaseWrite,
 } from "./sqlite-runtime-legacy.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";

@@ -14,7 +14,6 @@ export const BINDING_PERSISTENCE_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings",
     surfaces: [
       "createAccountScopedConversationBindingManager",
-      "createAccountScopedBindingAdapter",
       "registerSessionBindingAdapter",
       "SessionBindingService.listBySession",
       "SessionBindingService.resolveByConversation",

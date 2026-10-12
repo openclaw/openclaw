@@ -111,54 +111,6 @@ export function loadMemorySessionMetadata(params: {
   return instance ? projectSessionMetadata(instance) : undefined;
 }
 
-/** @deprecated Use loadMemorySessionMetadataBatchAsync; removed at the next Plugin SDK major. */
-export function loadMemorySessionMetadataBatch(params: {
-  agentId: string;
-  storePath?: string;
-  sessions: readonly { sessionId: string; sessionKey?: string }[];
-}): MemorySessionTarget[] {
-  if (isMainThread) {
-    warnPluginSdkDeprecation({
-      family: "memory-session",
-      method: "loadMemorySessionMetadataBatch",
-      replacement: "loadMemorySessionMetadataBatchAsync",
-    });
-  }
-  for (const session of params.sessions) {
-    assertBoundIncognitoMemorySyncAccess(
-      { ...params, ...session },
-      "loadMemorySessionMetadataBatch",
-      "loadMemorySessionMetadataBatchAsync",
-    );
-  }
-  const selectors = new Map<string, Set<string | undefined>>();
-  for (const { sessionId, sessionKey } of params.sessions) {
-    const keys = selectors.get(sessionId) ?? new Set<string | undefined>();
-    keys.add(sessionKey);
-    selectors.set(sessionId, keys);
-  }
-  const sessionIds = [...selectors.keys()];
-  const agentId = normalizeAgentId(params.agentId);
-  const metadata: MemorySessionTarget[] = [];
-  const batchSize = 128;
-  for (let start = 0; start < sessionIds.length; start += batchSize) {
-    const instances = listSessionTranscriptInstances(
-      { agentId, storePath: params.storePath, projection: "list" },
-      { includeAllWindows: true, sessionIds: sessionIds.slice(start, start + batchSize) },
-    );
-    for (const instance of instances) {
-      const keys = selectors.get(instance.sessionId);
-      if (
-        instance.agentId === agentId &&
-        (keys?.has(undefined) || keys?.has(instance.sessionKey))
-      ) {
-        metadata.push(projectSessionMetadata(instance));
-      }
-    }
-  }
-  return metadata;
-}
-
 /** Read the selected transcript's recorded source metadata through its owner. */
 export async function loadMemorySessionMetadataAsync(
   params: Parameters<typeof loadMemorySessionMetadata>[0],
@@ -167,9 +119,11 @@ export async function loadMemorySessionMetadataAsync(
 }
 
 /** One history read resolves the complete ingestion batch. */
-export async function loadMemorySessionMetadataBatchAsync(
-  params: Parameters<typeof loadMemorySessionMetadataBatch>[0],
-): Promise<MemorySessionTarget[]> {
+export async function loadMemorySessionMetadataBatchAsync(params: {
+  agentId: string;
+  storePath?: string;
+  sessions: readonly { sessionId: string; sessionKey?: string }[];
+}): Promise<MemorySessionTarget[]> {
   const selectors = new Map<string, Set<string | undefined>>();
   for (const { sessionId, sessionKey } of params.sessions) {
     const keys = selectors.get(sessionId) ?? new Set<string | undefined>();

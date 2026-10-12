@@ -121,9 +121,9 @@ each resolver so in-process write receipts invalidate ownership before an effect
 Core preserves the resolver's error and fallback handling and releases prepared
 facts when the operation ends; do not retain the reader for later operations.
 
-The synchronous `prepareConversationRouteOwners` and
-`resolveConversationRouteOwner` hooks remain deprecated compatibility until the
-next Plugin SDK major. See
+The released synchronous `resolveConversationRouteOwner` hook remains deprecated
+compatibility while plugins migrate. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed. See
 [binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 Await `getSessionBindingService().touchAsync(bindingId, at, scope)` when recording

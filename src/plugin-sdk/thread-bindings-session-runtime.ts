@@ -19,7 +19,6 @@ export {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 export {
-  createAccountScopedBindingAdapter,
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
 } from "../infra/outbound/session-binding-adapter.js";

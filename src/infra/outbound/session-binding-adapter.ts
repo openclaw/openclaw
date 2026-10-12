@@ -48,8 +48,8 @@ export function projectThreadBindingRecord(
   };
 }
 
-/** @deprecated Use createAccountScopedBindingAdapterV2; removed in the next Plugin SDK major. */
-export function createAccountScopedBindingAdapter<T>(params: {
+/** Internal synchronous projections still consumed by the core binding service. */
+function createAccountScopedBindingAdapter<T>(params: {
   channel: string;
   accountId: string;
   capabilities: SessionBindingAdapter["capabilities"];
