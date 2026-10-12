@@ -314,10 +314,6 @@ export function SkillMenu(props: { args: Parameters<typeof renderSkillMenuConten
   );
 }
 
-export function renderSkillMenuSolid(...args: Parameters<typeof renderSkillMenuContents>) {
-  return <SkillMenu args={args} />;
-}
-
 export function renderSkillMenu(...args: Parameters<typeof renderSkillMenuContents>) {
   return solidTemplate(SkillMenu, { args });
 }

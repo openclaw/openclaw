@@ -1,39 +1,70 @@
-import { render, nothing } from "lit";
-/* @vitest-environment jsdom */
+import { html, render, nothing } from "lit";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
-import { ChatComposer } from "./components/chat-composer.tsx";
+import { LitContent } from "./components/chat-composer-interop.tsx";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
 
-function mountComposer(view: Parameters<typeof mountSolid>[0]) {
-  return mountSolid(view, {
-    container: document.body.appendChild(createComposerContainer()),
+function mountComposer(initial: Parameters<typeof renderChatComposer>[0]) {
+  const container = document.body.appendChild(createComposerContainer());
+  let props = initial;
+  const paint = () => render(renderChatComposer(props), container);
+  onTestFinished(() => {
+    render(nothing, container);
   });
+  paint();
+  return {
+    container,
+    update: (next: (previous: typeof props) => typeof props) => {
+      props = next(props);
+      paint();
+    },
+  };
 }
+
+it("mounts nested Solid content when opaque Lit content changes after mount", async () => {
+  const Label = (props: { text: string }) => <b class="nested-label">{props.text}</b>;
+  const [value, setValue] = createSignal<unknown>(html`<i>initial</i>`);
+  const view = mountSolid(() => <LitContent value={value()} />);
+
+  // Composer updates reach LitContent from its render effect, where nested
+  // directives must not create roots without an owner.
+  setValue(html`${solidTemplate(Label, { text: "attached" })}`);
+  flush();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("attached"),
+  );
+
+  setValue(html`${solidTemplate(Label, { text: "still reactive" })}`);
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("still reactive"),
+  );
+});
 
 it("retains the native input and IME draft across external composer updates", () => {
   let draft = "hello";
   const onDraftChange = vi.fn((value: string) => {
     draft = value;
   });
-  const [current, setCurrent] = createSignal(
+  const view = mountComposer(
     createComposerProps({
       draft,
       getDraft: () => draft,
       onDraftChange,
     }),
   );
-  const view = mountComposer(() => <ChatComposer {...current()} />);
   const textarea = view.container.querySelector("textarea")!;
   const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!;
   const setValue = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
@@ -45,7 +76,7 @@ it("retains the native input and IME draft across external composer updates", ()
   };
 
   edit("hello there");
-  setCurrent((previous) => ({ ...previous, stream: "Streaming a response", runActive: true }));
+  view.update((previous) => ({ ...previous, stream: "Streaming a response", runActive: true }));
   flush();
   expect(view.container.querySelector("textarea")).toBe(textarea);
   expect(textarea.value).toBe("hello there");
@@ -54,7 +85,7 @@ it("retains the native input and IME draft across external composer updates", ()
   textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
   edit("hello 日本語", true);
   onDraftChange.mockClear();
-  setCurrent((previous) => ({
+  view.update((previous) => ({
     ...previous,
     draft: "stale host snapshot",
     stream: "More response",
@@ -73,20 +104,19 @@ it("retains the native input and IME draft across external composer updates", ()
 it("ends the old IME scope without writing into a newly selected session", () => {
   const onOldDraftChange = vi.fn();
   const onNewDraftChange = vi.fn();
-  const [current, setCurrent] = createSignal(
+  const view = mountComposer(
     createComposerProps({
       sessionKey: "first",
       draft: "first draft",
       onDraftChange: onOldDraftChange,
     }),
   );
-  const view = mountComposer(() => <ChatComposer {...current()} />);
   const oldInput = view.container.querySelector("textarea")!;
   oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
   oldInput.value = "unfinished composition";
   oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
 
-  setCurrent((previous) => ({
+  view.update((previous) => ({
     ...previous,
     sessionKey: "second",
     draft: "second draft",
@@ -117,7 +147,7 @@ it("updates follow-up controls during IME without replacing or writing the input
     followUpMode: "queue",
     onDraftChange,
   });
-  const view = mountComposer(() => <ChatComposer {...props} />);
+  const view = mountComposer(props);
   const textarea = view.container.querySelector("textarea")!;
   expect(view.container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -136,13 +166,12 @@ it("updates follow-up controls during IME without replacing or writing the input
 
 it("keeps the open permission picker through parent updates", () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
-  const [current, setCurrent] = createSignal(createComposerProps({ permissionPicker }));
-  const view = mountComposer(() => <ChatComposer {...current()} />);
+  const view = mountComposer(createComposerProps({ permissionPicker }));
   const picker = view.container.querySelector<HTMLElement & { open: boolean }>(
     ".chat-controls__permission-picker",
   )!;
   picker.open = true;
-  setCurrent((previous) => ({
+  view.update((previous) => ({
     ...previous,
     stream: "More response",
     permissionPicker: { ...permissionPicker },

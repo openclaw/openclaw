@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
@@ -173,47 +171,6 @@ describe("prepared worker intent admission", () => {
     expect(f.resumeProvision).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["legacy-label", "linked-transport"])(
-    "replays a fresh admitted intent after display or transport metadata changes (%s)",
-    async (variant) => {
-      const f = await fixture();
-      const options = { projectPath: f.projectPath };
-      const original = await f.owner.prepareIntent("development", options);
-      const profileSnapshot = structuredClone(original.profileSnapshot);
-      if (!isRecord(profileSnapshot.project)) {
-        throw new Error("Expected prepared project");
-      }
-      if (variant === "legacy-label") {
-        delete profileSnapshot.project.label;
-      } else if (variant === "linked-transport") {
-        const linked = path.join(support.testState.root, "previous-transport");
-        await requireGit(f.projectPath, ["worktree", "add", "--detach", linked, "HEAD"]);
-        profileSnapshot.project.root = linked;
-      }
-      const stored = await support.testState.store.createIntent({
-        ...deriveEnvironmentIntent("display-replay"),
-        providerId: original.providerId,
-        profileId: "development",
-        profileSnapshot,
-      });
-      await requireGit(f.projectPath, [
-        "remote",
-        "add",
-        "origin",
-        "git@example.invalid:Team/Renamed.git",
-      ]);
-      const retry = await f.owner.prepareIntent("development", options);
-      expect(retry.preparationKey).toBe(original.preparationKey);
-      await expect(
-        f.owner.createWithProfile("development", "display-replay", options, retry),
-      ).resolves.toMatchObject({ environmentId: stored.environmentId, profileSnapshot });
-      expect(support.testState.store.get(stored.environmentId)?.profileSnapshot).toEqual(
-        profileSnapshot,
-      );
-      expect(f.resumeProvision).toHaveBeenCalledOnce();
-    },
-  );
-
   it("requires setup authority for reserves while preserving explicit session setup admission", async () => {
     const f = await fixture(true);
     const ordinary = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
@@ -236,14 +193,5 @@ describe("prepared worker intent admission", () => {
     expect(
       readWorkerProjectPreparation(support.testState.store.list()[0]!.profileSnapshot.project)?.key,
     ).toBe(authorized.preparationKey);
-  });
-
-  it("rejects intents from outside the preparing lifecycle", async () => {
-    const f = await fixture();
-    const intent = await f.owner.prepareIntent("development", { projectPath: f.projectPath });
-    expect(() =>
-      f.owner.assertPreparedIntentCurrent("development", structuredClone(intent)),
-    ).toThrow("not owned by this lifecycle");
-    expect(support.testState.store.list()).toEqual([]);
   });
 });

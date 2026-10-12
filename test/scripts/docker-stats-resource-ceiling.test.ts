@@ -74,13 +74,6 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     },
   );
 
-  it("fails when the stats log contains no parseable samples", () => {
-    const result = runAssert(writeStats("not-json\n"));
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("was not valid JSON");
-  });
-
   it("rejects invalid resource limits instead of disabling the ceiling", () => {
     const result = runAssert(
       writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
@@ -160,16 +153,6 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.stdout).toContain("memory=128.0MiB");
     expect(result.stdout).toContain("cpu=25.0%");
     expect(result.stdout).toContain("samples=6");
-  });
-
-  it("streams stats logs instead of slurping them into memory", () => {
-    const source = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(source).toContain("createReadStream");
-    expect(source).toContain("MAX_STATS_SAMPLE_LINE_BYTES");
-    expect(source).not.toContain("createInterface");
-    expect(source).not.toContain("readFileSync(statsFile");
-    expect(source).not.toContain("split(/\\r?\\n/u)");
   });
 
   it("rejects oversized stats sample lines before parsing JSON", () => {

@@ -18,12 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { reefPeerIdentity } from "./friend-types.js";
-import {
-  REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
-  REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-  REEF_OUTBOUND_DELIVERY_TTL_MS,
-  type ReefOutboundDeliveryBinding,
-} from "./trust-store-format.js";
+import type { ReefOutboundDeliveryBinding } from "./trust-store-format.js";
 import {
   isReefPairingApprovalToken,
   openReefTrustStore,
@@ -205,10 +200,10 @@ describe("ReefTrustStore", () => {
       await recovery.reserve(notice);
 
       const raw = mockRuntime.state.openSyncKeyedStore({
-        namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-        maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+        namespace: "outbound-deliveries",
+        maxEntries: 32_768,
         overflowPolicy: "reject-new",
-        defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
+        defaultTtlMs: 61 * 24 * 60 * 60 * 1_000,
       });
       const duplicate = (await store.readOutboundDelivery("clawd", id))!;
       const saved = raw.entries()[0]!;
@@ -330,10 +325,10 @@ describe("ReefTrustStore", () => {
       await recordDelivery(store, "clawd", id, binding);
       const settlement = (await store.readOutboundDelivery("clawd", id))!;
       const raw = runtime().state.openSyncKeyedStore({
-        namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-        maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+        namespace: "outbound-deliveries",
+        maxEntries: 32_768,
         overflowPolicy: "reject-new",
-        defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
+        defaultTtlMs: 61 * 24 * 60 * 60 * 1_000,
       });
       const changed = {
         ...settlement.delivery,
@@ -431,10 +426,10 @@ describe("ReefTrustStore", () => {
     });
     const accepted = (await store.readOutboundDelivery("clawd", id))!;
     const raw = runtime().state.openSyncKeyedStore({
-      namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-      maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+      namespace: "outbound-deliveries",
+      maxEntries: 32_768,
       overflowPolicy: "reject-new",
-      defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
+      defaultTtlMs: 61 * 24 * 60 * 60 * 1_000,
     });
     raw.register(`${resolveReefTrustStoreKey(config(), "clawd")}:${id}`, {
       ...accepted.delivery,

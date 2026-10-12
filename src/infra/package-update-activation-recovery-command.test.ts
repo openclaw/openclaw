@@ -8,6 +8,7 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { prepareRemountedPublication } from "./package-update-activation-remount.test-support.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import {
   assertNoPendingPackageActivation,
@@ -137,5 +138,79 @@ it.skipIf(process.platform === "win32")(
         completedBytes,
       );
       expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
+    }),
+);
+
+it.skipIf(process.platform === "win32").each(["settle", "archive-sync-fails"] as const)(
+  "a separate helper settles only the verified unfinished remounted publication: %s",
+  (scenario) =>
+    fixture.lifetime.run(async () => {
+      const { root, childGuardEnv } = fixture.setup();
+      const f = await prepareRemountedPublication(fixture, root);
+      const preload = path.join(root, "archive-sync-failure.mjs");
+      if (scenario === "archive-sync-fails") {
+        // Inject at the filesystem boundary after custody really moved. The
+        // standalone command must expose the owner's unconfirmed-archive warning.
+        fs.writeFileSync(
+          preload,
+          `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const rename = fs.renameSync;
+const sync = fs.fsyncSync;
+let moved = false;
+fs.renameSync = (source, destination) => {
+  const result = rename(source, destination);
+  if (String(source) === ${JSON.stringify(`${f.anchor}.control`)}) moved = true;
+  return result;
+};
+fs.fsyncSync = (fd) => {
+  if (moved && fs.fstatSync(fd).isDirectory()) {
+    moved = false;
+    throw Object.assign(new Error("archive directory sync failed after control rename"), { code: "EIO" });
+  }
+  return sync(fd);
+};
+syncBuiltinESMExports();
+`,
+        );
+      }
+      const run = (action: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            ...(scenario === "archive-sync-fails" ? ["--import", preload] : []),
+            ...resolveRuntimeWorkerArgv(recoveryWorker),
+            "--anchor",
+            f.anchor,
+            "--operation",
+            f.operationId,
+            action,
+          ],
+          { env: childGuardEnv(process.env), encoding: "utf8", timeout: 30_000 },
+        );
+      const before = fs.readFileSync(f.journalPath);
+      for (const action of ["status", "retire"]) {
+        const refusal = run(action);
+        expect(refusal.status, refusal.stderr).toBe(1);
+        expect(refusal.stderr).toContain("does not match its installation");
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+      }
+      const result = run("repair");
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        phase: "complete",
+        operationId: f.operationId,
+      });
+      expect(result.stderr).toContain("No package was republished and no service was restarted");
+      if (scenario === "archive-sync-fails") {
+        expect(result.stderr).toContain("Closed recovery evidence could not be fully archived");
+        expect(result.stderr).toContain("archive directory sync failed after control rename");
+      }
+      const retained = `${f.anchor}.superseded-${f.operationId}`;
+      expect(fs.existsSync(path.join(retained, "previous/package.json"))).toBe(true);
+      expect(fs.existsSync(path.join(retained, "control/recovery.mjs"))).toBe(true);
+      expect(fs.existsSync(f.journalPath)).toBe(false);
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }),
 );

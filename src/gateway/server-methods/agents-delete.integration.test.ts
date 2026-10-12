@@ -12,7 +12,7 @@ import {
 import { createAgent } from "../../agents/agent-create.js";
 import {
   clearActiveEmbeddedRun,
-  isEmbeddedAgentRunInProgress,
+  resolveEmbeddedAgentRunProgressState,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
@@ -159,7 +159,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         signal,
       );
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-      expect(isEmbeddedAgentRunInProgress(session.sessionId)).toBe(true);
+      expect(resolveEmbeddedAgentRunProgressState(session.sessionId)).toBeDefined();
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
@@ -443,7 +443,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     signal,
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-                  expect(isEmbeddedAgentRunInProgress(sessionId)).toBe(true);
+                  expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
                   const relocatedWorkspace = state.path("workspace-relocated");
                   await expect(
                     client.request("agents.update", { agentId, workspace: relocatedWorkspace }),
@@ -483,7 +483,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(isEmbeddedAgentRunInProgress(sessionId)).toBe(false);
+                expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                 await expect(
                   client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
@@ -518,7 +518,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(isEmbeddedAgentRunInProgress(recreatedSession.sessionId)).toBe(false);
+                expect(
+                  resolveEmbeddedAgentRunProgressState(recreatedSession.sessionId),
+                ).toBeUndefined();
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {
