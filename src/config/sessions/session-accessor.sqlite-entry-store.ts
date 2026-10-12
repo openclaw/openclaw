@@ -13,9 +13,8 @@ import { getChildLogger } from "../../logging/logger.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
-import { retainLegacyAcpMigrationSourcesJson } from "./session-accessor.sqlite-acp-provenance.js";
+import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
 import {
   linkSessionConversation,
   prepareConversationIdentities,
@@ -505,23 +504,13 @@ export function writeSessionEntry(
   const persisted = splitSessionEntrySnapshots(canonicalEntry, {
     previousEntry: canonicalPreviousEntry,
   });
-  const retainLegacySources =
-    canonicalPreviousEntry &&
-    (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
-      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision) &&
-    hasLegacyAcpMigrationProvenanceColumn(database.db);
-  // Full entry snapshots already carry this column; legacy callers may supply only the entry.
-  const legacySourcesJson = retainLegacySources
-    ? canonicalPreviousRow && "legacy_acp_migration_json" in canonicalPreviousRow
-      ? canonicalPreviousRow.legacy_acp_migration_json
-      : executeSqliteQueryTakeFirstSync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("session_nodes")
-            .select("legacy_acp_migration_json")
-            .where("session_key", "=", sessionKey),
-        )?.legacy_acp_migration_json
-    : undefined;
+  const legacySources = prepareLegacyAcpMigrationSourcesForEntryWrite(
+    database,
+    sessionKey,
+    normalizedEntry,
+    canonicalPreviousEntry,
+    canonicalPreviousRow,
+  );
   const sessionNode = {
     ...bindSessionNode({
       entry: canonicalEntry,
@@ -529,14 +518,7 @@ export function writeSessionEntry(
       sessionKey,
       updatedAt,
     }),
-    ...(retainLegacySources
-      ? {
-          legacy_acp_migration_json: retainLegacyAcpMigrationSourcesJson(
-            legacySourcesJson,
-            normalizedEntry,
-          ),
-        }
-      : {}),
+    ...legacySources,
   };
   const previousColumns = new Map(Object.entries(canonicalPreviousRow ?? {}));
   const nodeChanged =
@@ -613,9 +595,10 @@ export function writeSessionEntry(
         nodeChanged || persisted.snapshotsChanged
           ? trackSessionEntryCacheWrite(database, () => {
               if (nodeChanged) {
-                const writeNode = retainLegacySources
-                  ? queries.nodeWithLegacySources
-                  : queries.node;
+                const writeNode =
+                  "legacy_acp_migration_json" in legacySources
+                    ? queries.nodeWithLegacySources
+                    : queries.node;
                 writeNode(sessionNode);
               }
               if (persisted.snapshotsChanged) {

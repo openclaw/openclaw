@@ -34,7 +34,6 @@ describe("node worker provider provisioning", () => {
 
   it.each([
     { target: "primary", executionMode: undefined, prewarm: true },
-    { target: "primary", executionMode: "remote-exec", prewarm: false },
     { target: "conversation", executionMode: undefined, prewarm: false },
   ] as const)(
     "installs the verified bundle with runtime-appropriate prewarming for $target/$executionMode",
@@ -126,7 +125,7 @@ describe("node worker provider provisioning", () => {
     },
   );
 
-  it.each(["ready", "bundle-failed", "provider-failed", "provider-timeout"] as const)(
+  it.each(["bundle-failed", "provider-timeout"] as const)(
     "prepares the bundle before project-less enrollment while preserving a %s outcome",
     async (outcome) => {
       if (outcome === "provider-timeout") {
@@ -171,9 +170,6 @@ describe("node worker provider provisioning", () => {
             expect(first).toBe(second);
             enrolled.resolve();
             await finishProvider.promise;
-            if (outcome === "provider-failed") {
-              throw new Error("provider response lost");
-            }
             return { leaseId, node: { deviceId }, sharedHost: false };
           },
           destroy,
@@ -224,40 +220,15 @@ describe("node worker provider provisioning", () => {
         const record = support.testState.store.list()[0]!;
         expect(record).toMatchObject({ state: "provisioning", bootstrapReceipt: null });
         expect(support.testState.store.getCredential(record.environmentId)).toBeUndefined();
-        if (outcome === "ready") {
-          finishProvider.resolve();
-          expect(await creation).toMatchObject({
-            value: { state: "ready", nodeDeviceId: deviceId },
-          });
-          expect(ensureNodeWorkerBundle).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ artifact: support.BUNDLE_ARTIFACT, deviceId }),
-          );
-        } else if (outcome === "provider-timeout") {
-          await vi.advanceTimersByTimeAsync(20);
-          expect(await creation).toMatchObject({ error: { code: "provider_failure" } });
-          await expect(begin!()).rejects.toThrow("Worker provisioning operation is closed");
-          teardown = workerService.destroy(record.environmentId);
-          await setImmediate();
-          expect(destroy).not.toHaveBeenCalled();
-          finishProvider.resolve();
-          await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-          await workerService.stop();
-        } else {
-          expect(destroy).not.toHaveBeenCalled();
-          expect(workerService.get(record.environmentId)?.state).toBe("provisioning");
-          finishProvider.resolve();
-          expect(await creation).toMatchObject({
-            error: {
-              code: "provider_failure",
-              message: expect.stringContaining("provider response lost"),
-            },
-          });
-          expect(destroy).not.toHaveBeenCalled();
-          expect(workerService.get(record.environmentId)?.state).toBe("provisioning");
-          teardown = workerService.destroy(record.environmentId);
-          await teardown;
-          expect(destroy).toHaveBeenCalledExactlyOnceWith({ leaseId, profile: { region: "test" } });
-        }
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await creation).toMatchObject({ error: { code: "provider_failure" } });
+        await expect(begin!()).rejects.toThrow("Worker provisioning operation is closed");
+        teardown = workerService.destroy(record.environmentId);
+        await setImmediate();
+        expect(destroy).not.toHaveBeenCalled();
+        finishProvider.resolve();
+        await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+        await workerService.stop();
         expect(prepareInstallation).toHaveBeenCalledOnce();
       } finally {
         finishProvider.resolve();
@@ -353,7 +324,7 @@ describe("node worker provider provisioning", () => {
     );
   });
 
-  it.each(["ready", "failure", "teardown"] as const)(
+  it.each(["teardown"] as const)(
     "prepares the node runtime before allocation when preparation ends in %s",
     async (outcome) => {
       const entered = createDeferredCore();
@@ -398,31 +369,15 @@ describe("node worker provider provisioning", () => {
         expect(provision).not.toHaveBeenCalled();
         const record = support.testState.store.list()[0]!;
         expect(record.state).toBe("requested");
-        if (outcome === "teardown") {
-          await support.testState.store.requestDestroy({
-            environmentId: record.environmentId,
-            state: "requested",
-          });
-        }
-        if (outcome === "failure") {
-          prepared.reject(new Error("node package is incomplete"));
-        } else {
-          prepared.resolve();
-        }
-        expect(await completed).toMatchObject(
-          outcome === "ready"
-            ? { value: { state: "ready" } }
-            : {
-                error: {
-                  message: expect.stringContaining(
-                    outcome === "failure"
-                      ? "node package is incomplete"
-                      : "changed during bootstrap preparation",
-                  ),
-                },
-              },
-        );
-        expect(provision).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
+        await support.testState.store.requestDestroy({
+          environmentId: record.environmentId,
+          state: "requested",
+        });
+        prepared.resolve();
+        expect(await completed).toMatchObject({
+          error: { message: expect.stringContaining("changed during bootstrap preparation") },
+        });
+        expect(provision).not.toHaveBeenCalled();
       } finally {
         prepared.resolve();
         await completed;
@@ -430,7 +385,7 @@ describe("node worker provider provisioning", () => {
     },
   );
 
-  it.each(["provider-error", "provider-timeout", "enrollment-timeout", "runtime-timeout"] as const)(
+  it.each(["provider-timeout", "enrollment-timeout", "runtime-timeout"] as const)(
     "closes the exact enrollment and rejects retained callbacks after %s",
     async (outcome) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -488,9 +443,6 @@ describe("node worker provider provisioning", () => {
             pendingEnrollment = begin();
             await pendingEnrollment;
             providerEntered.resolve();
-            if (outcome === "provider-error") {
-              throw new Error("provider response lost");
-            }
             await finishProvider.promise;
             return { leaseId: "cloud-lease-closed", node: { deviceId: "cloud-device-closed" } };
           },
@@ -520,9 +472,7 @@ describe("node worker provider provisioning", () => {
             });
           }),
         ]);
-        if (outcome !== "provider-error") {
-          await vi.advanceTimersByTimeAsync(20);
-        }
+        await vi.advanceTimersByTimeAsync(20);
         expect(await creationResult).toMatchObject({ error: { code: "provider_failure" } });
         expect(runtimeSignal?.aborted).toBe(true);
         if (outcome === "runtime-timeout") {

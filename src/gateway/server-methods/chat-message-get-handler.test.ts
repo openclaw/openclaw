@@ -24,7 +24,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";

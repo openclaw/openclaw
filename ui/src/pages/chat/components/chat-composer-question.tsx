@@ -19,10 +19,6 @@ export function ComposerQuestionDock(props: { panel: QuestionPanelProps | null }
   );
 }
 
-export function renderComposerQuestionDockSolid(panel: QuestionPanelProps | null) {
-  return <ComposerQuestionDock panel={panel} />;
-}
-
 export function resolveComposerQuestionPanel(
   props: ChatComposerProps,
   state: ChatComposerState,

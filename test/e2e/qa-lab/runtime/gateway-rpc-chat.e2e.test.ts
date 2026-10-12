@@ -6,12 +6,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { RUNTIME_CONTEXT_FOOTER, RUNTIME_CONTEXT_HEADER } from "../../../../src/llm/types.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type GatewayChatMessage = {
@@ -66,10 +66,6 @@ const historyTextSchema = z.union([
   z.string(),
   z.array(z.object({ type: z.literal("text"), text: z.string() })).length(1),
 ]);
-// Provider payloads carry runtime context as one labeled user item; it is not a conversation turn.
-const isRuntimeContextCarrierText = (text: string) =>
-  text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) && text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`);
-
 function expectWhitespaceInterior(
   texts: string[],
   owner: string,
@@ -394,7 +390,7 @@ describe("Gateway chat RPCs", () => {
             expect(part.type).toBe("input_text");
             return expectDefined(part.text, "user text");
           })
-          .filter((text) => !isRuntimeContextCarrierText(text));
+          .filter((text) => !isInternalRuntimeContextCarrierText(text));
         expect(userTexts).toHaveLength(index + 1);
         const history = await waitForChatHistory({
           gateway,
@@ -412,8 +408,35 @@ describe("Gateway chat RPCs", () => {
             typeof content === "string" ? content : expectDefined(content[0], "history text").text;
           expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
         }
-        // Replay uses the recorded model-prompt projection (#167938): the consumed
-        // directive stays out of both the original request and its later replay.
+        console.log(
+          "[gateway-rpc-chat-runtime-proof]",
+          JSON.stringify({
+            turn: index + 1,
+            gatewayRunStatus: terminal.status,
+            serializedRuntimeCarriersSkipped: input
+              .filter((item) => item.role === "user")
+              .map((item) =>
+                (item.content ?? [])
+                  .filter((part) => part.type === "input_text")
+                  .map((part) => part.text ?? "")
+                  .join(""),
+              )
+              .filter(isInternalRuntimeContextCarrierText).length,
+            selectedUserTurns: userTexts.length,
+            latestPromptSelected: userTexts.at(-1)?.includes(`BEGIN_${turn.marker}`) ?? false,
+            persistedHistoryContainsPrompt: userMessages.some((message) => {
+              const content = historyTextSchema.safeParse(message.content);
+              return (
+                content.success &&
+                (typeof content.data === "string"
+                  ? content.data
+                  : (content.data[0]?.text ?? "")
+                ).includes(`BEGIN_${turn.marker}`)
+              );
+            }),
+          }),
+        );
+        // The first-sent model prompt replays as projected, so its directive stays stripped.
         expect(userTexts[0]).not.toContain("/think high");
       }
     },

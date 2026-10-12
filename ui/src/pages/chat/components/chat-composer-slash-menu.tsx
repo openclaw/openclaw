@@ -667,10 +667,6 @@ export function SlashMenu(props: { args: Parameters<typeof renderSlashMenuConten
   );
 }
 
-export function renderSlashMenuSolid(...args: Parameters<typeof renderSlashMenuContents>) {
-  return <SlashMenu args={args} />;
-}
-
 export function renderSlashMenu(...args: Parameters<typeof renderSlashMenuContents>) {
   return solidTemplate(SlashMenu, { args });
 }

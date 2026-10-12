@@ -4,11 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
-import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
-import {
-  agentRunHasVisibleReply,
-  extractAgentRunTerminalError,
-} from "../../agents/agent-run-result.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -29,10 +24,6 @@ import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
-import {
-  prepareInternalSessionEffectsSession,
-  removeInternalSessionEffectsSession,
-} from "../../agents/internal-session-effects.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -53,7 +44,6 @@ import {
   copyConfigResolutionFactsExcept,
   resolveConfigSecretRef,
 } from "../../config/resolution-facts.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasConfiguredSecretInput,
@@ -323,14 +313,20 @@ export async function buildProbeTargets(params: {
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
-  const catalog = await readPreparedModelCatalog({
-    config: cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(agentDir ? { agentDir } : {}),
-    ...(workspaceDir ? { workspaceDir } : {}),
-    readOnly: true,
-  });
   const candidates = buildProbeCandidateMap(modelCandidates);
+  const providersNeedingCatalog = providers.filter(
+    (provider) => !candidates.has(normalizeProviderId(provider)),
+  );
+  const catalog = providersNeedingCatalog.length
+    ? await readPreparedModelCatalog({
+        config: cfg,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(agentDir ? { agentDir } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+        readOnly: true,
+        providerDiscoveryProviderIds: providersNeedingCatalog,
+      })
+    : [];
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
   const appendTarget = (target: AuthProbeTarget) => {
@@ -618,13 +614,12 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  storePath: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
   abortSignal?: AbortSignal;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, storePath, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, target, timeoutMs, maxTokens } = params;
   // Marker credentials must be resolved by the runtime from config, but the
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
@@ -635,35 +630,20 @@ async function probeTarget(params: {
   }
   const model = target.model;
 
-  const runId = `probe-${target.provider}-${crypto.randomUUID()}`;
   let isolatedAgentDir: string | null = null;
   let isolatedAuthEnv: NodeJS.ProcessEnv | undefined;
   let isolatedProfileId: string | undefined;
-  let sessionTarget: Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>> | undefined;
-  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+  let latencyMs: number | undefined;
 
   const work = await createAuthProbeWork(params.abortSignal);
-  const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult =>
     buildProbeResult(target, {
       status,
       ...(error ? { error } : {}),
-      latencyMs: Date.now() - start,
+      ...(latencyMs !== undefined ? { latencyMs } : {}),
     });
   try {
-    sessionTarget = await prepareInternalSessionEffectsSession({
-      agentId,
-      cwd: workspaceDir,
-      runId,
-      storePath,
-    });
-    // Any bound-value target runs in an empty agent dir so stored profiles are
-    // absent and cannot satisfy the probe via failover. Direct values pin a
-    // synthetic profile; marker values are resolved by the runtime from the
-    // profile-order-cleared config. Inside a Gateway, the isolated-read-only
-    // runtime mode set on the runner call keeps this pinned generation
-    // authoritative: a run-provenance lease would rebind it to the committed
-    // configured owner and lose the synthetic profile.
+    // A bound credential must not fall back to another stored profile.
     if (target.boundValue || target.useRuntimeAuth) {
       // Keep native, worker, and registry locators canonical across macOS's
       // os.tmpdir() symlink (/var -> /private/var).
@@ -696,55 +676,34 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth check profile");
       }
     }
-    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-    const probeSessionTarget = sessionTarget;
-    preparedRunAdmission = prepareSystemAgentRunAdmission(
-      probeConfig,
-      runId,
-      agentId,
-      "models.auth-probe",
-    );
-    const runResult = await work.run(() =>
-      runEmbeddedAgent({
-        preparedRunAdmission,
-        sessionId: probeSessionTarget.sessionId,
-        sessionKey: probeSessionTarget.sessionKey,
-        sessionTarget: probeSessionTarget,
-        agentId,
-        workspaceDir,
-        agentDir: isolatedAgentDir ?? agentDir,
+    // Keep normal status reads from loading the inference runtime; only --probe needs it.
+    const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
+    const result = await work.run(() =>
+      runIsolatedCompletion({
         config: probeConfig,
-        prompt: PROBE_PROMPT,
+        agentId,
+        agentDir: isolatedAgentDir ?? agentDir,
+        workspaceDir,
         provider: model.provider,
         model: model.model,
-        requestedRouteResolution: "resolved",
-        modelFallbacksOverride: [],
         authProfileId: isolatedProfileId ?? target.profileId,
-        authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
-        timeoutMs,
-        runId,
-        lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
-        thinkLevel: "off",
-        reasoningLevel: "off",
-        verboseLevel: "off",
-        streamParams: { maxTokens },
-        agentHarnessRuntimeOverride: "openclaw",
-        disableTools: true,
-        modelRun: true,
-        cleanupBundleMcpOnRunEnd: true,
-        // Keep the isolated generation outside configured Gateway ownership: a
-        // run-provenance lease rebinds the pinned agentDir to the committed
-        // configured owner, losing the synthetic probe profile below.
         ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
+        // Preserve the existing raw transport and persistent credential-refresh owner.
+        agentHarnessRuntimeOverride: "openclaw",
+        systemPrompt: "",
+        prompt: PROBE_PROMPT,
+        timeoutMs,
         abortSignal: params.abortSignal,
+        thinkLevel: "off",
+        streamParams: { maxTokens },
+        outputTextPolicy: "strict-visible",
+        onRequestComplete: (durationMs) => {
+          latencyMs = Math.round(durationMs);
+        },
       }),
     );
-    const terminalError = extractAgentRunTerminalError(runResult);
-    if (terminalError) {
-      throw new Error(terminalError);
-    }
-    if (!agentRunHasVisibleReply(runResult)) {
-      return buildResult("format", "The model did not return a visible check response.");
+    if (!result.text.trim()) {
+      return buildResult("format", "The provider returned no visible text.");
     }
     return buildResult("ok");
   } catch (err) {
@@ -754,30 +713,9 @@ async function probeTarget(params: {
       redactAuthProbeError(described.message),
     );
   } finally {
-    preparedRunAdmission?.close();
     await work.settle(async () => {
-      const cleanups: Array<() => void | Promise<void>> = [
-        () => removeInternalSessionEffectsSession(sessionTarget),
-      ];
       if (isolatedAgentDir) {
-        const ownedDir = isolatedAgentDir;
-        cleanups.push(() => disposeAuthProbeDirectory(ownedDir, isolatedAuthEnv));
-      }
-      const errors: unknown[] = [];
-      for (const cleanup of cleanups) {
-        try {
-          await cleanup();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Auth check resources could not all be released", {
-          cause: errors[0],
-        });
+        await disposeAuthProbeDirectory(isolatedAgentDir, isolatedAuthEnv);
       }
     });
   }
@@ -800,7 +738,6 @@ async function runTargetsWithConcurrency(params: {
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -818,7 +755,6 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        storePath,
         target,
         timeoutMs,
         maxTokens,

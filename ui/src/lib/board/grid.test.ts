@@ -6,7 +6,6 @@ import {
   nudge,
   previewDrag,
   resize,
-  toCssPlacement,
   type BoardGridItem,
   type BoardGridRect,
 } from "./grid.ts";
@@ -255,11 +254,5 @@ describe("board grid mutations", () => {
     const items = [item("a", 1, 1, 0), item("b", 1, 1, 1)];
     expect(nudge(items, "a", "up").map((entry) => entry.name)).toEqual(["a", "b"]);
     expect(nudge(items, "b", "right").map((entry) => entry.name)).toEqual(["a", "b"]);
-  });
-
-  it("serializes one-based CSS grid placement", () => {
-    expect(toCssPlacement({ name: "chart", x: 2, y: 4, w: 5, h: 3 })).toBe(
-      "grid-column: 3 / span 5; grid-row: 5 / span 3;",
-    );
   });
 });
