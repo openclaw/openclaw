@@ -87,8 +87,7 @@ export function createPlacementRecoveryActions(
     // Retire the old turn, not its machine. The node stop acknowledgement fences the
     // physical worker; the replacement turn receives a fresh claim on the same workspace.
     const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted =
-      claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
     if ((mode === "restart" || interrupted) && placement.turnClaim) {
       if (
         claim &&
