@@ -100,8 +100,7 @@ export function readSessionTerminalFallbackModel(
   return undefined;
 }
 
-/** Durable and memory readers apply the same terminal-run selection to a bounded tail. */
-export function selectSessionTerminalFallbackModel(
+function selectSessionTerminalFallbackModel(
   entry: InternalSessionEntry,
   event: unknown,
 ): SessionTerminalModel | undefined {

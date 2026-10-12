@@ -1,9 +1,5 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
-import { sha256Base64Url } from "./crypto-digest.js";
 import {
   computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
@@ -21,11 +17,7 @@ import {
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type {
-  CostUsageTotals,
-  ParsedTranscriptEntry,
-  UsageCostTranscriptFile,
-} from "./session-cost-usage.types.js";
+import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
 
 type UsageCostRollupScanInput = {
   previous?: UsageCostRollupEntry;
@@ -34,10 +26,6 @@ type UsageCostRollupScanInput = {
     pairs: Array<{ provider?: string; model?: string }>,
   ) => Promise<Array<ModelCostConfig | undefined>>;
 };
-
-function hashUsageCostCheckpointEvent(event: unknown): string {
-  return sha256Base64Url(JSON.stringify(event));
-}
 
 export function createUsageRollupScan(params: UsageCostRollupScanInput & { appendOnly: boolean }) {
   const previous = params.appendOnly ? params.previous : undefined;
@@ -123,27 +111,4 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
       };
     },
   };
-}
-
-/** Memory snapshots are immutable; no post-scan source probe or database lease is needed. */
-export async function scanMemoryUsageCostRollup(params: {
-  file: UsageCostTranscriptFile;
-  events: Array<{ seq: number; eventJson: string }>;
-  pricingFingerprint: string;
-  resolveCosts: UsageCostRollupScanInput["resolveCosts"];
-}): Promise<UsageCostRollupEntry> {
-  const records = params.events.map(({ eventJson }): unknown => JSON.parse(eventJson));
-  const scan = createUsageRollupScan({ ...params, appendOnly: false });
-  await scan.addRecords(selectVisibleTranscriptEvents(records).filter(isRecord));
-  const visibleLeafId = scanSessionTranscriptTree(records).leafId;
-  return scan.finish({
-    kind: "sqlite",
-    maxSeq: params.file.maxSeq ?? 0,
-    eventCount: params.file.eventCount ?? 0,
-    size: params.file.size,
-    mtimeMs: params.file.mtimeMs,
-    anchorHash:
-      records.length > 0 ? hashUsageCostCheckpointEvent(records.at(-1)) : sha256Base64Url(""),
-    ...(visibleLeafId ? { visibleLeafId } : {}),
-  });
 }
