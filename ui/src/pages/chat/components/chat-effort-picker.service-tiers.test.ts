@@ -3,7 +3,8 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { renderChatEffortPicker } from "./chat-effort-picker.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 const host = document.createElement("div");
 
@@ -25,7 +26,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
     serviceTierObservation?: ModelCatalogEntry["serviceTierObservation"],
   ) => {
     render(
-      renderChatEffortPicker({
+      solidTemplate(ChatEffortPicker, {
         disabled: false,
         thinkingDisabled: false,
         sessionKey: "tier-observation",
@@ -80,7 +81,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
   const onThinkingSelect = vi.fn(async () => undefined);
   const paint = (active: boolean) =>
     render(
-      renderChatEffortPicker({
+      solidTemplate(ChatEffortPicker, {
         disabled: false,
         thinkingDisabled: false,
         sessionKey: "reasoning-preview",
