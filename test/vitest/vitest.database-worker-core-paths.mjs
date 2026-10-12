@@ -1051,6 +1051,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.native-picker-failures.test.ts",
   "src/agents/prepared-model-runtime.owner-selection.test.ts",
   "src/agents/prepared-model-runtime.owner-supersession.test.ts",
+  "src/agents/prepared-model-runtime.published-replacement.test.ts",
   "src/agents/prepared-model-runtime.registry-borrow.test.ts",
   "src/agents/prepared-model-runtime.reload-auth.test.ts",
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",
