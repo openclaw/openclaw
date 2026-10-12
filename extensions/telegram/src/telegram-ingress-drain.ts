@@ -439,13 +439,15 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         if (outcome?.kind === "failed-retryable") {
           return { kind: "failed-retryable", error: outcome.error };
         }
-        // A dispatched update that records no outcome and defers no participant
-        // was consumed silently; completing here tombstones the spool row with
-        // attempts=0 and no trace, so keep a diagnostic trail for regressions.
+        // Only a recorded outcome can terminalize a synchronous handler. A
+        // missing fact is not an intentional skip and must preserve replay.
         if (!outcome) {
-          params.onLog?.(
-            `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
-          );
+          return {
+            kind: "failed-retryable",
+            error: new Error(
+              `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} did not record a processing outcome`,
+            ),
+          };
         }
         await lifecycle.onAdopted();
         return { kind: "completed" };

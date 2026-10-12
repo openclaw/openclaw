@@ -105,6 +105,50 @@ function deferred<T = void>() {
 }
 
 describe("createTelegramIngressMonitor", () => {
+  it("keeps an update without a processing outcome retryable across database reopen", async () => {
+    await withTempState(async (stateDir) => {
+      const openQueue = () =>
+        createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+          channelId: "telegram",
+          accountId: "default",
+          stateDir,
+        });
+      const queue = openQueue();
+      const eventId = "3".padStart(16, "0");
+      const payload = updatePayload(3);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => cfg,
+        accountId: "default",
+        dispatch: async () => {},
+      });
+
+      monitor.start();
+      try {
+        await monitor.waitForIdle();
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          {
+            id: eventId,
+            attempts: 1,
+            payload,
+            lastError: expect.stringContaining("did not record a processing outcome"),
+          },
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+
+      await closeOpenClawStateDatabaseAsync();
+      const reopened = openQueue();
+      expect((await reopened.enqueue(eventId, payload, { laneKey })).kind).toBe("pending");
+      expect(await reopened.listPending({ limit: "all" })).toMatchObject([
+        { id: eventId, attempts: 1, payload },
+      ]);
+    });
+  });
+
   it.each([
     {
       name: "blocked Telegram recipient",

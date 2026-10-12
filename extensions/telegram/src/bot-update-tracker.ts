@@ -34,7 +34,7 @@ type BeginUpdateResult =
     }
   | {
       accepted: false;
-      reason: "accepted-watermark" | "semantic-dedupe";
+      reason: "accepted-watermark" | "semantic-dedupe" | "pending";
     };
 
 type FinishUpdateOptions = {
@@ -174,17 +174,25 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (typeof updateId === "number") {
       if (failedUpdateIds.has(updateId)) {
         failedUpdateIds.delete(updateId);
-      } else if (
-        (initialUpdateId !== null && updateId <= initialUpdateId) ||
-        acceptedUpdateIds.has(updateId)
-      ) {
-        // Suppress restored offsets and exact ids already accepted in this process.
+      } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
+        // Suppress restored offsets for already-persisted ids.
         options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
+      } else if (acceptedUpdateIds.has(updateId)) {
+        // Pending middleware is not a terminal processing fact for a spool retry.
+        options.onSkip?.(`update:${updateId}`);
+        return {
+          accepted: false,
+          reason: pendingUpdateIds.has(updateId) ? "pending" : "accepted-watermark",
+        };
       }
     }
     if (updateKey) {
-      if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
+      if (activeHandledUpdateKeys.has(updateKey)) {
+        options.onSkip?.(updateKey);
+        return { accepted: false, reason: "pending" };
+      }
+      if (recentUpdates.peek(updateKey)) {
         options.onSkip?.(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }
