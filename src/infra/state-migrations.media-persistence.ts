@@ -20,7 +20,10 @@ import {
 } from "../state/openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import {
+  assertOpenClawAgentDatabaseForMaintenance,
+  assertOpenClawAgentDatabaseOwner,
+} from "../state/openclaw-agent-db-maintenance.js";
 import { migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps } from "../state/openclaw-agent-db-media-migration.js";
 import {
   registerOpenClawAgentDatabase,
@@ -30,6 +33,7 @@ import {
   assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   getOpenClawAgentMigrationSchema,
+  hasPendingCurrentVersionAgentDatabaseMigration,
 } from "../state/openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "../state/openclaw-agent-db-schema.js";
 import { assertSupportedAgentMigrationSchemas } from "../state/openclaw-agent-db-session-migrations.js";
@@ -43,6 +47,7 @@ import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { VERSION } from "../version.js";
+import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
@@ -131,6 +136,33 @@ async function migrateAgentDatabase(params: {
     let userVersion = readSqliteUserVersion(database);
     if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
       assertSupportedAgentMigrationSchemas(database, params.pathname, userVersion);
+    }
+    if (
+      isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+      userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+      !hasPendingCurrentVersionAgentDatabaseMigration(database) &&
+      !agentDatabaseLifecycle.terminal.peek(params.pathname) &&
+      !readOpenClawDatabaseQuarantineFailure("agent", params.pathname, {
+        env: params.env,
+        fresh: true,
+      }) &&
+      !assertOpenClawAgentDatabaseForMaintenance(database, {
+        agentId: params.agentId,
+        pathname: params.pathname,
+        allowStartupIndexRepair: true,
+      })
+    ) {
+      // Unchanged stores keep their clean-close proof. Explicit Doctor owns
+      // content repairs; an update only prepares stores needing migration.
+      return {
+        deferred: true,
+        rewrittenSessions: 0,
+        rewrittenTrajectoryRows: 0,
+        rewrittenArchives: 0,
+        warnings: [],
+        initialVersion: userVersion,
+        finalVersion: userVersion,
+      };
     }
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
     const initialVersion = userVersion;
@@ -340,6 +372,7 @@ async function migrateAgentDatabase(params: {
     });
     refreshSqlitePlannerStatistics(database);
     return {
+      deferred: false,
       ...rewritten,
       ...archives,
       warnings: [...schemaWarnings, ...archives.warnings],
@@ -490,12 +523,6 @@ export async function migrateLegacyMediaPersistence(
           }
           continue;
         }
-        archiveDirectories.add(
-          resolveSqliteTranscriptArchiveDirectory({
-            agentId: entry.agentId,
-            path: pathname,
-          }),
-        );
         if (seenPaths.has(entry.realPath)) {
           continue;
         }
@@ -514,6 +541,14 @@ export async function migrateLegacyMediaPersistence(
             preparedArchives: preparedDiscovery.preparedTranscriptArchives,
           });
           maintenance.assertOwned();
+          if (!result.deferred) {
+            archiveDirectories.add(
+              resolveSqliteTranscriptArchiveDirectory({
+                agentId: entry.agentId,
+                path: pathname,
+              }),
+            );
+          }
           warnings.push(...result.warnings);
           recoverableWarningCount += result.warnings.length;
           // A prior attempt may have committed the schema before publishing its registration.

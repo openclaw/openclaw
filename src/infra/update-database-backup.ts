@@ -15,15 +15,20 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
+  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { formatErrorMessageWithCode } from "./errors.js";
+import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import { copySqliteFile } from "./sqlite-file-copy.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
 import { UpdateStateDatabaseOwnerSchema } from "./update-candidate-paths.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
@@ -79,12 +84,15 @@ type BackupInput = {
   additionalPaths?: readonly string[];
   additionalFiles?: readonly string[];
   preserveSourceArtifacts?: boolean;
+  /** Native migration owns the stopped Gateway until Doctor takes custody. */
+  stopped?: boolean;
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
   previous?: ReadonlyMap<string, BigIntStats>,
+  stopped = false,
 ) {
   const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
@@ -105,13 +113,68 @@ async function inspectRestorableDatabaseFiles(
         );
       }
       const before = previous?.get(file);
-      if (before && !sameFileIdentity(before, info)) {
+      if (
+        before &&
+        !(stopped ? sameFileMutationFingerprint(before, info) : sameFileIdentity(before, info))
+      ) {
         throw new Error(`Update database file changed during backup: ${file}.`);
       }
       identities.set(file, info);
     }
   }
+  if (
+    stopped &&
+    previous &&
+    (identities.size !== previous.size ||
+      [...identities.keys()].some((file) => !previous.has(file)))
+  ) {
+    throw new Error("Update database journal state changed during stopped backup.");
+  }
   return identities;
+}
+
+/** The stopped native driver needs a rollback image, not another startup integrity audit. */
+async function captureStoppedDatabase(
+  sourcePath: string,
+  snapshotPath: string,
+  identity: BigIntStats,
+) {
+  if (identity.size === 0n) {
+    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
+  }
+  const publication = await copySqliteFile(sourcePath, snapshotPath, identity);
+  // Native cloning creates an independent inode; unsupported filesystems use the same byte copy.
+  // Only this backup child can write the image before its receipt is published.
+  const database = openNodeSqliteDatabase(snapshotPath);
+  let userVersion: number;
+  try {
+    database.exec(
+      "PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; PRAGMA journal_mode = DELETE;",
+    );
+    userVersion = readSqliteUserVersion(database);
+    database.prepare("SELECT name FROM sqlite_schema LIMIT 1").get();
+  } finally {
+    database.close();
+  }
+  const handle = await fs.open(snapshotPath, "r+");
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!sameFileIdentity(publication, before) || before.size !== identity.size) {
+      throw new Error(`SQLite snapshot file changed: ${snapshotPath}`);
+    }
+    // The persisted restore contract requires this digest. Hash once, after journal normalization.
+    const content = await sha256File(handle);
+    await handle.sync();
+    if (
+      !sameFileMutationFingerprint(before, await handle.stat({ bigint: true })) ||
+      !sameFileMutationFingerprint(before, await fs.lstat(snapshotPath, { bigint: true }))
+    ) {
+      throw new Error(`SQLite snapshot file changed while reading: ${snapshotPath}`);
+    }
+    return { userVersion, sha256: content.digest, sizeBytes: content.bytes };
+  } finally {
+    await handle.close();
+  }
 }
 
 async function checkDatabaseBackupSpace(directory: string, files: readonly string[]) {
@@ -291,25 +354,34 @@ export async function createUpdateDatabaseBackupInProcess(
       await ensureDurableDirectory({ directoryPath: parent, create: createPrivateSqliteDirectory });
     }
     const snapshotPath = path.join(directory, archivePath);
-    const before = readGeneration(sourcePath);
-    const snapshot = await createVerifiedSqliteSnapshot({
-      sourcePath,
-      targetPath: snapshotPath,
-      sourceAcquisition: {
-        mode: "isolated-process",
-        stagingRoot: input.stagingRoot,
-        preserveSourceArtifacts: input.preserveSourceArtifacts,
-      },
-      preserveRowIds: true,
-      requireNonEmptySource: true,
-    });
-    const after = readGeneration(sourcePath);
-    if (after !== undefined && before === after) {
-      sourceGenerations[sourcePath] = after;
-    } else {
-      warnings.push(
-        `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
-      );
+    const stopped =
+      input.stopped &&
+      !identities.has(`${sourcePath}-journal`) &&
+      (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
+    const before = input.stopped ? undefined : readGeneration(sourcePath);
+    const snapshot = stopped
+      ? await captureStoppedDatabase(sourcePath, snapshotPath, identities.get(sourcePath)!)
+      : await createVerifiedSqliteSnapshot({
+          sourcePath,
+          targetPath: snapshotPath,
+          sourceAcquisition: {
+            mode: "isolated-process",
+            stagingRoot: input.stagingRoot,
+            preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+          },
+          preserveRowIds: true,
+          requireNonEmptySource: true,
+        });
+    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
+    if (!input.stopped) {
+      const after = readGeneration(sourcePath);
+      if (after !== undefined && before === after) {
+        sourceGenerations[sourcePath] = after;
+      } else {
+        warnings.push(
+          `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+        );
+      }
     }
     databases.push({
       path: sourcePath,
@@ -319,11 +391,16 @@ export async function createUpdateDatabaseBackupInProcess(
       sizeBytes: snapshot.sizeBytes,
     });
   }
-  const current = await inventoryFor(await discoverUpdateStateSchemaInspectionInProcess(input));
+  const current = await inventoryFor(
+    await discoverUpdateStateSchemaInspectionInProcess({
+      ...input,
+      preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+    }),
+  );
   if (JSON.stringify(current) !== JSON.stringify(inventory)) {
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
-  await inspectRestorableDatabaseFiles(inventory.present, identities);
+  await inspectRestorableDatabaseFiles(inventory.present, identities, input.stopped);
   return {
     directory,
     databases,
@@ -368,6 +445,7 @@ export async function createUpdateDatabaseBackup({
       // Each SQLite reader owns its token-protected scratch beneath this private backup directory.
       const workerInput = {
         ...input,
+        preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
         additionalPaths,
         additionalFiles,
         backupRoot,
