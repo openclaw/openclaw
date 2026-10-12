@@ -181,7 +181,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
   });
 });
 
-it("rematerializes activity state from accepted facts without reading the databases again", async () => {
+it("refreshes activity state without rematerializing accepted rows or reading databases", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
     const revision = suffix.databaseFactsRevision;
     const owner = Symbol("activity-state");
@@ -199,12 +199,14 @@ it("rematerializes activity state from accepted facts without reading the databa
       setSessionActivitySummaryState(target, owner, value);
       await resume();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      const materializations = projection.materializedCount;
       setSessionActivitySummaryState(target, owner, { ...value, state: "unavailable" });
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("unavailable");
       setSessionActivitySummaryState(target, owner);
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.materializedCount).toBe(materializations);
       expect(reads).toHaveLength(1);
       expect(sharedReads).not.toHaveBeenCalled();
       expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);

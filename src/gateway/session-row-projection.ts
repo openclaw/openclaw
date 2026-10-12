@@ -339,7 +339,18 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       }
     } else if (!change.factsInvalidated && (change.scope === "automation" || presentationOnly)) {
       const affected = matching({ key: change.sessionKey }).filter((row) => !isCold(row));
-      records.markAutomation(affected, change.agentId, dirty);
+      for (const row of affected) {
+        if (change.agentId && row.agentId !== change.agentId) {
+          continue;
+        }
+        const id = records.identity(row);
+        // Runtime summary state does not change the entry-derived materialization.
+        if (presentationOnly && records.ready(row) && !dirty.has(id) && row.facts) {
+          row.facts.refreshActivitySummary();
+        } else {
+          dirty.add(id);
+        }
+      }
     } else if (!presentationOnly) {
       rowScope.visitSessionRowPublicationTargets(change, {
         matching,
@@ -477,9 +488,16 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       }
       epoch++;
       revisions.invalidate();
-      revisions.publishFacts(row);
       records.invalidateDatabaseFacts(row, retained);
+      // Certified transcript facts refresh summaries and previews without replacing the row.
+      if (retained && records.ready(row) && !dirty.has(id) && row.facts) {
+        row.facts.refreshActivitySummary(retained);
+        backfill.prepare(row, retained);
+        revisions.publishFacts(row);
+        return;
+      }
       dirty.add(id);
+      revisions.publishFacts(row);
       void ensureMaterialized().catch(() => {});
     },
   });
