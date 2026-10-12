@@ -2,7 +2,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
@@ -248,13 +248,17 @@ export type OpenClawPluginApi = {
   /**
    * Register a gateway RPC method for this plugin.
    *
+   * Return a payload (or a promise for one) to complete the request successfully.
+   * Explicit `respond(...)` calls take precedence; returning `undefined` leaves
+   * completion to `respond(...)`.
+   *
    * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
    * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
    * narrower scope is requested.
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: (opts: GatewayRequestHandlerOptions) => unknown,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";

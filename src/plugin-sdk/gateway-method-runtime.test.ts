@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import type {
+  GatewayRequestHandlerOptions,
+  OpenClawPluginApi as CorePluginApi,
+} from "openclaw/plugin-sdk/core";
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -19,6 +24,15 @@ vi.mock("../gateway/server-plugins.js", () => ({
 }));
 
 describe("plugin-sdk/gateway-method-runtime", () => {
+  it("shares the public registration contract without widening core callback handlers", () => {
+    expectTypeOf<OpenClawPluginApi["registerGatewayMethod"]>().toEqualTypeOf<
+      CorePluginApi["registerGatewayMethod"]
+    >();
+    expectTypeOf<
+      ReturnType<GatewayRequestHandlers[string]>
+    >().toEqualTypeOf<void | Promise<void>>();
+  });
+
   it("rejects callers without the gateway method dispatch contract", async () => {
     await expect(
       withPluginRuntimeGatewayRequestScope(
@@ -87,11 +101,12 @@ describe("plugin-sdk/gateway-method-runtime", () => {
         id: "reader",
         name: "Reader",
         contracts: entitled ? { gatewayMethodDispatch: ["authenticated-request"] } : {},
-        register(api) {
+        register(api: OpenClawPluginApi) {
           api.registerGatewayMethod(
             "reader.preview",
             async () => {
-              await dispatchGatewayMethod("health", {});
+              const result = await dispatchGatewayMethod("health", {});
+              return result.payload;
             },
             { scope: "operator.read" },
           );
@@ -101,6 +116,7 @@ describe("plugin-sdk/gateway-method-runtime", () => {
       if (!handler) {
         throw new Error("Missing registered handler");
       }
+      const respond = vi.fn();
       const invoke = () =>
         withPluginRuntimeGatewayRequestScope(
           {
@@ -116,7 +132,7 @@ describe("plugin-sdk/gateway-method-runtime", () => {
               isWebchatConnect: () => false,
               params: {},
               req: { type: "req", id: "reader-test", method: "reader.preview" },
-              respond: vi.fn(),
+              respond,
             }),
         );
       if (entitled && hasClient) {
@@ -126,9 +142,11 @@ describe("plugin-sdk/gateway-method-runtime", () => {
           {},
           { disableSyntheticClient: true, requireScopedClient: true },
         );
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined, undefined);
       } else {
         await expect(invoke()).rejects.toThrow("contracts.gatewayMethodDispatch");
         expect(dispatchGatewayMethodInProcessRaw).not.toHaveBeenCalled();
+        expect(respond).not.toHaveBeenCalled();
       }
     },
   );
