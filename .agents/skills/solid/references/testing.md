@@ -34,4 +34,6 @@ The chat gates (see [state and ownership](state-and-ownership.md#chat-render-lif
 
 ## Where proof runs
 
-Single-file tests may run locally (`pnpm test <file> --maxWorkers=1`). Suites, `tsgo`, builds, and E2E go to Testbox via `node scripts/crabbox-wrapper.mjs`; when Testbox doesn't admit, PR CI is the proof. Never use local Docker. A failing check is attributed by rerunning it on the merge base: the same failure there means it's inherited.
+Follow the canonical [proof policy](../../openclaw-testing/SKILL.md#proof-policy)
+for local, PR CI, and exceptional remote proof; use the owning UI/Gateway lane
+for the changed contract.

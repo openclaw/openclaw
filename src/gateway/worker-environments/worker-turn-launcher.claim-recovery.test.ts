@@ -550,6 +550,7 @@ describe("worker pre-launch claim recovery", () => {
           throw new Error("unexpected local execution");
         }),
       ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+      await placements.waitForTurnClaimRelease(SESSION_ID, {});
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       blockSecond = true;
@@ -635,6 +636,7 @@ describe("worker pre-launch claim recovery", () => {
             }),
           ),
         ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
+        await placements.waitForTurnClaimRelease(SESSION_ID, {});
         expect(placements.get(SESSION_ID)).toMatchObject({
           state: "active",
           environmentId: `${ENVIRONMENT_ID}-recovered`,

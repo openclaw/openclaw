@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type Eligibility = "eligible" | "exhausted" | "cooldown" | "stale" | "reauth_required";
-export type ClawRouterPoolTraffic = {
+type ClawRouterPoolTraffic = {
   provider?: string;
   grantLane?: string;
   grantKey?: string;

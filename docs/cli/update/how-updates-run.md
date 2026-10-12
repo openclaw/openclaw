@@ -39,6 +39,11 @@ executor binding does not match its parent`. The update owner must remain live,
 and changed or revoked leases still refuse mutation. This check runs in the
 candidate, so it also accepts valid handoffs from older installed updaters.
 
+If a service refresh refuses before writing its definition, the candidate keeps
+the original refusal in its output. The updater can then revalidate and restart
+the preserved service definition. Actual loss of native service authority still
+leaves recovery pending until ownership and restoration can be verified.
+
 Channel health collection timeouts are warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
 readiness, and pass the normal health-settle checks. An explicit negative channel

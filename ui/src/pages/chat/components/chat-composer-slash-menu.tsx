@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import {
   SLASH_COMMANDS,
   executesInlineImmediately,
@@ -14,6 +13,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
