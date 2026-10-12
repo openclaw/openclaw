@@ -67,17 +67,24 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     },
   );
 
-  it.each([{ sandboxMode: null }, { model: null, futureField: true }])(
-    "keeps privileged or unknown patch fields admin-scoped %#",
-    (patch) => {
-      expect(
-        resolveDynamicSessionMutationRequiredScope("sessions.patch", {
-          key: "agent:main:thread",
-          ...patch,
-        }),
-      ).toBe("operator.admin");
-    },
-  );
+  it.each([
+    { contextWindow: "extended" },
+    { toolOverrides: {} },
+    { sandboxMode: "off" },
+    { sandboxMode: null },
+    { verboseLevel: "full" },
+    { reasoningLevel: "high" },
+    { thinkingLevel: "high", verboseLevel: "full" },
+    { fastMode: true, permissionMode: "full" },
+    { model: null, futureField: true },
+  ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+        key: "agent:main:thread",
+        ...patch,
+      }),
+    ).toBe("operator.admin");
+  });
 
   it("scopes sessions.patchMany from the shared patch only", () => {
     for (const sandboxMode of ["off", null]) {

@@ -297,6 +297,12 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each([
+    {
+      name: "different canonical ID with identical text and send key",
+      metadata: { id: "different-native-id" },
+    },
+    { name: "different canonical sequence", metadata: { seq: 2 } },
+    { name: "missing persisted ID", metadata: { id: undefined } },
     { name: "imported message identity", metadata: { importedFrom: "external" } },
     {
       name: "imported message replacing a queued send",
