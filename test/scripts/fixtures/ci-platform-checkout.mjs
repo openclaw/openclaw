@@ -828,13 +828,22 @@ async function command() {
         publish(`cleanup-target-${process.pid}.json`, attempt);
       }
     }
-    const child = launch("child", attempt);
+    // Publisher policy cases need descendants at injected faults, not on every
+    // successful Git read. Other callers retain their process-lifecycle fixtures.
     if (
-      !(await waitForReady(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), child))
+      !options.publisher ||
+      commandResult ||
+      options.cancelDuringCleanup ||
+      scenario !== "configured"
     ) {
-      throw new Error(
-        `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
-      );
+      const child = launch("child", attempt);
+      if (
+        !(await waitForReady(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), child))
+      ) {
+        throw new Error(
+          `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
+        );
+      }
     }
     if (scenario.startsWith("cancel-") || commandResult?.code === "cancel") {
       const owned = await liveRecords();
