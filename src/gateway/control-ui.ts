@@ -194,17 +194,30 @@ export async function handleControlUiAssistantMediaRequest(
     relativeSource ? undefined : source,
     agentId,
   );
-  const requestAuth =
-    isMetaRequest || !ticketCandidate
-      ? await authorizeControlUiReadRequestOrReply({
-          ...opts,
-          req,
-          res,
-          cfg: opts?.cfg ?? opts?.config,
-          allowQueryToken: !explicitAllow,
-        })
-      : undefined;
-  if ((isMetaRequest || !ticketCandidate) && !requestAuth) {
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ticketCandidate?.reader.authMethod === "remote-ingress" && !ingress) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const needsAuthentication = Boolean(ingress) || isMetaRequest || !ticketCandidate;
+  const requestAuth = needsAuthentication
+    ? await authorizeControlUiReadRequestOrReply({
+        ...opts,
+        req,
+        res,
+        cfg: opts?.cfg ?? opts?.config,
+        allowQueryToken: !explicitAllow,
+      })
+    : undefined;
+  if (needsAuthentication && !requestAuth) {
+    return true;
+  }
+  if (
+    ingress &&
+    ticketCandidate &&
+    ticketCandidate.reader.profileId !== requestAuth?.authenticatedUserProfile?.profileId
+  ) {
+    respondControlUiNotFound(res);
     return true;
   }
   if (
@@ -232,7 +245,7 @@ export async function handleControlUiAssistantMediaRequest(
   const policy = resolveAssistantMediaPolicy({
     ...policyParams,
     requestAuth: requestAuth ?? undefined,
-    reader: isMetaRequest ? undefined : ticketCandidate?.reader,
+    reader: isMetaRequest || ingress ? undefined : ticketCandidate?.reader,
   });
   if (!policy) {
     respondControlUiNotFound(res);

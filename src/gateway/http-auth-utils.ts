@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -67,7 +67,6 @@ import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import {
   getRemoteControlUiIngressContext,
-  assertRemoteControlUiIngressCurrent,
   assertRemoteControlUiGatewayAuth,
 } from "./remote-control-ui-context.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -84,7 +83,6 @@ export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
   deviceOperatorScopes?: string[];
   revalidate?: () => Promise<void>;
   hasCurrentClientAuthority?: () => boolean;
-  operatorRoleActor?: { kind: "system" };
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
@@ -147,11 +145,8 @@ async function verifyHttpOperatorDeviceToken(
   token: string,
   requiredSharedGatewaySessionGeneration: string | undefined,
   requiredScopes: readonly string[] = [],
-  assertCurrent?: () => void,
 ): Promise<string[] | null> {
-  assertCurrent?.();
   const pairing = await listDevicePairing();
-  assertCurrent?.();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
     if (
@@ -169,9 +164,7 @@ async function verifyHttpOperatorDeviceToken(
       // leave the HTTP request with authority from the earlier pairing snapshot.
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
       requiredSharedGatewaySessionGeneration,
-      assertCurrent,
     });
-    assertCurrent?.();
     return verified.ok ? [...operatorToken.scopes] : null;
   }
   return null;
@@ -184,7 +177,7 @@ function resolveControlUiReadOperatorScopes(
   authenticatedRequest?: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy">,
 ): string[] {
   if (authMethod === "remote-ingress") {
-    return [...(getRemoteControlUiIngressContext(req)?.operatorScopeCeiling ?? [])];
+    return getRemoteControlUiIngressContext(req)?.resolvePrincipal().scopes ?? [];
   }
   if (authMethod === "device-token") {
     return applyHttpOperatorRoleScopeCeiling(deviceScopes ?? [], authenticatedRequest);
@@ -215,6 +208,13 @@ async function checkHttpOperatorCredentials(
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
   if (remoteIngress) {
     assertRemoteControlUiGatewayAuth(remoteIngress, auth, params.cfg ?? getRuntimeConfig());
+    remoteIngress.resolvePrincipal().assertCurrent();
+    return {
+      authResult: token
+        ? { ok: false, reason: "unauthorized" }
+        : { ok: true, method: "remote-ingress" },
+      authGeneration: resolveSharedGatewaySessionGeneration(auth, params.trustedProxies),
+    };
   }
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
@@ -240,9 +240,6 @@ async function checkHttpOperatorCredentials(
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
       deferRateLimitFailure: canUseDeviceTokenFallback,
     });
-    if (remoteIngress) {
-      assertRemoteControlUiIngressCurrent(remoteIngress);
-    }
     const authGeneration = resolveSharedGatewaySessionGeneration(auth, params.trustedProxies);
     let resolvedAuthResult = authResult;
     let deviceScopes: string[] | undefined;
@@ -277,17 +274,9 @@ async function checkHttpOperatorCredentials(
           token,
           authGeneration,
           params.requiredDeviceScopes,
-          remoteIngress ? () => assertRemoteControlUiIngressCurrent(remoteIngress) : undefined,
         );
-        if (remoteIngress) {
-          assertRemoteControlUiIngressCurrent(remoteIngress);
-        }
         if (verifiedScopes) {
-          deviceScopes = remoteIngress
-            ? remoteIngress.operatorScopeCeiling.filter((scope) =>
-                operatorScopeSatisfied(scope, verifiedScopes),
-              )
-            : verifiedScopes;
+          deviceScopes = verifiedScopes;
           params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
           resolvedAuthResult = { ok: true, method: "device-token" };
         } else {
@@ -343,8 +332,7 @@ export async function authorizeControlUiReadRequestOrReply(
   const token = resolveControlUiReadAuthToken(params.req, params.allowQueryToken);
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
   assertRemoteControlUiGatewayAuth(remoteIngress, auth, cfg);
-  // Startup fetches have no device token yet. The plugin authenticates every forwarded read.
-  // Presented credentials still take normal verification, including revocation and shared-secret denial.
+  // The grant selects ingress authority; reusable credentials cannot select another principal.
   const { authResult, authGeneration, deviceOperatorScopes }: HttpOperatorCredentialResult =
     remoteIngress && !token
       ? {
@@ -414,12 +402,7 @@ export async function authorizeControlUiReadRequestOrReply(
   );
   if (authMethod === "device-token" && token) {
     const verifyCurrentDeviceToken = () =>
-      verifyHttpOperatorDeviceToken(
-        token,
-        authGeneration,
-        deviceOperatorScopes,
-        remoteIngress ? () => assertRemoteControlUiIngressCurrent(remoteIngress) : undefined,
-      );
+      verifyHttpOperatorDeviceToken(token, authGeneration, deviceOperatorScopes);
     // Profile attribution can yield after the original credential verification.
     if (!(await verifyCurrentDeviceToken()) || !requestAuth.hasCurrentClientAuthority()) {
       if (params.replyOnFailure !== false) {
@@ -587,19 +570,20 @@ export async function checkGatewayHttpRequestAuth(
   const cfg = params.cfg ?? getRuntimeConfig();
   const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
   const token = getBearerToken(params.req);
-  const { authResult, deviceOperatorScopes }: HttpOperatorCredentialResult = allowDeviceToken
-    ? await checkHttpOperatorCredentials({ ...params, cfg, token }, authorizeHttpGatewayConnect)
-    : {
-        authResult: await authorizeHttpGatewayConnect({
-          auth: params.auth,
-          connectAuth: token ? { token, password: token } : null,
-          req: params.req,
-          trustedProxies: params.trustedProxies,
-          allowRealIpFallback: params.allowRealIpFallback,
-          rateLimiter: params.rateLimiter,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, cfg),
-        }),
-      };
+  const { authResult, deviceOperatorScopes }: HttpOperatorCredentialResult =
+    allowDeviceToken || getRemoteControlUiIngressContext(params.req)
+      ? await checkHttpOperatorCredentials({ ...params, cfg, token }, authorizeHttpGatewayConnect)
+      : {
+          authResult: await authorizeHttpGatewayConnect({
+            auth: params.auth,
+            connectAuth: token ? { token, password: token } : null,
+            req: params.req,
+            trustedProxies: params.trustedProxies,
+            allowRealIpFallback: params.allowRealIpFallback,
+            rateLimiter: params.rateLimiter,
+            browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, cfg),
+          }),
+        };
   if (!authResult.ok) {
     return { ok: false, authResult };
   }
@@ -688,6 +672,20 @@ export function resolveTrustedHttpOperatorScopes(
     "trustDeclaredOperatorScopes" | "operatorRolePolicy"
   >,
 ): string[] {
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    const scopes = ingress.resolvePrincipal().scopes;
+    const header = getHeader(req, "x-openclaw-scopes");
+    return header === undefined
+      ? scopes
+      : intersectOperatorScopes(
+          scopes,
+          header
+            .split(",")
+            .map((scope) => scope.trim())
+            .filter(Boolean),
+        );
+  }
   if (!requestAuth.trustDeclaredOperatorScopes) {
     // Gateway bearer auth only proves possession of the shared secret. Do not
     // let HTTP clients self-assert operator scopes through request headers.

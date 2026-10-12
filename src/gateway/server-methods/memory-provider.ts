@@ -108,7 +108,7 @@ async function captureMemoryReadAuthority(
   assertRequestCurrent: () => void,
 ): Promise<{ scopes: readonly string[]; assertCurrent: () => void; release: () => void }> {
   const { client, context, signal, hasCurrentClientAuthority } = options;
-  if (isSyntheticGatewayCaller(client)) {
+  if (isSyntheticGatewayCaller(client) || client?.internal?.remoteIngressPrincipal) {
     const captured = await captureGatewayOperatorRunAuthority({
       client,
       context,
@@ -116,7 +116,7 @@ async function captureMemoryReadAuthority(
       invocationAuthority: { assertCurrent: assertRequestCurrent, signal },
     });
     if (!captured) {
-      throw new Error("Memory provider reads from an agent run require its operator authority");
+      throw new Error("Memory provider reads require current operator authority");
     }
     return {
       scopes: captured.authority.scopes,

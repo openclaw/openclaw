@@ -4,28 +4,25 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
   GatewayControlUiIngressError,
-  type GatewayControlUiIngressFactoryV1,
-  type GatewayControlUiIngressV1,
+  type GatewayControlUiIngressFactoryV2,
+  type GatewayControlUiIngressV2,
 } from "../plugins/gateway-ingress.types.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { uploadUserBackground } from "../state/user-background.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
+  ensureCanonicalUserProfileForEmail,
+  mergeCanonicalUserProfiles,
+  setCanonicalUserProfileRole,
   setCanonicalUserProfileAvatar,
 } from "../state/user-profile-writes.js";
 import {
@@ -35,11 +32,31 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import {
+  connect,
+  request,
+  expectHello,
+  usePeer,
+  expectReadWriteWithoutAdmin,
+  expectOwnerReadAccess,
+  expectUiCloseJoinsRpc,
+  expectIngressDenials,
+  type IngressFrame,
+  type Peer,
+  type ConnectOptions,
+} from "./remote-control-ui-ingress.integration.test-support.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { createGatewayHttpRequestHandler } from "./server-http-request.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import type {
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./server-methods/types.js";
+import { usersHandlers } from "./server-methods/users.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
@@ -61,219 +78,40 @@ const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGO4E2DzHwAF3AJov2Ds8QAAAABJRU5ErkJggg==",
   "base64",
 );
-const CLIENT = {
-  id: "openclaw-control-ui",
-  version: "dev",
-  platform: "browser",
-  mode: "webchat",
-} as const;
-let connectionSequence = 0;
-
-type IngressFrame = {
-  type: string;
-  id?: string;
-  event?: string;
-  ok?: boolean;
-  payload?: {
-    nonce?: string;
-    type?: string;
-    controlUiUrl?: string;
-    sandboxUrl?: string;
-    sandboxOrigin?: string;
-    auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };
-    pending?: unknown[];
-    paired?: Array<{
-      deviceId: string;
-      scopes: string[];
-      approvedVia: string;
-      tokens: Array<{ role: string; scopes: string[]; revokedAtMs?: number }>;
-    }>;
-    triggers?: string[];
-  };
-  error?: { code: string; message: string };
-};
-
-type Peer = {
-  send(frame: unknown): Promise<void>;
-  read(): Promise<IngressFrame>;
-  close(): Promise<void>;
-};
-
-type ConnectOptions = {
-  identity?: DeviceIdentity;
-  auth?: { token?: string; password?: string; deviceToken?: string; bootstrapToken?: string };
-  scopes?: string[];
-  role?: string;
-  owner?: boolean;
-  tamperSignature?: boolean;
-};
-
-async function request(peer: Peer, method: string, params: unknown): Promise<IngressFrame> {
-  await peer.send({ type: "req", id: method, method, params });
-  for (;;) {
-    const frame = await peer.read();
-    if (frame.type === "res" && frame.id === method) {
-      return frame;
-    }
-  }
-}
-
-async function connect(peer: Peer, options: ConnectOptions): Promise<IngressFrame> {
-  const challenge = await peer.read();
-  expect(challenge.event).toBe("connect.challenge");
-  const nonce = challenge.payload?.nonce;
-  if (!nonce) {
-    throw new Error("Missing device challenge nonce");
-  }
-  const client = {
-    ...(options.owner ? { ...CLIENT, id: "cli", mode: "cli" } : CLIENT),
-    instanceId: `ingress-browser-${++connectionSequence}`,
-  };
-  const role = options.role ?? "operator";
-  const signedAt = Date.now();
-  const identity = options.identity;
-  const payload = identity
-    ? buildDeviceAuthPayloadV3({
-        deviceId: identity.deviceId,
-        clientId: client.id,
-        clientMode: client.mode,
-        platform: client.platform,
-        role,
-        scopes: options.scopes ?? [],
-        signedAtMs: signedAt,
-        token:
-          options.auth?.deviceToken ?? options.auth?.bootstrapToken ?? options.auth?.token ?? null,
-        nonce,
-      })
-    : undefined;
-  const hello = await request(peer, "connect", {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    client,
-    role,
-    scopes: options.scopes,
-    auth: options.auth,
-    ...(identity && payload
-      ? {
-          device: {
-            id: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-            signature: signDevicePayload(
-              identity.privateKeyPem,
-              options.tamperSignature ? `${payload}-tampered` : payload,
-            ),
-            signedAt,
-            nonce,
-          },
-        }
-      : {}),
-  });
-  if (hello.ok && !options.owner) {
-    expect(hello).toMatchObject({
-      payload: {
-        snapshot: {
-          presence: expect.arrayContaining([
-            expect.objectContaining({
-              instanceId: client.instanceId,
-              user: expect.objectContaining({ id: "gateway-owner" }),
-            }),
-          ]),
-        },
-      },
-    });
-  }
-  return hello;
-}
-
-function expectHello(frame: IngressFrame, method: string, scopes: readonly string[]): string {
-  expect(frame).toMatchObject({
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      auth: { method, role: "operator", scopes },
-    },
-  });
-  const token = frame.payload?.auth?.deviceToken;
-  if (!token) {
-    throw new Error("Hello did not issue an ordinary device token");
-  }
-  return token;
-}
-
-async function usePeer<T>(peer: Peer, run: (peer: Peer) => Promise<T>): Promise<T> {
-  try {
-    return await run(peer);
-  } finally {
-    await peer.close();
-  }
-}
-
-async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
-  expect(await request(peer, "voicewake.set", { triggers: [trigger] })).toMatchObject({
-    ok: true,
-    payload: { triggers: [trigger] },
-  });
-  expect(await request(peer, "voicewake.get", {})).toMatchObject({
-    ok: true,
-    payload: { triggers: [trigger] },
-  });
-  expect(await request(peer, "config.set", { raw: "{}" })).toMatchObject({
-    ok: false,
-    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
-  });
-}
-
-async function expectOwnerReadAccess(peer: Peer) {
-  expect(await request(peer, "users.self", {})).toMatchObject({
-    ok: true,
-    payload: { profile: { id: "gateway-owner" } },
-  });
-  const listed = await request(peer, "sessions.list", {
-    ownerId: "gateway-owner",
-    source: "sidebar",
-    rowMode: "compact",
-    limit: 20,
-  });
-  expect(listed.error).toBeUndefined();
-  expect(listed).toMatchObject({
-    ok: true,
-    payload: {
-      sessions: expect.arrayContaining([
-        expect.objectContaining({ key: OWNER_SESSION_KEY, displayName: "Owner ingress chat" }),
-      ]),
-    },
-  });
-}
-
-async function expectIngressDenials(peer: Peer) {
-  // Owner attribution never grants the question/approval/pairing scope families.
-  expect(await request(peer, "question.list", {})).toMatchObject({
-    ok: false,
-    error: {
-      code: "FORBIDDEN",
-      message: "Session-scoped access requires a verified user profile.",
-    },
-  });
-  for (const [method, scope] of [
-    ["exec.approval.list", "operator.approvals"],
-    ["device.pair.list", "operator.pairing"],
-  ]) {
-    expect(await request(peer, method!, {})).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN", message: `missing scope: ${scope}` },
-    });
-  }
-}
-
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
-  let ingress: GatewayControlUiIngressV1 | undefined;
-  let factory: GatewayControlUiIngressFactoryV1;
+  let ingress: GatewayControlUiIngressV2 | undefined;
+  let factory: GatewayControlUiIngressFactoryV2;
   let config: OpenClawConfig;
   let auth: ResolvedGatewayAuth;
   let projection: SessionRowProjection | undefined;
   let backgroundPath: string;
   let assistantMediaPath: string;
+  let heldMutation:
+    | {
+        entered: ReturnType<typeof createDeferred>;
+        release: ReturnType<typeof createDeferred>;
+        remaining: number;
+      }
+    | undefined;
+  let heldRead:
+    | { entered: ReturnType<typeof createDeferred>; release: ReturnType<typeof createDeferred> }
+    | undefined;
+  let observeOwnerMutation: ((options: GatewayRequestHandlerOptions) => void) | undefined;
+  const extraHandlers: GatewayRequestHandlers = {
+    "users.setDisplayName": async (options) => {
+      observeOwnerMutation?.(options);
+      const held = heldMutation;
+      if (held) {
+        held.remaining -= 1;
+        if (held.remaining === 0) {
+          held.entered.resolve(undefined);
+        }
+        await held.release.promise;
+      }
+      await usersHandlers["users.setDisplayName"]!(options);
+    },
+  };
   let http: ReturnType<typeof createGatewayHttpRequestHandler> | undefined;
   const hostLifetime = new AbortController();
   const serviceLifetime = new AbortController();
@@ -290,6 +128,7 @@ describe("remote Control UI ingress production composition", () => {
   });
   const openOptions = {
     audienceId: "synthetic-integration-grant",
+    principal: { kind: "owner" as const },
     publicOrigin: PUBLIC_ORIGIN,
     sandboxOrigin: SANDBOX_ORIGIN,
     operatorScopeCeiling: SCOPES,
@@ -361,14 +200,17 @@ describe("remote Control UI ingress production composition", () => {
     projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
     auth = { mode: "token", token: SHARED_TOKEN, allowTailscale: false };
     const logger = createSubsystemLogger("test/remote-control-ui-ingress");
+    const methodRegistry = createRequestGatewayMethodRegistry(extraHandlers);
     const requestContext = bindSessionRowProjection(
       {
         ...createGatewayWsTestRequestContext(),
         getRuntimeConfig: () => config,
+        trackExecution: <T>(run: () => T | Promise<T>) => connectionWork.track(run),
         logGateway: logger,
         broadcastVoiceWakeChanged: () => {},
         forgetConnectionAncestors: () => {},
         getMcpAppSandboxPort: () => 443,
+        getGatewayMethodRegistry: () => methodRegistry,
         isConnectionActive: (connId: string) => Boolean(clients.getByConnectionId(connId)),
       },
       () => projection,
@@ -385,7 +227,7 @@ describe("remote Control UI ingress production composition", () => {
       getResolvedAuth: () => auth,
       gatewayMethods: [],
       events: [],
-      extraHandlers: {},
+      extraHandlers,
       refreshHealthSnapshot: async () => ({
         ok: true,
         ts: 1,
@@ -433,9 +275,17 @@ describe("remote Control UI ingress production composition", () => {
       assertCurrent: () => serviceLifetime.signal.throwIfAborted(),
       host: {
         controlUiBasePath: "/claw",
+        resolveGatewayContext: () => requestContext as never,
         getResolvedAuth: () => auth,
         getRuntimeConfig: () => config,
-        handleRequest: http,
+        handleRequest: async (req, res) => {
+          const held = req.url?.includes("held=1") ? heldRead : undefined;
+          if (held) {
+            held.entered.resolve(undefined);
+            await held.release.promise;
+          }
+          await http!(req, res);
+        },
         handleUpgrade,
         handleSandboxRequest: createSandboxHostHttpRequestHandler(),
         signal: hostLifetime.signal,
@@ -519,16 +369,15 @@ describe("remote Control UI ingress production composition", () => {
     };
   }
 
-  async function readRemote(pathAndQuery: string, token?: string) {
+  async function readRemote(pathAndQuery: string, handle = ingress!) {
     return (
-      await ingress!.request({
+      await handle.request({
         surface: "control-ui",
         method: "GET",
         pathAndQuery,
         headers: [
           ["sec-fetch-mode", "cors"],
           ["sec-fetch-site", "same-origin"],
-          ...(token ? [["authorization", `Bearer ${token}`] as const] : []),
         ],
         signal: grantLifetime.signal,
       })
@@ -588,13 +437,12 @@ describe("remote Control UI ingress production composition", () => {
     expect(media.available).toBe(true);
     expect(media.mediaTicket).toMatch(/^v1\./);
     const ticketedPath = `${assistantMediaPath}&mediaTicket=${encodeURIComponent(media.mediaTicket)}`;
-    for (const response of [
-      await readRemote(ticketedPath),
-      await fetch(`${directOrigin}${ticketedPath}`),
-    ]) {
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("Ingress chat media\n");
-    }
+    const remoteMedia = await readRemote(ticketedPath);
+    expect(remoteMedia.status).toBe(200);
+    expect(await remoteMedia.text()).toBe("Ingress chat media\n");
+    const directReplay = await fetch(`${directOrigin}${ticketedPath}`);
+    expect(directReplay.status).toBe(404);
+    await directReplay.body?.cancel();
     for (const pathname of ["/api/sessions", "/v1/models", "/claw/__openclaw__/unknown"]) {
       const response = await readRemote(pathname);
       expect(response.status, pathname).toBe(404);
@@ -602,115 +450,28 @@ describe("remote Control UI ingress production composition", () => {
     }
   });
 
-  it("auto-approves a fresh browser and uses its ordinary capped token remotely and directly", async () => {
-    for (const [pathname, expected] of [
-      ["/claw/", "Remote UI fixture"],
-      ["/claw/assets/app.js", 'document.body.dataset.ready = "remote-ui";'],
-    ]) {
-      const { response } = await ingress!.request({
-        surface: "control-ui",
-        method: "GET",
-        pathAndQuery: pathname!,
-        headers: [],
-        signal: grantLifetime.signal,
-      });
-      expect(response.status).toBe(200);
-      const body = await response.text();
-      expect(body).toContain(expected);
-      if (pathname === "/claw/") {
-        expect(body).toContain('data-openclaw-remote-ingress="true"');
-        expect(body).toContain('data-openclaw-control-ui-base-path="/claw"');
-        expect(response.headers.get("content-security-policy")).toContain(
-          `frame-ancestors ${FRAME_ANCESTORS.join(" ")}`,
-        );
-      }
-    }
+  it("pairs visible devices without issuing credentials and reconnects under the live owner grant", async () => {
+    const document = await readRemote("/claw/");
+    expect(document.status).toBe(200);
+    const body = await document.text();
+    expect(body).toContain('data-openclaw-remote-ingress="true"');
+    expect(body).toContain('data-openclaw-control-ui-base-path="/claw"');
+    expect(document.headers.get("content-security-policy")).toContain(
+      `frame-ancestors ${FRAME_ANCESTORS.join(" ")}`,
+    );
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-remote-browser" });
-    const deviceToken = await usePeer(await openRemote(), async (peer) => {
-      const hello = await connect(peer, { identity, scopes: [] });
-      const token = expectHello(hello, "remote-ingress", SCOPES);
-      await expectOwnerReadAccess(peer);
-      await expectIngressDenials(peer);
-      expect(hello.payload?.controlUiUrl).toBe(`${PUBLIC_ORIGIN}/claw`);
-      const preview = await request(peer, "canvas.document.preview", {
-        html: "<p>Ingress preview</p>",
+    for (const scopes of [[], [...SCOPES], undefined]) {
+      await usePeer(await openRemote(), async (peer) => {
+        const hello = await connect(peer, { identity, scopes });
+        expectHello(hello, "remote-ingress", SCOPES);
+        expect(hello.payload?.controlUiUrl).toBe(`${PUBLIC_ORIGIN}/claw`);
+        await expectOwnerReadAccess(peer, OWNER_SESSION_KEY);
+        await expectIngressDenials(peer);
+        await expectReadWriteWithoutAdmin(peer, "credential-free browser");
       });
-      expect(preview).toMatchObject({ ok: true, payload: { sandboxOrigin: SANDBOX_ORIGIN } });
-      const sandboxUrl = new URL(preview.payload!.sandboxUrl!);
-      expect(sandboxUrl.origin).toBe(SANDBOX_ORIGIN);
-      const { response } = await ingress!.request({
-        surface: "sandbox",
-        method: "GET",
-        pathAndQuery: `${sandboxUrl.pathname}${sandboxUrl.search}`,
-        headers: [],
-        signal: grantLifetime.signal,
-      });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-security-policy")).toContain(
-        `frame-ancestors ${PUBLIC_ORIGIN} ${FRAME_ANCESTORS.join(" ")}`,
-      );
-      await response.body?.cancel();
-      await expectReadWriteWithoutAdmin(peer, "fresh browser");
-      return token;
-    });
-    await usePeer(await openRemote(), async (peer) => {
-      expectHello(
-        await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
-        "device-token",
-        SCOPES,
-      );
-      await expectReadWriteWithoutAdmin(peer, "returning browser");
-      await expectOwnerReadAccess(peer);
-      await expectIngressDenials(peer);
-      for (const pathname of [
-        "/claw/control-ui-config.json",
-        `/claw/__openclaw__/workspace-icon/${encodeURIComponent(OWNER_SESSION_KEY)}`,
-      ]) {
-        const response = await readRemote(pathname, deviceToken);
-        expect(response.status, pathname).toBe(200);
-        await response.body?.cancel();
-      }
-      const directIcon = await fetch(
-        `http://127.0.0.1:${listener.claim.port}/claw/__openclaw__/workspace-icon/${encodeURIComponent(OWNER_SESSION_KEY)}`,
-        { headers: { Authorization: `Bearer ${deviceToken}` } },
-      );
-      expect(directIcon.status).toBe(403);
-      await directIcon.body?.cancel();
-    });
-    await usePeer(await openRemote(), async (peer) => {
-      // The embedded UI reconnects with its stored token and no explicit scopes.
-      expectHello(
-        await connect(peer, { identity, auth: { deviceToken }, scopes: [] }),
-        "device-token",
-        SCOPES,
-      );
-      await expectReadWriteWithoutAdmin(peer, "returning embedded browser");
-      await expectOwnerReadAccess(peer);
-    });
-    await usePeer(await openRemote(), async (peer) => {
-      expectHello(await connect(peer, { identity }), "remote-ingress", SCOPES);
-    });
+    }
     await usePeer(await openDirect(), async (peer) => {
-      expectHello(
-        await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
-        "device-token",
-        SCOPES,
-      );
-      await expectReadWriteWithoutAdmin(peer, "direct browser");
-      await expectOwnerReadAccess(peer);
-    });
-    await usePeer(await openDirect(), async (peer) => {
-      expectHello(
-        await connect(peer, { identity, auth: { token: SHARED_TOKEN }, scopes: [...SCOPES] }),
-        "token",
-        SCOPES,
-      );
-      await expectOwnerReadAccess(peer);
-    });
-    await usePeer(await openDirect(), async (peer) => {
-      expect(
-        await connect(peer, { identity, auth: { deviceToken }, scopes: ["operator.admin"] }),
-      ).toMatchObject({ ok: false, error: { message: expect.stringContaining("device token") } });
+      expect(await connect(peer, { identity, scopes: [...SCOPES] })).toMatchObject({ ok: false });
     });
     await usePeer(await openDirect(true), async (owner) => {
       expect(
@@ -720,75 +481,79 @@ describe("remote Control UI ingress production composition", () => {
           scopes: ["operator.admin"],
         }),
       ).toMatchObject({ ok: true });
+      const adminClient = [...clients].find((client) => client.connect.client.mode === "cli");
+      if (!adminClient) {
+        throw new Error("Missing authenticated administrator connection");
+      }
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          client: adminClient,
+          isWebchatConnect: () => false,
+          hasCurrentClientAuthority: () => clients.has(adminClient),
+        },
+        async () => {
+          await expect(ingress!.requestGateway("config.set", { raw: "{}" })).rejects.toThrow(
+            "operator.admin",
+          );
+          expect(await ingress!.requestGateway("voicewake.get", {})).toHaveProperty("triggers");
+        },
+      );
       const list = await request(owner, "device.pair.list", {});
       expect(list.ok).toBe(true);
       expect(list.payload?.pending).toEqual([]);
-      expect(list.payload?.paired).toEqual([
-        expect.objectContaining({
-          deviceId: identity.deviceId,
-          role: "operator",
-          roles: ["operator"],
-          scopes: [...SCOPES],
-          approvedVia: "remote-ingress",
-          tokens: [expect.objectContaining({ role: "operator", scopes: [...SCOPES] })],
-        }),
-      ]);
-      expect(
-        await request(owner, "device.token.revoke", {
-          deviceId: identity.deviceId,
-          role: "operator",
-        }),
-      ).toMatchObject({ ok: true });
+      expect(list.payload?.paired).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            deviceId: identity.deviceId,
+            scopes: [...SCOPES],
+            approvedVia: "remote-ingress",
+          }),
+        ]),
+      );
     });
-    const revokedConfig = await readRemote("/claw/control-ui-config.json", deviceToken);
-    expect(revokedConfig.status).toBe(401);
-    await revokedConfig.body?.cancel();
-    for (const direct of [false, true]) {
-      await usePeer(await (direct ? openDirect() : openRemote()), async (connection) => {
-        const denied = await connect(connection, {
-          identity,
-          auth: { deviceToken },
-          scopes: [...SCOPES],
-        });
-        expect(denied.ok).toBe(false);
-        expect(denied.error?.message).toContain("device token");
-      });
-    }
+    const preview = await ingress!.requestGateway<{ sandboxUrl: string; sandboxOrigin: string }>(
+      "canvas.document.preview",
+      { html: "<p>Ingress preview</p>" },
+    );
+    expect(preview.sandboxOrigin).toBe(SANDBOX_ORIGIN);
+    const sandboxUrl = new URL(preview.sandboxUrl);
+    const { response } = await ingress!.request({
+      surface: "sandbox",
+      method: "GET",
+      pathAndQuery: `${sandboxUrl.pathname}${sandboxUrl.search}`,
+      headers: [],
+      signal: grantLifetime.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain(
+      `frame-ancestors ${PUBLIC_ORIGIN} ${FRAME_ANCESTORS.join(" ")}`,
+    );
+    await response.body?.cancel();
   });
 
-  it("refuses shared credentials, bootstrap tokens, invalid tokens, unbound devices, roles, and excess scopes", async () => {
+  it("rejects reusable credentials, invalid device proof, roles, and scopes above the grant", async () => {
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-rejected-browser" });
-    const bootstrap = await issueDeviceBootstrapToken({
-      profile: { purpose: "control-ui", roles: ["operator"], scopes: [...SCOPES] },
-    });
     for (const credential of [
       { token: SHARED_TOKEN },
       { password: "synthetic-password" },
-      { bootstrapToken: bootstrap.token },
+      { bootstrapToken: "synthetic-bootstrap" },
+      { deviceToken: "synthetic-device-token" },
     ]) {
       await usePeer(await openRemote(), async (peer) => {
         expect(
           await connect(peer, { identity, auth: credential, scopes: [...SCOPES] }),
         ).toMatchObject({
           ok: false,
-          error: {
-            code: "FORBIDDEN",
-            message: expect.stringContaining("shared Gateway credentials"),
-          },
+          error: { code: "FORBIDDEN", message: expect.stringContaining("credential") },
         });
       });
     }
-    const deniedCases: Array<[ConnectOptions, string]> = [
-      [
-        { identity, auth: { deviceToken: "invalid-device-token" }, scopes: [...SCOPES] },
-        "device token",
-      ],
+    for (const [options, message] of [
       [{ identity, scopes: [...SCOPES], tamperSignature: true }, "signature"],
       [{ scopes: [...SCOPES] }, "signed device identity"],
       [{ identity, role: "node", scopes: [] }, "operator role"],
       [{ identity, scopes: ["operator.admin"] }, "ceiling"],
-    ];
-    for (const [options, message] of deniedCases) {
+    ] as Array<[ConnectOptions, string]>) {
       await usePeer(await openRemote(), async (peer) => {
         expect(await connect(peer, options)).toMatchObject({
           ok: false,
@@ -798,99 +563,423 @@ describe("remote Control UI ingress production composition", () => {
     }
   });
 
-  it("caps empty-scope enrollment and same-key lost-token recovery to a read-only handle", async () => {
-    const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-narrowed-browser" });
-    const originalToken = await usePeer(await openRemote(), async (peer) =>
-      expectHello(await connect(peer, { identity, scopes: [] }), "remote-ingress", SCOPES),
-    );
-    const readOnly = await factory.open({
-      ...openOptions,
-      audienceId: "synthetic-read-only-grant",
-      operatorScopeCeiling: ["operator.read"],
-    });
-    try {
-      expect(readOnly.presentation).toMatchObject({
-        publicOrigin: PUBLIC_ORIGIN,
-        sandboxOrigin: SANDBOX_ORIGIN,
-      });
-      expect(ingress!.presentation).toMatchObject({
-        publicOrigin: PUBLIC_ORIGIN,
-        sandboxOrigin: SANDBOX_ORIGIN,
-      });
-      const readOnlyIdentity = loadOrCreateDeviceIdentity({
-        identityKey: "synthetic-read-only-browser",
-      });
-      await usePeer(await openRemote(readOnly), async (peer) => {
-        expectHello(await connect(peer, { identity: readOnlyIdentity }), "remote-ingress", [
-          "operator.read",
-        ]);
-      });
-      await usePeer(await openRemote(), async (peer) => {
-        expectHello(
-          await connect(peer, { identity: readOnlyIdentity, scopes: [...SCOPES] }),
-          "remote-ingress",
-          SCOPES,
-        );
-        await expectReadWriteWithoutAdmin(peer, "same-key scope upgrade");
-      });
-      const deviceToken = await usePeer(await openRemote(readOnly), async (peer) => {
-        const token = expectHello(await connect(peer, { identity }), "remote-ingress", [
-          "operator.read",
-        ]);
-        expect(await request(peer, "voicewake.get", {})).toMatchObject({ ok: true });
-        expect(await request(peer, "voicewake.set", { triggers: ["denied write"] })).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN", message: "missing scope: operator.write" },
+  it("enforces owner read/write and full ceilings in WS and origin-free RPC for token and password hosts", async () => {
+    for (const mode of ["token", "password"] as const) {
+      auth = { mode, [mode]: SHARED_TOKEN, allowTailscale: false };
+      config = { ...config, gateway: { ...config.gateway, auth: { mode, [mode]: SHARED_TOKEN } } };
+      setRuntimeConfigSnapshot(config, config);
+      for (const ceiling of [["operator.read"], [...SCOPES], ["operator.admin"]]) {
+        const binding = await factory.bindPrincipal({
+          audienceId: `owner-${mode}-${ceiling.join("-")}`,
+          principal: { kind: "owner" },
+          operatorScopeCeiling: ceiling,
+          signal: grantLifetime.signal,
+          assertCurrent: () => grantLifetime.signal.throwIfAborted(),
         });
-        return token;
-      });
-      expect(deviceToken).not.toBe(originalToken);
-      await usePeer(await openDirect(), async (peer) => {
-        expectHello(
-          await connect(peer, { identity, auth: { deviceToken }, scopes: ["operator.read"] }),
-          "device-token",
-          ["operator.read"],
-        );
-        expect(
-          await request(peer, "voicewake.set", { triggers: ["denied direct write"] }),
-        ).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN", message: "missing scope: operator.write" },
-        });
-      });
-      await usePeer(await openDirect(), async (peer) => {
-        expect(
-          await connect(peer, { identity, auth: { deviceToken }, scopes: [...SCOPES] }),
-        ).toMatchObject({ ok: false, error: { message: expect.stringContaining("device token") } });
-      });
-      for (const credential of [undefined, { deviceToken }]) {
-        await usePeer(await openRemote(readOnly), async (peer) => {
-          expect(
-            await connect(peer, { identity, auth: credential, scopes: [...SCOPES] }),
-          ).toMatchObject({
-            ok: false,
-            error: { code: "FORBIDDEN", message: expect.stringContaining("ceiling") },
+        try {
+          expect(await binding.request("voicewake.get", {})).toHaveProperty("triggers");
+          if (ceiling.includes("operator.read") && ceiling.length === 1) {
+            await expect(
+              binding.request("voicewake.set", { triggers: ["denied"] }),
+            ).rejects.toThrow("operator.write");
+          } else {
+            expect(await binding.request("voicewake.set", { triggers: [mode] })).toMatchObject({
+              triggers: [mode],
+            });
+          }
+          if (ceiling.includes("operator.admin")) {
+            expect(await binding.request("exec.approvals.get", {})).toHaveProperty(
+              "resolvedDefaults",
+            );
+            expect(await binding.request("device.pair.list", {})).toHaveProperty("paired");
+          } else {
+            await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
+              "operator.admin",
+            );
+          }
+          const ui = await binding.openControlUi({
+            publicOrigin: PUBLIC_ORIGIN,
+            sandboxOrigin: SANDBOX_ORIGIN,
+            frameAncestors: FRAME_ANCESTORS,
           });
-        });
+          await usePeer(await openRemote(ui), async (peer) => {
+            const identity = loadOrCreateDeviceIdentity({
+              identityKey: `synthetic-${mode}-${ceiling.join("-")}`,
+            });
+            expectHello(await connect(peer, { identity }), "remote-ingress", ceiling);
+            expect(await request(peer, "voicewake.get", {})).toMatchObject({ ok: true });
+            expect(await request(peer, "exec.approvals.get", {})).toMatchObject({
+              ok: ceiling.includes("operator.admin"),
+            });
+          });
+        } finally {
+          await binding.close();
+        }
       }
-    } finally {
-      await readOnly.close();
     }
-    const { response } = await ingress!.request({
-      surface: "control-ui",
-      method: "GET",
-      pathAndQuery: "/claw/",
-      headers: [],
-      signal: grantLifetime.signal,
+  });
+
+  it("retains live owner RPC authority without inventing a WebSocket connection", async () => {
+    let current = true;
+    let assertRetained: (() => void) | undefined;
+    const binding = await factory.bindPrincipal({
+      ...openOptions,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Owner grant revoked");
+        }
+      },
     });
-    expect(response.status).toBe(200);
-    await response.body?.cancel();
+    observeOwnerMutation = ({ client }) => {
+      expect(client?.connId).toBeUndefined();
+      const authority = client?.internal?.operatorRunAuthority;
+      expect(authority?.profileId).toBe("gateway-owner");
+      if (!authority) {
+        throw new Error("Missing retained owner authority");
+      }
+      assertRetained = authority.assertCurrent;
+    };
+    heldMutation = { entered: createDeferred(), release: createDeferred(), remaining: 1 };
+    try {
+      const pending = binding.request("users.setDisplayName", {
+        profileId: "gateway-owner",
+        displayName: "Must not be published",
+      });
+      const rejected = pending.catch((error: unknown) => error);
+      await awaitGateBeforeSettlement(
+        heldMutation.entered.promise,
+        pending,
+        "Owner mutation did not retain authority",
+      );
+      expect(assertRetained).toBeTypeOf("function");
+      expect(() => assertRetained!()).not.toThrow();
+      current = false;
+      expect(() => assertRetained!()).toThrow();
+      heldMutation.release.resolve(undefined);
+      expect(await rejected).toBeInstanceOf(Error);
+    } finally {
+      heldMutation?.release.resolve(undefined);
+      heldMutation = undefined;
+      observeOwnerMutation = undefined;
+      await binding.close();
+    }
+  });
+
+  it("joins retained UI RPC execution before closing its transport handle", async () => {
+    const binding = await factory.bindPrincipal(openOptions);
+    const ui = await binding.openControlUi({
+      publicOrigin: PUBLIC_ORIGIN,
+      sandboxOrigin: SANDBOX_ORIGIN,
+      frameAncestors: FRAME_ANCESTORS,
+    });
+    heldMutation = { entered: createDeferred(), release: createDeferred(), remaining: 1 };
+    try {
+      const pending = ui.requestGateway("users.setDisplayName", {
+        profileId: "gateway-owner",
+        displayName: "Must not be published",
+      });
+      await awaitGateBeforeSettlement(
+        heldMutation.entered.promise,
+        pending,
+        "UI RPC did not enter its handler",
+      );
+      await expectUiCloseJoinsRpc(ui, binding, pending, () =>
+        heldMutation!.release.resolve(undefined),
+      );
+    } finally {
+      heldMutation?.release.resolve(undefined);
+      heldMutation = undefined;
+      await binding.close();
+    }
+  });
+
+  it("reuses a signed device across independent ceilings without retaining the previous grant's scopes", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-changing-ceiling" });
+    for (const ceiling of [
+      ["operator.read", "operator.questions"],
+      ["operator.write"],
+      ["operator.read"],
+    ]) {
+      const ui = await factory.open({ ...openOptions, operatorScopeCeiling: ceiling });
+      try {
+        await usePeer(await openRemote(ui), async (peer) => {
+          expectHello(await connect(peer, { identity }), "remote-ingress", ceiling);
+          expect(await request(peer, "device.pair.list", {})).toMatchObject({ ok: false });
+          if (!ceiling.includes("operator.write")) {
+            expect(await request(peer, "voicewake.set", { triggers: ["denied"] })).toMatchObject({
+              ok: false,
+            });
+          }
+        });
+      } finally {
+        await ui.close();
+      }
+    }
+  });
+
+  it("binds Team WS, HTTP and RPC to each person's role and session visibility", async () => {
+    await ingress!.close();
+    const admin = await ensureCanonicalUserProfileForEmail("admin@ingress.example.test");
+    const reader = await ensureCanonicalUserProfileForEmail("reader@ingress.example.test");
+    await setCanonicalUserProfileRole(admin.id, "admin", {
+      onCommitted: invalidateOperatorRolePolicy,
+    });
+    await setCanonicalUserProfileRole(reader.id, "reader", {
+      onCommitted: invalidateOperatorRolePolicy,
+    });
+    const people = [admin, reader];
+    for (const person of people) {
+      await setCanonicalUserProfileAvatar(person.id, PNG_BYTES, "image/png");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: `agent:main:ingress-${person.id}` },
+        {
+          sessionId: `ingress-${person.id}`,
+          updatedAt: Date.now(),
+          label: person.id,
+          spawnedCwd: state.workspaceDir,
+          createdActor: { type: "human", source: "profile", id: person.id },
+          visibility: "draft",
+        },
+      );
+    }
+    const trustedProxy = {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+    };
+    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
+    config = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        auth: { mode: "trusted-proxy", trustedProxy },
+        roles: {
+          default: "reader",
+          definitions: {
+            admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+            reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+            policy: {
+              scopes: ["operator.admin"],
+              agents: "*",
+              sessions: { others: "write" },
+              accessPolicyPlugin: "unavailable-policy-fixture",
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    projection?.dispose();
+    projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
+    let adminMediaTicket: string | undefined;
+    for (const person of people) {
+      for (const full of [false, true]) {
+        const ceiling = full ? ["operator.admin"] : [...SCOPES];
+        const binding = await factory.bindPrincipal({
+          ...openOptions,
+          audienceId: `${person.id}-${full}`,
+          principal: { kind: "person", profileId: person.id },
+          operatorScopeCeiling: ceiling,
+        });
+        try {
+          const expectedScopes = person.id === admin.id ? ceiling : ["operator.read"];
+          expect(await binding.request("users.self", {})).toMatchObject({
+            profile: { id: person.id },
+          });
+          const listed = await binding.request<{ sessions: Array<{ key: string }> }>(
+            "sessions.list",
+            {
+              source: "sidebar",
+              rowMode: "compact",
+              limit: 20,
+            },
+          );
+          expect(listed.sessions.map((session) => session.key)).toContain(
+            `agent:main:ingress-${person.id}`,
+          );
+          if (person.id === reader.id) {
+            expect(listed.sessions.map((session) => session.key)).not.toContain(
+              `agent:main:ingress-${admin.id}`,
+            );
+          }
+          if (person.id === admin.id && full) {
+            expect(await binding.request("exec.approvals.get", {})).toHaveProperty(
+              "resolvedDefaults",
+            );
+          } else {
+            await expect(binding.request("exec.approvals.get", {})).rejects.toThrow(
+              "operator.admin",
+            );
+          }
+          if (person.id === reader.id) {
+            await expect(
+              binding.request("voicewake.set", { triggers: ["denied"] }),
+            ).rejects.toThrow("operator.write");
+          }
+          const ui = await binding.openControlUi({
+            publicOrigin: PUBLIC_ORIGIN,
+            sandboxOrigin: SANDBOX_ORIGIN,
+            frameAncestors: FRAME_ANCESTORS,
+          });
+          await usePeer(await openRemote(ui), async (peer) => {
+            const identity = loadOrCreateDeviceIdentity({
+              identityKey: `synthetic-person-${person.id}-${full}`,
+            });
+            expectHello(
+              await connect(peer, { identity, profileId: person.id }),
+              "remote-ingress",
+              expectedScopes,
+            );
+            expect(await request(peer, "users.self", {})).toMatchObject({
+              ok: true,
+              payload: { profile: { id: person.id } },
+            });
+            expect(await request(peer, "exec.approvals.get", {})).toMatchObject({
+              ok: person.id === admin.id && full,
+            });
+          });
+          if (person.id === admin.id && full) {
+            const metadata = await readRemote(`${assistantMediaPath}&meta=1`, ui);
+            expect(metadata.status).toBe(200);
+            adminMediaTicket = ((await metadata.json()) as { mediaTicket: string }).mediaTicket;
+          } else if (person.id === reader.id) {
+            expect(adminMediaTicket).toBeDefined();
+            const replay = await readRemote(
+              `${assistantMediaPath}&mediaTicket=${encodeURIComponent(adminMediaTicket!)}`,
+              ui,
+            );
+            expect(replay.status).toBe(404);
+            await replay.body?.cancel();
+          }
+          const avatar = await readRemote(`/claw/api/users/${person.id}/avatar`, ui);
+          expect(avatar.status).toBe(200);
+          await avatar.body?.cancel();
+          const ownIcon = await readRemote(
+            `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
+            ui,
+          );
+          expect(ownIcon.status).toBe(full && person.id === admin.id ? 200 : 403);
+          await ownIcon.body?.cancel();
+        } finally {
+          await binding.close();
+        }
+      }
+    }
+    for (const profileId of ["missing-ingress-person", "gateway-owner"]) {
+      await expect(
+        factory.bindPrincipal({
+          ...openOptions,
+          principal: { kind: "person", profileId },
+        }),
+      ).rejects.toMatchObject({ code: "forbidden" });
+    }
+    const policyPerson = await ensureCanonicalUserProfileForEmail("policy@ingress.example.test");
+    await setCanonicalUserProfileRole(policyPerson.id, "policy", {
+      onCommitted: invalidateOperatorRolePolicy,
+    });
+    await expect(
+      factory.bindPrincipal({
+        ...openOptions,
+        principal: { kind: "person", profileId: policyPerson.id },
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    for (const change of ["role", "merge", "grant", "assert"] as const) {
+      const subject = await ensureCanonicalUserProfileForEmail(`${change}@ingress.example.test`);
+      await setCanonicalUserProfileRole(subject.id, "admin", {
+        onCommitted: invalidateOperatorRolePolicy,
+      });
+      const grant = new AbortController();
+      let grantCurrent = true;
+      const binding = await factory.bindPrincipal({
+        ...openOptions,
+        principal: { kind: "person", profileId: subject.id },
+        operatorScopeCeiling: ["operator.admin"],
+        signal: grant.signal,
+        assertCurrent: () => {
+          grant.signal.throwIfAborted();
+          if (!grantCurrent) {
+            throw new Error("synthetic grant revoked by current assertion");
+          }
+        },
+      });
+      const ui = await binding.openControlUi({
+        publicOrigin: PUBLIC_ORIGIN,
+        sandboxOrigin: SANDBOX_ORIGIN,
+        frameAncestors: FRAME_ANCESTORS,
+      });
+      try {
+        const peer = await openRemote(ui);
+        const identity = loadOrCreateDeviceIdentity({
+          identityKey: `synthetic-retained-${change}`,
+        });
+        expectHello(await connect(peer, { identity, profileId: subject.id }), "remote-ingress", [
+          "operator.admin",
+        ]);
+        heldMutation = { entered: createDeferred(), release: createDeferred(), remaining: 2 };
+        heldRead = { entered: createDeferred(), release: createDeferred() };
+        const pendingHttp = readRemote("/claw/control-ui-config.json?held=1", ui);
+        const rejectedHttp = pendingHttp.catch((error: unknown) => error);
+        const pendingWs = request(peer, "users.setDisplayName", {
+          profileId: subject.id,
+          displayName: "Must not be published",
+        });
+        const rejectedWs = pendingWs.catch((error: unknown) => error);
+        const pending = binding.request("users.setDisplayName", {
+          profileId: subject.id,
+          displayName: "Must not be published",
+        });
+        const rejected = pending.catch((error: unknown) => error);
+        await awaitGateBeforeSettlement(
+          heldMutation.entered.promise,
+          pending,
+          "Mutation settled before reaching its held effect",
+        );
+        await awaitGateBeforeSettlement(
+          heldRead.entered.promise,
+          pendingHttp,
+          "HTTP response settled before the held read",
+        );
+        if (change === "role") {
+          await setCanonicalUserProfileRole(subject.id, "reader", {
+            onCommitted: invalidateOperatorRolePolicy,
+          });
+        } else if (change === "merge") {
+          await mergeCanonicalUserProfiles(subject.id, reader.id);
+        } else if (change === "grant") {
+          grant.abort(new Error("synthetic grant revoked"));
+        } else {
+          grantCurrent = false;
+          expect(grant.signal.aborted).toBe(false);
+        }
+        heldMutation.release.resolve(undefined);
+        heldRead.release.resolve(undefined);
+        heldMutation = undefined;
+        heldRead = undefined;
+        expect(await rejected).toBeInstanceOf(Error);
+        expect(await rejectedWs).toBeInstanceOf(Error);
+        expect(await rejectedHttp).toBeInstanceOf(Error);
+        await peer.close();
+        const current = await ensureCanonicalUserProfileForEmail(`${change}@ingress.example.test`);
+        expect(current.displayName).not.toBe("Must not be published");
+        await expect(binding.request("voicewake.get", {})).rejects.toThrow();
+        await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
+        await expect(openRemote(ui)).rejects.toThrow();
+      } finally {
+        heldMutation?.release.resolve(undefined);
+        heldRead?.release.resolve(undefined);
+        heldMutation = undefined;
+        heldRead = undefined;
+        await binding.close();
+      }
+    }
   });
 
   it("refuses an unauthenticated host", async () => {
     await ingress!.close();
     auth = { mode: "none", allowTailscale: false };
-    config = { ...config, gateway: { ...config.gateway, auth: { mode: "none" } } };
+    config = {
+      ...config,
+      gateway: { ...config.gateway, roles: undefined, auth: { mode: "none" } },
+    };
     setRuntimeConfigSnapshot(config, config);
     await expect(factory.open(openOptions)).rejects.toMatchObject({
       name: GatewayControlUiIngressError.name,

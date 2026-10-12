@@ -9,6 +9,7 @@ import { markGatewayIngressTransport, readGatewayIngressTransport } from "./ingr
 import type { RemoteControlUiIngressContext } from "./remote-control-ui-context.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createRemoteControlUiTransport } from "./remote-control-ui-transport.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { startWebSocketKeepalive } from "./websocket-keepalive.js";
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -22,7 +23,7 @@ function fixture(
 ) {
   let current = true;
   let reserved = 0;
-  const context: RemoteControlUiIngressContext = {
+  const context = createRemoteControlUiIngressTestContext({
     pluginId: "test-ingress",
     audienceId: "test-audience",
     publicOrigin: "https://ui.example.test",
@@ -36,7 +37,7 @@ function fixture(
       }
     },
     trackWork: (work) => work,
-  };
+  });
   const host: GatewayControlUiIngressHost = {
     signal: new AbortController().signal,
     controlUiBasePath: "/claw",

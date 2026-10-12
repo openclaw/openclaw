@@ -354,6 +354,16 @@ A browser working while `openclaw connect` receives HTTP 302 means the machine
 request reached Access, not that node pairing succeeded. Keep machine credentials
 out of browser links and do not bypass Access for the whole Gateway.
 
+Trusted relay plugins can use [principal-bound remote ingress](/plugins/sdk-gateway-ingress)
+for a remote Control UI and MCP calls. A Team grant belongs to the verified person
+who approves it in this Gateway's Control UI, never the shared owner or the
+loopback password. The plugin's consent flow should default to **Read + write**
+and offer **Full** within that person's current role. Full gives administrators
+admin access and does not elevate restricted roles. Both UI and RPC must share
+the same live grant; the plugin and relay own expiry and revocation. Ingress
+reconnects are tokenless and issue no reusable device token. This SDK capability
+does not itself install or configure a relay service.
+
 ## 6. Give widgets a separate sandbox origin
 
 Inline Canvas widgets and MCP Apps use a separate sandbox listener. Behind HTTPS

@@ -1,3 +1,4 @@
+import type { RemoteIngressPrincipalSnapshot } from "../remote-ingress-principal.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type DesktopObserveRequester = {
@@ -5,6 +6,7 @@ export type DesktopObserveRequester = {
   /** Display identity from authenticated Gateway metadata, never wire-supplied client labels. */
   operatorName?: string;
   signal?: AbortSignal;
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
   isCurrent: () => boolean;
 };
 
@@ -24,6 +26,7 @@ export function resolveDesktopObserveRequester(options: {
       client.authenticatedUserId?.trim() ||
       undefined,
     signal: client.connectionSignal,
+    remoteIngressPrincipal: client.internal?.remoteIngressPrincipal,
     isCurrent: () =>
       client.invalidated !== true &&
       !client.connectionSignal?.aborted &&

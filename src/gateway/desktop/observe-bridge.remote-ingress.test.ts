@@ -23,6 +23,7 @@ vi.mock("./rfb-preauth.js", async (original) => ({
   ...(await original<typeof import("./rfb-preauth.js")>()),
   preauthenticateRfb: peers.authenticate,
 }));
+import { handleDesktopAudioUpgrade, mintDesktopAudioObserver } from "./audio-bridge.js";
 import { handleDesktopObserveUpgrade, mintDesktopObserverToken } from "./observe-bridge.js";
 
 it("retains pending observer authentication until its actual work settles after ingress closure", async () => {
@@ -55,7 +56,7 @@ it("retains pending observer authentication until its actual work settles after 
     control: false,
     attachment: { kind: "stream", streamId: "fixture-stream" },
     preauth: { auth: "vnc-password", credentials: { password: "fixture-password" } },
-    requester: { isCurrent: () => true },
+    requester: { isCurrent: () => true, remoteIngressPrincipal: context.resolvePrincipal() },
   });
   const req = new IncomingMessage(new Socket());
   req.url = `/desktop/observe?token=${ticket.token}`;
@@ -86,3 +87,62 @@ it("retains pending observer authentication until its actual work settles after 
     transport.destroy();
   }
 });
+
+it.each(["observe", "audio"] as const)(
+  "refuses a %s ticket issued under another ingress grant",
+  (kind) => {
+    const source = createRemoteControlUiIngressTestContext({
+      principal: { kind: "person", profileId: "person-a" },
+    });
+    const destination = createRemoteControlUiIngressTestContext({
+      principal: { kind: "person", profileId: "person-b" },
+    });
+    const requester = { isCurrent: () => true, remoteIngressPrincipal: source.resolvePrincipal() };
+    const audio =
+      kind === "audio"
+        ? mintDesktopAudioObserver({
+            requester,
+            source: {
+              start: async () => {
+                throw new Error("Rejected tickets must not start audio");
+              },
+            },
+          })
+        : undefined;
+    const path =
+      audio?.descriptor.wsPath ??
+      `/desktop/observe?token=${
+        mintDesktopObserverToken({
+          sourceKey: "desktop:fixture",
+          ownerEpoch: 1,
+          control: false,
+          attachment: { kind: "stream", streamId: "fixture-stream" },
+          requester,
+        }).token
+      }`;
+    const req = new IncomingMessage(new Socket());
+    req.url = path;
+    markGatewayIngressTransport(req, { kind: "remote-forwarded", context: destination });
+    const transport = new PassThrough();
+    const chunks: Buffer[] = [];
+    transport.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const attachObserver = vi.fn();
+    const claimStream = vi.fn();
+    try {
+      if (kind === "audio") {
+        handleDesktopAudioUpgrade(req, transport, Buffer.alloc(0));
+      } else {
+        handleDesktopObserveUpgrade(req, transport, Buffer.alloc(0), {
+          registry: { attachObserver, claimStream },
+        });
+      }
+      expect(Buffer.concat(chunks).toString()).toContain("401 Unauthorized");
+      expect(attachObserver).not.toHaveBeenCalled();
+      expect(claimStream).not.toHaveBeenCalled();
+    } finally {
+      audio?.close();
+      req.destroy();
+      transport.destroy();
+    }
+  },
+);

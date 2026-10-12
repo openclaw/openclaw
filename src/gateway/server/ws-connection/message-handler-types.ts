@@ -17,6 +17,7 @@ import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.js";
+import type { RemoteIngressPrincipalSnapshot } from "../../remote-ingress-principal.js";
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
@@ -137,6 +138,7 @@ export type GatewayConnectPhaseContext = {
 };
 
 export type AuthenticatedGatewayConnect = {
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
   authPolicy: GatewayAuthPolicy;
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;

@@ -23,7 +23,7 @@ const audioWss = new WebSocketServer({ noServer: true, maxPayload: 128 });
 type AudioObservation = {
   attach(ws: WebSocket, ingress?: RemoteControlUiIngressContext): void;
   close(): void;
-  isCurrent(): boolean;
+  isCurrent(ingress?: RemoteControlUiIngressContext): boolean;
 };
 const tickets = createOneTimeTicketStore<AudioObservation>({
   ttlMs: 60_000,
@@ -38,7 +38,12 @@ export function mintDesktopAudioObserver(params: {
   const lifetime = new AbortController();
   const ready = createDeferredCore<boolean>();
   let closeSocket: (() => void) | undefined;
-  const isCurrent = () => !lifetime.signal.aborted && params.requester?.isCurrent() !== false;
+  const isCurrent = (ingress?: RemoteControlUiIngressContext) =>
+    !lifetime.signal.aborted &&
+    (!ingress ||
+      params.requester?.remoteIngressPrincipal?.assertCurrent ===
+        ingress.resolvePrincipal().assertCurrent) &&
+    params.requester?.isCurrent() !== false;
   const close = () => {
     if (lifetime.signal.aborted) {
       return;
@@ -53,7 +58,7 @@ export function mintDesktopAudioObserver(params: {
     close,
     isCurrent,
     attach(ws, ingress) {
-      const isAttachCurrent = () => isCurrent() && hasCurrentRemoteControlUiIngress(ingress);
+      const isAttachCurrent = () => isCurrent(ingress) && hasCurrentRemoteControlUiIngress(ingress);
       let captureAbort: AbortController | undefined;
       let transition: Promise<void> | undefined;
       let pending: (() => Promise<void>) | undefined;
@@ -249,7 +254,7 @@ export function handleDesktopAudioUpgrade(
   }
   const ingress = getRemoteControlUiIngressContext(req);
   const entry = tickets.consume(resource.searchParams.get("token") ?? "");
-  if (!entry || !entry.isCurrent() || !hasCurrentRemoteControlUiIngress(ingress)) {
+  if (!entry || !entry.isCurrent(ingress) || !hasCurrentRemoteControlUiIngress(ingress)) {
     entry?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;

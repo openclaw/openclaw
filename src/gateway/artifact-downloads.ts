@@ -51,7 +51,15 @@ export async function handleArtifactDownloadHttpRequest(
     return true;
   }
   const assertCurrent = () => {
-    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    if (
+      ingress &&
+      client.internal?.remoteIngressPrincipal?.assertCurrent !==
+        ingress.resolvePrincipal().assertCurrent
+    ) {
+      throw new Error("Artifact download belongs to another ingress grant");
+    }
     assertArtifactDownloadGrantCurrent(opts.clients, client, ticket, grant);
   };
   let prepared: ArtifactDownloadResponse | undefined;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
@@ -84,6 +85,29 @@ describe("GitHub publication request discovery", () => {
     mocks.roleScopes = undefined;
     mocks.loadSession.mockReset();
     mocks.loadSession.mockReturnValue(sessionRead());
+  });
+
+  it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
+    const request = createRequest();
+    const grant = new AbortController();
+    const principal = createRemoteControlUiIngressTestContext({
+      principal: { kind: "person", profileId: "profile-cache-test" },
+      signal: grant.signal,
+    }).resolvePrincipal();
+    delete request.client.connId;
+    request.client.authenticatedUserProfile = principal.authenticatedUserProfile;
+    request.client.internal = {
+      remoteIngressPrincipal: principal,
+      operatorRoleActor: principal.operatorRoleActor,
+    };
+    request.context.getClientConnIds = () => new Set();
+    const read = await prepareGitHubPublicationOptionsRead(request, { sessionKey: "main" });
+    expect(read.personal.kind).toBe("eligible");
+    const publication = preparePersonalGitHubSessionAction(request, { sessionKey: "main" });
+    expect(() => publication.assertCurrent()).not.toThrow();
+    grant.abort();
+    expect(() => read.currentSession()).toThrow("connection is no longer current");
+    expect(() => publication.assertCurrent()).toThrow("current authenticated human");
   });
 
   it.each([

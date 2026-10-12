@@ -182,7 +182,10 @@ export function createBoardHandlers(
                 },
               }
             : {}),
-          authority: authority.ticketAuthority,
+          authority: {
+            ...authority.ticketAuthority,
+            remoteIngressPrincipal: client?.internal?.remoteIngressPrincipal,
+          },
         });
         if (registration) {
           widget.kindLabel = registration.definition.label;

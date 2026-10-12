@@ -34,6 +34,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
   hasCurrentRemoteControlUiIngress,
+  type RemoteControlUiIngressContext,
 } from "../remote-control-ui-context.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import {
@@ -77,7 +78,9 @@ function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
   requestAuth?: AuthorizedGatewayHttpRequest,
+  ingress?: RemoteControlUiIngressContext,
 ): GatewayRequestOptions["client"] {
+  const principal = ingress?.resolvePrincipal();
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
   const operatorRoleActor = requestAuth?.operatorRoleActor;
   const operatorAccessAuthority = requestAuth?.operatorAccessAuthority;
@@ -85,11 +88,18 @@ function createPluginRouteRuntimeClient(
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(operatorRoleActor || operatorAccessAuthority !== undefined
+    ...(ingress && principal
+      ? {
+          remoteControlUiIngress: ingress,
+          preparedSessionProfile: principal.preparedSessionProfile,
+        }
+      : {}),
+    ...(operatorRoleActor || operatorAccessAuthority !== undefined || principal
       ? {
           internal: {
             ...(operatorRoleActor ? { operatorRoleActor } : {}),
             ...(operatorAccessAuthority !== undefined ? { operatorAccessAuthority } : {}),
+            ...(principal ? { remoteIngressPrincipal: principal } : {}),
           },
         }
       : {}),
@@ -106,7 +116,9 @@ function createPluginRouteRuntimeClient(
       scopes: [...scopes],
     },
   };
-  prepareGatewayRecipientProfile(client);
+  if (!principal) {
+    prepareGatewayRecipientProfile(client);
+  }
   return client;
 }
 
@@ -117,9 +129,10 @@ async function withPluginRouteRuntimeScope<T>(
   // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
   // current across handler and projection awaits, using the same publication owner.
   const client = scope.client;
-  const stop = client?.authenticatedUserProfile
-    ? onUserProfilesChanged(() => prepareGatewayRecipientProfile(client))
-    : undefined;
+  const stop =
+    client?.authenticatedUserProfile && !client.remoteControlUiIngress
+      ? onUserProfilesChanged(() => prepareGatewayRecipientProfile(client))
+      : undefined;
   try {
     return await withPluginRuntimeGatewayRequestScope(scope, run);
   } finally {
@@ -175,6 +188,7 @@ function createPluginRouteRuntimeScope(params: {
     runtimeScopes,
     params.gatewayRequestClientIp,
     requestAuth,
+    ingress,
   );
   const operatorAccessAuthority = runtimeClient?.internal?.operatorAccessAuthority;
   const hasCurrentClientAuthority = () =>
@@ -270,7 +284,7 @@ export function createGatewayPluginRequestHandler(params: {
       : resolvePluginRoutePathContextForRequest(req, providedPathContext);
     const ingress = getRemoteControlUiIngressContext(req);
     const remoteGrants = ingress
-      ? listControlUiPluginTabAuthGrants(ingress.operatorScopeCeiling)
+      ? listControlUiPluginTabAuthGrants(ingress.resolvePrincipal().scopes)
       : undefined;
     const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext).filter(
       (route) =>

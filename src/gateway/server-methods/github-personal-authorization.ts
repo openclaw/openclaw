@@ -22,7 +22,7 @@ import {
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
-  isIneligiblePersonalGatewayCaller,
+  hasCurrentPersonalGatewaySource,
   isSyntheticGatewayCaller,
 } from "./gateway-personal-caller.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -42,6 +42,8 @@ function currentGitHubClient(
     client?.invalidated ||
     client?.connectionSignal?.aborted ||
     !hasCurrentGatewayOperatorAccess(client?.internal?.operatorAccessAuthority) ||
+    (client?.internal?.remoteIngressPrincipal &&
+      !hasCurrentPersonalGatewaySource(client, context)) ||
     (client?.connId &&
       !isSyntheticGatewayCaller(client) &&
       !context.getClientConnIds?.((current) => current === client).has(client.connId))
@@ -138,8 +140,8 @@ export async function prepareGitHubPublicationOptionsRead(
   };
   const eligibleClient = currentClient();
   const personal: PersonalEligibility =
-    !eligibleClient?.connId ||
-    isIneligiblePersonalGatewayCaller(eligibleClient) ||
+    !eligibleClient ||
+    !hasCurrentPersonalGatewaySource(options.client, options.context) ||
     !operatorScopeSatisfied("operator.read", eligibleClient.connect.scopes ?? [])
       ? { kind: "ineligible" }
       : !profile
@@ -205,13 +207,7 @@ export function preparePersonalGitHubAction(
   const { client, context } = options;
   const resolveOwner = () => {
     signal?.throwIfAborted();
-    if (
-      !client?.connId ||
-      client.connect?.role !== "operator" ||
-      isIneligiblePersonalGatewayCaller(client) ||
-      options.signal?.aborted ||
-      !context.getClientConnIds?.((current) => current === client).has(client.connId)
-    ) {
+    if (!hasCurrentPersonalGatewaySource(client, context) || options.signal?.aborted) {
       throw new Error("My GitHub requires a current authenticated human Gateway connection.");
     }
     const profile = client.authenticatedUserProfile?.profileId;

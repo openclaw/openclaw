@@ -422,6 +422,7 @@ export async function createGatewayHttpTransport(params: {
     const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
     const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
     bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
+      resolveGatewayContext: params.getGatewayRequestContext,
       controlUiBasePath: params.controlUiBasePath,
       getResolvedAuth: params.getResolvedAuth,
       getRuntimeConfig: loadRuntimeConfig,

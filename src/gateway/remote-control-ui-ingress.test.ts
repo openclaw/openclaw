@@ -1,14 +1,26 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import type {
-  GatewayControlUiIngressOpenOptionsV1,
+  GatewayControlUiIngressOpenOptionsV2,
   GatewayControlUiIngressV1,
 } from "../plugins/gateway-ingress.types.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
+
+let state: OpenClawTestState;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "ingress-capability", layout: "state-only" });
+});
+afterAll(async () => {
+  await state?.cleanup();
+});
 
 const handles = new Set<GatewayControlUiIngressV1>();
 afterEach(async () => {
@@ -37,8 +49,9 @@ function fixture() {
       ws.handleUpgrade(req, socket, head, () => {});
     },
   };
-  const options: GatewayControlUiIngressOpenOptionsV1 = {
+  const options: GatewayControlUiIngressOpenOptionsV2 = {
     audienceId: "test-grant",
+    principal: { kind: "owner" },
     publicOrigin: "https://ui.example.test",
     sandboxOrigin: "https://sandbox.example.test",
     frameAncestors: ["https://host.example.test", "codex-sandbox:"],
@@ -53,7 +66,7 @@ function fixture() {
       signal: host.signal,
       assertCurrent: () => {},
     });
-  const open = async (overrides: Partial<GatewayControlUiIngressOpenOptionsV1> = {}) => {
+  const open = async (overrides: Partial<GatewayControlUiIngressOpenOptionsV2> = {}) => {
     const handle = await factory().open({ ...options, ...overrides });
     handles.add(handle);
     return handle;
@@ -72,6 +85,14 @@ function request(handle: GatewayControlUiIngressV1, pathAndQuery = "/claw/") {
 }
 
 describe("remote Control UI handle", () => {
+  it("requires an explicit principal on the principal-aware host", async () => {
+    const { factory, options } = fixture();
+    const { principal: _principal, ...legacyOptions } = options;
+    await expect(
+      factory().open(legacyOptions as GatewayControlUiIngressOpenOptionsV2),
+    ).rejects.toMatchObject({ code: "invalid-options" });
+  });
+
   it.each(["token", "password"] as const)(
     "rejects a redacted configured %s before opening transport",
     async (mode) => {

@@ -24,6 +24,10 @@ import {
   GatewayHttpRequestAuthorityError,
 } from "./http-request-authority.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./remote-control-ui-context.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginCookieRequest>>;
@@ -41,6 +45,8 @@ function readControlUiPluginCookieRequest(
   req: IncomingMessage,
   params: { requestPath: string; authGeneration: string | undefined },
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
   // Explicit owner/staff credentials retain their own authority even when an
@@ -71,7 +77,11 @@ export async function prepareControlUiPluginCookieRequest(
   params: { requestPath: string; authGeneration: string | undefined; res: ServerResponse },
 ) {
   const selected = readControlUiPluginCookieRequest(req, params);
-  if (selected?.profileId && !(await prepareHttpUserProfileCatalog(params.res))) {
+  if (
+    !getRemoteControlUiIngressContext(req) &&
+    selected?.profileId &&
+    !(await prepareHttpUserProfileCatalog(params.res))
+  ) {
     return null;
   }
   return authorizeControlUiPluginCookieRequest(req, params);
@@ -86,7 +96,19 @@ export function authorizeControlUiPluginCookieRequest(
     return null;
   }
   const { cfg, grants, profileId } = selected;
-  const profileAuth = checkHttpCookieUserProfile(cfg, profileId);
+  const ingress = getRemoteControlUiIngressContext(req);
+  const principal = ingress?.resolvePrincipal();
+  const profileAuth = principal
+    ? {
+        ok: true as const,
+        profile: {
+          authenticatedUserProfile: principal.authenticatedUserProfile,
+          operatorRolePolicy: principal.operatorRolePolicy,
+          operatorRoleActor: principal.operatorRoleActor,
+          operatorAccessAuthority: principal.operatorAccessAuthority,
+        },
+      }
+    : checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
     if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);

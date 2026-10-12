@@ -47,13 +47,19 @@ function issueCookie(
     pluginId = "example",
     generation = resolveControlUiPluginAuthCookieGeneration("generation", getRuntimeConfig()),
     scopes = ["operator.read"],
-  }: { pluginId?: string; generation?: string; scopes?: OperatorScope[] } = {},
+    request,
+  }: {
+    pluginId?: string;
+    generation?: string;
+    scopes?: OperatorScope[];
+    request?: IncomingMessage;
+  } = {},
 ): string {
   const { res, setHeader } = makeMockHttpResponse();
   setControlUiPluginAuthCookie(
     res,
     [{ pluginId, path: "/plugins/example", match: "prefix", scopes }],
-    { generation, ...(profileId ? { profileId } : {}) },
+    { generation, ...(profileId ? { profileId } : {}), request },
   );
   const value = setHeader.mock.calls.at(-1)?.[1];
   const header = Array.isArray(value) ? value[0] : value;
@@ -120,11 +126,10 @@ describe("Control UI plugin auth cookie profile binding", () => {
           "operator.pairing",
           "operator.talk.secrets",
         ];
-        const cookie = issueCookie(undefined, { generation, scopes: signedScopes });
         for (const remote of [false, true]) {
           const req = createGatewayRequest({
             path: "/plugins/example/session",
-            headers: { cookie },
+            headers: {},
           });
           if (remote) {
             markGatewayIngressTransport(req, {
@@ -133,6 +138,40 @@ describe("Control UI plugin auth cookie profile binding", () => {
                 operatorScopeCeiling: ["operator.read"],
               }),
             });
+          }
+          const cookie = issueCookie(remote ? "gateway-owner" : undefined, {
+            generation,
+            scopes: signedScopes,
+            request: req,
+          });
+          req.headers.cookie = cookie;
+          if (remote) {
+            const direct = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(direct, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            direct.destroy();
+            const other = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            markGatewayIngressTransport(other, {
+              kind: "remote-forwarded",
+              context: createRemoteControlUiIngressTestContext(),
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(other, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            other.destroy();
           }
           const expected = remote ? ["operator.read"] : signedScopes;
           expect(

@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import type { GatewayControlUiIngressOpenOptionsV1 } from "./gateway-ingress.types.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import type {
+  GatewayControlUiIngressFactoryV1,
+  GatewayControlUiIngressFactoryV2,
+  GatewayControlUiIngressOpenOptionsV2,
+} from "./gateway-ingress.types.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, revokePluginRecord } from "./registry-lifecycle.js";
@@ -14,6 +22,14 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
+
+let state: OpenClawTestState;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ label: "ingress-capability", layout: "state-only" });
+});
+afterAll(async () => {
+  await state?.cleanup();
+});
 
 const services = new Set<PluginServicesHandle>();
 afterEach(async () => {
@@ -79,9 +95,10 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}, stop?: () => P
   return { service, serviceContext, registry, record };
 }
 
-function openOptions(): GatewayControlUiIngressOpenOptionsV1 {
+function openOptions(): GatewayControlUiIngressOpenOptionsV2 {
   return {
     audienceId: "synthetic-grant",
+    principal: { kind: "owner" },
     publicOrigin: "https://ui.example.com",
     sandboxOrigin: "https://sandbox.example.com",
     frameAncestors: ["https://host.example.com"],
@@ -92,6 +109,29 @@ function openOptions(): GatewayControlUiIngressOpenOptionsV1 {
 }
 
 describe("service Control UI ingress authority", () => {
+  it("refuses a legacy host before it can interpret a person grant as owner authority", async () => {
+    let legacyOpened = false;
+    const legacy: GatewayControlUiIngressFactoryV1 = {
+      async open() {
+        legacyOpened = true;
+        throw new Error("Legacy owner open called");
+      },
+    };
+    const openPerson = async (
+      factory: GatewayControlUiIngressFactoryV1 | GatewayControlUiIngressFactoryV2,
+    ) => {
+      if (!("capabilityVersion" in factory) || factory.capabilityVersion !== 2) {
+        throw new Error("Upgrade OpenClaw: principal-bound ingress requires capability version 2.");
+      }
+      return factory.open({
+        ...openOptions(),
+        principal: { kind: "person", profileId: "approved-person" },
+      });
+    };
+    await expect(openPerson(legacy)).rejects.toThrow("requires capability version 2");
+    expect(legacyOpened).toBe(false);
+  });
+
   it.each([
     { origin: "bundled" as const, available: true },
     { origin: "global" as const, trustedOfficialInstall: true, available: true },
@@ -103,6 +143,7 @@ describe("service Control UI ingress authority", () => {
       const { serviceContext } = await fixture(record);
       expect(serviceContext.controlUiIngress !== undefined).toBe(available);
       if (serviceContext.controlUiIngress) {
+        expect(serviceContext.controlUiIngress.capabilityVersion).toBe(2);
         const ingress = await serviceContext.controlUiIngress.open(openOptions());
         const { response } = await ingress.request({
           surface: "control-ui",
@@ -125,9 +166,10 @@ describe("service Control UI ingress authority", () => {
       await releaseStop.promise;
     });
     const factory = serviceContext.controlUiIngress!;
-    const ingress = await factory.open(openOptions());
     let stopping: Promise<unknown> | undefined;
     try {
+      const ingress = await factory.open(openOptions());
+      const rpc = await factory.bindPrincipal(openOptions());
       stopping = service.stop();
       await awaitGateBeforeSettlement(
         enteredStop.promise,
@@ -135,6 +177,7 @@ describe("service Control UI ingress authority", () => {
         "Service stopped before its cleanup",
       );
       await expect(factory.open(openOptions())).rejects.toThrow(/stopped|active|closed/);
+      await expect(rpc.request("users.self", {})).rejects.toThrow(/stopped|active|closed/);
       await expect(
         ingress.request({
           surface: "control-ui",
@@ -154,8 +197,10 @@ describe("service Control UI ingress authority", () => {
     const { serviceContext, registry, record } = await fixture();
     const factory = serviceContext.controlUiIngress!;
     const ingress = await factory.open(openOptions());
+    const rpc = await factory.bindPrincipal(openOptions());
     revokePluginRecord(registry, record);
     await expect(factory.open(openOptions())).rejects.toThrow(/active/);
+    await expect(rpc.request("users.self", {})).rejects.toThrow(/active/);
     await expect(
       ingress.request({
         surface: "control-ui",

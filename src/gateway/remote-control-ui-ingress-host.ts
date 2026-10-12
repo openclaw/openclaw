@@ -8,6 +8,7 @@ export type GatewayControlUiIngressHost = {
   controlUiBasePath: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveGatewayContext?: GatewayContextResolver;
   handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>;
   handleSandboxRequest: (req: IncomingMessage, res: ServerResponse) => Promise<void>;

@@ -17,6 +17,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { handleBoardHttpRequest } from "./board-http.js";
 import { BOARD_VIEW_TICKET_TTL_MS, createBoardViewTicket } from "./board-view-ticket.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-board-http-"));
@@ -136,6 +137,24 @@ function request(
 }
 
 describe("board widget HTTP", () => {
+  it("fences direct-listener replay of an ingress ticket when its grant ends", async () => {
+    const grant = new AbortController();
+    const ingress = createRemoteControlUiIngressTestContext({ signal: grant.signal });
+    const document = (await readBoardHtml(store, mainSession, "status"))!;
+    const { ticket } = issueTicket(
+      {
+        sessionKey: mainSession.sessionKey,
+        name: "status",
+        revision: document.revision,
+        viewGeneration: document.viewGeneration,
+        nowMs,
+      },
+      { ...gatewayAAuthority, remoteIngressPrincipal: ingress.resolvePrincipal() },
+    );
+    expect((await request("status", { ticket })).status).toBe(200);
+    grant.abort();
+    expect((await request("status", { ticket })).status).toBe(503);
+  });
   it("binds global widget tickets to their canonical session and selected owner", async () => {
     for (const agentId of ["main", "work"]) {
       await store.putWidget({

@@ -102,7 +102,8 @@ export async function authorizeExistingGatewayDevice(params: {
     return { ok: false, handoffBootstrapProfile };
   }
 
-  if (scopes.length > 0) {
+  // The ingress grant owns scopes; this row only pins the signed device identity.
+  if (scopes.length > 0 && !state.remoteIngressPrincipal) {
     const scopesAllowed =
       pairedScopes.length > 0 &&
       roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });

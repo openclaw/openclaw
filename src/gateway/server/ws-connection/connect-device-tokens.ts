@@ -9,7 +9,6 @@ export async function issueGatewayConnectDeviceTokens(params: {
   state: AuthenticatedGatewayConnect;
   scopes: string[];
   hasApprovedDeviceBaseline: boolean;
-  tokenScopeCeiling?: readonly string[];
   isIssuanceCurrent: () => boolean;
 }): Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">> {
   const { state, scopes, hasApprovedDeviceBaseline } = params;
@@ -27,8 +26,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
   const sharedGatewayAuthIssuer =
     sessionSharedGatewaySessionGeneration &&
     (deviceTokenSharedGatewaySessionGeneration !== undefined ||
-      (sessionUsesSharedGatewayAuth &&
-        (isBrowserOperatorUi || isWebchat || state.authMethod === "remote-ingress")))
+      (sessionUsesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
       ? {
           kind: "shared-gateway-auth" as const,
           generation: sessionSharedGatewaySessionGeneration,
@@ -41,7 +39,6 @@ export async function issueGatewayConnectDeviceTokens(params: {
           role,
           scopes,
           issuer: sharedGatewayAuthIssuer,
-          scopeCeiling: params.tokenScopeCeiling,
           isIssuanceCurrent: params.isIssuanceCurrent,
         })
       : null;

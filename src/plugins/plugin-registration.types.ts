@@ -369,7 +369,7 @@ export type OpenClawPluginServiceContext = {
   /** Gateway-owned timed work; required by the version 2 service contract. */
   scheduler?: PluginServiceSchedulerV1;
   /** Remote device-only Control UI ingress, available only to admitted trusted services. */
-  controlUiIngress?: import("./gateway-ingress.types.js").GatewayControlUiIngressFactoryV1;
+  controlUiIngress?: import("./gateway-ingress.types.js").GatewayControlUiIngressFactoryV2;
   /** Gateway-owned scheduler access, revoked when this service stops. */
   getCron?: () =>
     | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {

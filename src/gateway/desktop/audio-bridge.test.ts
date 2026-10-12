@@ -74,7 +74,16 @@ function fixture(
     captures.push(capture);
     return capture;
   });
-  const observation = mintDesktopAudioObserver({ source: source ?? { start }, requester });
+  const observation = mintDesktopAudioObserver({
+    source: source ?? { start },
+    requester: ingress
+      ? {
+          ...requester,
+          isCurrent: () => requester?.isCurrent() ?? true,
+          remoteIngressPrincipal: ingress.resolvePrincipal(),
+        }
+      : requester,
+  });
   cleanups.push(observation.close);
   const peer = new Peer();
   const attach = (path = observation.descriptor.wsPath) => {

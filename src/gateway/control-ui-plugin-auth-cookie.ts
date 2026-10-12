@@ -6,7 +6,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayPluginReadCookieV1 } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
@@ -20,6 +20,7 @@ import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
+  type RemoteControlUiIngressContext,
 } from "./remote-control-ui-context.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 
@@ -29,6 +30,23 @@ import { resolvePluginRoutePathContext } from "./server/plugins-http/path-contex
 const CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX = `__openclaw_plugin_tab_auth_${randomBytes(8).toString("hex")}`;
 const CONTROL_UI_PLUGIN_AUTH_COOKIE_SCOPE = "plugin-tab";
 const controlUiPluginAuthCookieSecret = randomBytes(32);
+const ingressCookieGenerations = new WeakMap<
+  RemoteControlUiIngressContext["resolvePrincipal"],
+  string
+>();
+
+function requestCookieGeneration(generation: string, req?: IncomingMessage): string {
+  const ingress = req && getRemoteControlUiIngressContext(req);
+  if (!ingress) {
+    return generation;
+  }
+  let binding = ingressCookieGenerations.get(ingress.resolvePrincipal);
+  if (!binding) {
+    binding = randomBytes(32).toString("base64url");
+    ingressCookieGenerations.set(ingress.resolvePrincipal, binding);
+  }
+  return createHash("sha256").update(`${generation}\0${binding}`).digest("base64url");
+}
 
 /** Forward only this host process's core-issued read-cookie namespace; verification stays at its owner. */
 export function filterRemoteControlUiPluginReadCookies(header: string): string | undefined {
@@ -136,7 +154,7 @@ function createControlUiPluginAuthCookie(
     scopes: grant.scopes.filter(isOperatorScope),
     path,
     match: grant.match,
-    generation: params.generation,
+    generation: requestCookieGeneration(params.generation, params.request),
     exp,
     ...(params.profileId ? { profileId: params.profileId } : {}),
   };
@@ -240,6 +258,7 @@ export function resolveControlUiPluginAuthCookieGrants(
 ): ControlUiPluginTabAuthGrant[] {
   const ingress = getRemoteControlUiIngressContext(req);
   assertRemoteControlUiIngressCurrent(ingress);
+  const principal = ingress?.resolvePrincipal();
   const now = asDateTimestampMs(params.nowMs ?? Date.now());
   if (now === undefined) {
     return [];
@@ -272,11 +291,12 @@ export function resolveControlUiPluginAuthCookieGrants(
       if (
         payload?.scope !== CONTROL_UI_PLUGIN_AUTH_COOKIE_SCOPE ||
         payload.exp <= now ||
-        payload.generation !== params.generation ||
+        payload.generation !== requestCookieGeneration(params.generation, req) ||
         typeof payload.pluginId !== "string" ||
         payload.pluginId.length === 0 ||
         (payload.profileId !== undefined &&
           (typeof payload.profileId !== "string" || payload.profileId.length === 0)) ||
+        (principal && payload.profileId !== principal.authenticatedUserProfile.profileId) ||
         !Array.isArray(payload.scopes) ||
         typeof payload.path !== "string" ||
         normalizeCookiePath(payload.path) !== payload.path ||
@@ -301,8 +321,8 @@ export function resolveControlUiPluginAuthCookieGrants(
         pluginId: payload.pluginId,
         path: payload.path,
         match: payload.match,
-        scopes: ingress
-          ? ingress.operatorScopeCeiling.filter((scope) => operatorScopeSatisfied(scope, scopes))
+        scopes: principal
+          ? intersectOperatorScopes(scopes, principal.scopes).filter(isOperatorScope)
           : scopes,
         ...(payload.profileId ? { profileId: payload.profileId } : {}),
       };

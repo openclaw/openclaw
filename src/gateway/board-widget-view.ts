@@ -6,6 +6,7 @@ import {
   resolveBoardWidgetContentKindResourceUrls,
 } from "../plugins/board-widget-content-kinds.js";
 import { requireBoardViewTicketAuthority, verifyBoardViewTicket } from "./board-view-ticket.js";
+import { prepareRemoteIngressSessionRead } from "./remote-ingress-session-read.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type AuthorizedBoardWidgetView = BoardSessionTarget & {
@@ -23,10 +24,16 @@ export async function withAuthorizedBoardWidgetView<T>(
   if (!claims) {
     throw new BoardValidationError("invalid_operation", "board widget view ticket is invalid");
   }
-  requireBoardViewTicketAuthority(claims, options.gatewayContext);
+  const source = requireBoardViewTicketAuthority(claims, options.gatewayContext);
+  using ingressRead = await prepareRemoteIngressSessionRead(
+    source.remoteIngressPrincipal,
+    claims.sessionKey,
+    claims.agentId,
+  );
   const session = { sessionKey: claims.sessionKey, agentId: claims.agentId };
   return await store.useWidgetDocument(session, claims.name, (document) => {
     const authority = requireBoardViewTicketAuthority(claims, options.gatewayContext);
+    ingressRead.assertCurrent();
     if (claims.expiresAtMs <= (options.nowMs ?? Date.now())) {
       throw new BoardValidationError("invalid_operation", "board widget view ticket is expired");
     }

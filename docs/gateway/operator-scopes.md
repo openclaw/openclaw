@@ -393,6 +393,16 @@ reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
 
+[Principal-bound remote ingress](/plugins/sdk-gateway-ingress) uses a separate
+plugin-approved ceiling intersected with the bound person's current role.
+**Read + write** uses `operator.read` and `operator.write`; **Full** uses
+`operator.admin`, whose implications are still limited by the role. Thus Full
+for a read-only role yields read access, while an empty role or grant remains
+empty. The same exact effective scopes apply to the remote UI and grant-bound
+Gateway RPC: neither identity grants nor an admin plugin caller adds authority.
+Role or profile changes fence existing delegated work. Ingress never issues a
+reusable device token, and device scope upgrades cannot widen its grant ceiling.
+
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's
 `operator.admin` scope. This does not require an additional identity-scope grant.

@@ -168,6 +168,51 @@ describe("chat send command authority", () => {
     expect(context).not.toHaveProperty("SenderId");
   });
 
+  it.each(["revoked", "aborted", "rebound", "synthetic"] as const)(
+    "uses live person ingress command authority without a proxy login and rejects %s authority",
+    (change) => {
+      const lifetime = new AbortController();
+      let current = true;
+      const actor = { kind: "operator" as const, profileId: "profile-ada" };
+      const client = createClient({ authenticatedUserId: undefined });
+      const internal: NonNullable<GatewayClient["internal"]> = {
+        operatorRoleActor: actor,
+        remoteIngressPrincipal: {
+          bindingId: "synthetic-command-grant",
+          authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "1" },
+          preparedSessionProfile: {
+            profileId: "profile-ada",
+            role: null,
+            githubLogin: null,
+            aliases: new Set(),
+          },
+          operatorRoleActor: actor,
+          scopes: ["operator.write"],
+          signal: lifetime.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Grant revoked");
+            }
+          },
+        },
+      };
+      client.internal = internal;
+      const context = resolveChatSendCallerContext(client);
+      expect(authorize(context).isAuthorizedSender).toBe(true);
+      expect(authorize(context, "profile-other").isAuthorizedSender).toBe(false);
+      if (change === "revoked") {
+        current = false;
+      } else if (change === "aborted") {
+        lifetime.abort();
+      } else if (change === "rebound") {
+        client.authenticatedUserProfile!.profileId = "profile-other";
+      } else {
+        internal.syntheticClient = true;
+      }
+      expect(authorize(context).isAuthorizedSender).toBe(false);
+    },
+  );
+
   it.each([true, false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
     const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
     client.connect.client = {

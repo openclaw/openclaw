@@ -33,7 +33,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./remote-control-ui-context.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -42,6 +42,7 @@ export type AuthenticatedHttpUserProfile = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
+  operatorRoleActor?: GatewayOperatorRoleActor;
 };
 
 type HttpUserProfileAuthResult =
@@ -129,6 +130,16 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   res?: ServerResponse;
 }): Promise<AuthenticatedHttpUserProfile> {
   const ingress = getRemoteControlUiIngressContext(params.req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+    const principal = ingress.resolvePrincipal();
+    return {
+      authenticatedUserProfile: principal.authenticatedUserProfile,
+      operatorRolePolicy: principal.operatorRolePolicy,
+      operatorRoleActor: principal.operatorRoleActor,
+      operatorAccessAuthority: principal.operatorAccessAuthority,
+    };
+  }
   const readAdmissionPolicy = (cfg: OpenClawConfig) => {
     // Snapshot policy facts; service authority retains live closures and is checked separately.
     const { remoteControlUiIngress: _ingress, ...browserOrigin } = resolveBrowserOriginPolicy({

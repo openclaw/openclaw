@@ -41,8 +41,6 @@ export async function ensureDeviceToken(params: {
   deviceId: string;
   role: string;
   scopes: string[];
-  /** Limit both issuance and reuse when a trusted ingress recovers a device token. */
-  scopeCeiling?: readonly string[];
   issuer?: DeviceAuthToken["issuer"];
   isIssuanceCurrent?: () => boolean;
   baseDir?: string;

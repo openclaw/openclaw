@@ -145,6 +145,20 @@ async function request(
 // The real HTTP boundary plus real files protect session-root admission and exact-file grants;
 // existing media tests cover static agent roots only.
 describe("assistant image session policy", () => {
+  it("does not redeem an ingress-issued media ticket on the direct listener", async () => {
+    const source = path.join(project, "ingress-image.png");
+    await fs.writeFile(source, PNG);
+    state.auth.mockResolvedValue({
+      authMethod: "remote-ingress",
+      operatorScopes: ["operator.admin", "operator.read"],
+    });
+    const metadata = await request(source);
+    expect(metadata.payload).toMatchObject({ available: true, mediaTicket: expect.any(String) });
+    expect(
+      (await request(source, { bytes: true, ticket: String(metadata.payload!.mediaTicket) })).res
+        .statusCode,
+    ).toBe(404);
+  });
   it("binds relative media tickets to the execution directory within the session root", async () => {
     const first = path.join(project, "first");
     const second = path.join(project, "second");

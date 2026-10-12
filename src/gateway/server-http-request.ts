@@ -210,7 +210,7 @@ export function createGatewayHttpRequestHandler(
         ? resolveRemoteControlUiHttpRoute(
             req,
             controlUiRouteBasePath,
-            remoteIngress.operatorScopeCeiling,
+            remoteIngress.resolvePrincipal().scopes,
           )
         : undefined;
       if (remoteIngress && !remoteRoute) {

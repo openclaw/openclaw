@@ -159,7 +159,7 @@ describe("remote Control UI ingress security", () => {
     const capture = (signal: AbortSignal) =>
       captureGatewayAuthPolicy(config, {
         role: "operator",
-        authMethod: "device-token",
+        authMethod: "remote-ingress",
         browserOrigin: {
           origin: "https://ui.example.test",
           remoteControlUiIngress: createRemoteControlUiIngressTestContext({ signal }),
@@ -181,19 +181,24 @@ describe("remote Control UI ingress security", () => {
     },
     { name: "node role", change: { role: "node" }, message: "only admits the operator role" },
     {
+      name: "paired device token",
+      change: { auth: { deviceToken: "paired-test-token" } },
+      message: "credential-free signed device",
+    },
+    {
       name: "shared token",
       change: { auth: { token: "shared-test-token" } },
-      message: "a signed device with no credential or a paired device token",
+      message: "credential-free signed device",
     },
     {
       name: "shared password",
       change: { auth: { password: "shared-test-password" } },
-      message: "a signed device with no credential or a paired device token",
+      message: "credential-free signed device",
     },
     {
       name: "bootstrap token",
       change: { auth: { bootstrapToken: "bootstrap-test" } },
-      message: "a signed device with no credential or a paired device token",
+      message: "credential-free signed device",
     },
     ...[
       "operator.admin",
@@ -221,7 +226,6 @@ describe("remote Control UI ingress security", () => {
         signedAt: 1,
         nonce: "test-nonce",
       },
-      auth: { deviceToken: "paired-test-token" },
       ...change,
     };
     const sendHandshakeErrorResponse = vi.fn();

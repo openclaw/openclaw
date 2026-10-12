@@ -120,7 +120,12 @@ export async function authorizeGatewayConnectDevice(
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   const sharedSecretOwner = authMethod === "token" || authMethod === "password";
-  if (roleConfiguredHumanOperator && !sharedSecretOwner && !authResult.user?.trim()) {
+  if (
+    roleConfiguredHumanOperator &&
+    !sharedSecretOwner &&
+    !authResult.user?.trim() &&
+    state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"
+  ) {
     failPairingHandshake({
       message:
         "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
@@ -192,8 +197,7 @@ export async function authorizeGatewayConnectDevice(
         devicePublicKey,
         scopes,
         hasRequestedScopes,
-        remoteIngressScopeCeiling: getRemoteControlUiIngressContext(context.handler.upgradeReq)
-          ?.operatorScopeCeiling,
+        remoteIngressScopeCeiling: state.remoteIngressPrincipal?.scopes,
         connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
@@ -600,19 +604,15 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
-  // Device tokens do not carry profile identity and existing broader grants may be reused.
-  // Team-role operators must reauthenticate as their verified person on every connection.
+  // Ingress authenticates exclusively from its live principal grant and signed
+  // device proof. Never mint a reusable credential that can outlive that grant.
   const { deviceToken, bootstrapDeviceTokens } =
-    roleConfiguredHumanOperator && authResult.user?.trim()
+    state.remoteIngressPrincipal || (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
       : await issueGatewayConnectDeviceTokens({
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
-          tokenScopeCeiling:
-            authMethod === "remote-ingress"
-              ? getRemoteControlUiIngressContext(context.handler.upgradeReq)?.operatorScopeCeiling
-              : undefined,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
   assertIngressCurrent();

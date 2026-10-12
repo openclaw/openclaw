@@ -33,6 +33,54 @@ export interface GatewayControlUiIngressFactoryV1 {
   open(options: GatewayControlUiIngressOpenOptionsV1): Promise<GatewayControlUiIngressV1>;
 }
 
+export type GatewayIngressPrincipal = { kind: "owner" } | { kind: "person"; profileId: string };
+
+/** The plugin owns consent, expiry, persistence, and revocation of this exact grant. */
+export type GatewayIngressPrincipalOptionsV1 = {
+  audienceId: string;
+  principal: GatewayIngressPrincipal;
+  operatorScopeCeiling: readonly string[];
+  signal: AbortSignal;
+  assertCurrent: () => void;
+};
+
+export type GatewayControlUiIngressPresentationOptionsV1 = {
+  publicOrigin: string;
+  sandboxOrigin: string;
+  frameAncestors: readonly string[];
+};
+
+export type GatewayControlUiIngressOpenOptionsV2 = GatewayIngressPrincipalOptionsV1 &
+  GatewayControlUiIngressPresentationOptionsV1;
+
+export type GatewayIngressRequestOptionsV1 = { signal?: AbortSignal };
+
+/** One live principal resolution shared by RPC and any Control UI transport it opens. */
+export interface GatewayIngressPrincipalBindingV1 {
+  request<T = unknown>(
+    method: string,
+    params: Record<string, unknown>,
+    options?: GatewayIngressRequestOptionsV1,
+  ): Promise<T>;
+  openControlUi(
+    options: GatewayControlUiIngressPresentationOptionsV1,
+  ): Promise<GatewayControlUiIngressV2>;
+  close(): Promise<void>;
+}
+
+export interface GatewayControlUiIngressV2 extends GatewayControlUiIngressV1 {
+  requestGateway: GatewayIngressPrincipalBindingV1["request"];
+}
+
+/** Check this version before passing a person: V1 hosts do not understand principals. */
+export interface GatewayControlUiIngressFactoryV2 {
+  readonly capabilityVersion: 2;
+  open(options: GatewayControlUiIngressOpenOptionsV2): Promise<GatewayControlUiIngressV2>;
+  bindPrincipal(
+    options: GatewayIngressPrincipalOptionsV1,
+  ): Promise<GatewayIngressPrincipalBindingV1>;
+}
+
 export type GatewayIngressMessage =
   | { kind: "text"; text: string }
   | { kind: "binary"; bytes: Uint8Array };

@@ -180,14 +180,13 @@ export async function resolvePairingApprovalPlan(
     role === "operator" &&
     operatorApprovalKind !== null
       ? params.connectionScopeCap(
-          resolveTrustedProxyDeviceAutoApproveScopes({
-            requestedScopes: scopes,
-            hasRequestedScopes: params.hasRequestedScopes,
-            configuredScopes:
-              operatorApprovalKind === "remote-ingress"
-                ? params.remoteIngressScopeCeiling
-                : trustedProxyAutoApproveConfig?.scopes,
-          }),
+          operatorApprovalKind === "remote-ingress"
+            ? scopes
+            : resolveTrustedProxyDeviceAutoApproveScopes({
+                requestedScopes: scopes,
+                hasRequestedScopes: params.hasRequestedScopes,
+                configuredScopes: trustedProxyAutoApproveConfig?.scopes,
+              }),
         )
       : null;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({

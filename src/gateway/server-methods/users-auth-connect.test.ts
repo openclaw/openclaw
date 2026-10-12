@@ -3,6 +3,7 @@ import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js"
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { ProviderAuthResult } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   setupModelAccountConnectTest,
   resolveUserProfileId,
@@ -41,11 +42,24 @@ import {
 setupModelAccountConnectTest();
 
 describe("users model-account connection lifecycle", () => {
-  it.each(["direct", "shared-secret"] as const)(
+  it.each(["direct", "shared-secret", "ingress"] as const)(
     "uses the catalog and exact sensitive step for a %s caller without consuming a rejected answer",
     async (caller) => {
       if (caller === "shared-secret") {
         self.internal = { operatorRoleActor: { kind: "system" } };
+      }
+      const grant = new AbortController();
+      if (caller === "ingress") {
+        const principal = createRemoteControlUiIngressTestContext({
+          principal: { kind: "person", profileId: "profile-1" },
+          signal: grant.signal,
+        }).resolvePrincipal();
+        clients.delete(self);
+        self.connId = "";
+        self.internal = {
+          remoteIngressPrincipal: principal,
+          operatorRoleActor: principal.operatorRoleActor,
+        };
       }
       expect(
         await rpc("users.authConnect.catalog", { profileId: "profile-1" }),
@@ -93,6 +107,12 @@ describe("users model-account connection lifecycle", () => {
         {},
         { dropIfSlow: true },
       );
+      if (caller === "ingress") {
+        grant.abort();
+        expect(
+          await rpc("users.authConnect.catalog", { profileId: "profile-1" }),
+        ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+      }
     },
   );
 

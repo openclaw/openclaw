@@ -189,7 +189,11 @@ export function handleDesktopObserveUpgrade(
   const ingress = getRemoteControlUiIngressContext(req);
   const entry = observerTokens.consume(token);
   const isCurrent = () =>
-    hasCurrentRemoteControlUiIngress(ingress) && entry?.requester?.isCurrent() !== false;
+    hasCurrentRemoteControlUiIngress(ingress) &&
+    (!ingress ||
+      entry?.requester?.remoteIngressPrincipal?.assertCurrent ===
+        ingress.resolvePrincipal().assertCurrent) &&
+    entry?.requester?.isCurrent() !== false;
   if (!entry || !isCurrent()) {
     entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });

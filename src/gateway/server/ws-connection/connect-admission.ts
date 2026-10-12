@@ -184,7 +184,11 @@ export function resolveGatewayConnectPolicyFailure(
   if (
     remoteIngress &&
     (!hasCurrentRemoteControlUiIngress(remoteIngress) ||
-      remoteControlUiGatewayAuthError(context.handler.getResolvedAuth(), getRuntimeConfig()))
+      remoteControlUiGatewayAuthError(
+        context.handler.getResolvedAuth(),
+        getRuntimeConfig(),
+        remoteIngress.principal,
+      ))
   ) {
     return { kind: "auth" };
   }
@@ -296,6 +300,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     const configError = remoteControlUiGatewayAuthError(
       context.handler.getResolvedAuth(),
       getRuntimeConfig(),
+      remoteIngress.principal,
     );
     const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
       ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
@@ -304,17 +309,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
           ? "Remote Control UI ingress only admits the operator role."
           : !connectParams.device
             ? "Remote Control UI ingress requires a signed device identity."
-            : connectParams.auth?.token !== undefined ||
+            : connectParams.auth?.deviceToken !== undefined ||
+                connectParams.auth?.token !== undefined ||
                 connectParams.auth?.password !== undefined ||
                 connectParams.auth?.bootstrapToken !== undefined ||
                 connectParams.auth?.approvalRuntimeToken !== undefined ||
                 connectParams.auth?.agentRuntimeIdentityToken !== undefined
-              ? "Remote Control UI ingress accepts a signed device with no credential or a paired device token; shared Gateway credentials and other tokens are not accepted."
-              : scopes.some(
-                    (scope) =>
-                      !remoteIngress.operatorScopeCeiling.some((allowed) => allowed === scope),
-                  )
-                ? "Remote Control UI scopes must stay within this grant's operator.read/operator.write ceiling."
+              ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+              : !roleScopesAllow({
+                    role,
+                    requestedScopes: scopes,
+                    allowedScopes: remoteIngress.operatorScopeCeiling,
+                  })
+                ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
                 : undefined));
     if (denied) {
       markHandshakeFailure("remote-control-ui-admission-denied");

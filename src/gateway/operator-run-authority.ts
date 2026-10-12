@@ -40,6 +40,7 @@ type OperatorSource = {
     config: GatewayRequestContext["getRuntimeConfig"],
     device: object | undefined,
     access: object | null | undefined,
+    ingress: object | undefined,
     invocation: object | undefined,
   ];
   membership: string | undefined;
@@ -264,14 +265,18 @@ export async function captureGatewayOperatorRunAuthority(input: {
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
-  // Shared-secret owner sessions keep system role semantics, but still have an
-  // authenticated user subject. Capture only the real, handshake-attested ingress:
-  // an autonomous/synthetic system caller must not acquire the owner profile.
+  const ingressPrincipal = client?.internal?.remoteIngressPrincipal;
+  // An owner subject requires a real socket or the host-bound ingress grant.
+  // Autonomous/synthetic system callers must not acquire the owner profile.
   const isAuthenticatedOwner = (currentActor: typeof actor) =>
     client?.internal?.authenticatedOperator === true &&
     (currentActor === undefined || currentActor.kind === "system") &&
     client.connect.role === "operator" &&
-    Boolean(client.connId) &&
+    (Boolean(client.connId) ||
+      (ingressPrincipal !== undefined &&
+        client.internal.remoteIngressPrincipal === ingressPrincipal &&
+        ingressPrincipal.operatorRoleActor.kind === "system" &&
+        ingressPrincipal.authenticatedUserProfile.profileId === GATEWAY_OWNER_PROFILE_ID)) &&
     !client.invalidated &&
     !client.connectionSignal?.aborted &&
     !client.internal.syntheticClient &&
@@ -302,7 +307,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     params.sourceAuthority !== undefined
       ? params.sourceAuthority
       : client.internal?.operatorAccessAuthority;
-  const sourceAuthorities = [sourceAuthority, params.invocationAuthority];
+  const sourceAuthorities = [sourceAuthority, ingressPrincipal, params.invocationAuthority];
   const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
   const sourceOwners: OperatorSource["owners"] = [
     gatewayContext ?? params.context,
@@ -311,6 +316,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     readGatewayDeviceSourceIdentity(params.hasCurrentClientAuthority) ??
       (params.hasCurrentClientAuthority ? Object.freeze({}) : undefined),
     sourceAuthority,
+    ingressPrincipal,
     params.invocationAuthority,
   ];
   let releaseSource: (() => void) | undefined;

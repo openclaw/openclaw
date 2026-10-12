@@ -18,7 +18,7 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect-erro
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
-import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
+import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -41,15 +41,13 @@ export async function prepareUserModelAccountAction(
     // A copied identity, retained scopes, or a replacement socket cannot keep
     // the original action alive after disconnect or role invalidation.
     if (
-      !client?.connId ||
+      !hasCurrentPersonalGatewaySource(client, context) ||
       client.connId !== connectionId ||
       client.invalidated ||
       client.connectionSignal?.aborted ||
       client.connect.role !== "operator" ||
-      isIneligiblePersonalGatewayCaller(client) ||
       options.signal?.aborted ||
       isGatewayClientProfilePending(client) ||
-      !context.getClientConnIds?.((current) => current === client).has(client.connId) ||
       client.authenticatedUserProfile?.profileId !== profileReference ||
       client.authenticatedUserId !== userReference
     ) {
@@ -165,7 +163,7 @@ export async function prepareSessionModelAccountAccess(
   }
   const { client } = options;
   const personalAccountDefaults =
-    client?.connId && client.authenticatedUserProfile && !isIneligiblePersonalGatewayCaller(client)
+    hasCurrentPersonalGatewaySource(client, options.context) && client.authenticatedUserProfile
       ? await prepareUserModelAccountAction(
           options,
           undefined,

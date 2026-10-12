@@ -12,6 +12,7 @@ import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
 } from "../../../shared/device-bootstrap-profile.js";
+import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
@@ -344,8 +345,7 @@ async function authenticateGatewayConnectCore(
 
   // Admission already requires a live grant, operator role, and no shared or
   // bootstrap credential. Only the signed, credential-free connect uses it as auth.
-  const ingressAuthenticated = remoteIngress && connectParams.auth?.deviceToken === undefined;
-  const authDecision = ingressAuthenticated
+  const authDecision = remoteIngress
     ? {
         authResult: { ok: true, method: "remote-ingress" as const },
         authOk: true,
@@ -384,11 +384,14 @@ async function authenticateGatewayConnectCore(
     rejectUnauthorized(authResult);
     return undefined;
   }
-  // Verify the signature against the browser's original scopes before applying
-  // the ingress default; an omitted or empty request receives the full ceiling,
-  // including returning browsers that present their device token.
-  if (remoteIngress && scopes.length === 0) {
-    scopes = [...remoteIngress.operatorScopeCeiling];
+  // The device signs its requested scopes; the live principal caps authority only
+  // after signature verification. Empty requests select the current grant ceiling.
+  const remoteIngressPrincipal = remoteIngress?.resolvePrincipal();
+  if (remoteIngressPrincipal) {
+    scopes =
+      scopes.length === 0
+        ? [...remoteIngressPrincipal.scopes]
+        : intersectOperatorScopes(scopes, remoteIngressPrincipal.scopes);
     connectParams.scopes = scopes;
   }
   const boundBootstrapContext =
@@ -489,6 +492,7 @@ async function authenticateGatewayConnectCore(
 
   return {
     ...admission,
+    remoteIngressPrincipal,
     authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
       role,
       authMethod,
