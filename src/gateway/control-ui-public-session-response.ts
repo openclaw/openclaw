@@ -25,7 +25,7 @@ export async function servePublicSessionRepresentation(params: {
     "latestUrl" | "canonicalUrl" | "cardUrl" | "entryUrl" | "clientAuthBasePath" | "assetBasePath"
   >;
   olderUrl: (offset: number) => string;
-  unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => void;
+  unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => true | Promise<true>;
 }): Promise<true> {
   const { req, res, config, gate, locator, projection, offset, unavailable } = params;
   const result = await gate.run({
@@ -48,7 +48,7 @@ export async function servePublicSessionRepresentation(params: {
     },
   });
   if (result.kind !== "ok") {
-    unavailable(
+    await unavailable(
       result.kind === "rate-limited" ? 429 : 503,
       result.kind === "rate-limited" ? result.retryAfterSeconds : undefined,
     );
@@ -57,12 +57,12 @@ export async function servePublicSessionRepresentation(params: {
   return withReadySessionRows(
     projection,
     () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    () => {
+    async () => {
       const representation = result.value;
       if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
-        unavailable(404);
+        await unavailable(404);
       } else if (!representation.isCurrent()) {
-        unavailable(503);
+        await unavailable(503);
       } else {
         const { body, etag } = representation;
         res.setHeader("ETag", etag);

@@ -43,7 +43,7 @@ function currentProjection() {
 function readPublicSessionShare(
   config: OpenClawConfig,
   target: typeof locator,
-  options: { offset?: number } = {},
+  options: { offset?: number; card?: boolean } = {},
 ) {
   return readShare(config, target, { ...options, projection: currentProjection() });
 }
@@ -115,6 +115,9 @@ describe("anonymous published session reader", () => {
       expect(older?.messages[0]).toMatchObject({ content: "Message 5" });
       const first = await readPublicSessionShare(cfg, locator, { offset: older?.olderOffset });
       expect(first?.messages).toHaveLength(5);
+      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      expect(preview?.messages[0]).toMatchObject({ content: "Message 0" });
+      expect(preview?.totalMessages).toBe(205);
       expect(first?.olderOffset).toBeUndefined();
     });
   });

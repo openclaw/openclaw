@@ -4,7 +4,9 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import type { PublicSessionCardFacts } from "./control-ui-public-session-card-facts.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
@@ -15,6 +17,7 @@ type PublicSessionShareReadResult = {
   totalMessages: number;
   truncated: boolean;
   olderOffset?: number;
+  cardFacts?: PublicSessionCardFacts;
 };
 
 function readAuthorizedTarget(
@@ -78,7 +81,12 @@ export function isPublicSessionShareActive(
 export async function readPublicSessionShare(
   cfg: OpenClawConfig,
   locator: PublicSessionShareLocator,
-  options: { offset?: number; projection: SessionRowProjection },
+  options: {
+    offset?: number;
+    projection: SessionRowProjection;
+    card?: boolean;
+    pullRequests?: GatewayRequestContext["controlUiSessionPullRequests"];
+  },
 ): Promise<PublicSessionShareReadResult | null> {
   const { projection } = options;
   if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
@@ -91,22 +99,32 @@ export async function readPublicSessionShare(
   if (!initial) {
     return null;
   }
-  const history = await readSessionMessagesPageWithStatsAsync(
-    {
-      agentId: initial.source.agentId,
-      sessionKey: locator.sessionKey,
-      sessionId: locator.sessionId,
-      storePath: initial.source.path,
-      sessionEntry: initial.target.entry,
-    },
-    {
-      offset: options.offset ?? 0,
+  const scope = {
+    agentId: initial.source.agentId,
+    sessionKey: locator.sessionKey,
+    sessionId: locator.sessionId,
+    storePath: initial.source.path,
+    sessionEntry: initial.target.entry,
+  };
+  let history = await readSessionMessagesPageWithStatsAsync(scope, {
+    offset: options.offset ?? 0,
+    maxMessages: 100,
+    maxBytes: 1024 * 1024,
+    allowResetArchiveFallback: false,
+  });
+  if (options.card && history.olderOffset !== undefined) {
+    // The opening request is in the oldest bounded page, not the latest turn.
+    history = await readSessionMessagesPageWithStatsAsync(scope, {
+      offset: Math.max(0, history.totalMessages - 100),
       maxMessages: 100,
       maxBytes: 1024 * 1024,
       allowResetArchiveFallback: false,
-    },
-  );
-  return withReadySessionRows(projection, queries, () => {
+    });
+  }
+  const resolveCardFacts = options.card
+    ? (await import("./control-ui-public-session-card-facts.js")).resolvePublicSessionCardFacts
+    : undefined;
+  return withReadySessionRows(projection, queries, (read) => {
     const current = readAuthorizedTarget(cfg, locator, projection);
     if (
       !current ||
@@ -121,11 +139,22 @@ export async function readPublicSessionShare(
       current.target.entry.displayName ||
       "Shared session"
     ).trim();
+    const record = options.card ? read.describe(queries()[0]!) : undefined;
     return {
       title: title || "Shared session",
       messages: history.messages,
       totalMessages: history.totalMessages,
       truncated: history.omittedOversized === true,
+      ...(record && resolveCardFacts
+        ? {
+            cardFacts: resolveCardFacts({
+              cfg,
+              record,
+              rowContext: read.state.rowContext,
+              pullRequests: options.pullRequests,
+            }),
+          }
+        : {}),
       ...(history.olderOffset !== undefined ? { olderOffset: history.olderOffset } : {}),
     };
   });
