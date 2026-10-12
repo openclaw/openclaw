@@ -440,6 +440,7 @@ it.each(["committed", "unknown"] as const)(
     const requested = input(`projection-${outcome}`);
     // The fault belongs to the claim admission, not the worker's first open admission.
     await placements.releaseTurn(await placements.claimTurn(requested));
+    await placements.readProjection([requested.sessionId]);
     const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
     const changes: SessionRowChange[] = [];
     const stop = sessionChanges.subscribeProjection((change) => {

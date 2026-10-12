@@ -48,33 +48,39 @@ describe("worker placement read cache", () => {
     expect((await store.getAsync(identity.sessionId))?.turnClaim).toBeNull();
   });
 
-  it("reuses local projections and observes claims from another store without rereading", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-local-cache-"));
-    const database = openOpenClawStateDatabase();
-    const reader = createWorkerSessionPlacementStore({ database });
-    const writer = createWorkerSessionPlacementStore({ database });
-    const identity = { sessionId: "local", agentId: "main", sessionKey: "agent:main:local" };
-    expect((await reader.readProjection([identity.sessionId])).placements.size).toBe(0);
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const claim = await writer.claimTurn({
-      ...identity,
-      owner: { kind: "local" },
-      claimId: "claim",
-      runId: "run",
-    });
-    const claimed = await reader.readProjection([identity.sessionId]);
-    expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
-    await writer.releaseTurnIfOwned(claim);
-    expect(
-      (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
-    ).toMatchObject({ state: "local", turnClaim: null });
-    expect(reads).not.toHaveBeenCalled();
-    // Returned snapshots cannot mutate the next reader's facts.
-    claimed.placements.get(identity.sessionId)!.state = "requested";
-    expect(
-      (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)?.state,
-    ).toBe("local");
-  });
+  it.each([false, true])(
+    "observes local claim receipts with a preloaded projection: %s",
+    async (preloaded) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-local-cache-"));
+      const database = openOpenClawStateDatabase();
+      const reader = createWorkerSessionPlacementStore({ database });
+      const writer = createWorkerSessionPlacementStore({ database });
+      const identity = { sessionId: "local", agentId: "main", sessionKey: "agent:main:local" };
+      if (preloaded) {
+        expect((await reader.readProjection([identity.sessionId])).placements.size).toBe(0);
+      }
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const claim = await writer.claimTurn({
+        ...identity,
+        owner: { kind: "local" },
+        claimId: "claim",
+        runId: "run",
+      });
+      const claimed = await reader.readProjection([identity.sessionId]);
+      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      await writer.releaseTurnIfOwned(claim);
+      expect(
+        (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
+      ).toMatchObject({ state: "local", turnClaim: null });
+      expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
+      // Returned snapshots cannot mutate the next reader's facts.
+      claimed.placements.get(identity.sessionId)!.state = "requested";
+      expect(
+        (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)
+          ?.state,
+      ).toBe("local");
+    },
+  );
 
   it("reuses preservation until a writer adds a non-local placement", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-preservation-cache-"));
