@@ -103,13 +103,41 @@ describe("Ollama balance usage", () => {
     ]);
   });
 
-  it("reports HTTP failures without exposing response contents", async () => {
+  it.each([
+    [403, "HTTP 403: Check the configured Ollama server's access permissions"],
+    [500, "HTTP 500: Check the configured Ollama server and retry"],
+  ])(
+    "gives recovery guidance for HTTP %i without exposing response contents",
+    async (status, error) => {
+      const snapshot = await fetchOllamaUsage({
+        ...baseParams,
+        fetchFn: vi.fn(async () => new Response("private", { status })),
+      });
+      expect(snapshot.error).toBe(error);
+      expect(snapshot.windows).toEqual([]);
+    },
+  );
+
+  it("gives recovery guidance when the server is unreachable", async () => {
     const snapshot = await fetchOllamaUsage({
       ...baseParams,
-      fetchFn: vi.fn(async () => new Response("private", { status: 403 })),
+      fetchFn: vi.fn(async () => {
+        throw new Error("private network details");
+      }),
     });
-    expect(snapshot.error).toBe("HTTP 403");
-    expect(snapshot.windows).toEqual([]);
+    expect(snapshot.error).toBe(
+      "Usage unavailable. Check that the configured Ollama server is reachable, then retry.",
+    );
+  });
+
+  it("gives recovery guidance for an invalid JSON response", async () => {
+    const snapshot = await fetchOllamaUsage({
+      ...baseParams,
+      fetchFn: vi.fn(async () => new Response("private invalid JSON")),
+    });
+    expect(snapshot.error).toBe(
+      "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry.",
+    );
   });
 
   it("does not manufacture a quota from malformed or empty responses", async () => {
@@ -122,7 +150,11 @@ describe("Ollama balance usage", () => {
         ...baseParams,
         fetchFn: vi.fn(async () => Response.json(body)),
       });
-      expect(snapshot.error).toBeTruthy();
+      expect(snapshot.error).toBe(
+        body === null
+          ? "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry."
+          : "No balance data. Check the configured server's Ollama Cloud account.",
+      );
       expect(snapshot.windows).toEqual([]);
     }
   });

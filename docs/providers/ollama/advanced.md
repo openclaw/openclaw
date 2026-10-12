@@ -29,6 +29,7 @@ cloud quota. Unsigned-in servers and servers without the balance endpoint are
 quietly omitted from usage reports. OpenClaw fetches the balance only during the
 existing usage refresh; it does not poll separately or need your Ollama web
 session cookie. If `plugins.allow` is set, include `ollama` so its usage hook can load.
+Other balance failures include guidance for checking the server or its access permissions.
 
 <AccordionGroup>
   <Accordion title="Legacy OpenAI-compatible mode">

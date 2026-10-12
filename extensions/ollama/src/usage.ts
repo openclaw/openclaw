@@ -50,7 +50,10 @@ export async function fetchOllamaUsage(params: {
       params.fetchFn,
     );
   } catch {
-    return buildUsageErrorSnapshot("ollama", "Usage unavailable");
+    return buildUsageErrorSnapshot(
+      "ollama",
+      "Usage unavailable. Check that the configured Ollama server is reachable, then retry.",
+    );
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -58,7 +61,14 @@ export async function fetchOllamaUsage(params: {
       // Reuse the shared quiet auth outcome for unsigned-in or pre-balance daemons.
       return buildUsageErrorSnapshot("ollama", "No auth");
     }
-    return buildUsageHttpErrorSnapshot({ provider: "ollama", status: response.status });
+    return buildUsageHttpErrorSnapshot({
+      provider: "ollama",
+      status: response.status,
+      message:
+        response.status === 403
+          ? "Check the configured Ollama server's access permissions"
+          : "Check the configured Ollama server and retry",
+    });
   }
 
   let data: Record<string, unknown>;
@@ -70,7 +80,10 @@ export async function fetchOllamaUsage(params: {
         new Error(`Ollama balance response stalled for ${chunkTimeoutMs}ms`),
     });
   } catch {
-    return buildUsageErrorSnapshot("ollama", "Malformed balance response");
+    return buildUsageErrorSnapshot(
+      "ollama",
+      "Malformed balance response. Check the configured Ollama server's /api/balance response, then retry.",
+    );
   }
 
   const included = asProviderUsageObject(data.included);
@@ -105,7 +118,10 @@ export async function fetchOllamaUsage(params: {
     });
   }
   if (windows.length === 0 && billing.length === 0) {
-    return buildUsageErrorSnapshot("ollama", "No balance data");
+    return buildUsageErrorSnapshot(
+      "ollama",
+      "No balance data. Check the configured server's Ollama Cloud account.",
+    );
   }
   return {
     provider: "ollama",
