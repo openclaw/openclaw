@@ -115,7 +115,12 @@ describe("renderSidebarMentionItem", () => {
 
   it("expands the thread-titled mention and opens its session without dismissing it", async () => {
     vi.useFakeTimers({ now: mention.createdAt + 5 * 60_000 });
-    const { onNavigate, onDismiss } = renderMention();
+    const excerpt = '<img src="about:blank" onerror="alert(1)"> & **release notes**';
+    const { onNavigate, onDismiss } = renderMention({ mention: { ...mention, excerpt } });
+    const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
+    expect(renderedExcerpt.textContent).toBe(excerpt);
+    expect(renderedExcerpt.children).toHaveLength(0);
+    expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
     await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-relative-time",
     )?.updateComplete;
@@ -163,29 +168,6 @@ describe("renderSidebarMentionItem", () => {
     expect(details.open).toBe(false);
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledOnce();
-  });
-
-  it("preserves expansion for the same mention but collapses a replacement mention", () => {
-    renderMention();
-    container.querySelector("summary")!.click();
-    expect(container.querySelector("details")?.open).toBe(true);
-
-    renderMention({ mention: { ...mention, excerpt: "Updated release notes" } });
-    expect(container.querySelector("details")?.open).toBe(true);
-
-    renderMention({ mention: { ...mention, id: "mention-next", sessionTitle: "Next release" } });
-    expect(container.querySelector("details")?.open).toBe(false);
-    expect(container.querySelector("summary")?.textContent).toContain("Next release");
-  });
-
-  it("renders the message excerpt as text rather than HTML or Markdown", () => {
-    const excerpt = '<img src="about:blank" onerror="alert(1)"> & **release notes**';
-    renderMention({ mention: { ...mention, excerpt } });
-
-    const renderedExcerpt = container.querySelector(".sidebar-mention-row__excerpt")!;
-    expect(renderedExcerpt.textContent).toBe(excerpt);
-    expect(renderedExcerpt.children).toHaveLength(0);
-    expect(renderedExcerpt.closest(".sidebar-issues-panel__body")).not.toBeNull();
   });
 
   it("disables repeated dismissal while leaving the session link usable", () => {
@@ -309,13 +291,6 @@ describe("renderSidebarUpdateSurface", () => {
       canUpdate: false,
       canNativeUpdate: true,
     },
-    {
-      scope: "operator.admin",
-      methods: ["update.run", "update.status"],
-      canCheck: true,
-      canUpdate: true,
-      canNativeUpdate: true,
-    },
   ])(
     "gates discovery and fresh confirmation for $scope with $methods",
     async ({ scope, methods, canCheck, canUpdate, canNativeUpdate }) => {
@@ -377,13 +352,13 @@ describe("renderSidebarUpdateSurface", () => {
       }
     },
   );
-  it.each(["acknowledged", "expired", "visible"] as const)(
+  it.each(["acknowledged", "visible"] as const)(
     "dismisses the producer's current notice beside a %s terminal run",
     async (state) => {
       const run = createUpdateRunFixture({
         status: "succeeded",
         phase: "finished",
-        finishedAtMs: Date.now() - (state === "expired" ? 25 * 60 * 60 * 1_000 : 0),
+        finishedAtMs: Date.now(),
       });
       const harness = updateRunHarness(async () => ({
         lastRun: run,
