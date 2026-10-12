@@ -81,8 +81,13 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     });
   };
 
-  const finishLoadFailure = (scope: SessionConnectionScope, error: unknown, retry: boolean) => {
-    if (!host.connection.isCurrent(scope)) {
+  const finishLoadFailure = (
+    scope: SessionConnectionScope,
+    error: unknown,
+    retry: boolean,
+    isCurrentLoad: () => boolean,
+  ) => {
+    if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
       return null;
     }
     if (defaultsStatus !== "unavailable") {
@@ -112,7 +117,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   ) => {
     try {
       const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
-      if (!host.connection.isCurrent(scope)) {
+      if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
         return null;
       }
       let settings = readSessionCustomGroups(listed);
@@ -127,12 +132,8 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         }).allowed
       ) {
         if (settings.length === 0) {
-          // Legacy import replaces persisted groups; an invalidated read cannot authorize it.
-          if (!isCurrentLoad()) {
-            return null;
-          }
           const put = await scope.client.request("sessions.groups.put", { names: legacy });
-          if (!host.connection.isCurrent(scope)) {
+          if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
             return null;
           }
           settings = readSessionCustomGroups(put);
@@ -159,18 +160,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog(settings, sectionOrder, "loading");
       try {
         const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
-        if (!host.connection.isCurrent(scope)) {
+        if (!host.connection.isCurrent(scope) || !isCurrentLoad()) {
           return null;
         }
         settings = mergeSessionGroupDefaults(settings, defaults);
       } catch (error) {
-        return finishLoadFailure(scope, error, true);
+        return finishLoadFailure(scope, error, true, isCurrentLoad);
       }
       publishCatalog(settings, sectionOrder, "ready");
       return settings;
     } catch (error) {
       // Gateways without feature metadata retain the legacy one-shot probe.
-      return finishLoadFailure(scope, error, advertised === true);
+      return finishLoadFailure(scope, error, advertised === true, isCurrentLoad);
     }
   };
 
@@ -194,16 +195,27 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    // Concurrent catalog changes settle best effort until the next invalidation or reconnect.
+    // Only the retained load may publish after a mutation or catalog invalidation.
     const promise: Promise<readonly SessionGroupSettings[] | null> = loadAttempt(
       scope,
       advertised,
       () => pendingLoad === promise,
-    ).finally(() => {
-      if (pendingLoad === promise) {
-        pendingLoad = null;
-      }
-    });
+    )
+      .then((result) => {
+        // Bootstrap coalesces invalidations into this task. Start a successor only
+        // when no other consumer has already loaded or retained the replacement.
+        return host.connection.isCurrent(scope) &&
+          pendingLoad === null &&
+          loadedEpoch === -1 &&
+          defaultsStatus === "loading"
+          ? load()
+          : result;
+      })
+      .finally(() => {
+        if (pendingLoad === promise) {
+          pendingLoad = null;
+        }
+      });
     pendingLoad = promise;
     return promise;
   };
