@@ -92,11 +92,11 @@ describe("alibaba video generation provider", () => {
     });
   });
 
-  it("advertises Wan video generation with a config-only Standard API key", () => {
+  it("advertises Wan video generation with a config-only Standard API key", async () => {
     clearAlibabaAuthEnvironment();
 
     expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
+      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {
@@ -112,11 +112,11 @@ describe("alibaba video generation provider", () => {
     ).toBe(true);
   });
 
-  it("does not use Qwen Coding Plan credentials for Alibaba video discovery", () => {
+  it("does not use Qwen Coding Plan credentials for Alibaba video discovery", async () => {
     clearAlibabaAuthEnvironment();
 
     expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
+      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {
@@ -132,7 +132,7 @@ describe("alibaba video generation provider", () => {
     ).toBe(false);
   });
 
-  it("tracks whether an allowed Alibaba API-key SecretRef resolves", () => {
+  it("tracks whether an allowed Alibaba API-key SecretRef resolves", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "resolved-alibaba-config-key");
 
@@ -161,31 +161,31 @@ describe("alibaba video generation provider", () => {
       },
     };
 
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(true);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(true);
     vi.stubEnv("ALIBABA_QA_CONFIG_KEY", "");
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg })).toBe(false);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
-  it("preserves Alibaba environment API-key discovery", () => {
+  it("preserves Alibaba environment API-key discovery", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("MODELSTUDIO_API_KEY", "alibaba-environment-key");
 
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(true);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {} })).toBe(true);
   });
 
-  it("does not advertise an inherited Qwen Coding Plan API key", () => {
+  it("does not advertise an inherited Qwen Coding Plan API key", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
-    expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {} })).toBe(false);
+    expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {} })).toBe(false);
   });
 
-  it("keeps explicit Standard config above an inherited Coding Plan environment key", () => {
+  it("keeps explicit Standard config above an inherited Coding Plan environment key", async () => {
     clearAlibabaAuthEnvironment();
     vi.stubEnv("QWEN_API_KEY", "sk-sp-qwen-coding-plan-key");
 
     expect(
-      alibabaVideoGenerationProvider.isConfigured?.({
+      await alibabaVideoGenerationProvider.isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {
@@ -226,7 +226,9 @@ describe("alibaba video generation provider", () => {
         { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
-      expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
+      expect(await alibabaVideoGenerationProvider.isConfiguredAsync?.({ cfg: {}, agentDir })).toBe(
+        expected,
+      );
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       // Saving the profile store opens the per-agent database under the temporary agent

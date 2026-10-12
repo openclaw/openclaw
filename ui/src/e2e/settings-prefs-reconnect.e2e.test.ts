@@ -286,8 +286,17 @@ suite.define(() => {
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot,
+          ),
+        )
+        .toMatchObject({ config: committed.config, hash: committed.hash });
+      await expect.poll(() => readPendingPrefStorage(page)).toEqual([]);
       await expectThemeActive(page, "knot");
+      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit + 1);
     } finally {
       await context.close();
     }

@@ -278,7 +278,10 @@ describe("secrets apply", () => {
     expect(await fs.readFile(fixture.envPath, "utf8")).toBe(envBefore);
 
     prepareSecretsRuntimeSnapshotMock.mockImplementationOnce(async ({ loadAuthStore }) => {
-      const store = expectDefined(loadAuthStore, "preflight auth-store loader")(fixture.agentDir);
+      const store = await expectDefined(
+        loadAuthStore,
+        "preflight auth-store loader",
+      )(fixture.agentDir);
       const profile = store.profiles["openai:default"];
       if (profile?.type !== "api_key" || !profile.keyRef) {
         throw new Error("expected the projected auth-profile SecretRef");

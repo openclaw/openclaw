@@ -267,6 +267,8 @@ async function prepareHistoryRead(
               request.resolved,
               request.selection,
               readMessage,
+              undefined,
+              request.preparedEntry,
             ),
           { ...request.database, env: request.resolved.env },
         );
