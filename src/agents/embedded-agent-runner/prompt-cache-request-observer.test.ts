@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -15,6 +16,48 @@ describe("prompt cache request observer", () => {
     currentTestScope = String(++testScope);
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("pairs a drop with the last measured wire request across missing usage and run boundaries", () => {
+    const sessionId = scopedKey("wire-pair");
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const request = (key: string, cacheRead?: number) => {
+      const observer = createPromptCacheRequestObserver(
+        { sessionId, streamStrategy: "test" },
+        () => {},
+      );
+      observer.onModelRequest(model, { systemPrompt: "stable", messages: [] });
+      const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+        payload: { prompt_cache_key: key, previous_response_id: "private-response", input: [] },
+        encode: true,
+      });
+      observer.onModelUsage(cacheRead === undefined ? undefined : { cacheRead }, {
+        scopeDigest: "same-scope",
+        ...fingerprint,
+      });
+      return observer.getObservation();
+    };
+    expect(request("private-first", 9_000)?.broke).toBe(false);
+    request("private-unmeasured");
+    const dropped = request("private-final", 2_000);
+    expect(dropped).toMatchObject({
+      broke: true,
+      requests: {
+        previous: {
+          cacheKeyPresent: true,
+          cacheKeyHash: hash("sha256", '"private-first"').slice(0, 16),
+        },
+        current: {
+          cacheKeyPresent: true,
+          cacheKeyHash: hash("sha256", '"private-final"').slice(0, 16),
+        },
+      },
+    });
+    expect(JSON.stringify(dropped)).not.toContain("private-");
+    // A fresh request with the original key must compare against the measured drop.
+    expect(request("private-first", 0)?.requests?.previous?.cacheKeyHash).toBe(
+      dropped?.requests?.current?.cacheKeyHash,
+    );
+  });
 
   it("keeps concurrent review and foreground usage in their own diagnostic sessions", () => {
     const promptCacheKey = scopedKey("shared-provider-affinity");
@@ -41,11 +84,40 @@ describe("prompt cache request observer", () => {
       broke: true,
       previousCacheRead: 9_000,
       cacheRead: 2_000,
+      dropCause: "unattributed:provider-prompt-unavailable",
     });
   });
 
+  it.each(["omitted", "missing", "unavailable"] as const)(
+    "retains the input change with %s usage",
+    (usage) => {
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey("unfinished-request"), streamStrategy: "test" },
+        () => {},
+      );
+      const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+      observer.onModelRequest(model, { systemPrompt: "before", messages: [] });
+      observer.onModelUsage({ cacheRead: 8_000 });
+      observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
+      if (usage !== "omitted") {
+        observer.onModelUsage(
+          usage === "missing"
+            ? undefined
+            : { cacheRead: 0, cacheTelemetry: { state: "unavailable" } },
+        );
+      }
+      observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
+      observer.onModelUsage({ cacheRead: 2_000 });
+      expect(observer.getObservation()).toMatchObject({
+        broke: true,
+        dropCause: "tracked-input-change",
+        changes: [{ code: "systemPrompt", detail: "system prompt digest changed" }],
+      });
+    },
+  );
+
   it.each([
-    ["system", { instructions: "provider rewritten system" }],
+    ["system", { instructions: "provider rewritten system" }, "provider-input-change:system"],
     ["tools", { tools: [{ type: "function", name: "changed" }] }],
     ["tools", { tools: [{ name: "read", type: "function" }] }],
     ["message:0.content", { input: [{ role: "user", content: "private rewritten history" }] }],
@@ -71,7 +143,11 @@ describe("prompt cache request observer", () => {
     ["parameters:service_tier", { service_tier: "default" }],
     ["parameters:metadata", { metadata: { "private-name": "private-value" } }],
     ["parameters:other", { "private-parameter-name": "private-value" }],
-    ["continuation:parameters:previous_response_id", { previous_response_id: "private-response" }],
+    [
+      "continuation:parameters:previous_response_id",
+      { previous_response_id: "private-response" },
+      "unattributed:continuation-wire-input",
+    ],
     [
       "continuation:wire-input:0.content,parameters:previous_response_id",
       {
@@ -87,10 +163,11 @@ describe("prompt cache request observer", () => {
           { role: "user", content: "appended" },
         ],
       },
+      "provider-cache-reuse-lost:unchanged-prefix",
     ],
   ] as const)(
     "identifies final encoded %s changes despite unchanged assembled context",
-    (expected, replacement) => {
+    (expected, replacement, dropCause?: string) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const observer = createPromptCacheRequestObserver(
         { sessionId: scopedKey(`wire-${expected}`), streamStrategy: "test" },
@@ -130,6 +207,9 @@ describe("prompt cache request observer", () => {
         requestGapMs: 2_000,
         promptTokens: 10_000,
       });
+      if (dropCause) {
+        expect(observer.getObservation()?.dropCause).toBe(dropCause);
+      }
       expect(JSON.stringify(observer.getObservation())).not.toContain("private");
     },
   );

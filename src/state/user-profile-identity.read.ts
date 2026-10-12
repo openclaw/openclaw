@@ -30,10 +30,7 @@ import {
   userProfileDisplaySelection,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -126,11 +123,7 @@ export function readUserProfileSnapshotSync(
           .select([
             ...userProfileDisplaySelection,
             "created_at",
-            // The native role writer can add this column after a worker has opened.
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ||
-            tableHasColumn(database.db, "user_profiles", "role")
-              ? (["role"] as const)
-              : []),
+            ...(tableHasColumn(database.db, "user_profiles", "role") ? (["role"] as const) : []),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -320,12 +313,14 @@ export function selectUserProfileDisplaysInDatabase(
     )
   ) {
     // Native BLOB keys compare by value in SQLite, not by Map object identity.
-    return new Map(
-      ids.map((id) => [
+    const displays: Map<string, Omit<ProfileDisplayRow, "role"> | undefined> = new Map();
+    for (const id of ids) {
+      displays.set(
         id,
         selectResolvedUserProfile(db, id, profiles.select(userProfileDisplaySelection)),
-      ]),
-    );
+      );
+    }
+    return displays;
   }
   const byId = new Map(rows.map((row) => [row.id, row]));
   return new Map(

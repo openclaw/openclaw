@@ -6,7 +6,6 @@ import {
   installSqliteTempTrackingSchema,
   readSqliteRollbackRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
@@ -119,24 +118,17 @@ class SessionEntryRevisionConflictError extends Error {
   readonly code = "invalid_state";
 }
 
-class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
-
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
   database: DatabaseSync,
   assertSourceCurrent: () => void,
   matches: () => boolean,
-  mode: "mutation" | "read" = "mutation",
 ): () => void {
   let verified: SqliteSessionEntryRevision | undefined;
-  const guard = () => {
+  return () => {
     assertSourceCurrent();
-    const before = readSessionEntryCacheValidityToken(database);
-    if (
-      verified &&
-      !(mode === "read" && database.isTransaction) &&
-      cacheValidityTokensEqual(verified, before)
-    ) {
+    const revision = readSessionEntryCacheValidityToken(database);
+    if (verified && !database.isTransaction && cacheValidityTokensEqual(verified, revision)) {
       assertSourceCurrent();
       return;
     }
@@ -146,52 +138,11 @@ export function createSessionEntryRevisionGuard(
         "Prepared session entry facts are no longer current",
       );
     }
-    const after = readSessionEntryCacheValidityToken(database);
     assertSourceCurrent();
-    // A sibling commit during the predicate must not be hidden by its later receipt.
-    if (
-      before.sessionNodesGeneration !== after.sessionNodesGeneration ||
-      before.siblingWriteRevision !== after.siblingWriteRevision
-    ) {
-      throw new SessionEntryRevisionChangedError(
-        "Session entry facts changed during their mutation check",
-      );
-    }
-    if (
-      before.siblingWriteRevision === undefined ||
-      after.siblingWriteRevision === undefined ||
-      (mode === "read" && database.isTransaction)
-    ) {
-      return;
-    }
+    // A concurrent receipt invalidates this pre-read token on the next check.
+    // Transactional predicates are checked at each effect, not cached past settlement.
     if (!database.isTransaction) {
-      verified = after;
-    } else {
-      // A first-use TEMP tracker can disappear on rollback and later restart at the same value.
-      // Unmanaged transactions cannot retain a verified snapshot past their unknown settlement.
-      stageSqliteTransactionState(database, {
-        stage: () => {
-          verified = after;
-        },
-        rollback: () => {
-          verified = undefined;
-        },
-        commit: () => {},
-      });
-    }
-  };
-  if (mode === "mutation") {
-    return guard;
-  }
-  return () => {
-    try {
-      guard();
-    } catch (error) {
-      if (!(error instanceof SessionEntryRevisionChangedError) || database.isTransaction) {
-        throw error;
-      }
-      // Reprepare read facts once; no snapshot outlives this check.
-      runSqliteReadSnapshotSync(database, guard);
+      verified = revision;
     }
   };
 }

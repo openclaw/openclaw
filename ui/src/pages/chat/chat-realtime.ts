@@ -90,13 +90,9 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkVideoCapable = false;
   state.realtimeTalkVideoPending = false;
   state.realtimeTalkCameraError = false;
-  if (options.preserveConversation) {
-    state.realtimeTalkConversationState = continueRealtimeTalkConversation(
-      state.realtimeTalkConversationState,
-    );
-  } else {
-    state.realtimeTalkConversationState = createRealtimeTalkConversationState();
-  }
+  state.realtimeTalkConversationState = options.preserveConversation
+    ? continueRealtimeTalkConversation(state.realtimeTalkConversationState)
+    : createRealtimeTalkConversationState();
   void session?.stop();
 }
 

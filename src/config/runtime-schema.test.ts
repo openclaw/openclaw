@@ -120,8 +120,8 @@ function makeManifestRegistry() {
   };
 }
 
-async function readSchemaNodes() {
-  const result = await readBestEffortRuntimeConfigSchema();
+async function readSchemaNodes(prepared?: Parameters<typeof readBestEffortRuntimeConfigSchema>[0]) {
+  const result = await readBestEffortRuntimeConfigSchema(prepared);
   const schema = result.schema as { properties?: Record<string, unknown> };
   const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
   const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
@@ -184,6 +184,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadConfigFileSnapshot.mockReset();
     mockLoadConfig.mockReturnValue(explicitMainRoster());
     mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
@@ -210,6 +211,79 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     await readBestEffortRuntimeConfigSchema();
 
     expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+  });
+
+  it("builds from prepared config and metadata without another config or registry read", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValue(
+      makeSnapshot({
+        valid: true,
+        config: {
+          ...explicitMainRoster(),
+          plugins: { entries: { "fallback-only": { enabled: true } } },
+        },
+      }),
+    );
+    const snapshot = makeSnapshot({
+      valid: true,
+      config: {
+        ...explicitMainRoster(),
+        plugins: { entries: { "prepared-demo": { enabled: true } } },
+      },
+    });
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "prepared-demo",
+          configSchema: { type: "object", properties: { mode: { type: "string" } } },
+          configUiHints: { mode: { sensitive: true } },
+        },
+      ],
+    });
+
+    const result = await readBestEffortRuntimeConfigSchema({ snapshot, pluginMetadataSnapshot });
+
+    expect(result.schema).toMatchObject({
+      properties: {
+        plugins: {
+          properties: {
+            entries: {
+              properties: {
+                "prepared-demo": {
+                  properties: { config: { properties: { mode: { type: "string" } } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.uiHints["plugins.entries.prepared-demo.config.mode"]?.sensitive).toBe(true);
+    expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mockGetCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("resolves missing metadata from the prepared config without rereading its source", async () => {
+    mockReadConfigFileSnapshot.mockResolvedValue(
+      makeSnapshot({
+        valid: true,
+        config: { ...explicitMainRoster(), gateway: { mode: "local" } },
+      }),
+    );
+    const config: OpenClawConfig = {
+      ...explicitMainRoster(),
+      plugins: { entries: { "prepared-only": { enabled: true } } },
+    };
+
+    const { channelProps, entryProps } = await readSchemaNodes({
+      snapshot: makeSnapshot({ valid: true, config }),
+    });
+
+    expect(channelProps).toHaveProperty("matrix");
+    expect(entryProps).toHaveProperty("demo");
+    expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(getManifestRegistryLoadArg()?.config).toEqual(config);
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {

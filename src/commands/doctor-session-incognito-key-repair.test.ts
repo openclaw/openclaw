@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -55,11 +56,21 @@ describe("doctor reserved incognito session key repair", () => {
         systemPromptReport: { source: "run", generatedAt: 1, sessionKey: oldKey },
         pluginExtensions: { test: { label: oldKey } },
       });
+      const predicates = deriveSessionPredicateColumns(entryJson);
       database.db
         .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key) VALUES (?, ?, ?, 1, ?, ?, ?)",
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key, session_started_at, has_optional_references) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
         )
-        .run(oldKey, "session-old", entryJson, oldKey, oldKey, oldKey);
+        .run(
+          oldKey,
+          "session-old",
+          entryJson,
+          oldKey,
+          oldKey,
+          oldKey,
+          predicates.session_started_at,
+          predicates.has_optional_references,
+        );
       database.db
         .prepare(
           "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",

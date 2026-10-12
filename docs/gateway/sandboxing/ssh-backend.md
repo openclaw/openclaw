@@ -1,10 +1,10 @@
 ---
-summary: "Sandboxing tools on an arbitrary SSH-accessible machine, and its remote-canonical workspace"
+summary: "Sandboxing tools on an arbitrary SSH-accessible machine, and its remote workspace as the source of truth"
 title: "SSH backend"
 read_when: "You are offloading sandboxed tool execution to a remote machine over SSH."
 ---
 
-The remote utility contract, authentication material, and the remote-canonical workspace this backend seeds once.
+The remote utility contract, authentication material, and the remote workspace this backend seeds once and then uses as the source of truth.
 
 ## SSH backend
 
@@ -17,7 +17,7 @@ login shell. The Gateway host does not need these remote utilities: a macOS or
 Windows Gateway can use an SSH target that supplies them. This is a remote
 utility contract, not a Linux-only Gateway requirement.
 
-Canonical workspace and parent-directory paths retain their whitespace, including
+Resolved workspace and parent-directory paths retain their whitespace, including
 embedded and trailing newlines, during remote reads and writes.
 Remove and rename operations follow in-mount parent-directory aliases while acting
 on the final entry itself. Removing a final symlink leaves its target intact;
@@ -67,4 +67,4 @@ Defaults: `command: "ssh"`, `workspaceRoot: "/tmp/openclaw-sandboxes"`, `strictH
 
 - **Lifecycle**: OpenClaw creates a per-scope remote root under `sandbox.ssh.workspaceRoot`. On first use after create or recreate, it seeds that remote workspace from the local workspace once. After that, `exec`, `read`, `write`, `edit`, `apply_patch`, prompt media reads, and inbound media staging run directly against the remote workspace over SSH. OpenClaw does not sync remote changes back to the local workspace automatically.
 - **Authentication material**: `identityFile`/`certificateFile`/`knownHostsFile` reference existing local files. `identityData`/`certificateData`/`knownHostsData` accept inline strings or SecretRefs, resolved through the normal secrets runtime snapshot, written to temp files with mode `0600`, and deleted when the SSH session ends. If both a `*File` and `*Data` variant are set for the same item, `*Data` wins for that session.
-- **Remote-canonical consequences**: the remote SSH workspace becomes the real sandbox state after the initial seed. Host-local edits made outside OpenClaw after the seed step are not visible remotely until you recreate the sandbox. `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use. Browser sandboxing is not supported on this backend, and `sandbox.docker.*` settings do not apply to it.
+- **Remote workspace consequences**: the remote SSH workspace becomes the real sandbox state after the initial seed. Host-local edits made outside OpenClaw after the seed step are not visible remotely until you recreate the sandbox. `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use. Browser sandboxing is not supported on this backend, and `sandbox.docker.*` settings do not apply to it.

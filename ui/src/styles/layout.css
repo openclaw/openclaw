@@ -370,7 +370,8 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
     color var(--duration-fast) ease;
 }
 
-.settings-sidebar__back-icon {
+.settings-sidebar__back-icon,
+.settings-save-indicator__claw {
   display: inline-flex;
   width: 15px;
   height: 15px;
@@ -530,9 +531,8 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   appearance: none;
 }
 
-.settings-sidebar__search-clear {
-  position: absolute;
-  inset-inline-end: 5px;
+.settings-sidebar__search-clear,
+.session-menu__icon-back {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -540,9 +540,14 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
+}
+
+.settings-sidebar__search-clear {
+  position: absolute;
+  inset-inline-end: 5px;
+  border-radius: var(--radius-sm);
 }
 
 .settings-sidebar__nav {
@@ -604,7 +609,8 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   width: 68%;
 }
 
-.settings-sidebar__group {
+.settings-sidebar__group,
+.sidebar-online__list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -743,12 +749,6 @@ openclaw-settings-save-indicator:empty {
 .settings-save-indicator svg,
 .session-menu__icon-back svg,
 .sidebar-identity-menu .nav-item__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.settings-save-indicator__claw {
-  display: inline-flex;
   width: 15px;
   height: 15px;
 }
@@ -1250,68 +1250,6 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
 }
 
-.sidebar-session-filter-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
-  min-width: 0;
-  height: 18px;
-  padding: 0 4px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  cursor: default;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-/* The lead slot stacks the filter glyph (owner avatar or archive mark) under the
-   clear icon; hover swaps them so the summary spends no width on a second control. */
-.sidebar-session-filter-summary__lead {
-  display: inline-grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-.sidebar-session-filter-summary__lead > * {
-  grid-area: 1 / 1;
-  display: inline-flex;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-session-filter-summary__clear,
-.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__glyph {
-  opacity: 0;
-}
-
-.sidebar-session-filter-summary:is(:hover, :focus-visible) .sidebar-session-filter-summary__clear {
-  opacity: 1;
-}
-
-.sidebar-session-filter-summary .viewer-avatar {
-  width: 14px;
-  height: 14px;
-  border-color: var(--bg-elevated);
-}
-
-.sidebar-session-filter-summary__label,
-.sidebar-footer-branch__name {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.sidebar-session-filter-summary__sep {
-  margin: 0 4px;
-}
-
 .sidebar-session-toolbar__button.sidebar-session-sort {
   margin-left: auto;
 }
@@ -1693,15 +1631,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (hover: none), (pointer: coarse) {
-  /* No hover on touch: the clear icon is the resting lead glyph. */
-  .sidebar-session-filter-summary__glyph {
-    opacity: 0;
-  }
-
-  .sidebar-session-filter-summary__clear {
-    opacity: 0.55;
-  }
-
   /* Touch has no hover, so the chevron must be the resting state or
      catalog collapsibility becomes undiscoverable. */
   .sidebar-session-group-toggle__lead--branded .sidebar-session-catalog-provider-icon {
@@ -1798,7 +1727,8 @@ openclaw-settings-save-indicator:empty {
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-.sidebar-session-catalog-host__label {
+.sidebar-session-catalog-host__label,
+.session-menu__text {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1847,8 +1777,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-filter-summary:hover,
-.sidebar-session-filter-summary:focus-visible,
 .sidebar-session-catalog-load-more:hover:not(:disabled),
 .sidebar-session-catalog-load-more:focus-visible,
 .sidebar-session-catalog-project__head:hover,
@@ -1924,7 +1852,9 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session-empty-hint--startup {
+.sidebar-session-empty-hint--startup,
+.sidebar-identity-card__gateway,
+.sidebar-gateway-details {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2322,12 +2252,6 @@ openclaw-settings-save-indicator:empty {
   }
 }
 
-.sidebar-online__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .sidebar-online__facepile {
   display: inline-flex;
   min-width: 0;
@@ -2519,7 +2443,7 @@ openclaw-settings-save-indicator:empty {
 
 @media (prefers-reduced-motion: no-preference) {
   @starting-style {
-    .sidebar-r .sidebar-zone-entry {
+    .sidebar-r .sidebar:not([data-snapshot-state="cached"]) .sidebar-zone-entry {
       opacity: 0;
       transform: translateX(-8px) scale(0.98);
     }
@@ -2566,13 +2490,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--muted);
-}
-
-.sidebar-customize-menu__provenance {
-  margin: 0 8px 6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
 }
 
 .sidebar-customize-menu__item {
@@ -2699,14 +2616,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-}
-
-.session-menu__text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-menu__sub,
@@ -2944,16 +2853,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .session-menu__icon-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
   border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--muted);
   cursor: var(--cursor-action);
 }
 
@@ -3030,8 +2930,7 @@ a:is(
     .sidebar-issues-panel__navigation-link,
     .sidebar-approval-row__open-session,
     .sidebar-footer-build
-  ):where(:not([target="_blank" i], [data-new-tab-action])),
-.sidebar-more-menu a:where(:not([target="_blank" i], [data-new-tab-action])) {
+  ):where(:not([target="_blank" i], [data-new-tab-action])) {
   cursor: var(--cursor-action);
 }
 
@@ -3543,13 +3442,6 @@ openclaw-sidebar-attention {
   line-height: 18px;
 }
 
-.sidebar-identity-card__gateway,
-.sidebar-gateway-details {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .sidebar-identity-card__gateway {
   color: var(--muted);
   font-size: 11px;
@@ -3837,12 +3729,12 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   border-radius: var(--radius-full);
   background: var(
     --agent-avatar-background,
-    color-mix(in srgb, var(--text-strong) 9%, var(--card))
+    color-mix(in srgb, var(--text-strong) var(--agent-avatar-fill, 9%), var(--card))
   );
   color: var(--secondary-foreground);
   box-shadow:
-    0 0 0 2px transparent,
-    0 0 0 4px transparent;
+    0 0 0 2px var(--agent-avatar-ring-inner, transparent),
+    0 0 0 4px var(--agent-avatar-ring-outer, transparent);
   transition:
     background-color 120ms ease,
     box-shadow 120ms ease;
@@ -3947,20 +3839,13 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 .sidebar-agent-menu__agent-switch--active .sidebar-agent-menu__agent-avatar {
   --agent-avatar-opacity: 1;
   --agent-avatar-filter: none;
-
-  box-shadow:
-    0 0 0 2px var(--bg-elevated),
-    0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent);
+  --agent-avatar-ring-inner: var(--bg-elevated);
+  --agent-avatar-ring-outer: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .sidebar-agent-menu__agent-switch--active:hover .sidebar-agent-menu__agent-avatar {
-  background: var(
-    --agent-avatar-background,
-    color-mix(in srgb, var(--text-strong) 12%, var(--card))
-  );
-  box-shadow:
-    0 0 0 2px var(--bg-elevated),
-    0 0 0 4px color-mix(in srgb, var(--accent) 65%, transparent);
+  --agent-avatar-fill: 12%;
+  --agent-avatar-ring-outer: color-mix(in srgb, var(--accent) 65%, transparent);
 }
 
 .sidebar-agent-menu__agent-switch:not(.sidebar-agent-menu__agent-switch--active):hover
@@ -3978,9 +3863,8 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 
 .sidebar-agent-menu__agent-switch:not(.sidebar-agent-menu__agent-switch--active):focus-visible
   .sidebar-agent-menu__agent-avatar {
-  box-shadow:
-    0 0 0 2px var(--bg-elevated),
-    0 0 0 4px color-mix(in srgb, var(--text-strong) 24%, transparent);
+  --agent-avatar-ring-inner: var(--bg-elevated);
+  --agent-avatar-ring-outer: color-mix(in srgb, var(--text-strong) 24%, transparent);
 }
 
 .sidebar-agent-menu__agent-row .agent-select__option-copy {
@@ -4253,7 +4137,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   flex: 0 0 auto;
 }
 
-.sidebar-session-filter-summary__lead svg,
 .sidebar-footer-branch__icon svg {
   width: 12px;
   height: 12px;

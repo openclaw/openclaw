@@ -138,17 +138,14 @@ export function resolveSessionPatchModelSelection(params: {
 }):
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
+  const { cfg, agentId } = params;
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
-  const statusDefault = isSessionStatusModelPatchOrigin()
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
+  const configuredDefault = resolveDefaultModelForAgent({ cfg, agentId });
   const isDefault = (ref: ModelRef) =>
-    statusDefault !== undefined &&
-    ref.provider === statusDefault.provider &&
-    ref.model === statusDefault.model;
+    ref.provider === configuredDefault.provider && ref.model === configuredDefault.model;
   const policy = {
-    cfg: params.cfg,
-    agentId: params.agentId,
+    cfg,
+    agentId,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.subagentModelHint ?? {
@@ -181,7 +178,6 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
-    // Direct patches pin concrete models; status retains its configured-default reset contract.
     isDefault: isDefault(resolved.ref),
   };
 }

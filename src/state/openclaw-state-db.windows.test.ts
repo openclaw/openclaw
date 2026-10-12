@@ -53,9 +53,10 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     // Keep SQLite and the cache real; these exact synthetic locators refer to one host file.
     const nativePath = (value: unknown) => (spellings.has(String(value)) ? physical : value);
     const resolve = path.resolve;
+    const win32Resolve = path.win32.resolve;
     vi.spyOn(path, "resolve").mockImplementation((...segments) =>
       segments.some((segment) => spellings.has(segment))
-        ? path.win32.resolve(...segments)
+        ? win32Resolve(...segments)
         : resolve(...segments),
     );
     const stat = fs.statSync;

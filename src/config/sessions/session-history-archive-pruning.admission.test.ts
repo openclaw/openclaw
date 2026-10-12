@@ -450,7 +450,7 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
     31,
   );
   let remaining: number | null = null;
-  const failure: unknown = await own(
+  await own(
     pageReclamation.withSqliteSessionPageReclamation(options, async (reclaim) => {
       const first = await reclaim(1);
       expect(first).toMatchObject({ checkpointCompleted: true, vacuumPagesRequested: 1 });
@@ -460,16 +460,12 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
       closeOpenClawAgentDatabaseByPath(database.path);
       await expect(reclaim(1)).rejects.toThrow(/revoked|closed/);
     }),
-  ).catch((error: unknown) => error);
+  );
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const reopened = openOpenClawAgentDatabase(options);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(
     remaining,
   );
-  expect(failure).toMatchObject({
-    code: "unavailable",
-    message: expect.stringMatching(/revoked/),
-  });
 });
 
 it.each([

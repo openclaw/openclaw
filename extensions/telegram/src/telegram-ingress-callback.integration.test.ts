@@ -13,13 +13,14 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
-import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
+import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
@@ -127,10 +128,16 @@ it.each(["none", "middleware", "handler"] as const)(
     });
     const telegramTransport = { fetch, sourceFetch: fetch, close: async () => {} };
     let monitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
-    const readHandlerAnswer = vi.spyOn(
-      callbackQueryAnswerState,
-      "getTelegramCallbackQueryAnswerPromise",
-    );
+    let menuSync: Promise<void> | undefined;
+    const handlerAnswerRead = Promise.withResolvers<void>();
+    const getHandlerAnswer = callbackQueryAnswerState.getTelegramCallbackQueryAnswerPromise;
+    const readHandlerAnswer = vi
+      .spyOn(callbackQueryAnswerState, "getTelegramCallbackQueryAnswerPromise")
+      .mockImplementation((ctx) => {
+        const answer = getHandlerAnswer(ctx);
+        handlerAnswerRead.resolve();
+        return answer;
+      });
     try {
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
@@ -140,6 +147,7 @@ it.each(["none", "middleware", "handler"] as const)(
         channels: { telegram: { apiRoot, dmPolicy: "open", allowFrom: ["*"] } },
         session: { store: path.join(stateDir, "sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const bot = await createTelegramBot({
         token: "123456:loopback-token",
         botInfo: telegramBotInfoForTest,
@@ -147,8 +155,9 @@ it.each(["none", "middleware", "handler"] as const)(
         telegramTransport,
         telegramDeps: {
           ...defaultTelegramBotDeps,
+          syncTelegramMenuCommands: (params) => (menuSync = syncTelegramMenuCommands(params)),
           getRuntimeConfig: () => cfg,
-          listSkillCommandsForAgents: () => [],
+          prepareSkillCommandsForAgents: async () => [],
           readChannelAllowFromStore: async () => [],
         },
         runtime: {
@@ -221,8 +230,8 @@ it.each(["none", "middleware", "handler"] as const)(
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
         if (recovery === "handler") {
-          // Let the real router consume the pending admission answer before rejecting it.
-          await vi.waitFor(() => expect(readHandlerAnswer).toHaveBeenCalled(), { interval: 10 });
+          // Wait for the router, not a polling deadline, before rejecting its pending answer.
+          await handlerAnswerRead.promise;
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
           firstResponse!.writeHead(503, { "content-type": "application/json" });
@@ -291,20 +300,14 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
-      // Menu sync has its own queue; finish it before closing the loopback API.
-      await new Promise<void>((resolve, reject) => {
-        enqueueTelegramMenuSync({
-          ownerKey: resolveTelegramMenuRemoteOwner({ botId: telegramBotInfoForTest.id }).queueKey,
-          sync: async () => resolve(),
-          onError: reject,
-        });
-      });
+      await menuSync;
       readHandlerAnswer.mockRestore();
       await telegramTransport.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      clearRuntimeConfigSnapshot();
       clearTelegramRuntimeForTest();
       resetTelegramAccountThrottlersForTest();
       resetPluginStateStoreForTests({ closeDatabase: false });

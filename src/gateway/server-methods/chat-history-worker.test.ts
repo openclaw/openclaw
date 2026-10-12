@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,
@@ -46,6 +47,7 @@ function expectHistoryThreadSql(queries: string[]) {
 
 it("serves committed history while transcript searches wait on a stuck writer", async (test) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:writer-isolation",
@@ -116,6 +118,7 @@ it.each(["native", "acp"])(
   "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",
   async (sourceKind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:worker-delta",
@@ -363,6 +366,7 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
 
 it("forwards worker history as text JSON while preserving object callers and tiny budgets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:encoded-history",

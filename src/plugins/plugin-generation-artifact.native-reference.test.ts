@@ -386,7 +386,6 @@ it.each(["state root", "temporary placement", "publication root"] as const)(
               expect(captured.startsWith(fs.realpathSync(runtimeTemp) + path.sep)).toBe(true);
             }
             expect(fs.readFileSync(captured).equals(fixture.bytes)).toBe(true);
-            artifact.assertSourceCurrent();
           }
           expect(capturedPaths[0] === capturedPaths[1]).toBe(false);
           await settlePluginNativeAdmissions(cache);

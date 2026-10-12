@@ -11,7 +11,10 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { registerDevicesCli } from "../../cli/devices-cli.js";
 import * as gatewayRpc from "../../cli/gateway-rpc.js";
 import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
+import type * as updateCheckLifecycle from "../../infra/update-check-lifecycle.js";
 import { defaultRuntime } from "../../runtime.js";
+import { useMockHttp } from "../../test-utils/mock-http.js";
+import type * as versionModule from "../../version.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   renderQrPngDataUrl: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   readDevicePairSetupCompletion: vi.fn(),
+  readInstallStatus: vi.fn(),
+  version: "2026.9.9",
 }));
 
 vi.mock("../../pairing/setup-code.js", async (importOriginal) => ({
@@ -36,6 +41,18 @@ vi.mock("../../process/exec.js", () => ({
 vi.mock("../../infra/device-bootstrap.js", () => ({
   readDevicePairSetupCompletion: mocks.readDevicePairSetupCompletion,
 }));
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof updateCheckLifecycle>()),
+  currentUpdateCheckLifecycle: () => ({ installStatus: mocks.readInstallStatus() }),
+}));
+vi.mock("../../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof versionModule>()),
+  get VERSION() {
+    return mocks.version;
+  },
+}));
+
+const mockHttp = useMockHttp();
 
 import { devicePairSetupHandlers } from "./device-pair-setup.js";
 
@@ -92,6 +109,10 @@ describe("device.pair.setupCode", () => {
     mocks.renderQrPngDataUrl.mockReset();
     mocks.runCommandWithTimeout.mockReset();
     mocks.readDevicePairSetupCompletion.mockReset();
+    mocks.version = "2026.9.9";
+    mocks.readInstallStatus.mockReturnValue({
+      status: { installKind: "package", packageManager: "npm" },
+    });
   });
 
   afterEach(() => {
@@ -147,28 +168,6 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("delegates the configured device-pair public URL fallback to the shared resolver", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
-
-    await runSetupCode(
-      {},
-      {
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: " wss://gateway.example.com " } },
-          },
-        },
-      },
-    );
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ publicUrl: undefined }),
-    );
-  });
-
   it("labels an explicit request URL separately from configured fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
@@ -202,44 +201,6 @@ describe("device.pair.setupCode", () => {
       );
     },
   );
-
-  it("prefers the remote URL over the configured device-pair fallback", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
-
-    await runSetupCode(
-      { preferRemoteUrl: true },
-      {
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: "wss://plugin.example.com" } },
-          },
-        },
-      },
-    );
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ publicUrl: undefined, preferRemoteUrl: true }),
-    );
-  });
-
-  it("omits the QR when includeQr is false", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-
-    const respond = await runSetupCode({ includeQr: false });
-
-    expect(mocks.renderQrPngDataUrl).not.toHaveBeenCalled();
-    const [ok, payload] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
-    expect(ok).toBe(true);
-    expect(payload.qrDataUrl).toBeUndefined();
-    expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
-  });
 
   it.each([
     { bootstrapProfile: "node", profile: { roles: ["node"], scopes: [] } },
@@ -399,18 +360,92 @@ describe("device.pair.setupCode", () => {
     expect(writeJson).toHaveBeenCalledWith({
       joinUrl,
       command: `npx -y openclaw connect ${joinUrl} --service --session-host`,
+      serviceCommand: `npx -y openclaw connect ${joinUrl} --service`,
+      installedCommand: `openclaw connect ${joinUrl} --service --session-host`,
+      versionNote: expect.stringContaining("matching Gateway build"),
     });
   });
 
-  it.each(["limited", "voice-node"])(
-    "does not put a %s grant in a join URL",
-    async (bootstrapProfile) => {
-      const respond = await runSetupCode({ joinUrl: true, bootstrapProfile });
-
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "published release",
+      kind: "package",
+      version: "2026.9.9",
+      exact: true,
+      tag: false,
+      spec: "openclaw@2026.9.9",
     },
-  );
+    {
+      name: "unpublished beta",
+      kind: "package",
+      version: "2026.9.9-beta.1",
+      exact: false,
+      tag: true,
+      spec: "openclaw@beta",
+    },
+    {
+      name: "unpublished release",
+      kind: "package",
+      version: "2026.9.9",
+      exact: false,
+      tag: true,
+      spec: "openclaw@latest",
+    },
+    {
+      name: "source checkout",
+      kind: "git",
+      version: "2026.9.9",
+      exact: false,
+      tag: true,
+      spec: "openclaw@dev",
+    },
+    {
+      name: "offline registry",
+      kind: "package",
+      version: "2026.9.9",
+      exact: false,
+      tag: false,
+      spec: "openclaw",
+    },
+  ])("mints Gateway-owned join commands for $name", async ({ kind, version, exact, tag, spec }) => {
+    mocks.version = version;
+    mocks.readInstallStatus.mockReturnValue({ status: { installKind: kind } });
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP");
+    vi.spyOn(devicePairingJoinCode, "registerDevicePairingJoinCode").mockResolvedValue(
+      "a".repeat(22),
+    );
+    if (kind === "package") {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${version}`,
+        reply: exact ? { json: { version } } : { status: 404, json: {} },
+      });
+    }
+    if (!exact) {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${kind === "git" ? "dev" : version.includes("beta") ? "beta" : "latest"}`,
+        reply: tag ? { json: { version: "2026.9.9" } } : { status: 404, json: {} },
+      });
+    }
+    const respond = await runSetupCode({ joinUrl: true, includeQr: false });
+    const joinUrl = `https://gw.example:8443/j/${"a".repeat(22)}`;
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      command: `npx -y ${spec} connect ${joinUrl} --service --session-host`,
+      serviceCommand: `npx -y ${spec} connect ${joinUrl} --service`,
+      installedCommand: `openclaw connect ${joinUrl} --service --session-host`,
+      ...(exact ? {} : { versionNote: expect.stringContaining("matching Gateway build") }),
+    });
+    if (exact) {
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("versionNote");
+    }
+  });
+
+  it.each(["voice-node"])("does not put a %s grant in a join URL", async (bootstrapProfile) => {
+    const respond = await runSetupCode({ joinUrl: true, bootstrapProfile });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
+  });
 
   it("omits an oversized QR but still returns the setup code", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);

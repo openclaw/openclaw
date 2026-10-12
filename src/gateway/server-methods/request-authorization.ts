@@ -323,21 +323,25 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     let requestParams = params.requestParams;
     if (params.method === "chat.send" && !sessionPolicy) {
       const cfg = params.context.getRuntimeConfig();
-      if (!assertChatRoutingCurrent) {
-        const routing = captureSessionMutationRouting(cfg);
-        assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
-      }
-      assertChatRoutingCurrent();
       const normalized = resolveChatSendAuthorizationParams(cfg, requestParams);
       if (!normalized.ok) {
         return { error: normalized.error };
       }
+      if (!assertChatRoutingCurrent) {
+        const routing = captureSessionMutationRouting(
+          cfg,
+          undefined,
+          resolveDirectSessionTargets(params.method, requestParams),
+        );
+        assertChatRoutingCurrent = () => routing(params.context.getRuntimeConfig());
+      }
+      assertChatRoutingCurrent();
       requestParams = normalized.value;
     }
     const projection =
       !sessionPolicy &&
       resolveDirectSessionTargets(params.method, requestParams).length > 0 &&
-      (params.consumeSessionTurn || !isGatewayAdmin(params.client))
+      (params.consumeSessionTurn || params.method === "chat.send" || !isGatewayAdmin(params.client))
         ? getSessionRowProjection(params.context)
         : undefined;
     const sessionAuthorizationParams = {

@@ -27,7 +27,6 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -41,7 +40,6 @@ import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
@@ -372,10 +370,6 @@ export async function createCanonicalForkFixture(params: {
         releaseLeasedSharedCodexAppServerClient(client);
       }
     },
-    holdConfiguration: (client: CodexAppServerClient) =>
-      acquireCodexNativeConfigFence(
-        expectDefined(resolveCodexNativeConfigFenceKey({ client }), "native configuration fence"),
-      ),
     bindingStore,
     identity,
     readEntries,

@@ -3,6 +3,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
@@ -56,7 +57,10 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   validateCanonicalKeys: boolean;
   options: SqliteSessionEntryPatchOptions;
   selection: SessionEntryPatchSelection;
-  readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
+  readSnapshot: (
+    database: OpenClawAgentDatabase,
+    includeWindowFacts?: true,
+  ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
   storePath: string;
@@ -75,6 +79,7 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   };
   resolved.env.OPENCLAW_STATE_DIR = resolveStateDir(resolved.env);
   const databaseOptions = toDatabaseOptions(resolved);
+  assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const targetIdentity = readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
@@ -86,13 +91,9 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     sessionKey,
     storePath: databasePath,
   });
-  // Released session-store callbacks retain their native synchronous transaction boundary.
+  // Offline maintenance and process-held incognito stores retain native ownership.
   const useWorker =
-    !incognitoBinding &&
-    isMainThread &&
-    !options.shouldCommit &&
-    !options.assertCommitAllowed &&
-    supportsOpenClawAgentDatabaseExecution(databaseOptions);
+    !incognitoBinding && isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const ensure = options.workerGuard?.ensureIdentitySource;
   if (
     ensure &&

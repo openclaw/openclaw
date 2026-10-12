@@ -331,6 +331,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: {
           agentId: null,
@@ -390,6 +391,7 @@ export function createSessionCapabilityFixture(
   return {
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
+    subscribe: () => () => undefined,
     deletionState: () => undefined,
     think: () => undefined,
     settingsPreview: () => undefined,
@@ -466,6 +468,7 @@ export function createSessionContext(
       },
     },
     config: {
+      subscribe: () => () => {},
       current: {
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,

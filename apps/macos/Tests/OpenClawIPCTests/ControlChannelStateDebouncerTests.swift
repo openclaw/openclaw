@@ -339,7 +339,7 @@ struct ControlChannelGatewayMessageTests {
             configRoot: root)
 
         #expect(message.contains("localhost:"))
-        #expect(message.contains("ensure the gateway is running"))
+        #expect(message.contains("check that the gateway is running"))
         #expect(!message.contains("SSH"))
     }
 }

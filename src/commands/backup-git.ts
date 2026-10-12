@@ -1,5 +1,5 @@
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
@@ -62,7 +62,7 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   }
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
-    const config = getRuntimeConfig({ skipPluginValidation: true });
+    const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     const agentIds = options.all
       ? listAgentIds(config).toSorted()
       : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));

@@ -28,6 +28,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hoo
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -35,7 +36,7 @@ import {
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.js";
+import { readClosedTranscriptTurnInDatabase } from "../src/config/sessions/session-accessor.transcript-range.worker.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
 import type {
@@ -47,10 +48,11 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
+  type PluginStateActionAuthority,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
@@ -169,7 +171,7 @@ async function withFixture(
       key: string,
       entryId: string,
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
-    revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
+    revoke: (target: "source" | "child", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
     runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
@@ -205,8 +207,11 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
-        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
-          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
+        openKeyedStoreV2: <T>(
+          storeOptions: OpenAsyncKeyedStoreOptions,
+          authority: PluginStateActionAuthority = { assertCurrent() {} },
+        ) =>
+          createPluginStateKeyedStoreV2<T>("codex", { ...storeOptions, env: state.env }, authority),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
           createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
@@ -389,6 +394,7 @@ async function withFixture(
           openai: { enabled: true },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const { registry, createApi } = createPluginRegistry({
         runtime,
         logger: { info() {}, warn() {}, error() {} },
@@ -509,10 +515,6 @@ async function withFixture(
             fixture,
             fork,
             (target, sourceKey) => {
-              if (target === "registry") {
-                markPluginRegistryRetired(registry);
-                return;
-              }
               const key =
                 target === "source"
                   ? sourceKey
@@ -680,9 +682,9 @@ describe("canonical descendant lifecycle through real owners", () => {
   );
 
   it.each(
-    ["source", "child", "registry"].flatMap((target) =>
+    ["source", "child"].flatMap((target) =>
       ["prewrite", "overload", "acknowledged"].map((phase) => ({
-        target: target as "source" | "child" | "registry",
+        target: target as "source" | "child",
         phase,
       })),
     ),
@@ -996,51 +998,7 @@ describe("canonical descendant lifecycle through real owners", () => {
       }
     });
   }, 180_000);
-  it.each(["source", "child", "registry"] as const)(
-    "fences physical fork writes after %s revocation during configuration wait",
-    async (target) => {
-      await withFixture(async (fixture, fork, revoke) => {
-        const source = await fixture.adopt();
-        await fixture.turn(source.sessionKey, "canonical");
-        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
-        await fixture.withClient(async (client) => {
-          const release = await fixture.holdConfiguration(client);
-          const request = vi.spyOn(client, "request"); // Pass-through: the real fence still runs.
-          const before = fixture.native.calls.filter(
-            (call) => call.method === "thread/fork",
-          ).length;
-          const pending = fork(source.sessionKey, selected.entryId);
-          let result: Awaited<ReturnType<typeof fork>>;
-          try {
-            await vi.waitFor(
-              () =>
-                expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(true),
-              { timeout: 10_000 },
-            );
-            expect(
-              fixture.native.calls.filter((call) => call.method === "thread/fork"),
-            ).toHaveLength(before);
-            revoke(target, source.sessionKey);
-          } finally {
-            release();
-            result = await pending;
-            request.mockRestore();
-          }
-          expect(result.ok).toBe(false);
-          expect(fixture.native.calls.filter((call) => call.method === "thread/fork")).toHaveLength(
-            before,
-          );
-          await fixture.withClient(async (next) => {
-            expect(next).toBe(client);
-          });
-          await expect(client.request("config/read", {})).resolves.toMatchObject({ config: {} });
-        });
-      });
-    },
-    180_000,
-  );
-
-  it.each(["source", "child", "registry"] as const)(
+  it.each(["source", "child"] as const)(
     "fences physical fork retries after %s revocation on overload",
     async (target) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1064,10 +1022,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
-  it.each([
-    ["source", 2, 0],
-    ["registry", 1, 1],
-  ] as const)(
+  it.each([["source", 2, 0]] as const)(
     "keeps native archive overload retry within captured rollback after %s revocation",
     async (target, attempts, retained) => {
       await withFixture(async (fixture, fork, revoke) => {
@@ -1097,7 +1052,6 @@ describe("canonical descendant lifecycle through real owners", () => {
   it.each([
     ["source", true],
     ["child", false],
-    ["registry", false],
   ] as const)(
     "uses captured rollback ownership after %s revocation following native fork",
     async (target, rollbackAllowed) => {

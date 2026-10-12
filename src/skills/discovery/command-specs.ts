@@ -66,6 +66,7 @@ type WorkspaceSkillCommandOptions = {
   eligibility?: SkillEligibilityContext;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   reservedNames?: Set<string>;
+  gatewayOnly?: boolean;
 };
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
@@ -82,15 +83,16 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
       : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+    gatewayOnly: opts?.gatewayOnly,
   };
 }
 
 /** Builds user-invocable slash command specs for synchronous SDK consumers. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
-  opts?: WorkspaceSkillCommandOptions & { gatewayOnly?: boolean },
+  opts?: WorkspaceSkillCommandOptions,
 ): SkillCommandSpec[] {
-  const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
+  const loadOptions = resolveCommandSkillLoadOptions(opts);
   const eligible = opts?.entries
     ? filterSkillEntries(opts.entries, loadOptions)
     : loadVisibleSkills(workspaceDir, loadOptions);

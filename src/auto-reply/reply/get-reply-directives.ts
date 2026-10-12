@@ -22,6 +22,7 @@ import {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
 import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
@@ -129,7 +130,7 @@ export async function resolveReplyDirectives(params: {
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
 
   const commandText = sessionCtx.commandText;
-  const command = buildCommandContext({
+  const commandContext = {
     ctx,
     cfg,
     agentId,
@@ -137,7 +138,11 @@ export async function resolveReplyDirectives(params: {
     isGroup,
     triggerBodyNormalized,
     commandAuthorized,
-  });
+  };
+  const command = buildCommandContext(
+    commandContext,
+    await resolveCommandAuthorizationAsync(commandContext),
+  );
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
     surface: command.surface,

@@ -62,9 +62,11 @@ export default defineSingleProviderPluginEntry({
     },
     wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn),
     resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.VENICE_API_KEY],
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          envDirect: [ctx.env.VENICE_API_KEY],
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) =>

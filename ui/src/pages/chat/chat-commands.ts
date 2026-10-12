@@ -356,7 +356,8 @@ export async function dispatchChatSlashCommand(
       return "completed";
   }
 
-  if (!host.client || !host.connected) {
+  const target = captureChatCommandTarget(host);
+  if (!target) {
     setChatError(host, "Gateway not connected");
     injectCommandResult(
       host,
@@ -368,10 +369,6 @@ export async function dispatchChatSlashCommand(
     return "failed";
   }
 
-  const target = captureChatCommandTarget(host);
-  if (!target) {
-    return "failed";
-  }
   const targetIsCurrent = () => isChatCommandTargetCurrent(host, target);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {

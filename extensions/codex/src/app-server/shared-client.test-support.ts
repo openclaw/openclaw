@@ -1,7 +1,6 @@
 import {
   createCodexAppServerStartupLifetime,
   getSharedCodexAppServerClientState,
-  notifyDesktopGenerationDrainChecks,
 } from "./shared-client-lifecycle.js";
 
 export function resetSharedCodexAppServerClientForTests(): void {
@@ -17,5 +16,4 @@ export function resetSharedCodexAppServerClientForTests(): void {
   for (const client of [...clients, ...isolatedClients]) {
     client.close();
   }
-  notifyDesktopGenerationDrainChecks(state);
 }

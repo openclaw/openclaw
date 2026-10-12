@@ -16,6 +16,7 @@ import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
@@ -158,7 +159,7 @@ describe("session menu", () => {
         ]),
       );
       const selected = menuItem(menu, selectedLabel);
-      expect(selected.getAttribute("role")).toBe("menuitemradio");
+      await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
       expect(selected.getAttribute("aria-checked")).toBe("true");
       expect(selected.disabled).toBe(true);
       expect(selected.querySelector("[slot='details']")).not.toBeNull();
@@ -661,7 +662,7 @@ describe("session menu", () => {
     const set = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set");
     expect(input).not.toBeNull();
     expect(input?.getAttribute("aria-label")).toBe("Custom icon");
-    expect(document.activeElement).toBe(input);
+    await waitForSolid(() => expect(document.activeElement).toBe(input));
     expect(set?.disabled).toBe(true);
 
     if (!input) {
@@ -689,6 +690,7 @@ describe("session menu", () => {
     press(input, "Enter");
 
     expect(calls).toEqual([`set-icon:${icon}`]);
+    expect(document.activeElement).toBe(input);
   });
 
   it("returns from custom entry on Escape without closing the menu", async () => {

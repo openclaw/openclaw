@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -157,10 +156,7 @@ export function createTestGatewayServer(options: {
   resolvedAuth: ResolvedGatewayAuth;
   overrides?: GatewayServerOptions;
 }): GatewayHttpServer {
-  const context = createGatewayRequestContext({
-    ...makeContextParams(),
-    configRevisionProjector: loadGatewayConfigRevisionProjector(),
-  });
+  const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   return createGatewayHttpServer({
     clients: new Set(),

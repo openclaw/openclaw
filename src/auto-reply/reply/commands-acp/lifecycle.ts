@@ -13,6 +13,7 @@ import {
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
+import { listAgentIds } from "../../../agents/agent-roster.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spawn/acp-spawn-policy.js";
 import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
@@ -116,10 +117,15 @@ export async function handleAcpSpawnAction(
   }
 
   const acpManager = getAcpSessionManager();
-  const sessionKey = `agent:${spawn.agentId}:acp:${randomUUID()}`;
+  // Raw harness ids select a backend, not a new OpenClaw owner. Keep configured
+  // targets in their existing namespace; otherwise mirror sessions_spawn ownership.
+  const ownerAgentId = listAgentIds(params.cfg).includes(spawn.agentId)
+    ? spawn.agentId
+    : params.agentId;
+  const sessionKey = `agent:${ownerAgentId}:acp:${randomUUID()}`;
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: params.cfg,
-    targetAgentId: spawn.agentId,
+    targetAgentId: ownerAgentId,
     requesterSessionKey: params.sessionKey,
     explicitWorkspaceDir: spawn.cwd,
   });
@@ -143,7 +149,7 @@ export async function handleAcpSpawnAction(
       assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       agent: spawn.agentId,
       mode: spawn.mode,
       cwd: runtimeCwd,
@@ -162,7 +168,7 @@ export async function handleAcpSpawnAction(
     cleanupFailedAcpSpawn({
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       sessionEntry,
       deleteTranscript: false,
       closeRuntimeOnFailure,
@@ -173,8 +179,8 @@ export async function handleAcpSpawnAction(
     const result = await bindSpawnedAcpSession({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
-      label: spawn.label,
+      agentId: ownerAgentId,
+      label: spawn.label ?? spawn.agentId,
       mode:
         spawn.bind !== "off"
           ? "conversation"
@@ -194,7 +200,7 @@ export async function handleAcpSpawnAction(
     await persistSpawnedSessionLabel({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       label: spawn.label,
     });
   } catch (err) {

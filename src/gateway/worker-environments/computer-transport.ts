@@ -257,12 +257,13 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         timeoutMs?: number;
         signal?: AbortSignal;
         idempotencyKey?: string;
+        authorizeDispatch?: () => Promise<boolean>;
         isDispatchAuthorized: () => boolean;
         onDispatchReady?: (invokeId: string) => void;
       },
     ): Promise<InvokeResult> => {
       const isCurrent = () => resourceBindingIsCurrent() && params.isDispatchAuthorized();
-      if (!isCurrent()) {
+      if (!resourceBindingIsCurrent()) {
         throw new Error("Session computer authority closed before dispatch");
       }
       const command = input.operation === "snapshot" ? "screen.snapshot" : "computer.act";
@@ -331,7 +332,6 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         // Tool construction can also build a schema-only projection. Only an actual
         // operation opens a binding; independent projections never retire the active tool.
         let execution: { logicalId: string; physicalId: string } | undefined;
-        let bindingClosed = false;
         let bindingClosing: Promise<unknown> | undefined;
         const inFlight = new Set<Promise<unknown>>();
         const inputControllers = new Set<AbortController>();
@@ -344,7 +344,7 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
         const assertCurrent = () => {
           if (
             closed ||
-            bindingClosed ||
+            lifetime.signal.aborted ||
             !bindingIsCurrent() ||
             !validateAgentRunDelegatedAuthority(authority)
           ) {
@@ -423,6 +423,9 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
                 timeoutMs: params.timeoutMs,
                 signal: params.signal,
                 idempotencyKey: params.idempotencyKey,
+                ...(params.authorizeDispatch
+                  ? { authorizeDispatch: params.authorizeDispatch }
+                  : {}),
                 isDispatchAuthorized: () => isCurrent() && params.isDispatchAuthorized(),
                 onDispatchReady: params.onDispatchReady,
               });
@@ -474,7 +477,6 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             if (bindingClosing) {
               return bindingClosing;
             }
-            bindingClosed = true;
             lifetime.abort();
             releaseControlListener?.();
             bindingClosing = (async () => {

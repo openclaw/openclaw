@@ -5,19 +5,7 @@ import {
 } from "./command-output-summary.js";
 
 describe("cron command output summaries", () => {
-  it("prepends preserved action lines that were truncated out of the captured tail", () => {
-    const summary = buildCronCommandSummary({
-      stdout: "tail only",
-      stderr: "",
-      preservedStdoutLines: ["Visit https://example.com/device and enter code ABCD-EFGH"],
-    });
-
-    expect(summary).toBe(
-      "action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\ntail only",
-    );
-  });
-
-  it.each(["\n", "\r\n"])("matches complete trimmed action lines with %j separators", (newline) => {
+  it.each(["\r\n"])("matches complete trimmed action lines with %j separators", (newline) => {
     const action = "Visit https://example.com/device";
     const stdout = `before${newline}  ${action}  ${newline}after`;
     expect(

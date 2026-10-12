@@ -18,7 +18,7 @@ export const page = definePage({
     );
   },
   component: () =>
-    import("./channels-page.ts").then(() => ({
+    import("./channels-page.tsx").then(() => ({
       header: true,
       render: () => html`<openclaw-channels-page></openclaw-channels-page>`,
     })),

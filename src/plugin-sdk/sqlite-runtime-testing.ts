@@ -18,8 +18,8 @@ export { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 export { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 export { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 export { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+export { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
 export {
-  appendSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeScope,
 } from "../trajectory/runtime-store.sqlite.js";

@@ -16,10 +16,10 @@ import {
 import {
   listAgentIds,
   resolveConfiguredAgentId,
-  getRuntimeConfig,
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
@@ -123,7 +123,7 @@ async function loadMemoryCommandConfig(
   commandName: string,
   mode?: "enforce_resolved" | "read_only_status",
 ) {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   try {
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,

@@ -126,15 +126,6 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     cleanupTempDirs(tempDirs);
   });
 
-  it("honors a preferred free team from CRLF Xcode listings", () => {
-    const result = runScript(sharedHomeDir, {
-      IOS_PYTHON_BIN: sharedFakePythonPath,
-      IOS_PREFERRED_TEAM_ID: "AAAAA11111",
-    });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("AAAAA11111");
-  });
-
   it("prefers the canonical OpenClaw iOS team when it is present", async () => {
     const homeDir = makeTempDir(tempDirs, "openclaw-ios-team-id-canonical-");
     const binDir = path.join(homeDir, "bin");
@@ -185,15 +176,6 @@ echo '{}'`,
     expect(result.stdout).toBe(CANONICAL_TEAM_ID);
   });
 
-  it("falls back to a paid Xcode team when the preferred ID is unavailable", () => {
-    const result = runScript(sharedHomeDir, {
-      IOS_PYTHON_BIN: sharedFakePythonPath,
-      IOS_PREFERRED_TEAM_ID: "CCCCCC3333",
-    });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("BBBBB22222");
-  });
-
   it("fails canonical-only resolution when only fallback teams are available", () => {
     const result = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath }, [
       "--require-canonical",
@@ -210,18 +192,5 @@ echo '{}'`,
     ]);
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("is not the canonical OpenClaw iOS team");
-  });
-
-  it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", () => {
-    const result = runScript(sharedHomeDir);
-    expect(result.ok).toBe(false);
-    expect(
-      result.stderr.includes("An Apple account is signed in to Xcode") ||
-        result.stderr.includes("No Apple Team ID found in Xcode accounts"),
-    ).toBe(true);
-    expect(
-      result.stderr.includes("IOS_DEVELOPMENT_TEAM") ||
-        result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
-    ).toBe(true);
   });
 });

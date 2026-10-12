@@ -12,8 +12,12 @@ import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
-import { requestPlaceCatalog, requestSessionPlacement } from "./cloud-target.ts";
-import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
+import {
+  readDraftCloudProfiles,
+  type DraftCloudProfile,
+  type DraftEnvironment,
+} from "./discovery.ts";
 import {
   DraftPreferenceState,
   type SubmittedWorktreePreference,
@@ -56,6 +60,8 @@ export type DraftPreferenceOptions = {
 };
 
 type DraftGatewayCallbacks = DraftPreferenceOptions & {
+  // Read apart from the snapshot: the snapshot's place fields depend on this policy.
+  readAgents: () => ApplicationContext["agents"] | undefined;
   requestUpdate: () => void;
   updateComplete: () => Promise<unknown>;
   onInvalidate: (resetHostSelection: boolean, outcome: SubmissionOutcomeReason) => void;
@@ -73,8 +79,6 @@ export class DraftGatewayState {
   }
 
   private cloudProfilesValue: DraftCloudProfile[] = [];
-  private requiredProfileValue: string | undefined;
-  private placementPolicyReadyValue = false;
   private gatewayAuthorityValue = "";
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
@@ -166,24 +170,25 @@ export class DraftGatewayState {
           this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
           this.read().runtimeId,
+          this.placementPolicy(),
         ] as const,
-      task: async (
-        [client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId],
-        { signal },
-      ) => {
+      task: async ([
+        client,
+        _connectionEpoch,
+        canWrite,
+        isAdmin,
+        _recoveryScope,
+        runtimeId,
+        policy,
+      ]) => {
         this.cloudProfileTaskHasClient = client !== null;
-        if (!client) {
+        if (!client || !policy) {
           return initialState;
         }
-        const policy = await requestSessionPlacement(client);
-        signal.throwIfAborted();
-        this.requiredProfileValue = policy.requiredProfile;
-        if (policy.requiredProfile || !canWrite) {
-          return { profiles: policy.profiles, environments: [] };
+        const required = policy.requiredProfile;
+        if (required || !canWrite) {
+          return { profiles: readDraftCloudProfiles(required ? [required] : []), environments: [] };
         }
-        // Local starts need the directive, not optional inventory latency/availability.
-        this.placementPolicyReadyValue = true;
-        this.callbacks.requestUpdate();
         const result = await requestPlaceCatalog(client, runtimeId);
         return {
           ...result,
@@ -195,8 +200,6 @@ export class DraftGatewayState {
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
         this.cloudProfilesReadyValue = true;
-        // Required starts need their profiles before an accepted cold Send can resume.
-        this.placementPolicyReadyValue = true;
       },
       onError: () => {
         // A failed refresh cannot invalidate this Gateway's last successful place catalog.
@@ -216,12 +219,19 @@ export class DraftGatewayState {
     return this.cloudProfilesValue;
   }
 
+  /** The agent roster carries the policy, so it needs no request or wait of its own. */
+  private placementPolicy() {
+    return this.callbacks.readAgents()?.state.agentsList?.sessionPlacement;
+  }
+
   get requiredProfile(): string | undefined {
-    return this.requiredProfileValue;
+    return this.placementPolicy()?.requiredProfile?.id;
   }
 
   get placementPolicyReady(): boolean {
-    return this.placementPolicyReadyValue;
+    const policy = this.placementPolicy();
+    // Required starts need their profile applied before an accepted cold Send can resume.
+    return policy !== undefined && (!policy.requiredProfile || this.cloudProfilesReadyValue);
   }
 
   get environments(): readonly DraftEnvironment[] | null {
@@ -306,6 +316,12 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.cloudProfileRetryTimer);
     this.cloudProfileRetryTimer = undefined;
     return this.cloudProfileTask.run();
+  }
+
+  /** A missing required worker is a policy fact, so Retry rereads the roster that owns it. */
+  async retryRequiredPlacement(): Promise<void> {
+    await this.callbacks.readAgents()?.refreshList();
+    await this.refreshCloudProfiles();
   }
 
   synchronize(gateway: ApplicationContext["gateway"]) {
@@ -410,8 +426,6 @@ export class DraftGatewayState {
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
-    this.requiredProfileValue = undefined;
-    this.placementPolicyReadyValue = false;
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
       this.environmentsValue = null;
@@ -586,8 +600,6 @@ export class DraftGatewayState {
     this.stopPreferences = undefined;
     this.identityPreferences = undefined;
     this.cloudProfilesValue = [];
-    this.requiredProfileValue = undefined;
-    this.placementPolicyReadyValue = false;
     this.cloudProfilesReadyValue = false;
     this.environmentsValue = null;
     this.cloudProfileRefresh = null;

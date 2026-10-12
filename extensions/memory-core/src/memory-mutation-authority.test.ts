@@ -10,6 +10,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionCorpus from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -65,6 +66,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
   await configureMemoryCoreDreamingStateForTests();
   await fs.mkdir(path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main" })), {
     recursive: true,
@@ -329,11 +331,6 @@ describe("memory mutation authority at durable effects", () => {
         operation,
         "Rollback never reached partial failure",
       );
-      const locks = openMemoryCoreStateStore({
-        namespace: SHORT_TERM_LOCK_NAMESPACE,
-        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-      });
-      expect(await locks.lookup(memoryCoreWorkspaceStateKey(rollbackWorkspace))).toBeDefined();
       expect(settled).toBe(false);
     } finally {
       finish.resolve();

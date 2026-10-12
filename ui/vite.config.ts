@@ -6,7 +6,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
-import solid from "@solidjs/vite-plugin";
 import { gzip } from "pako";
 import {
   runnerImport,
@@ -14,7 +13,6 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
-import type { ViteUserConfig } from "vitest/config";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
@@ -34,6 +32,7 @@ import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
@@ -45,67 +44,6 @@ const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 
-export function controlUiSolidPlugin(): Plugin[] {
-  let testMode = false;
-  return [
-    ...solid({
-      include: /\.[jt]sx$/u,
-      // Skip automatic page-wide Chrome performance tracks; keep Solid's dev runtime.
-      performanceTracks: false,
-    }),
-    {
-      name: "openclaw:solid-test-runtime",
-      enforce: "post",
-      apply(config, env) {
-        return env.command === "serve" && env.mode === "test" && config.test !== undefined;
-      },
-      config(_config, env): ViteUserConfig | undefined {
-        testMode = env.mode === "test";
-        if (!testMode) {
-          return undefined;
-        }
-        return {
-          resolve: {
-            alias: [
-              {
-                find: /^solid-js$/u,
-                replacement: path.join(path.dirname(require.resolve("solid-js")), "solid.dev.js"),
-              },
-              {
-                find: /^@solidjs\/web$/u,
-                replacement: path.join(path.dirname(require.resolve("@solidjs/web")), "web.dev.js"),
-              },
-            ],
-          },
-          test: {
-            server: {
-              deps: {
-                // Native imports and optimized browser imports must share one owner graph.
-                inline: [
-                  "solid-js",
-                  "@solidjs/signals",
-                  "@solidjs/web",
-                  "@solidjs/testing-library",
-                ],
-              },
-            },
-          },
-        };
-      },
-      configEnvironment(name, config) {
-        if (testMode && (name === "ssr" || config.consumer === "server") && config.resolve) {
-          // Node-pragmas share this server; only Solid should use its browser runtime.
-          config.resolve.conditions = config.resolve.conditions?.filter(
-            (condition) => condition !== "browser",
-          );
-          config.resolve.externalConditions = config.resolve.externalConditions?.filter(
-            (condition) => condition !== "browser",
-          );
-        }
-      },
-    },
-  ];
-}
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
@@ -495,33 +433,6 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
-function normalizeViteImporterPath(importer: string): string {
-  return path.normalize(importer.replace(/[?#].*$/u, ""));
-}
-
-export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
-  const sharedRedactImporters = new Set([
-    path.join(repoRoot, "src/agents/tool-display-common.ts"),
-    path.join(repoRoot, "src/agents/tool-display-exec.ts"),
-    path.join(repoRoot, "src/agents/tool-display.ts"),
-  ]);
-  return {
-    name: "control-ui-browser-only-shared-module-aliases",
-    enforce: "pre",
-    resolveId(source, importer) {
-      if (
-        source === "../logging/redact.js" &&
-        importer &&
-        sharedRedactImporters.has(normalizeViteImporterPath(importer))
-      ) {
-        return browserRedactPath;
-      }
-      return null;
-    },
-  };
-}
-
 function controlUiBuildOutputPlugin(buildId: string): Plugin {
   let publicAssets: string[] = [];
   let cacheId: string | undefined;
@@ -719,10 +630,17 @@ export default function controlUiViteConfig(
     if (context.hostType !== "js") {
       return pending;
     }
-    // The executing importer has already loaded its direct static JS imports.
+    // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = staticImports.get(context.hostId);
-    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(context.hostId) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return pending.filter((dep) => !loaded.has(dep));
   };
   return {
     base,
@@ -802,7 +720,6 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
-      controlUiBrowserOnlySharedModuleAliases(),
       controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {

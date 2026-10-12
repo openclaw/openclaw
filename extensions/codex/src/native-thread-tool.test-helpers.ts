@@ -23,11 +23,14 @@ export function wrapCodexNativeThreadToolRequest(
   client: CodexAppServerClient,
 ): typeof codexControlRequest {
   return async (...args: Parameters<typeof codexControlRequest>) => {
-    const response = await request(...args);
     const options = args[3];
+    await options?.assertCurrentAsync?.();
+    options?.assertCurrent?.();
+    const response = await request(...args);
     if (options?.onResponse) {
       await options.onResponse(response, client, {
         assertCurrent: options.assertCurrent ?? (() => undefined),
+        assertCurrentAsync: options.assertCurrentAsync,
       });
     } else {
       options?.assertCurrent?.();

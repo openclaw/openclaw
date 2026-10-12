@@ -253,10 +253,16 @@ describe("canonical main-key policy facts", () => {
       const filename = path.join(tempDirs.make("canonical-policy-publication-"), "agent.sqlite");
       const { db, database, read } = fixture(filename);
       setCanonicalSqliteSessionMainKey(database, "previous");
+      const publish = databaseAdmissions.publishSqliteDatabaseAdmission;
+      let injected = false;
       const publication = vi
         .spyOn(databaseAdmissions, "publishSqliteDatabaseAdmission")
-        .mockImplementationOnce(() => {
-          throw new Error("publication failed");
+        .mockImplementation((...args) => {
+          if (!injected && args[1].name === "canonical-session-main-key-write") {
+            injected = true;
+            throw new Error("publication failed");
+          }
+          return publish(...args);
         });
       const write = () => setCanonicalSqliteSessionMainKey(database, "committed");
       try {
@@ -270,6 +276,7 @@ describe("canonical main-key policy facts", () => {
       } finally {
         publication.mockRestore();
       }
+      expect(injected).toBe(true);
       expect(db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get()).toEqual({
         main_key: "committed",
       });

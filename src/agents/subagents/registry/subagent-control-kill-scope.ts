@@ -9,12 +9,14 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureSubagentControllerOwnsRun,
@@ -23,6 +25,7 @@ import {
 } from "./subagent-control-scope.js";
 import {
   prepareSubagentKillSession,
+  prepareSubagentKillSessionReads,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import type {
@@ -106,6 +109,7 @@ export async function withSubagentKillScope<T>(
     assertCurrent,
   };
   const selected = new Map<string, Set<string | undefined>>();
+  const unresolvedRunIds = new Set<string>();
   let selectedCount = 0;
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const retirements: Array<ReturnType<typeof subagentRuns.captureRetirement>> = [];
@@ -133,12 +137,49 @@ export async function withSubagentKillScope<T>(
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
       assertCurrent();
-      const childOwner = parseAgentSessionKey(snapshot.childSessionKey)
-        ? undefined
-        : (snapshot.childAgentId ?? resolveSubagentRequesterAgentId(params.cfg, snapshot));
-      const entry = getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
+      if (
+        parent &&
+        resolveSubagentChildAuthority(parent.entry).status === "legacy-unverified" &&
+        !isCurrentSubagentRun(parent.entry, params.cfg) &&
+        snapshot.requesterTurnRunId !== parent.entry.runId
+      ) {
+        continue;
+      }
+      const authority = resolveSubagentChildAuthority(snapshot);
+      if (authority.status === "mismatch") {
+        if (
+          !unresolvedRunIds.has(snapshot.runId) &&
+          (!controller ||
+            !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: snapshot })) &&
+          ownsRoot?.(snapshot) !== false &&
+          parent?.canTraverse(false) !== false
+        ) {
+          unresolvedRunIds.add(snapshot.runId);
+          trees.push({
+            entry: snapshot,
+            isCurrent: () => false,
+            ownsRun: () => isSameSubagentRunOwner(subagentRuns.get(snapshot.runId), snapshot),
+            canTraverse: () => false,
+            prepareRead: () => undefined,
+            children: [],
+            errors: new Set([authority.error]),
+            discoveryFailed: true,
+          });
+        }
+        continue;
+      }
+      const childOwner = resolveSubagentChildAgentId(snapshot);
+      const legacy = authority.status === "legacy-unverified";
+      const entry = legacy
+        ? subagentRuns.get(snapshot.runId)
+        : getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
       const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
-      if (!entry || !isSameSubagentRunOwner(entry, snapshot) || selectedForChild.has(childOwner)) {
+      const selectedOwner = legacy ? `${childOwner}\0${snapshot.runId}` : childOwner;
+      if (
+        !entry ||
+        !isSameSubagentRunOwner(entry, snapshot) ||
+        selectedForChild.has(selectedOwner)
+      ) {
         continue;
       }
       const ownerCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
@@ -147,10 +188,10 @@ export async function withSubagentKillScope<T>(
         ownsRoot?.(candidate) !== false &&
         (!controller ||
           !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
-      if (!ownerCurrent(entry, false) || !isCurrentSubagentRun(entry, params.cfg)) {
+      if (!ownerCurrent(entry, false) || (!legacy && !isCurrentSubagentRun(entry, params.cfg))) {
         continue;
       }
-      selectedForChild.add(childOwner);
+      selectedForChild.add(selectedOwner);
       selected.set(entry.childSessionKey, selectedForChild);
       selectedCount += 1;
       const errors = new Set<string>();
@@ -172,7 +213,7 @@ export async function withSubagentKillScope<T>(
       const { childSessionKey } = entry;
       const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
       const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
-        isSameSubagentRunOwner(latest(), candidate),
+        isSameSubagentRunOwner(legacy ? subagentRuns.get(candidate.runId) : latest(), candidate),
       );
       retirements.push(retirement);
       const selectedEntry = () => retirement.observation.entry;
@@ -195,7 +236,7 @@ export async function withSubagentKillScope<T>(
           isSameSubagentRunOwner(current, entry) &&
           ownsRun() &&
           ownerCurrent(current, requirePreparedSession) &&
-          isCurrentSubagentRun(current, params.cfg) &&
+          (legacy || isCurrentSubagentRun(current, params.cfg)) &&
           (!requirePreparedSession || ownsSessionIncarnation())
         );
       };
@@ -206,55 +247,17 @@ export async function withSubagentKillScope<T>(
         }
         const replacement = latest();
         return (
-          (isSameSubagentRunOwner(replacement, current) ||
+          (legacy ||
+            isSameSubagentRunOwner(replacement, current) ||
             (retirement.observation.state === "retired" &&
               (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&
           (!requirePreparedSession || ownsSessionIncarnation())
         );
       };
-      const prepareRead = (): Promise<void> | undefined => {
-        const failures: unknown[] = [];
-        const publications = [parent?.prepareRead, session?.prepareRead].flatMap((prepare) => {
-          try {
-            const publication = prepare?.();
-            return publication ? [publication] : [];
-          } catch (error) {
-            // The synchronous ownership check handles a known-revoked generation.
-            if (!isSessionDeliveryGenerationRevokedError(error)) {
-              failures.push(error);
-            }
-            return [];
-          }
-        });
-        const throwFailures = () => {
-          if (failures.length === 1) {
-            throw failures[0];
-          }
-          if (failures.length > 1) {
-            throw new AggregateError(failures, "Subagent publication readiness failed");
-          }
-        };
-        if (publications.length === 0) {
-          throwFailures();
-          return undefined;
-        }
-        return Promise.allSettled(publications).then((results) => {
-          try {
-            assertSubagentRegistryWriteSourceCurrent(stateContext);
-          } catch (error) {
-            failures.push(error);
-          }
-          for (const result of results) {
-            if (
-              result.status === "rejected" &&
-              !isSessionDeliveryGenerationRevokedError(result.reason)
-            ) {
-              failures.push(result.reason);
-            }
-          }
-          throwFailures();
-        });
-      };
+      const prepareRead = () =>
+        prepareSubagentKillSessionReads([parent?.prepareRead, session?.prepareRead], () =>
+          assertSubagentRegistryWriteSourceCurrent(stateContext),
+        );
       const tree: KillTree = {
         get entry() {
           return selectedEntry() ?? entry;
@@ -282,6 +285,8 @@ export async function withSubagentKillScope<T>(
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
               selectedRun.execution.transcriptTarget,
               selectedRun.childAgentId,
+              selectedRun.childSessionIdentity,
+              selectedRun,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -307,7 +312,11 @@ export async function withSubagentKillScope<T>(
       const controller = controllerFor(tree);
       capture(
         pending,
-        listRunsForControllerFromRuns(resident, controller.controllerSessionKey),
+        listRunsForControllerFromRuns(
+          resident,
+          controller.controllerSessionKey,
+          controller.controllerAgentId,
+        ),
         tree.children,
         controller,
         tree,
@@ -376,7 +385,11 @@ export async function withSubagentKillScope<T>(
             sessionKeys: [controller.controllerSessionKey],
           }),
           (_selection, runs) =>
-            listRunsForControllerFromRuns(new Map(runs), controller.controllerSessionKey),
+            listRunsForControllerFromRuns(
+              new Map(runs),
+              controller.controllerSessionKey,
+              controller.controllerAgentId,
+            ),
           { sessionKeys: [controller.controllerSessionKey], descendants: false },
         );
         assertCurrent();

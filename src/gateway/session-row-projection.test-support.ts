@@ -156,6 +156,9 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    async readLookup() {
+      throw new Error("Indexed lookup requires a real session row projection");
+    },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     observeGeneration() {

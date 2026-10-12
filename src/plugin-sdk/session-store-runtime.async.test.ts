@@ -1,8 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterAll, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   withIncognitoSessionActor,
@@ -11,26 +15,39 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   openIncognitoTestActor,
   useIncognitoActorProbe,
 } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { captureSessionEntryCurrentCheck } from "./session-binding-runtime.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { captureSessionEntryCurrentCheckAsync } from "./session-binding-runtime.js";
 import {
   patchSessionEntry,
   cleanupSessionLifecycleArtifacts,
   getSessionEntry,
   getSessionEntryAsync,
   getSessionEntryByIdAsync,
+  listSessionEntriesAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+  upsertSessionEntry,
 } from "./session-store-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = createTempDirTracker();
 const probe = useIncognitoActorProbe();
 const authority = { assertCurrent() {} };
-afterAll(() => closeOpenClawAgentDatabasesAsync());
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+afterEach(async () => {
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
+});
 
 const completeEntry: InternalSessionEntry = {
   sessionId: "selected",
@@ -51,6 +68,102 @@ const completeEntry: InternalSessionEntry = {
     writerRunId: "synthetic-writer",
   },
 };
+
+it("lists current public metadata off the host after an owner write without creating absent stores", async () => {
+  expectTypeOf<
+    PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]
+  >().parameters.toEqualTypeOf<Parameters<typeof listSessionEntriesAsync>>();
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-list-") };
+  const scope = { agentId: "main", env };
+  const sessionKey = "agent:main:listed";
+  await expect(listSessionEntriesAsync(scope)).resolves.toEqual([]);
+  expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      ...completeEntry,
+      initializationPending: true,
+    },
+  );
+  const read = async () => {
+    const sql = observeHostDataSql();
+    try {
+      const entries = await listSessionEntriesAsync(scope);
+      expect(sql.queries).toEqual([]);
+      return entries;
+    } finally {
+      sql.restore();
+    }
+  };
+  const before = await read();
+  expect(before).toEqual([
+    {
+      sessionKey,
+      entry: expect.objectContaining({
+        sessionId: "selected",
+        initializationPending: true,
+        pluginExtensions: completeEntry.pluginExtensions,
+      }),
+    },
+  ]);
+  expect(before[0]?.entry).not.toHaveProperty("pendingProjectGitUrl");
+  expect(before[0]?.entry).not.toHaveProperty("skillsSnapshot");
+
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "replacement", updatedAt: 2, displayName: "Replacement" },
+  });
+  expect(await read()).toEqual([
+    {
+      sessionKey,
+      entry: expect.objectContaining({ sessionId: "replacement", displayName: "Replacement" }),
+    },
+  ]);
+  expect(before[0]?.entry.sessionId).toBe("selected");
+});
+
+it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-watermark-") };
+  const scope = { agentId: "main", env, sessionKey: "agent:main:telegram:group:room" };
+  const key = resolveAmbientTranscriptWatermarkKey({
+    channel: "telegram",
+    accountId: "default",
+    conversationId: "room",
+  });
+  let entry = {
+    sessionId: "before-reset",
+    updatedAt: 1,
+    ambientTranscriptWatermarks: {
+      [key]: { sessionId: "before-reset", messageId: "11", updatedAt: 1 },
+    },
+  };
+  const read = async () => {
+    const sql = observeHostDataSql();
+    try {
+      const watermark = await readAmbientTranscriptWatermarkAsync({ ...scope, key });
+      expect(sql.queries).toEqual([]);
+      return watermark;
+    } finally {
+      sql.restore();
+    }
+  };
+  await upsertSessionEntry({ ...scope, entry });
+  expect(await read()).toMatchObject({ messageId: "11" });
+
+  entry = {
+    ...entry,
+    ambientTranscriptWatermarks: {
+      [key]: { sessionId: "before-reset", messageId: "12", updatedAt: 2 },
+    },
+  };
+  await upsertSessionEntry({ ...scope, entry });
+  expect(await read()).toMatchObject({ messageId: "12" });
+
+  await upsertSessionEntry({ ...scope, entry: { ...entry, sessionId: "after-reset" } });
+  expect(await read()).toBeUndefined();
+});
 
 it.each(["durable", "incognito"] as const)(
   "selects the most recently updated duplicate ID only when requested in %s sessions",
@@ -238,9 +351,9 @@ it("keeps unbound incognito host-owned and distinguishes selected absence from a
     { kind: "absent", agentId: "main", env: absentEnv, authority },
     async () => {
       await expect(getSessionEntryAsync({ ...scope, env: absentEnv })).resolves.toBeUndefined();
-      const absent = await captureSessionEntryCurrentCheck({ ...scope, env: absentEnv });
+      const absent = await captureSessionEntryCurrentCheckAsync({ ...scope, env: absentEnv });
       expect(absent.entry).toBeUndefined();
-      expect(absent.isCurrent()).toBe(true);
+      await expect(absent.isCurrent()).resolves.toBe(true);
       await expect(
         getSessionEntryByIdAsync({ agentId: "main", sessionId: "missing" }),
       ).resolves.toBeUndefined();
@@ -295,24 +408,24 @@ it("keeps exact actor policy guards current without treating unrelated metadata 
     await withIncognitoSessionActor(actor, async () => {
       const sql = observeHostDataSql();
       try {
-        const prepared = await captureSessionEntryCurrentCheck({
+        const prepared = await captureSessionEntryCurrentCheckAsync({
           ...target,
           fields: ["execHost", "execNode"],
         });
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         expect(prepared.entry).toMatchObject({ execHost: "node", execNode: "original-node" });
         expect(prepared.entry).not.toHaveProperty("cliHistoryBoundary");
         expect(prepared.entry).not.toHaveProperty("pendingProjectGitUrl");
         // Returned metadata is caller-owned, not the retained authorization predicate.
         prepared.entry!.execNode = "edited-return-value";
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         await patchSessionEntry({ ...target, update: () => ({ displayName: "unrelated" }) });
-        expect(prepared.isCurrent()).toBe(true);
+        await expect(prepared.isCurrent()).resolves.toBe(true);
         await patchSessionEntry({ ...target, update: () => ({ execNode: "replacement-node" }) });
-        expect(prepared.isCurrent()).toBe(false);
-        expect(prepared.assertCurrent).toThrow("selected session changed");
+        await expect(prepared.isCurrent()).resolves.toBe(false);
+        await expect(prepared.assertCurrent()).rejects.toThrow("selected session changed");
         await expect(
-          captureSessionEntryCurrentCheck({
+          captureSessionEntryCurrentCheckAsync({
             ...target,
             fields: ["execNode"],
             expected: { sessionId: "selected", execNode: "original-node" },

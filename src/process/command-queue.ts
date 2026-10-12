@@ -33,6 +33,7 @@ import type {
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
 } from "./command-queue.types.js";
+import { isExpectedRunCancellation } from "./expected-run-cancellation.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -101,7 +102,10 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 }
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
-  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+  return (
+    (err instanceof Error && err.name === "LiveSessionModelSwitchError") ||
+    isExpectedRunCancellation(err)
+  );
 }
 
 function isQuietProbeLane(lane: string): boolean {
@@ -151,6 +155,7 @@ function retireIdleScopedCommandLane(state: LaneState): void {
       (state.maxConcurrent !== 1 ||
         (!state.lane.startsWith("session:") &&
           !state.lane.startsWith("nested:") &&
+          !state.lane.startsWith("cli:") &&
           !state.lane.startsWith("context-engine-turn-maintenance:"))))
   ) {
     return;

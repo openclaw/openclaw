@@ -23,7 +23,7 @@ import type {
   TranscriptReportSelection,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
-import type { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.js";
+import type { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.worker.js";
 import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import {
   isIncognitoManagerCommand,

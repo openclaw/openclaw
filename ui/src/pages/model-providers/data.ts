@@ -7,6 +7,7 @@ import type {
 } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
+  AgentsListResult,
   FastMode,
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
@@ -15,12 +16,15 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -543,4 +547,73 @@ export function buildUnconfiguredProviderOptions(
     }
   }
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+/** Assembles admitted snapshots for the Models page without owning state or effects. */
+export function buildModelProviderPresentation(params: {
+  configObject: Record<string, unknown> | null;
+  behavior: ModelBehaviorConfig;
+  catalog: ModelCatalogPresentation;
+  data: Omit<
+    ModelProviderCardsInput,
+    "models" | "configProviders" | "pendingProviders" | "providerUsage"
+  > & {
+    providerUsage: ProviderUsageRequestResult | null;
+  };
+  agentsState: { agentsList: AgentsListResult | null; agentsError: string | null };
+  agentId: string;
+  defaultsDraft: DefaultsDraft | null;
+}) {
+  const { catalog, data, agentsState, agentId } = params;
+  const agents = agentsState.agentsList?.agents ?? [];
+  const noSelectableAgents =
+    agentsState.agentsList !== null && listSelectableAgents(agents).length === 0;
+  const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
+  const selected = agents.find((agent) => normalizeAgentId(agent.id) === agentId);
+  const config = readModelProviderConfig(params.configObject);
+  const configuredDefaults = { ...config.defaults, ...params.behavior };
+  const { defaults, configuredModels } = resolveDefaultModelPresentation(
+    catalog,
+    configuredDefaults,
+    params.defaultsDraft,
+  );
+  const cards = buildModelProviderCards({
+    ...data,
+    models: catalog.models,
+    providerOutcomes: catalog.hasSnapshot
+      ? (catalog.providerOutcomes ?? [])
+      : data.providerOutcomes,
+    pendingProviders: catalog.pendingProviders,
+    providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
+    configProviders: config.providers,
+  });
+  const configuredProviderIds = new Set([
+    ...config.providers.map(({ key }) => key),
+    ...(data.authStatus?.providers
+      .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
+      .map((provider) => provider.provider) ?? []),
+  ]);
+  return {
+    configuredDefaults,
+    cards,
+    noSelectableAgents,
+    rosterError,
+    agentLabel: selected ? normalizeAgentLabel(selected) : agentId,
+    values: {
+      configuredModels,
+      defaultModels: defaults,
+      decisionModels: catalog.decisionModels ?? [],
+      authStatus: data.authStatus,
+      automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityRuntime: catalog.defaultModels?.utilityRuntime,
+      thinkingLevel: defaults.thinkingLevel,
+      thinkingOverridden: defaults.thinkingOverridden,
+      fastMode: defaults.fastMode,
+      fastModeOverridden: defaults.fastModeOverridden,
+      unconfiguredProviders: buildUnconfiguredProviderOptions(
+        data.authStatus?.providerCapabilities,
+        configuredProviderIds,
+      ),
+    },
+  };
 }

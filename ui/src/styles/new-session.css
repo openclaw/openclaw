@@ -74,6 +74,17 @@ openclaw-new-session-page {
   color: var(--accent);
 }
 
+.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
+  width: auto;
+  padding-inline: 10px;
+  gap: 7px;
+}
+
+.new-session-page__incognito-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
   top: var(--openclaw-native-titlebar-height, 52px);
 }
@@ -174,9 +185,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   pointer-events: none;
   transform: translateY(-2px);
   visibility: hidden;
-  white-space: nowrap;
+  white-space: normal;
   transition:
-    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
     margin 160ms cubic-bezier(0.2, 0, 0, 1),
     opacity 120ms ease-out,
     filter 120ms ease-out,
@@ -185,7 +195,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__incognito-notice--visible {
-  max-height: 20px;
+  max-height: none;
   margin-top: 0;
   opacity: 1;
   filter: blur(0);
@@ -353,7 +363,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger:hover:not(:disabled),
-.new-session-page__trigger[aria-expanded="true"] {
+.new-session-page__trigger[aria-expanded="true"],
+.new-session-page__browser-nav:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
@@ -1021,11 +1032,6 @@ wa-popover.new-session-page__where-popover {
   cursor: var(--cursor-action);
 }
 
-.new-session-page__browser-nav:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
 .new-session-page__browser-nav:disabled {
   opacity: 0.4;
   cursor: default;
@@ -1437,16 +1443,11 @@ wa-popover.new-session-page__where-popover {
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
-    max-height: 0;
     max-width: var(--chat-thread-max-width, 48rem);
     margin-inline: auto;
     padding-inline: 0;
     white-space: normal;
     text-align: left;
-  }
-
-  .new-session-page__incognito-notice--visible {
-    max-height: 48px;
   }
 }
 

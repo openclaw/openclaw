@@ -84,7 +84,9 @@ Cancelled and interrupted inputs are retained for inspection and never run
 automatically. Built-in and CLI agent turns also receive bounded text previews of recent
 visible interrupted inputs as historical context, even when session-history tools
 are unavailable. These previews do not consume input, restore old permissions, or
-resume work without a current request. Queued, cancelled, hidden, and
+resume work without a current request. The preview tells the agent to resume them
+only when the user asks to continue them, and otherwise answer the current request.
+Queued, cancelled, hidden, and
 context-excluded inputs are not included. Use `pendingBefore` with the page's
 `nextBefore` to read older inputs; `limit` bounds both pages. Pending previews share a 4 KB budget within
 the overall 80 KB response budget, so use a smaller `limit` for richer previews.
@@ -98,9 +100,9 @@ retained inputs were executable. Pending metadata neither authorizes replay nor
 blocks unrelated work. Execution still requires current admission and exact
 input custody.
 
-The returned view is intentionally bounded and redacted:
+The returned view is intentionally bounded:
 
-- credential/token-like text is redacted even when general-purpose log redaction is disabled
+- text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
 - long text blocks are truncated to 4000 characters, with a truncation marker appended
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
@@ -112,7 +114,7 @@ Use the returned **session key** (like `"main"`) with `sessions_history`, `sessi
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
-Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering, snippet redaction, and output bounds match the history boundary.
+Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering and output bounds match the history boundary.
 
 ## Managing session settings and groups
 
@@ -288,6 +290,9 @@ and are not restart-durable. They produce no separate completion turn. Use
 If an idempotent retry finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
 installing a watch. Inspect that run before retrying.
+
+Delegated turns write to the target session's transcript, including replies and workspace
+conflict reports from device-hosted workers. The requesting session keeps its own transcript.
 
 Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through

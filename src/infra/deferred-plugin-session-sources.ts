@@ -1,13 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  resolveTrajectoryPath,
-  resolveTrajectoryPointerPath,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
@@ -37,13 +32,11 @@ import {
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";
 import {
-  canonicalMigrationFilePath,
   filterRestoreManifestTargets,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
 } from "./session-sqlite-migration-manifest.js";
-import type { TranscriptFileFingerprint } from "./session-sqlite-migration-readers.js";
 import {
   parseSessionImportReceipt,
   supersedeDeferredPluginSessionImport,
@@ -79,42 +72,6 @@ export type SessionSourceVerification = Map<
   }
 >;
 const RECEIPT_KIND = "deferred-plugin-session-import";
-
-/** Capture originals before deferral; settlement may only archive these verified identities. */
-export function captureDeferredPluginSessionSources(params: {
-  storePath: string;
-  indexIdentity?: MigrationArtifactIdentity;
-  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
-  unreferencedJsonlFiles: readonly string[];
-  referencedPaths?: ReadonlySet<string>;
-}): DeferredPluginSessionImport["sources"] {
-  const sources = new Map<string, MigrationArtifactIdentity>(
-    params.indexIdentity ? [[path.resolve(params.storePath), params.indexIdentity]] : [],
-  );
-  for (const file of params.unreferencedJsonlFiles) {
-    if (!params.referencedPaths?.has(canonicalMigrationFilePath(file))) {
-      sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
-    }
-  }
-  for (const record of params.records) {
-    if (!record.transcriptPath || !record.sourceFingerprint) {
-      continue;
-    }
-    sources.set(
-      path.resolve(record.transcriptPath),
-      readMigrationArtifactIdentity(record.transcriptPath, 1n, record.sourceFingerprint),
-    );
-    for (const file of [
-      resolveTrajectoryPath(record.transcriptPath),
-      resolveTrajectoryPointerPath(record.transcriptPath),
-    ]) {
-      if (file && fs.existsSync(file)) {
-        sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
-      }
-    }
-  }
-  return [...sources].map(([sourcePath, identity]) => ({ path: sourcePath, identity }));
-}
 
 export function deferredPluginSessionStoreIds(params: {
   target: { agentId: string; storePath: string };
@@ -426,16 +383,44 @@ export function readStaleDeferredPluginSessionImport(
 export function readDeferredPluginSessionImportReceipt(
   params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & { database?: DatabaseSync },
 ) {
+  const receipt = readSessionImportReceipt(params);
+  return receipt?.removedSource ? undefined : receipt;
+}
+
+/** Archive retirement ends active source custody, not the canonical import's no-replay evidence. */
+function readSessionImportReceipt(
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & { database?: DatabaseSync },
+) {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
-  const read = (db: DatabaseSync) => {
-    const receipt = tableExists(db, "migration_sources")
+  const read = (db: DatabaseSync) =>
+    tableExists(db, "migration_sources")
       ? readLegacyMigrationReceiptFromDatabase(db, sourceKey(target))
       : undefined;
-    return receipt?.removedSource ? undefined : receipt;
-  };
   return params.database
     ? read(params.database)
     : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db), { env: params.env });
+}
+
+/** Resolve the verified live or archived legacy index whose canonical import is still bound. */
+export function resolveDeferredPluginSessionStoreSource(params: {
+  target: LegacySessionStoreTarget;
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const { path: sqlitePath } = resolveSqliteTargetFromSessionStorePath(params.target.storePath, {
+    agentId: params.target.agentId,
+    env: params.env,
+  });
+  const receipt = readSessionImportReceipt({ ...params, sqlitePath });
+  const binding = receipt && parseSessionImportReceipt({ sqlitePath }, receipt);
+  const index =
+    binding && !binding.stale
+      ? binding.recorded.sources.find(
+          (source) => source.path === path.resolve(params.target.storePath),
+        )
+      : undefined;
+  return index
+    ? resolveVerifiedSessionSource(index, { ...params.target, sqlitePath }, params.env)
+    : undefined;
 }
 
 /** Rebuild derived evidence from proven original index values or verified canonical transcripts. */
@@ -662,10 +647,8 @@ export function prepareDeferredPluginSessionImportReader(
     if (!prepared || !isDeepStrictEqual(prepared.receipt, receipt)) {
       prepared = {
         receipt,
-        binding:
-          receipt && !receipt.removedSource
-            ? parseSessionImportReceipt(target, receipt)
-            : undefined,
+        // Retired source custody still certifies the canonical import's no-replay binding.
+        binding: receipt ? parseSessionImportReceipt(target, receipt) : undefined,
       };
       verified.set(key, prepared);
     }

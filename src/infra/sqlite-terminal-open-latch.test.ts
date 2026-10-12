@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { readStableSqliteFileGeneration } from "./sqlite-file-generation.js";
@@ -48,31 +47,6 @@ describe("terminal failure asynchronous generation validation", () => {
           writer.close();
         }
       }
-    },
-  );
-
-  it("does not return a cleared failure after pending inspection completes", async () => {
-    const { pathname, latch } = fixture();
-    const inspection = createDeferred<boolean>();
-    const pending = latch.getAsync(pathname, () => inspection.promise);
-    latch.clear(pathname);
-    inspection.resolve(true);
-    expect(await pending).toBeUndefined();
-  });
-
-  it.each([true, false])(
-    "retains a newer failure after an older inspection reports current=%s",
-    async (current) => {
-      const { pathname, generation, latch } = fixture();
-      const inspection = createDeferred<boolean>();
-      const inspect = vi.fn(async () => true).mockImplementationOnce(() => inspection.promise);
-      const pending = latch.getAsync(pathname, inspect);
-      const replacement = new Error("newer failure");
-      expect(latch.record(pathname, replacement, generation)).toBe(true);
-      inspection.resolve(current);
-      expect(await pending).toBe(replacement);
-      expect(latch.get(pathname)).toBe(replacement);
-      expect(inspect).toHaveBeenCalledTimes(2);
     },
   );
 

@@ -176,7 +176,7 @@ describe("standalone backup database completeness", () => {
             await expect(
               backupVerifyCommand(createTestRuntime(), { archive: incomplete }),
             ).rejects.toThrow(
-              `Backup lacks verified canonical SQLite coverage for ${databasePaths[index < databasePaths.length ? index : 0]}.`,
+              `Backup lacks verified SQLite database coverage for ${databasePaths[index < databasePaths.length ? index : 0]}.`,
             );
           }
           for (const [index, writer] of writers.entries()) {

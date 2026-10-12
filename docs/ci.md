@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -19,6 +23,9 @@ would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing
 
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
+
+Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
+[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
@@ -28,15 +35,21 @@ Default fork first attempts run their existing core lint stripes on Blacksmith16
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-First-attempt PR Node matrices let the scoped monitor classify failures before
-cancelling eligible same-repository work. Fork monitoring is read-only. Exact
-known hourly-main test and supported static failures can remain advisory when the PR leaves their
-subjects unchanged and all remaining checks finish. Canonical PR reruns let every
-Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
-run to keep its complete matrix running after a failure. Native matrix fail-fast
-applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
-[failure cancellation](/ci/pipeline#fail-fast-order).
+PR jobs run to completion after a sibling failure. `pr-failure-report` compares
+every failed or timed-out job with the newest completed scheduled main CI run
+and publishes a **pre-existing**, **new**, or **unknown** classification in its
+summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
+matched signatures or job-name-only matches. The existing known-main-red
+allowance and gate result stay unchanged. Detected build-verifier or lint-mode
+scope differences are **unknown**; other reasons say when selected scope was
+not compared. See
+[job ordering and failure reporting](/ci/pipeline#fail-fast-order).
+
+Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
+`checks-ui-e2e` shards (Control UI and browser extension), and every
+`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
+same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -93,13 +106,20 @@ The extension package boundary row has a 30-minute job budget for SDK preparatio
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
 command alone; one completed compile and canary but exceeded the former
-20-minute whole-job deadline. Other additional-check rows retain 20 minutes.
+20-minute whole-job deadline.
 Optional hybrid hosted overflow retains this row on Blacksmith: compiled receipt
 archives include checkout-specific paths and links, and hosted cold runs exceeded
 22 minutes. Explicit hosted overrides, retry and trust fallbacks remain available.
 Other jobs keep their existing admission thresholds; the hosted row total counts
 only the rows actually offloaded. Compiler concurrency, coverage and cache guards
 are unchanged.
+
+The Plugin SDK API diff row also has a 30-minute job budget. Two hosted runs took
+722 and 725 seconds to render the base revision, then reached the former
+20-minute deadline while rendering the candidate. The budget allows both full
+revision renders plus setup and cleanup. Rendering stays serial below eight CPUs
+or 24 GiB of memory; larger hosts retain two render workers. Other
+additional-check rows retain 20 minutes.
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
 
@@ -190,6 +210,11 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
+Main runs UI on Node, so a PR changing the runtime owner
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
+Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still
@@ -297,7 +322,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 
 | Page                                                           | Read it when                                                                                                        |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| [CI pipeline jobs](/ci/pipeline)                               | The job table, the fail-fast order, and the Control UI size budgets.                                                |
+| [CI pipeline jobs](/ci/pipeline)                               | The job table, job ordering and failure reporting, and the Control UI size budgets.                                 |
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
@@ -312,7 +337,7 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/ci#pipeline-overview` still resolves. Each entry points at the page that now holds the content.
 
 - <a id="pipeline-overview" />[Pipeline overview](/ci/pipeline#pipeline-overview)
-- <a id="fail-fast-order" />[Fail-fast order](/ci/pipeline#fail-fast-order)
+- <a id="fail-fast-order" />[Job ordering and failure reporting](/ci/pipeline#fail-fast-order)
 - <a id="control-ui-size-budgets" />[Control UI size budgets](/ci/pipeline#control-ui-size-budgets)
 - <a id="watching-pull-request-ci" />[Watching pull request CI](/ci/watching-runs#watching-pull-request-ci)
 - <a id="recover-an-existing-pr-run-first" />[Recover an existing PR run first](/ci/watching-runs#recover-an-existing-pr-run-first)

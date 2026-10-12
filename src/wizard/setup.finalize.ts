@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -41,11 +42,7 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import {
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -808,17 +805,20 @@ export async function finalizeSetupWizard(
       const hasKey = keyConfigured || envAvailable;
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
+      const authStore = authProviderId
+        ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
+        : undefined;
       const providerAuthProfileAvailable = authProviderId
         ? hasAuthProfileForProvider({
             provider: authProviderId,
-            agentDir,
+            authStore,
           })
         : false;
       const oauthAuthProfileAvailable =
         authProviderId && providerAuthProfileAvailable
           ? hasAuthProfileForProvider({
               provider: authProviderId,
-              agentDir,
+              authStore,
               type: "oauth",
             })
           : false;
@@ -975,26 +975,16 @@ export async function finalizeSetupWizard(
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
+          // Setup owns this temporary Gateway; settle it before returning or
+          // propagating a TUI failure to the CLI finalizer.
+          await closeSessionGatewayForOnboarding({
+            sessionGateway,
+            runtime,
+            reason: "onboarding tui exited",
           });
-          try {
-            await closeSessionGatewayForOnboarding({
-              sessionGateway,
-              runtime,
-              reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            clearTimeout(cleanupExitTimer);
-          }
+          sessionGateway = undefined;
         }
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 

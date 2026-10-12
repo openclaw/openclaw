@@ -11,6 +11,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar-native-gateways.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",
+  "ui/src/components/mcp-app-bridge.test.ts",
+  "ui/src/components/mcp-app-panel.test.tsx",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/resizable-divider.test.ts",
   "ui/src/components/sidebar-update-card.test.ts",

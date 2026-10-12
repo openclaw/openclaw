@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
-import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import {
@@ -56,7 +55,6 @@ export function usePersistentRelayTestState(activeRelaySessions: Map<string, str
     } finally {
       vi.useRealTimers();
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       embeddedRunTesting.resetActiveEmbeddedRuns();
       await drainSessionStateForTest({ stateDir: testState.stateDir, rootPath: testState.root });
       await deletePersistentSessionStoreRows({

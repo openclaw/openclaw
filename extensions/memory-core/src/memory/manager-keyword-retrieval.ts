@@ -183,16 +183,24 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           return { ...entry, score: scoreExactPathTieForTemporalDecay(contentScore) };
         })
       : params.results;
+    const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
+    const weighted = applyRetrievalRanking(decayInputs, activeProjects);
+    const strict = weighted.filter(
+      (entry) =>
+        (entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, activeProjects)
+          : entry.score) >= params.minScore,
+    );
+    const eligible = strict.length > 0 ? strict : weighted.filter((entry) => entry.score >= 0);
     const decayed = await applyTemporalDecayToHybridResults({
-      results: decayInputs,
+      results: eligible,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
       sessionSourceMtimes: this.loadSourceMtimes("sessions", params.results),
       memorySourceMtimes: this.loadSourceMtimes("memory", params.results),
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
-    const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
-    const ranked = applyRetrievalRanking(decayed, activeProjects)
+    const ranked = decayed
       .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
       .map((entry) =>
         entry.exactPathSpecificity > 0
@@ -201,9 +209,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
             })
           : entry,
       );
-    const strict = ranked.filter((entry) => entry.score >= params.minScore);
-    const selected = strict.length > 0 ? strict : ranked.filter((entry) => entry.score >= 0);
-    return this.toMemorySearchResults(selected.slice(0, params.maxResults));
+    return this.toMemorySearchResults(ranked.slice(0, params.maxResults));
   }
 
   protected loadSourceMtimes(

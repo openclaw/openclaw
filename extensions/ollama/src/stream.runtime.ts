@@ -48,7 +48,6 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
-import { appendOllamaResponseText } from "./stream-commentary.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
@@ -426,7 +425,6 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
-  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -442,7 +440,9 @@ export function buildAssistantMessage(
           modelId: modelInfo.id,
           text: rawText,
         });
-  appendOllamaResponseText(content, text, stopReason);
+  if (text) {
+    content.push({ type: "text", text });
+  }
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
@@ -474,7 +474,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason,
+    stopReason: resolveOllamaStopReason(response),
     usage: {
       ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),

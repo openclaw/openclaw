@@ -1,5 +1,7 @@
 import "./isolated-agent.mocks.js";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
@@ -31,15 +33,18 @@ async function withAnnounce(
   ) => void = () => {},
 ) {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStoreEntries(home, options.entries ?? {});
+    const storePath = path.join(home, ".openclaw", "sessions", "sessions.json");
+    const cfg = makeCfg(home, storePath, {
+      ...options.cfg,
+      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
+    });
+    setRuntimeConfigSnapshot(cfg);
+    await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: makeCfg(home, storePath, {
-        ...options.cfg,
-        ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-      }),
+      cfg,
       deps,
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -53,7 +58,7 @@ async function withAnnounce(
   });
 }
 
-describe("isolated cron delivery awareness", () => {
+describe("isolated cron delivery notifications", () => {
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
@@ -88,6 +93,10 @@ describe("isolated cron delivery awareness", () => {
           `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
           expect.any(Object),
         );
+        expect(deps.telegram).toHaveBeenCalledTimes(2);
+        expect(peekSystemEvents("agent:main:main")).toEqual([]);
+        expect(peekSystemEvents("agent:main:global")).toEqual([]);
+        expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
       },
     );
   });
@@ -99,19 +108,6 @@ describe("isolated cron delivery awareness", () => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBeFalsy();
         expect(deps.telegram).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  it("scopes the global main queue to the delivering agent", async () => {
-    await withAnnounce(
-      { texts: ["global cron digest"], cfg: { session: { scope: "global", mainKey: "main" } } },
-      (result) => {
-        expect(result.status).toBe("ok");
-        expect(result.delivered).toBe(true);
-        expect(peekSystemEvents("agent:main:global")).toEqual(["global cron digest"]);
-        expect(peekSystemEventEntries("agent:main:global")).toHaveLength(1);
-        expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
       },
     );
   });

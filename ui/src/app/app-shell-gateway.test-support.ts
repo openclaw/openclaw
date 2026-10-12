@@ -13,11 +13,11 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     () =>
       new Promise<{
         status: string;
-        entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
       }>((resolve) => {
         pendingResponses.push((accent) =>
           // Existing personal navigation keeps this appearance fixture out of legacy inventory.
-          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.sidebarEntries": [] } }),
+          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } }),
         );
         requestStarted.resolve();
       }),

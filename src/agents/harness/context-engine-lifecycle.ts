@@ -269,7 +269,6 @@ type PreparedHarnessContextEnginePrompt = {
   messages: AgentMessage[];
   systemPrompt: string;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 };
 
@@ -285,7 +284,6 @@ export async function prepareHarnessContextEnginePrompt(
     messages: params.messages,
     systemPrompt: params.promptBudget.systemPrompt,
     contextEnginePromptAuthority: "assembled",
-    contextEngineAssemblySucceeded: false,
   };
   if (!params.contextEngine) {
     return initial;
@@ -309,7 +307,6 @@ export async function prepareHarnessContextEnginePrompt(
             })
           : initial.systemPrompt,
         contextEnginePromptAuthority: authority,
-        contextEngineAssemblySucceeded: true,
         ...(authority === "preassembly_may_overflow"
           ? { unwindowedContextEngineMessagesForPrecheck: preassemblyMessages }
           : {}),

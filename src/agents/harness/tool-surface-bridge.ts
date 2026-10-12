@@ -176,7 +176,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       toolSearchRuntimeConfig,
       codeModeControlsEnabled,
       toolSearchConfig,
-      forceDirectMessageTool,
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,

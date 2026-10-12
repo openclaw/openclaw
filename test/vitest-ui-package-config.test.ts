@@ -412,7 +412,7 @@ describe("ui package vitest config", () => {
       cwd: uiRoot,
       exclude: node?.exclude,
     })
-      .filter((file) => file.endsWith(".browser.test.ts"))
+      .filter((file) => /\.browser\.test\.tsx?$/u.test(file))
       .map((file) => `ui/${file}`);
     const rootFiles = globTestFiles(root.include ?? [], { exclude: root.exclude });
     expect(rootFiles.includes("ui/src/solid-smoke/solid-smoke.test.tsx")).toBe(
@@ -423,7 +423,9 @@ describe("ui package vitest config", () => {
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
     expect(rootFiles).toEqual(expect.arrayContaining(nodeFiles));
     expect([...nativeFiles, ...nodeFiles].toSorted()).toEqual(
-      globTestFiles("ui/src/**/*.browser.test.ts").toSorted(),
+      globTestFiles(patterns)
+        .filter((file) => /\.browser\.test\.tsx?$/u.test(file))
+        .toSorted(),
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
     expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));

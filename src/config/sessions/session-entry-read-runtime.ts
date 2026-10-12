@@ -26,6 +26,10 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import {
+  readSessionEntriesWithRetainedFacts,
+  readSessionEntryWithRetainedFacts,
+} from "./session-entry-read-facts.js";
+import {
   readAdmittedSessionEntry,
   withOrderedSessionEntriesInWorker,
 } from "./session-entry-read-ordered.js";
@@ -59,7 +63,6 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
-  isSessionStoreReadCandidateCurrent,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
@@ -157,7 +160,9 @@ export async function withSessionEntryReadOnlyInWorker<T>(
         readConsistency: scope.readConsistency,
         projection: scope.projection,
       };
-      const read = await reader.readEntryResult({ scope: readScope, continuation });
+      const read = await readSessionEntryWithRetainedFacts(database, readScope, () =>
+        reader.readEntryResult({ scope: readScope, continuation }),
+      );
       owner.assertCurrent();
       const value = await consumeRead(read, {
         ...owner,
@@ -229,19 +234,14 @@ export async function readSessionEntryByIdReadOnlyInWorker(
       source.admissionSignal?.throwIfAborted();
       source.actor.assertReadable();
     };
-    let assertSnapshot = assertCurrent;
-    const selected = await source.actor.sessions.withSharedState(async () => {
+    return source.actor.sessions.withSharedState(async () => {
       const read = await source.actor.sessions.readById(
         { assertCurrent },
         { sessionId, orderBy: input.orderBy },
         source.admissionSignal,
       );
-      assertSnapshot = read.snapshot.assertCurrent;
-      assertSnapshot();
       return read.selected;
     });
-    assertSnapshot();
-    return selected;
   }
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   if (isNativeSessionEntryRead(scope, agentId)) {
@@ -395,14 +395,21 @@ export async function withSessionEntriesFromStoresInWorker<T>(
 ): Promise<T> {
   const originalInputs = [...inputs];
   const capturedInputs: SessionEntryWorkerRead[] = originalInputs.map((input) => {
-    const captured = {
+    const captured: SessionEntryWorkerRead = {
+      ...input,
       env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
       snapshotFields: input.snapshotFields?.slice(),
       preparedSource: input.preparedSource && { ...input.preparedSource },
     };
-    return input.selection
-      ? { ...input, ...captured, selection: { ...input.selection } }
-      : { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    if (captured.selection) {
+      captured.selection =
+        captured.selection.kind === "children"
+          ? { ...captured.selection, parentSessionKeys: [...captured.selection.parentSessionKeys] }
+          : { ...captured.selection };
+    } else {
+      captured.sessionKeys = [...captured.sessionKeys];
+    }
+    return captured;
   });
   if (options?.ordered) {
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
@@ -439,28 +446,12 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     for (const read of reads) {
       read.assertCurrent();
     }
-    let active = true;
-    try {
-      const result = consume(
-        reads.map((read) => ({
-          result: read.result,
-          database: read.database,
-          assertCurrent: () => {
-            if (!active) {
-              throw new Error("Session entry read consumer is no longer active");
-            }
-            read.assertCurrent();
-          },
-        })),
-      );
-      if (isPromiseLike(result)) {
-        void Promise.resolve(result).catch(() => {});
-        throw new Error("Session entry read consumers must remain synchronous");
-      }
-      return Promise.resolve(result);
-    } finally {
-      active = false;
+    const result = consume(reads);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {});
+      throw new Error("Session entry read consumers must remain synchronous");
     }
+    return Promise.resolve(result);
   };
   return enter(0);
 }
@@ -490,7 +481,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
     input,
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const result = await reader.readExactEntries({ ...request, env: database.env, continuation });
+      const result = await readSessionEntriesWithRetainedFacts(database, request, () =>
+        reader.readExactEntries({ ...request, env: database.env, continuation }),
+      );
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
@@ -568,18 +561,9 @@ export async function withSessionStoreReaderInWorker<T>(
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
   }> = [];
-  let sourceActive = true;
   const assertSourcesCurrent = () => {
-    if (!sourceActive) {
-      throw new Error("Session entry read source is no longer active");
-    }
     logical?.assertCurrent?.();
     if (logical || preparedSource) {
-      for (const candidate of candidates) {
-        if (!isSessionStoreReadCandidateCurrent(candidate)) {
-          throw new Error("Session store alias changed during discovery; retry the read.");
-        }
-      }
       for (const { owner } of continuations) {
         owner.assertCurrent();
       }
@@ -617,12 +601,12 @@ export async function withSessionStoreReaderInWorker<T>(
             prepareSource || capturePhysicalSource
               ? readDatabasePathIdentitySync(database.path)
               : undefined;
-          let active = true;
           const assertCapturedCurrent = () => {
             assertSourcesCurrent();
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
+            // Discovery can yield before writable admission; retain its selected physical source.
             if (sourceIdentity?.key.startsWith("file:")) {
               assertExistingDatabaseIdentity(
                 database.path,
@@ -631,33 +615,23 @@ export async function withSessionStoreReaderInWorker<T>(
               );
             }
           };
-          if (dataOnly) {
+          if (dataOnly && (logical?.assertCurrent || preparedSource)) {
             assertFinalCurrent = assertCapturedCurrent;
           }
-          const assertCurrent = () => {
-            if (!active) {
-              throw new Error("Session entry read consumer is no longer active");
-            }
-            assertCapturedCurrent();
-          };
-          try {
-            assertCurrent();
-            const preparedDatabase = { ...database, env: { ...env } };
-            if (sourceIdentity) {
-              prepareSource?.(preparedDatabase, sourceIdentity);
-            }
-            return await read({
-              ...route,
-              reader,
-              database: preparedDatabase,
-              logicalAgentId,
-              selectedStore: Object.freeze({ path: sourcePath, physicalPath: database.path }),
-              continuation: continuation?.receipt,
-              assertCurrent,
-            });
-          } finally {
-            active = false;
+          assertCapturedCurrent();
+          const preparedDatabase = { ...database, env: { ...env } };
+          if (sourceIdentity) {
+            prepareSource?.(preparedDatabase, sourceIdentity);
           }
+          return await read({
+            ...route,
+            reader,
+            database: preparedDatabase,
+            logicalAgentId,
+            selectedStore: Object.freeze({ path: sourcePath, physicalPath: database.path }),
+            continuation: continuation?.receipt,
+            assertCurrent: assertCapturedCurrent,
+          });
         },
         readLane,
       );
@@ -667,11 +641,6 @@ export async function withSessionStoreReaderInWorker<T>(
       const assertPreparedCurrent = () => {
         preparedSource.assertCurrent();
         assertSessionStoreReadCandidate(preparedSource.path, candidates);
-        assertExistingDatabaseIdentity(
-          preparedSource.path,
-          `file:${preparedSource.databaseIdentity}`,
-          preparedSource.databaseBirthtime,
-        );
       };
       assertPreparedCurrent();
       result = await readDatabase(
@@ -718,7 +687,6 @@ export async function withSessionStoreReaderInWorker<T>(
     assertFinalCurrent?.();
     return result;
   } finally {
-    sourceActive = false;
     for (const { owner } of continuations.toReversed()) {
       owner.release();
     }

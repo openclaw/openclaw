@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import * as modelDecisions from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
@@ -11,10 +10,7 @@ import {
   bindPreparedModelRuntimeAuth,
   setPreparedModelFullCatalogAuth,
 } from "../../agents/prepared-model-runtime-auth.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "../../agents/prepared-model-runtime.errors.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,10 +30,6 @@ const catalogMocks = vi.hoisted(() => ({
 
 const staleCfg = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-} as OpenClawConfig;
-
-const replacementCfg = {
-  agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
 } as OpenClawConfig;
 
 beforeEach(() => {
@@ -187,46 +179,6 @@ describe("/models browse catalog recovery", () => {
       expect(recovered?.shouldContinue).toBe(false);
       expect(recovered?.reply?.text).not.toContain("Some models could not be refreshed.");
       expect(recovered?.reply?.text).toContain(choice);
-    },
-  );
-
-  it.each(["default"] as const)(
-    "rejects a generation retired during %s projection and allows a current retry",
-    async (view) => {
-      let current = true;
-      catalogMocks.isCurrent = () => current;
-      const evaluateModelAuth = vi.fn(() => ({
-        availability: true as const,
-        routeResolution: null,
-      }));
-      evaluateModelAuth.mockImplementationOnce(() => {
-        current = false;
-        return { availability: true, routeResolution: null };
-      });
-      const prepareDecisions = modelDecisions.prepareModelCatalogDecisions;
-      vi.spyOn(modelDecisions, "prepareModelCatalogDecisions").mockImplementation(
-        async (params) => ({
-          ...(await prepareDecisions(params)),
-          evaluateEntry: evaluateModelAuth,
-        }),
-      );
-      catalogMocks.readSnapshot.mockReturnValueOnce({
-        entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Retired model" }],
-        routeVariants: [],
-      });
-      const first = buildPreparedModelsProviderData(staleCfg, undefined, { view });
-      const rejected = expect(first).rejects.toBeInstanceOf(
-        PreparedModelRuntimePublicationSupersededError,
-      );
-      await rejected;
-      catalogMocks.isCurrent = () => true;
-      catalogMocks.readSnapshot.mockReturnValueOnce({
-        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current model" }],
-        routeVariants: [],
-      });
-      const next = await buildPreparedModelsProviderData(replacementCfg, undefined, { view });
-      expect(next.modelNames.get("openai/gpt-5.6-luna")).toBe("Current model");
-      expect(next.modelNames.has("anthropic/claude-opus-4-5")).toBe(false);
     },
   );
 

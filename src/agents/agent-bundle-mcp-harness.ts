@@ -49,6 +49,17 @@ type StaticHarnessMcpTools = {
   dispose: () => Promise<void>;
 };
 
+function createHarnessDisposer(runtime: Pick<StaticHarnessMcpTools, "dispose"> | undefined) {
+  let disposed = false;
+  return async () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    await runtime?.dispose();
+  };
+}
+
 function formatConfiguredMcpDiagnosticNotice(
   messages: readonly string[],
   runLabel: "this scheduled run" | "this run",
@@ -249,6 +260,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -327,17 +339,10 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
       ],
       params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
     );
-    let disposed = false;
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime.dispose();
-      },
+      dispose: createHarnessDisposer(liveRuntime),
     };
   } catch (error) {
     await liveRuntime.dispose();
@@ -360,6 +365,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
@@ -429,17 +435,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         })
       : filteredTools;
 
-    let disposed = false;
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: async () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await liveRuntime?.dispose();
-      },
+      dispose: createHarnessDisposer(liveRuntime),
     };
   } catch (error) {
     await liveRuntime?.dispose();

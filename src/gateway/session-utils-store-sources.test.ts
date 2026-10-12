@@ -233,7 +233,6 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
         env: state.env,
         registryPath,
       });
-      await prepared.revalidate(() => {});
       prepared.assertCurrent();
       sql.expectIdle();
     } finally {
@@ -292,7 +291,6 @@ it.each([false, true])(
         main: [{ agentId: "main", path: main.path }],
         blocked: [],
       });
-      await prepared.revalidate(() => {});
       prepared.assertCurrent();
     });
   },

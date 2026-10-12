@@ -119,7 +119,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
     },
   );
 
-  it("keeps a reusable checkpoint before transient context during a tool loop", async () => {
+  it("keeps every checkpoint before transient context during a tool loop", async () => {
     const messages = appendToolTurn(
       appendToolTurn(
         [
@@ -143,7 +143,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
       markers(payload)
         .map((marker) => marker.path)
         .toSorted(),
-    ).toEqual(["messages[0].content[0]", "messages[5].content[0]", "system[0]", "tools[0]"]);
+    ).toEqual(["messages[0].content[0]", "system[0]", "tools[0]"]);
   });
 
   it.each([

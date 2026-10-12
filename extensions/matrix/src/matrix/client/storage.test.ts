@@ -263,11 +263,11 @@ describe("matrix client storage paths", () => {
         createdAt: "2026-09-01T00:00:00.000Z",
       });
       const runtime = getMatrixRuntime();
-      const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+      const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
       const observed = createDeferred<void>();
       const resume = createDeferred<void>();
       let pause = true;
-      vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
+      vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
         const store = openStore(options);
         const observe = store.observe;
         if (options.namespace !== "storage-meta" || !observe) {
@@ -324,38 +324,31 @@ describe("matrix client storage paths", () => {
     expect(fs.existsSync(rootDir)).toBe(false);
   });
 
-  it.each(["older-host", "worker-failure"])(
-    "selects the metadata compatibility path only for %s",
-    async (mode) => {
-      setupStateDir();
-      const storagePaths = await resolveDefaultStoragePaths();
-      seedStorageMeta(storagePaths.rootDir, {
-        accessTokenHash: storagePaths.tokenHash,
-        deviceId: "ORIGINAL",
-      });
-      const runtime = getMatrixRuntime();
-      const openStore = runtime.state.openKeyedStore.bind(runtime.state);
-      vi.spyOn(runtime.state, "openKeyedStore").mockImplementation((options) => {
-        const store = openStore(options);
-        return mode === "older-host"
-          ? { ...store, observe: undefined, compareAndApply: undefined }
-          : {
-              ...store,
-              compareAndApply: async () => {
-                throw new Error("synthetic worker failure");
-              },
-            };
-      });
-      const native = vi.spyOn(runtime.state, "openSyncKeyedStore");
-      expect(
-        await recordCurrentStorageMetaDeviceId({ rootDir: storagePaths.rootDir, deviceId: "NEW" }),
-      ).toBe(mode === "older-host");
-      expect(native.mock.calls.length).toBe(mode === "older-host" ? 1 : 0);
-      expect(readStorageMeta(storagePaths.rootDir)?.deviceId).toBe(
-        mode === "older-host" ? "NEW" : "ORIGINAL",
-      );
-    },
-  );
+  it("preserves metadata when its worker write fails", async () => {
+    setupStateDir();
+    const storagePaths = await resolveDefaultStoragePaths();
+    seedStorageMeta(storagePaths.rootDir, {
+      accessTokenHash: storagePaths.tokenHash,
+      deviceId: "ORIGINAL",
+    });
+    const runtime = getMatrixRuntime();
+    const openStore = runtime.state.openKeyedStoreV2.bind(runtime.state);
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation((options) => {
+      const store = openStore(options);
+      return {
+        ...store,
+        compareAndApply: async () => {
+          throw new Error("synthetic worker failure");
+        },
+      };
+    });
+    const native = vi.spyOn(runtime.state, "openSyncKeyedStore");
+    expect(
+      await recordCurrentStorageMetaDeviceId({ rootDir: storagePaths.rootDir, deviceId: "NEW" }),
+    ).toBe(false);
+    expect(native).not.toHaveBeenCalled();
+    expect(readStorageMeta(storagePaths.rootDir)?.deviceId).toBe("ORIGINAL");
+  });
 
   async function seedExistingStorageRoot(params: {
     accessToken: string;

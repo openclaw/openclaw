@@ -12,34 +12,39 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Personal navigation identity resolution" });
 
 suite.define(() => {
-  it("keeps unresolved Mine private, falls back for a profileless connection, and restores Mine after identification", async () => {
+  it("shows All owners without a profile and defaults to My sessions after identification", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 800 }, locale: "en-US" },
       async ({ page }) => {
         const mine = "agent:main:planning";
         const other = "agent:main:research";
+        const owners = [
+          { type: "human" as const, id: "alex", label: "Alex" },
+          { type: "human" as const, id: "sam", label: "Sam" },
+        ];
+        const sessions = [
+          { key: mine, label: "Weekly planning", owner: { actor: owners[0]! } },
+          { key: other, label: "Research notes", owner: { actor: owners[1]! } },
+        ];
         const gateway = await installMockGateway(page, {
           heldMethods: ["users.self"],
+          hasMultipleSessionSharingIdentities: true,
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
           agentModel: "gpt-5-mini",
-          sessions: [
-            {
-              key: mine,
-              label: "Weekly planning",
-              owner: { actor: { type: "human", id: "alex", label: "Alex" } },
-            },
-            {
-              key: other,
-              label: "Research notes",
-              owner: { actor: { type: "human", id: "sam", label: "Sam" } },
-            },
-          ],
+          sessions,
           methodResponses: {
+            "sessions.list": {
+              sessions,
+              owners,
+              count: sessions.length,
+              defaults: {},
+              path: "",
+              ts: 1,
+            },
             "users.prefs.get": {
               status: "ok",
               entries: {
-                "ui.sidebarEntries": [],
-                "ui.navigationScope": "mine",
+                "ui.railShortcuts": [],
                 "new-session.migration.v1": true,
               },
             },
@@ -49,21 +54,18 @@ suite.define(() => {
         await gateway.waitForRequest("users.self");
         const sidebar = page.locator("openclaw-app-sidebar");
         const rows = sidebar.locator(".sidebar-session-content .sidebar-recent-session");
-        expect(await rows.count()).toBe(0);
-        expect(
-          await sidebar
-            .getByRole("button", { name: "Mine", exact: true })
-            .getAttribute("aria-pressed"),
-        ).toBe("true");
+        const ownerFilter = sidebar.locator("#sidebar-session-owner-title .picker-select__label");
+        await expect
+          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
+          .toBe("All owners");
+        await expect.poll(() => rows.count()).toBe(2);
         await gateway.rejectDeferred("users.self", {
           code: "FORBIDDEN",
           message: "No authenticated profile",
         });
         await expect
-          .poll(() =>
-            sidebar.getByRole("button", { name: "All", exact: true }).getAttribute("aria-pressed"),
-          )
-          .toBe("true");
+          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
+          .toBe("All owners");
         await expect.poll(() => rows.count()).toBe(2);
         expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -94,10 +96,8 @@ suite.define(() => {
           ],
         });
         await expect
-          .poll(() =>
-            sidebar.getByRole("button", { name: "Mine", exact: true }).getAttribute("aria-pressed"),
-          )
-          .toBe("true");
+          .poll(() => ownerFilter.textContent().then((text) => text?.trim()))
+          .toBe("My sessions");
         await expect.poll(() => rows.count()).toBe(1);
         expect(await rows.first().getAttribute("data-session-key")).toBe(mine);
         expect(await gateway.getRequests("users.prefs.set")).toEqual([]);

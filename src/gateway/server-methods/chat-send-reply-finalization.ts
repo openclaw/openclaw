@@ -204,7 +204,7 @@ export async function finalizeChatSendDispatchedReplies(
     transcriptMirrorResolution.kind === "owner" || transcriptMirrorResolution.kind === "blocked"
       ? transcriptMirrorResolution.owner
       : undefined;
-  const mediaScope = captureMediaScope();
+  const mediaScope = await captureMediaScope();
   const sourceSession = await loadGatewaySessionEntryReadOnlyInWorker({
     cfg: context.getRuntimeConfig(),
     key: sessionKey,

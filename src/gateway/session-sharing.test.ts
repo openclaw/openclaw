@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -63,8 +66,10 @@ describe("session sharing policy", () => {
   it("reserves communication changes for the direct human creator or administrator", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const creator = roleClient("write", "communication-creator");
       const peer = roleClient("write", "communication-peer");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const creatorId = creator.authenticatedUserProfile?.profileId;
       if (!creatorId) {
         throw new Error("expected verified creator");
@@ -108,8 +113,10 @@ describe("session sharing policy", () => {
   it("keeps shared VIEW while limiting narrow writes to the caller's own rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("view", "narrow-owner");
       const member = roleClient("view", "narrow-member");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const ownerId = owner.authenticatedUserProfile?.profileId;
       const memberId = member.authenticatedUserProfile?.profileId;
       if (!ownerId || !memberId) {
@@ -176,6 +183,7 @@ describe("session sharing policy", () => {
       const owner = roleClient("view", "narrow-create-owner");
       owner.connect.scopes = ["operator.sessions.write"];
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const captured = resolveSessionMutationAuthorization({
         client: owner,
         method: "sessions.create",
@@ -196,8 +204,10 @@ describe("session sharing policy", () => {
   it("denies starting a run on an existing foreign-agent session despite foreign-session write access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig(["guest-agent"]);
+      setRuntimeConfigSnapshot(cfg);
       const writer = roleClient("write", "foreign-agent-writer");
       const owner = ensureProfileForEmail("foreign-agent-owner@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:existing-maintainer-session";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -256,7 +266,9 @@ describe("session sharing policy", () => {
   it("enforces closed role ceilings above shared visibility while preserving explicit membership and admin access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("none", "owner");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const ownerId = owner.authenticatedUserProfile?.profileId;
       const sessionKey = "agent:main:team-shared";
       await upsertSessionEntryCore(
@@ -401,8 +413,10 @@ describe("session sharing policy", () => {
   it("keeps draft and incognito carve-outs even for roles permitting foreign-session writes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const writer = roleClient("write", "draft-writer");
       const owner = ensureProfileForEmail("draft-owner@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
       for (const visibility of ["draft", "incognito"] as const) {
         const sessionKey = `agent:main:dashboard:${visibility === "incognito" ? "incognito-" : ""}role-carveout`;
@@ -440,9 +454,11 @@ describe("session sharing policy", () => {
   it("hides foreign cron sessions with none access across listings, reads, mutations, and broadcasts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const creator = roleClient("none", "cron-creator");
       const creatorId = creator.authenticatedUserProfile!.profileId;
       const restricted = roleClient("none", "restricted");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const restrictedId = restricted.authenticatedUserProfile!.profileId;
       const foreignKey = "agent:main:cron:job-1:run:run-1";
       const ownKey = "agent:main:team-own";
@@ -601,6 +617,8 @@ describe("session sharing policy", () => {
 
   it("requires participation for categorized adoption and message-cut lifecycle targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:dashboard:categorized-adoption";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -613,7 +631,7 @@ describe("session sharing policy", () => {
         },
       );
 
-      const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+      const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       for (const [method, requestParams] of [
         ["sessions.create", { key: sessionKey, category: "Projects" }],
         ["sessions.fork", { sessionKey }],
@@ -646,7 +664,12 @@ describe("session sharing policy", () => {
     "preserves visibility-authorized owner assignment for %s sessions at commit",
     async (visibility) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = {};
+        setRuntimeConfigSnapshot(cfg);
         const sessionKey = `agent:main:assignment-${visibility}`;
+        const cappedClient = roleClient("view", `assignment-${visibility}`);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        prepareGatewayRecipientProfile(cappedClient);
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
@@ -660,14 +683,14 @@ describe("session sharing policy", () => {
           client: client({ user: "viewer@example.com" }),
           method: "sessions.assignOwner",
           requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
-          context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
         });
 
         expect(authorization.error).toBeNull();
         expect(() => authorization.authorization?.assertCurrent()).not.toThrow();
 
         const capped = resolveSessionMutationAuthorization({
-          client: roleClient("view", `assignment-${visibility}`),
+          client: cappedClient,
           method: "sessions.assignOwner",
           requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
           context: {
@@ -722,6 +745,8 @@ describe("session sharing policy", () => {
 
   it("keeps incognito admin-only while treating identityless connections as owner-equivalent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:dashboard:incognito-private";
       const sessionAlias = "dashboard:incognito-private";
       const entry = {
@@ -736,7 +761,6 @@ describe("session sharing policy", () => {
       const admin = client({ user: "admin@example.com", scopes: ["operator.admin"] });
       const solo = client({});
       const profiledSolo = client({ user: "gateway-owner" });
-      const cfg = {};
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
       const directRequests = (requestedKey: string) => [
         { method: "chat.history", requestParams: { sessionKey: requestedKey } },
@@ -795,6 +819,10 @@ describe("session sharing policy", () => {
 
   it("keeps agent scope for progress cards and indirect run and approval authorization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        agents: { entries: { main: {}, work: {} } },
+      } as never;
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
         { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
@@ -812,9 +840,6 @@ describe("session sharing policy", () => {
         { agentId: "main", sessionKey: "agent:main:solo-draft" },
         { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
       );
-      const cfg = {
-        agents: { entries: { main: {}, work: {} } },
-      } as never;
       const context = {
         chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),
         execApprovalManager: {
@@ -889,6 +914,8 @@ describe("session sharing policy", () => {
 
   it("filters event recipients by draft ownership, suggestion participation, and row existence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       for (const [visibility, recipients] of [
         [
           "suggest",
@@ -931,7 +958,7 @@ describe("session sharing policy", () => {
         }
         const check = (recipient: GatewayClient, event?: string) =>
           canReceiveSessionEvent({
-            cfg: {},
+            cfg,
             client: recipient,
             sessionKeys: [sessionKey],
             event,

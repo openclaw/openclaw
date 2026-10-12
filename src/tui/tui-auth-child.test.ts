@@ -37,7 +37,7 @@ describe("TUI auth child owner", () => {
   it("does not spawn after terminal close", async () => {
     const owner = createTuiAuthChildOwner();
     const spawnChild = vi.fn(() => createChild(101));
-    owner.close();
+    await owner.close();
 
     await expect(owner.spawnAndWait(spawnChild)).rejects.toThrow("owner is closed");
     expect(spawnChild).not.toHaveBeenCalled();
@@ -68,8 +68,13 @@ describe("TUI auth child owner", () => {
     const child = createChild(103);
     const result = owner.spawnAndWait(() => child);
 
-    owner.close();
-    owner.close();
+    let closed = false;
+    const closing = owner.close().then(() => {
+      closed = true;
+    });
+    const repeatedClose = owner.close();
+    await Promise.resolve();
+    expect(closed).toBe(false);
 
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(103, "SIGTERM", {
@@ -88,6 +93,8 @@ describe("TUI auth child owner", () => {
 
     emitExit(child, null, "SIGKILL");
     await expect(result).resolves.toEqual({ exitCode: null, signal: "SIGKILL" });
+    await Promise.all([closing, repeatedClose]);
+    expect(closed).toBe(true);
   });
 
   it("clears force escalation when the owned child exits", async () => {
@@ -95,10 +102,11 @@ describe("TUI auth child owner", () => {
     const owner = createTuiAuthChildOwner();
     const child = createChild(104);
     const result = owner.spawnAndWait(() => child);
-    owner.close();
+    const closing = owner.close();
     emitExit(child, null, "SIGTERM");
 
     await expect(result).resolves.toEqual({ exitCode: null, signal: "SIGTERM" });
+    await closing;
     vi.advanceTimersByTime(1_001);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(104, "SIGTERM", {

@@ -28,9 +28,9 @@ import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -306,7 +306,7 @@ export async function createAgentSession(
     if (hasExistingSession && hasThinkingEntry) {
       return Promise.resolve();
     }
-    return withSessionManagerWrite(sessionManager, async () => {
+    return withSessionManagerAppend(sessionManager, async () => {
       assertInitialSessionCurrent();
       if (!hasExistingSession) {
         await appendInitialMetadata(

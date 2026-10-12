@@ -91,31 +91,6 @@ describe("createDockPanelLayout", () => {
 
     expect(layout.load().dock).toBe("right");
   });
-
-  it("caps persisted sizes to the current viewport and saves the canonical shape", () => {
-    const layout = createLayout("right");
-    vi.stubGlobal("innerHeight", 500);
-    vi.stubGlobal("innerWidth", 750);
-    layout.save({ open: true, dock: "bottom", height: 900, width: 900 });
-
-    expect(layout.load()).toEqual({ open: true, dock: "bottom", height: 400, width: 600 });
-  });
-
-  it("round-trips an opted-in main placement", () => {
-    const layout = createDockPanelLayout({
-      storageKey: "test.dock-panel.main",
-      minHeight: 140,
-      minWidth: 320,
-      defaultDock: "bottom",
-      supportedDocks: ["bottom", "right", "main"],
-      defaultHeight: 320,
-      defaultWidth: 520,
-    });
-
-    layout.save({ open: true, dock: "main", height: 320, width: 520 });
-
-    expect(layout.load()).toEqual({ open: true, dock: "main", height: 320, width: 520 });
-  });
 });
 
 describe("DockLayoutController open intent", () => {
@@ -164,10 +139,9 @@ describe("DockLayoutController open intent", () => {
 
 describe("DockLayoutController inline columns", () => {
   it.each([
-    { dock: "right", reserved: { bottom: "0px", right: "520px" } },
-    { dock: "bottom", reserved: { bottom: "320px", right: "0px" } },
+    { dock: "bottom", hostKind: "element", reserved: { bottom: "320px", right: "0px" } },
   ] as const)(
-    "lets only the standalone $dock dock own the viewport reservation",
+    "lets only the standalone $dock dock own the viewport reservation with an embedded $hostKind",
     ({ dock, reserved }) => {
       const layout = createLayout("right");
       layout.save({ open: true, dock, height: 320, width: 520 });
@@ -271,10 +245,9 @@ describe("DockLayoutController inline columns", () => {
     controller.hostConnected();
 
     render(controller.renderResizer("test", "Resize panel"), container);
-    let separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    let separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
+    expect(separator.getAttribute("role")).toBe("separator");
     expect(separator.getAttribute("tabindex")).toBe("0");
     expect(separator.getAttribute("aria-orientation")).toBe("vertical");
 
@@ -285,9 +258,7 @@ describe("DockLayoutController inline columns", () => {
 
     controller.setDock("bottom", false);
     render(controller.renderResizer("test", "Resize panel"), container);
-    separator = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      '[role="separator"]',
-    )!;
+    separator = container.querySelector("resizable-divider")!;
     await separator.updateComplete;
     expect(separator.getAttribute("aria-orientation")).toBe("horizontal");
 

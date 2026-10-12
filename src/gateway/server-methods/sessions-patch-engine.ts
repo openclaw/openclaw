@@ -439,23 +439,17 @@ export async function executeSessionPatchMutations(params: {
                         continue;
                       }
                       const validateSandbox = sandboxRuntime
-                        ? () =>
-                            sandboxRuntime.validateSessionPatchSandboxChange({
-                              client,
-                              context: params.context,
-                              patch: target.fullPatch,
-                              existingEntry,
-                              entry: projected.entry,
-                              sessionKey: primaryKey,
-                              storePath: target.storePath,
-                              lifecycleIdentities: target.lifecycleIdentities,
-                            })
+                        ? await sandboxRuntime.prepareSessionPatchSandboxChange({
+                            client,
+                            context: params.context,
+                            patch: target.fullPatch,
+                            existingEntry,
+                            entry: projected.entry,
+                            sessionKey: primaryKey,
+                            storePath: target.storePath,
+                            lifecycleIdentities: target.lifecycleIdentities,
+                          })
                         : undefined;
-                      const sandboxError = validateSandbox?.();
-                      if (sandboxError) {
-                        projectedOutcomes.push({ ok: false, error: sandboxError });
-                        continue;
-                      }
                       const runtimeSelection =
                         await modelSelection.prepareSessionPatchRuntimeSelection({
                           cfg,

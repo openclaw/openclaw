@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
@@ -85,6 +86,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   document.documentElement.style.removeProperty("--openclaw-css-ok");
+  document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
 });
 
 describe("isStaleChunkImportError", () => {
@@ -336,30 +338,6 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
-  it("does not let an unrelated pending probe bypass a failed build's cooldown", async () => {
-    vi.useFakeTimers();
-    const pending = deferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const storage = memoryStorage();
-    const reload = vi.fn();
-    const attempt = (buildId: string) => scheduleStaleChunkReload({ buildId, storage, reload });
-    const older = attempt("build-a");
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(older).resolves.toBe(false);
-    const attempts = fetchMock.mock.calls.length;
-    fetchMock.mockImplementationOnce(() => pending.promise);
-    const newer = attempt("build-b");
-    await expect(attempt("build-a")).resolves.toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
-
-    pending.resolve(new Response(null, { status: 503 }));
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(newer).resolves.toBe(false);
-    expect(reload).not.toHaveBeenCalled();
-    expect(storage.getItem(GUARD_KEY)).toBeNull();
-  });
-
   it.each([false, true])(
     "reprobes a newer build after its joined older-build probe fails (replacement: %s)",
     async (replaceOwner) => {
@@ -546,6 +524,29 @@ describe("scheduleStaleChunkReload", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("stops automatic probes after a manual refresh succeeds during its retry delay", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+
+    const automatic = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 }),
+    ).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(automatic).resolves.toBe(false);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(storage.getItem(GUARD_KEY)).toBe("gateway-target");
+  });
+
   it("coalesces automatic and manual probes while automatic recovery waits out failure", async () => {
     vi.useFakeTimers();
     const firstProbe = deferred<Response>();
@@ -572,6 +573,54 @@ describe("scheduleStaleChunkReload", () => {
 });
 
 describe("retryStaleChunkReloadWhenReachable single-shot", () => {
+  it.each([
+    { routeBase: "", resourceBase: "", automatic: false },
+    { routeBase: "/control", resourceBase: "/control", automatic: false },
+    { routeBase: "/portable", resourceBase: "", automatic: false },
+    { routeBase: "/control", resourceBase: "/control", automatic: true },
+    { routeBase: "", resourceBase: "", automatic: false, devGateway: true },
+  ])(
+    "reloads a chat deep link through its serving document ($routeBase, $resourceBase, automatic: $automatic, dev: $devGateway)",
+    async ({ routeBase, resourceBase, automatic, devGateway }) => {
+      const replace = stubDocumentNavigation();
+      const location = new URL(
+        `http://localhost${routeBase}/chat/main/12345678aaaa40008000000000000001?view=split#files`,
+      );
+      Object.assign(window.location, { href: location.href, pathname: location.pathname });
+      document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, resourceBase);
+      if (devGateway) {
+        vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+          gatewayUrl: "ws://gateway.example/control",
+          proxyPath: "/__gateway__",
+        });
+      }
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const target = new URL(input instanceof Request ? input.url : input, location);
+        // Canonical chat documents deliberately reject HEAD before reading a session.
+        return new Response(null, {
+          status: target.pathname === `${resourceBase}/index.html` ? 200 : 405,
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        automatic
+          ? scheduleStaleChunkReload()
+          : retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
+      ).resolves.toBe(true);
+
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        `${location.origin}${resourceBase}/index.html`,
+        expect.objectContaining({ method: "HEAD", cache: "no-store" }),
+      );
+      expect(replace).toHaveBeenCalledOnce();
+      const destination = new URL(replace.mock.calls[0]![0]);
+      expect(destination.pathname).toBe(location.pathname);
+      expect(destination.searchParams.get("view")).toBe("split");
+      expect(destination.hash).toBe("#files");
+    },
+  );
+
   it("rearms bounded automatic recovery when the gateway is reachable", async () => {
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "replacement-build" });

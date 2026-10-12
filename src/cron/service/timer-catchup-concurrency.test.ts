@@ -9,8 +9,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { add, update } from "./ops-mutations.js";
 import { run as runCronJob } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
-import { onTimer } from "./timer-scheduler.js";
-import { runMissedJobs } from "./timer.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-catchup-concurrency-" });
 

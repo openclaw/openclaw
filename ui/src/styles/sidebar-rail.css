@@ -29,10 +29,33 @@
 }
 
 .sidebar-rail__pins {
-  flex: 1;
+  flex: 1 1 0;
+  align-self: stretch;
   min-height: 32px;
   overflow: auto;
   scrollbar-width: none;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-rail__pins--drag-active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+}
+
+.sidebar-rail__monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .sidebar-rail__button,
@@ -142,38 +165,14 @@
   display: none;
 }
 
-/* Reordering owns a separate hit area below the shortcut, never its glyph. */
 .sidebar-rail__pin {
   display: flex;
-  flex-direction: column;
   position: relative;
   width: 36px;
-  min-height: 60px;
+  height: 36px;
   flex: 0 0 auto;
-}
-
-.sidebar-rail .sidebar-rail__pin > .sidebar-reorder-menu {
-  position: static;
-}
-
-.sidebar-rail__pin .sidebar-reorder-trigger {
-  width: 36px;
-  height: 24px;
-  min-height: 24px;
-  flex: none;
-  padding: 0;
-  opacity: 0;
-}
-
-.sidebar-rail__pin:hover .sidebar-reorder-trigger,
-.sidebar-rail__pin:focus-within .sidebar-reorder-trigger {
-  opacity: 1;
-  background: var(--bg-elevated);
-}
-
-.sidebar-rail .sidebar-zone-entry .sidebar-reorder-menu,
-.sidebar-pages .sidebar-reorder-menu {
-  display: none;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 .sidebar-pages__entry {
@@ -216,12 +215,6 @@
   font-size: var(--font-size-sm);
 }
 
-.sidebar-navigation-scope {
-  display: flex;
-  justify-content: flex-end;
-  gap: 4px;
-}
-
 html:is(.openclaw-native-desktop, .openclaw-native-macos)
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
@@ -238,8 +231,9 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
     height: 44px;
   }
 
-  .sidebar-rail__pin .sidebar-reorder-trigger {
-    opacity: 1;
+  .sidebar-rail__pin {
+    width: 44px;
+    height: 44px;
   }
 
   .sidebar-pages__pin {
@@ -259,4 +253,71 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
   display: none;
+}
+
+/* Keep identity and command access in the persistent rail. */
+.sidebar-rail .sidebar-agent-card--rail,
+.sidebar-rail .sidebar-workspace-header--rail {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.sidebar-rail .sidebar-agent-card__main,
+.sidebar-rail .sidebar-workspace-header__main {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+.sidebar-rail .sidebar-agent-card__text {
+  display: none;
+}
+
+.sidebar-rail .sidebar-agent-card__avatar,
+.sidebar-rail .sidebar-workspace-header__mark {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+}
+
+.sidebar--rail .sidebar-session-toolbar {
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.sidebar-session-owner-filter {
+  flex: 0 1 auto;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger {
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+}
+
+.sidebar-session-owner-filter .picker-select__chevron {
+  margin-inline-start: 0;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
+  transform: rotate(90deg);
+}
+
+.sidebar-session-owner-filter .picker-select__trigger:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar--rail .sidebar-session-toolbar__button {
+  width: 28px;
+  height: 28px;
 }

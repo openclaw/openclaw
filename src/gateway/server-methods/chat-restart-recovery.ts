@@ -397,6 +397,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   clientRunId: string;
   startedAt: number;
   sourceIngress: "control-ui" | "internal";
+  lastInteractionAt?: number;
   operatorSource?: InternalSessionEntry["restartRecoveryOperatorSource"];
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
@@ -416,6 +417,9 @@ export function buildRestartSafeChatTranscriptState(params: {
         event: { runId: params.clientRunId, ts: params.startedAt, data: { phase: "start" } },
       }),
       lifecycleRunId: params.clientRunId,
+      ...(params.lastInteractionAt !== undefined
+        ? { lastInteractionAt: params.lastInteractionAt }
+        : {}),
       lastRunId: undefined,
       restartRecoveryDeliveryContext: undefined,
       restartRecoveryDeliveryRequestFingerprint: params.admission.requestFingerprint,

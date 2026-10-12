@@ -4,7 +4,7 @@ import { t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { getChatComposerState } from "../chat/components/chat-composer-state.ts";
-import { renderChatComposer, resetChatComposerState } from "../chat/components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "../chat/components/chat-composer.tsx";
 import type { CreationComposer } from "./creation-composer.ts";
 
 /** This view has no Gateway client: it can compose and stage, never execute session controls. */

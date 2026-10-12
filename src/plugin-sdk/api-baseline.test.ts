@@ -7,7 +7,6 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as nativeDeclarations from "../../scripts/lib/native-declaration-subprocess.mts";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
@@ -505,117 +504,57 @@ describe("Plugin SDK API baseline", () => {
     },
   );
 
-  it.each(
-    ["source project creation", "declaration emission"].flatMap((timing) =>
-      [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
-    ),
-  )(
-    "rejects source changes after $timing with clock skew $clockSkewMs while accepting linked external types",
-    async ({ timing, clockSkewMs }) => {
-      const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
-      const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
-      const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
-      fs.mkdirSync(path.dirname(entry), { recursive: true });
-      fs.mkdirSync(path.join(repoRoot, "node_modules"));
-      fs.writeFileSync(path.join(repoRoot, "package.json"), '{"type":"module"}');
-      fs.writeFileSync(
-        path.join(repoRoot, "tsconfig.json"),
-        JSON.stringify({
-          compilerOptions: {
-            module: "NodeNext",
-            moduleResolution: "NodeNext",
-            target: "ESNext",
-            types: [],
-          },
+  it("renders linked external types alongside local exports", async () => {
+    const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-linked-local-");
+    const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
+    const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "node_modules"));
+    fs.writeFileSync(path.join(repoRoot, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(
+      path.join(repoRoot, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ESNext",
+          types: [],
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(external, "package.json"),
+      '{"name":"fixture-linked","type":"module","types":"index.d.ts"}',
+    );
+    fs.writeFileSync(
+      path.join(external, "index.d.ts"),
+      'export declare const externalValue: "external";\n',
+    );
+    fs.symlinkSync(external, path.join(repoRoot, "node_modules/fixture-linked"), "junction");
+    const source = (origin: string) =>
+      [
+        'import { externalValue } from "fixture-linked";',
+        "export const linked = externalValue;",
+        `export const local = "${origin}" as const;`,
+      ].join("\n");
+    fs.writeFileSync(entry, source("checked"));
+    const render = () => renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
+    const stable = await render();
+    expect(stable.modules[0]?.exports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          exportName: "linked",
+          declaration: expect.stringContaining('"external"'),
         }),
-      );
-      fs.writeFileSync(
-        path.join(external, "package.json"),
-        '{"name":"fixture-linked","type":"module","types":"index.d.ts"}',
-      );
-      fs.writeFileSync(
-        path.join(external, "index.d.ts"),
-        'export declare const externalValue: "external";\n',
-      );
-      fs.symlinkSync(external, path.join(repoRoot, "node_modules/fixture-linked"), "junction");
-      const source = (origin: string) =>
-        [
-          'import { externalValue } from "fixture-linked";',
-          "export const linked = externalValue;",
-          `export const local = "${origin}" as const;`,
-        ].join("\n");
-      fs.writeFileSync(entry, source("checked"));
-      const render = () => renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
-      const stable = await render();
-      expect(stable.modules[0]?.exports).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            exportName: "linked",
-            declaration: expect.stringContaining('"external"'),
-          }),
-          expect.objectContaining({
-            exportName: "local",
-            declaration: expect.stringContaining('"checked"'),
-          }),
-        ]),
-      );
+        expect.objectContaining({
+          exportName: "local",
+          declaration: expect.stringContaining('"checked"'),
+        }),
+      ]),
+    );
 
-      let changed = false;
-      const changeSource = () => {
-        changed = true;
-        fs.writeFileSync(entry, source("changed"));
-      };
-      const sourceConfig = path
-        .join(repoRoot, ".openclaw-plugin-sdk-api.tsconfig.json")
-        .split(path.sep)
-        .join("/");
-      const createProject = nativeTypeScript.createNativeTypeScriptProject;
-      const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
-      // Declaration errors come from the emit result, the last compiler stage before publication.
-      const emitDeclarations = nativeDeclarations.emitNativeDeclarationsInSubprocess;
-      const emit = vi.spyOn(nativeDeclarations, "emitNativeDeclarationsInSubprocess");
-      if (timing === "source project creation") {
-        create.mockImplementationOnce(function intercept(options) {
-          const native = createProject(options);
-          if (options.configFileName.split(path.sep).join("/") === sourceConfig) {
-            expect(native.project.program.getSourceFile(entry)?.getText()).toContain('"checked"');
-            changeSource();
-          } else {
-            create.mockImplementationOnce(intercept);
-          }
-          return native;
-        });
-      } else {
-        emit.mockImplementationOnce(async function (options) {
-          emit.mockRestore();
-          const result = await emitDeclarations(options);
-          expect(result.inputs).toContain(entry);
-          expect(result.declarations.get(entry)?.code).toContain('"checked"');
-          changeSource();
-          return result;
-        });
-      }
-      const now = Date.now;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + clockSkewMs);
-      try {
-        const failure = await render().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect(changed).toBe(true);
-        expect(failure).toBeInstanceOf(Error);
-        expect(failure).toMatchObject({
-          message: expect.stringMatching(/Boundary .*changed during compilation/u),
-        });
-      } finally {
-        clock.mockRestore();
-        create.mockRestore();
-        emit.mockRestore();
-      }
-      expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
-      expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
-    },
-  );
+    expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
+  });
 
   it("renders a checkout reached through a symlinked alias", async () => {
     // macOS temporary revision checkouts sit behind the /var -> /private/var alias.

@@ -144,7 +144,7 @@ export async function resolveGatewayInstallToken(
 
   if (tokenRefConfigured && resolvedToken.source === "secretRef") {
     warnings.push(
-      "gateway.auth.token is SecretRef-managed; install will not persist a resolved token in service environment. Ensure the SecretRef is resolvable in the daemon runtime context.",
+      "gateway.auth.token is SecretRef-managed; install will not persist a resolved token in service environment. Check that the SecretRef is resolvable in the daemon runtime context.",
     );
   } else if (tokenRefConfigured && !token) {
     unavailableReason = `gateway.auth.token SecretRef is configured but unresolved (${resolvedToken.unresolvedRefReason ?? "unknown reason"}).`;

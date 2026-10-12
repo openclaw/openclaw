@@ -12,6 +12,8 @@ beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "source-import-closure-"));
   fixturePath = path.relative(repoRoot, fixtureRoot);
   const files = {
+    "tsx-entry.ts": 'import { view } from "./view.tsx"; export { view };',
+    "view.tsx": 'import "./forbidden.js"; export const view = <span />;',
     "raw.ts": 'import html from "./page.html?raw"; export { html };',
     "missing.ts": 'import html from "./missing.html?raw"; export { html };',
     "raw-value.ts": 'import "./forbidden.ts?raw=1";',
@@ -55,3 +57,14 @@ it.each(["raw-value", "raw-empty-value"])(
     ).toEqual([`${fixturePath}/${name}.ts -> ${fixturePath}/forbidden.ts`]);
   },
 );
+
+it("follows TSX source dependencies and entrypoints", () => {
+  expect(
+    findSourceImportBackedges(`${fixturePath}/tsx-entry.ts`, [`${fixturePath}/forbidden.ts`]),
+  ).toEqual([
+    `${fixturePath}/tsx-entry.ts -> ${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`,
+  ]);
+  expect(
+    findSourceImportBackedges(`${fixturePath}/view.tsx`, [`${fixturePath}/forbidden.ts`]),
+  ).toEqual([`${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`]);
+});

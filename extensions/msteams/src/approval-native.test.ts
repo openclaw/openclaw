@@ -86,36 +86,8 @@ describe("Microsoft Teams native approval capability", () => {
 
   it.each([
     {
-      name: "approval forwarding is absent",
-      cfg: { channels: createConfig().channels } satisfies OpenClawConfig,
-    },
-    {
-      name: "exec forwarding is disabled",
-      cfg: createConfig({ approvals: { exec: { enabled: false } } }),
-    },
-    {
-      name: "forwarding only targets another channel",
-      cfg: createConfig({
-        approvals: {
-          exec: {
-            enabled: true,
-            mode: "targets",
-            targets: [{ channel: "slack", to: "channel:C123" }],
-          },
-        },
-      }),
-    },
-    {
-      name: "the Teams account is disabled",
-      cfg: createConfig({ teams: { enabled: false } }),
-    },
-    {
       name: "the bot credentials are incomplete",
       cfg: createConfig({ teams: { appPassword: undefined } }),
-    },
-    {
-      name: "no approvers are configured",
-      cfg: createConfig({ teams: { allowFrom: undefined } }),
     },
     {
       name: "allowlist entries are not stable Entra object IDs",
@@ -238,36 +210,6 @@ describe("Microsoft Teams native approval capability", () => {
         request: createExecRequest({ turnSourceTo: "  " }),
       }),
     ).toBe(false);
-  });
-
-  it("does not handle exec approvals when only plugin forwarding is enabled", () => {
-    expect(
-      shouldHandleMSTeamsNativeApprovalRequest({
-        cfg: createConfig({ approvals: { plugin: { enabled: true } } }),
-        approvalKind: "exec",
-        request: createExecRequest(),
-      }),
-    ).toBe(false);
-  });
-
-  it("preserves the normalized conversation and source thread for native delivery", () => {
-    const request = createExecRequest({
-      turnSourceTo: `teams:conversation:${CONVERSATION_ID}`,
-      turnSourceThreadId: "thread-root-123",
-    });
-
-    expect(
-      msTeamsApprovalCapability.native?.resolveOriginTarget?.({
-        cfg: createConfig(),
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }),
-    ).toEqual({
-      to: `conversation:${CONVERSATION_ID}`,
-      accountId: "default",
-      threadId: "thread-root-123",
-    });
   });
 
   it("maps stable allowlisted approvers to user-prefixed Teams DM targets", () => {

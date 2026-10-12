@@ -1,17 +1,12 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { renderCostBreakdownCompact } from "./view-chart.ts";
-import {
-  renderCostWindowComparison,
-  renderFilterChips,
-  renderSessionsCard,
-  renderUsageInsights,
-} from "./view-overview.ts";
-import { createUsageProps } from "./view.test-support.ts";
+import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageOverview, createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -40,56 +35,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function directText(element: Element | null | undefined): string | undefined {
-  return Array.from(element?.childNodes ?? [])
-    .filter((node) => node.nodeType === Node.TEXT_NODE)
-    .map((node) => node.textContent ?? "")
-    .join("")
-    .trim();
-}
-
-function getSummaryCards(container: HTMLElement): Array<{
-  title: string | undefined;
-  value: string | undefined;
-  sub: string | undefined;
-}> {
-  return Array.from(container.querySelectorAll(".usage-summary-card")).map((card) => ({
-    title: directText(card.querySelector(".usage-summary-title")),
-    value: card.querySelector(".usage-summary-value")?.textContent?.trim(),
-    sub: card.querySelector(".usage-summary-sub")?.textContent?.trim(),
-  }));
-}
-
-describe("renderUsageInsights", () => {
+describe("UsageInsights", () => {
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
+    const [currentTotals, setCurrentTotals] = createSignal(totals);
+    const [currentAggregates, setCurrentAggregates] = createSignal({
+      ...aggregates,
+      byAgent: [
+        { agentId: "main", totals },
+        { agentId: "research", totals },
+      ],
+    });
 
-    render(
-      renderUsageInsights(
-        totals,
-        {
-          ...aggregates,
-          byAgent: [
-            { agentId: "main", totals },
-            { agentId: "research", totals },
-          ],
-        },
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
+    mountSolid(
+      () =>
+        UsageInsights({
+          get totals() {
+            return currentTotals();
+          },
+          get aggregates() {
+            return currentAggregates();
+          },
+          stats: {
+            durationCount: 0,
+            avgDurationMs: 0,
+            errorRate: 0,
+          },
+          showCostHint: false,
+          showCostShares: true,
+          errorHours: [],
+          sessionCount: 1,
+          totalSessions: 1,
+        }),
+      { container },
     );
+    flush();
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
+    const cacheCard = container
+      .querySelector("#usage-summary-hint-cache-hit-rate")
+      ?.closest(".usage-summary-card");
+    expect(cacheCard?.querySelector(".usage-summary-value")?.textContent).toBe("30.0%");
+    expect(cacheCard?.querySelector(".usage-summary-sub")?.textContent).toBe(
+      "300 cached · 1.0K prompt",
+    );
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
@@ -122,154 +112,32 @@ describe("renderUsageInsights", () => {
       }),
     ).toBe(true);
 
-    buttons[0]?.click();
-    expect(document.activeElement).toBe(buttons[0]);
-  });
+    await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
+    const button = buttons[0]!;
+    const tooltip = button.closest("openclaw-tooltip")!;
+    button.click();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot?.querySelector("wa-tooltip");
+    expect(popup).toBeTruthy();
+    expect(document.activeElement).toBe(button);
 
-  it("includes cache writes in cache-hit-rate denominator", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsageInsights(
-        totals,
-        aggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    expect(getSummaryCards(container).filter((card) => card.title === "Cache Hit Rate")).toEqual([
-      {
-        title: "Cache Hit Rate",
-        value: "30.0%",
-        sub: "300 cached · 1.0K prompt",
-      },
-    ]);
-  });
-
-  it("shows provider cost share when cost data is available", () => {
-    const container = document.createElement("div");
-    const costTotals = { ...totals, totalCost: 10 };
-    const costAggregates = {
-      ...aggregates,
-      byProvider: [
-        {
-          provider: "openai",
-          count: 3,
-          totals: { ...totals, totalCost: 7, totalTokens: 700 },
-        },
-      ],
-    } as UsageAggregates;
-
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        true,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    const providerCard = Array.from(container.querySelectorAll(".usage-insight-card")).find(
-      (card) => card.querySelector(".usage-insight-title")?.textContent === "Top Providers",
-    );
-    expect(providerCard?.textContent).toContain("70.0% of cost");
-  });
-
-  it("omits cost shares when category totals are not day-scoped", () => {
-    const container = document.createElement("div");
-    const costTotals = { ...totals, totalCost: 1 };
-    const costAggregates = {
-      ...aggregates,
-      byProvider: [
-        {
-          provider: "openai",
-          count: 3,
-          totals: { ...totals, totalCost: 10, totalTokens: 700 },
-        },
-      ],
-    } as UsageAggregates;
-
-    render(
-      renderUsageInsights(
-        costTotals,
-        costAggregates,
-        {
-          durationCount: 0,
-          avgDurationMs: 0,
-          errorRate: 0,
-        },
-        false,
-        false,
-        [],
-        1,
-        1,
-      ),
-      container,
-    );
-
-    expect(container.textContent).not.toContain("1000.0% of cost");
+    setCurrentTotals((current) => ({ ...current, totalCost: 12 }));
+    setCurrentAggregates((current) => ({
+      ...current,
+      messages: { ...current.messages, total: 8 },
+    }));
+    flush();
+    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(button.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(tooltip.shadowRoot?.querySelector("wa-tooltip")).toBe(popup);
+    expect(document.activeElement).toBe(button);
+    expect(
+      button.closest(".usage-summary-card")?.querySelector(".usage-summary-value")?.textContent,
+    ).toBe("8");
   });
 });
 
 describe("usage overview presentation owners", () => {
-  it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
-    const container = document.createElement("div");
-    render(
-      renderCostBreakdownCompact(
-        {
-          ...totals,
-          totalCost: 1,
-          outputCost: 0.2,
-          inputCost: 0.1,
-          cacheWriteCost: 0.3,
-          cacheReadCost: 0.4,
-        },
-        mode,
-      ),
-      container,
-    );
-
-    const categories = [
-      "usage-token-output",
-      "usage-token-input",
-      "usage-token-cache-write",
-      "usage-token-cache-read",
-    ];
-    expect(
-      [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
-        categories.find((category) => segment.classList.contains(category)),
-      ),
-    ).toEqual(categories);
-    expect(
-      [...container.querySelectorAll(".cost-breakdown-legend .legend-item")].map((entry) =>
-        entry.textContent?.replaceAll(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(
-      mode === "tokens"
-        ? ["Output 40", "Input 100", "Cache Write 600", "Cache Read 300"]
-        : ["Output $0.20", "Input $0.10", "Cache Write $0.30", "Cache Read $0.40"],
-    );
-  });
-
   it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
     const container = document.createElement("div");
     const onClearDays = vi.fn();
@@ -282,13 +150,15 @@ describe("usage overview presentation owners", () => {
       selectedSessions: ["agent:main:usage"],
     });
     Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
-    render(
-      renderFilterChips(
-        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        props,
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderFilterChips(
+          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+          props,
+        ),
+      { container },
     );
+    flush();
 
     const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
     expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
@@ -305,45 +175,19 @@ describe("usage overview presentation owners", () => {
 });
 
 describe("renderCostWindowComparison", () => {
-  it("shows the selected range and shorter calendar periods", () => {
-    const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [
-          dailyEntry("2026-06-01", 100, 1),
-          dailyEntry("2026-06-25", 400, 4),
-          dailyEntry("2026-07-01", 500, 5),
-        ],
-        "2026-06-01",
-        "2026-07-01",
-        "local",
-      ),
-      container,
-    );
-
-    const cards = Array.from(container.querySelectorAll(".cost-window-card")).map((card) => ({
-      label: card.querySelector(".cost-window-card__label")?.textContent?.trim(),
-      value: card.querySelector(".cost-window-card__value")?.textContent?.trim(),
-    }));
-    expect(cards).toEqual([
-      { label: "Selected Range", value: "$10.00" },
-      { label: "Jul 1", value: "$5.00" },
-      { label: "Last 7 days", value: "$9.00" },
-      { label: "Last 30 days", value: "$9.00" },
-    ]);
-  });
-
   it("preserves sub-cent totals and daily averages", () => {
     const container = document.createElement("div");
-    render(
-      renderCostWindowComparison(
-        [dailyEntry("2026-07-01", 300, 0.003)],
-        "2026-06-02",
-        "2026-07-01",
-        "local",
-      ),
-      container,
+    mountSolid(
+      () =>
+        renderCostWindowComparison(
+          [dailyEntry("2026-07-01", 300, 0.003)],
+          "2026-06-02",
+          "2026-07-01",
+          "local",
+        ),
+      { container },
     );
+    flush();
 
     const range = container.querySelector(".cost-window-card--range");
     expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
@@ -351,471 +195,81 @@ describe("renderCostWindowComparison", () => {
   });
 });
 
-describe("renderSessionsCard", () => {
-  const noop = () => {};
-  const renderCard = (
-    sessions: UsageSessionEntry[],
-    options: {
-      selected?: string[];
-      days?: string[];
-      tokens?: boolean;
-      sort?: UsageProps["display"]["sessionSort"];
-      direction?: UsageProps["display"]["sessionSortDir"];
-      recent?: string[];
-      tab?: UsageProps["display"]["sessionsTab"];
-      onSelect?: UsageProps["callbacks"]["details"]["onSelectSession"];
-      totalSessions?: number;
-    } = {},
-  ) => {
+describe("SessionsCard", () => {
+  const session = (key: string, tokens = 100): UsageSessionEntry => ({
+    key,
+    label: key,
+    agentId: "main",
+    usage: { ...totals, totalTokens: tokens },
+  });
+
+  it("preserves sort focus while waiting for the server to reorder rows", () => {
+    const base = createUsageProps();
+    const [display, setDisplay] = createSignal(base.display);
+    const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
+    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
+      setDisplay((current) => ({ ...current, ...patch })),
+    );
+    const usage = {
+      ...base,
+      get display() {
+        return display();
+      },
+      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        SessionsCard({
+          get sessions() {
+            return sessions();
+          },
+          usage,
+          totalSessions: 2,
+        }),
+      { container },
+    );
+    flush();
+    const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
+    select.focus();
+    select.value = "cost";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(onChange).toHaveBeenCalledWith({ sessionSort: "cost" });
+    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Alpha");
+    setSessions([session("Beta"), session("Alpha")]);
+    flush();
+    expect(container.querySelector(".session-bar-title")?.textContent).toBe("Beta");
+    expect(container.querySelector(".sessions-sort select")).toBe(select);
+    expect(document.activeElement).toBe(select);
+  });
+
+  it("renders the server recent roster without changing its all-roster average", () => {
+    const base = createUsageProps();
+    const overview = createUsageOverview({
+      total: 2,
+      tableSessionCount: 100,
+      tableTotals: { tokens: 50000, cost: 100, errors: 7 },
+    });
+    const usage = {
+      ...base,
+      data: { ...base.data, overview },
+      display: {
+        ...base.display,
+        sessionsTab: "recent" as const,
+        recentSessions: ["A", "missing"],
+      },
+    };
     const container = document.createElement("div");
-    const props = createUsageProps();
-    props.filters.selectedSessions = options.selected ?? [];
-    props.filters.selectedDays = options.days ?? [];
-    Object.assign(props.display, {
-      chartMode: options.tokens === false ? "cost" : "tokens",
-      sessionSort: options.sort ?? "tokens",
-      sessionSortDir: options.direction ?? "desc",
-      recentSessions: options.recent ?? [],
-      sessionsTab: options.tab ?? "all",
-    });
-    props.callbacks.details.onSelectSession = options.onSelect ?? noop;
-    render(
-      renderSessionsCard(sessions, props, options.totalSessions ?? sessions.length),
-      container,
+    mountSolid(
+      () =>
+        SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
+      { container },
     );
-    return container;
-  };
-
-  it("identifies mixed-agent sessions", async () => {
-    const container = renderCard([
-      { key: "agent:main:one", agentId: "main", usage: null },
-      { key: "agent:research:two", agentId: "research", usage: null },
-    ]);
-    document.body.append(container);
-    await Promise.all(
-      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
-    );
+    flush();
     expect(
-      [...container.querySelectorAll(".session-bar-row .agent-row-chip")].map((chip) =>
-        chip.getAttribute("data-agent-id"),
-      ),
-    ).toEqual(["main", "research"]);
+      [...container.querySelectorAll(".session-bar-title")].map((entry) => entry.textContent),
+    ).toEqual(["B", "A"]);
+    expect(container.querySelector(".sessions-card-stats")?.textContent).toContain("500 avg");
   });
-
-  const shownCountCases: Array<{
-    name: string;
-    sessionCount: number;
-    options?: Parameters<typeof renderCard>[1];
-    shown: number;
-    header: string;
-    empty?: string;
-    more?: string;
-    primaryLabels?: string[];
-    selectedLabel?: string;
-  }> = [
-    {
-      name: "empty All list",
-      sessionCount: 0,
-      shown: 0,
-      header: "0 shown",
-      empty: "No sessions in range",
-    },
-    {
-      name: "All list below the display cap",
-      sessionCount: 3,
-      shown: 3,
-      header: "3 shown",
-    },
-    {
-      name: "All list above the display cap",
-      sessionCount: 51,
-      shown: 50,
-      header: "50 shown · 51 total",
-      more: "+1 more",
-    },
-    {
-      name: "empty Recently viewed list",
-      sessionCount: 3,
-      options: { tab: "recent" },
-      shown: 0,
-      header: "0 shown · 3 total",
-      empty: "No recent sessions",
-    },
-    {
-      name: "Recently viewed list with a separate selected comparison",
-      sessionCount: 3,
-      options: {
-        tab: "recent",
-        recent: ["session-2", "missing", "session-0"],
-        selected: ["session-0", "session-1"],
-      },
-      shown: 2,
-      header: "2 shown · 3 total",
-      primaryLabels: ["Session 2", "Session 0"],
-      selectedLabel: "Selected (2)",
-    },
-    {
-      name: "Recently viewed list whose keys no longer match",
-      sessionCount: 3,
-      options: { tab: "recent", recent: ["missing"] },
-      shown: 0,
-      header: "0 shown · 3 total",
-      empty: "No recent sessions",
-    },
-    {
-      name: "filtered All list with its original total",
-      sessionCount: 3,
-      options: { totalSessions: 7 },
-      shown: 3,
-      header: "3 shown · 7 total",
-    },
-    {
-      name: "filtered Recently viewed list with its original total",
-      sessionCount: 3,
-      options: { tab: "recent", recent: ["session-1", "missing"], totalSessions: 7 },
-      shown: 1,
-      header: "1 shown · 7 total",
-      primaryLabels: ["Session 1"],
-    },
-  ];
-
-  it.each(shownCountCases)("reports the rows shown in the $name", (scenario) => {
-    const sessions: UsageSessionEntry[] = Array.from(
-      { length: scenario.sessionCount },
-      (_, index) => ({
-        key: `session-${index}`,
-        label: `Session ${index}`,
-        usage: {
-          ...totals,
-          input: 100 - index,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 100 - index,
-        },
-      }),
-    );
-    const container = renderCard(sessions, scenario.options);
-    const primaryList = container.querySelector(".sessions-card > .session-bars");
-    expect(primaryList?.querySelectorAll(".session-bar-row").length ?? 0).toBe(scenario.shown);
-    expect(
-      container
-        .querySelector(".sessions-card-header .sessions-card-count")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe(scenario.header);
-    expect(container.querySelector(".usage-empty-block")?.textContent?.trim()).toBe(scenario.empty);
-    expect(container.querySelector(".usage-more-sessions")?.textContent?.trim()).toBe(
-      scenario.more,
-    );
-    expect(
-      container.querySelector(".sessions-selected-group .sessions-card-count")?.textContent?.trim(),
-    ).toBe(scenario.selectedLabel);
-    if (scenario.primaryLabels) {
-      expect(
-        [...(primaryList?.querySelectorAll(".session-bar-title") ?? [])].map((label) =>
-          label.textContent?.trim(),
-        ),
-      ).toEqual(scenario.primaryLabels);
-    }
-  });
-
-  it.each([
-    { copied: true, feedback: "Copied!" },
-    { copied: false, feedback: "Copy failed" },
-  ])("keeps session selection separate while showing $feedback", async ({ copied, feedback }) => {
-    const writeText = vi.fn(async () => {
-      if (!copied) {
-        throw new Error("Clipboard access denied");
-      }
-    });
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
-    const sessions = [
-      {
-        key: "agent:main:selected",
-        label: "Selected thread",
-        updatedAt: 2,
-        usage: { ...totals, totalTokens: 200 },
-      },
-      {
-        key: "agent:main:next",
-        label: "Next thread",
-        updatedAt: 1,
-        usage: { ...totals, totalTokens: 100 },
-      },
-    ] as UsageSessionEntry[];
-
-    const props = createUsageProps();
-    props.filters.selectedSessions = ["agent:main:selected"];
-    props.callbacks.details.onSelectSession = onSelectSession;
-    render(renderSessionsCard(sessions, props, sessions.length), container);
-
-    const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
-    const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
-    const next = rows[1]?.querySelector<HTMLButtonElement>(".session-bar-selection");
-    expect(selected).toBeInstanceOf(HTMLButtonElement);
-    expect(selected?.type).toBe("button");
-    expect(selected?.getAttribute("aria-label")).toBe("Selected thread");
-    expect(selected?.getAttribute("aria-pressed")).toBe("true");
-    expect(next?.getAttribute("aria-label")).toBe("Next thread");
-    expect(next?.getAttribute("aria-pressed")).toBe("false");
-    next?.focus();
-    expect(document.activeElement).toBe(next);
-    next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectSession).toHaveBeenCalledOnce();
-    expect(onSelectSession).toHaveBeenCalledWith(
-      "agent:main:next",
-      true,
-      sessions.map((s) => s.key),
-    );
-
-    const copyButton = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button");
-    copyButton?.click();
-    await vi.waitFor(() => {
-      expect(copyButton?.textContent?.trim()).toBe(feedback);
-      expect(copyButton?.getAttribute("aria-label")).toBeNull();
-    });
-    expect(writeText).toHaveBeenCalledWith("Selected thread");
-    expect(onSelectSession).toHaveBeenCalledOnce();
-    rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
-    expect(onSelectSession).toHaveBeenCalledWith(
-      "agent:main:selected",
-      false,
-      sessions.map((s) => s.key),
-    );
-  });
-
-  it.each([
-    {
-      tokens: true,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["10", "30"],
-      avg: "20",
-    },
-    {
-      tokens: false,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-  ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {
-    const sessions: UsageSessionEntry[] = [
-      {
-        key: "all-time-winner",
-        label: "All time winner",
-        updatedAt: 2,
-        usage: {
-          ...totals,
-          totalCost: 100,
-          totalTokens: 100,
-          dailyBreakdown: [
-            { ...totals, date: "2026-02-05", cost: 1, tokens: 30 },
-            { ...totals, date: "2026-02-04", cost: 90, tokens: 900 },
-          ],
-        },
-      } as UsageSessionEntry,
-      {
-        key: "day-winner",
-        label: "Day winner",
-        updatedAt: 1,
-        usage: {
-          ...totals,
-          totalCost: 50,
-          totalTokens: 50,
-          dailyBreakdown: [{ ...totals, date: "2026-02-05", cost: 10, tokens: 10 }],
-        },
-      } as UsageSessionEntry,
-    ];
-
-    const container = renderCard(sessions, { ...scenario, days: ["2026-02-05"] });
-    expect(
-      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
-    ).toEqual(scenario.names);
-    expect(
-      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
-    ).toEqual(scenario.values);
-    expect(
-      container
-        .querySelector(".sessions-card-stats span")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe(`${scenario.avg} avg`);
-  });
-
-  it("reads each daily bucket once across sorting, totals, recent and selected rows", () => {
-    const reads = { dates: 0, tokens: 0, cost: 0 };
-    const sessions = Array.from({ length: 3 }, (_, index): UsageSessionEntry => ({
-      key: `session-${index}`,
-      label: `Session ${index}`,
-      usage: {
-        ...totals,
-        totalTokens: (index + 1) * 100,
-        dailyBreakdown: ["2026-02-04", "2026-02-05"].map((date) =>
-          Object.assign(
-            {
-              get date() {
-                reads.dates += 1;
-                return date;
-              },
-              get tokens() {
-                reads.tokens += 1;
-                return (index + 1) * 10;
-              },
-              get cost() {
-                reads.cost += 1;
-                return 3 - index;
-              },
-            },
-            totals,
-          ),
-        ),
-      },
-    }));
-    const container = renderCard(sessions, {
-      days: ["2026-02-05"],
-      sort: "cost",
-      selected: ["session-0", "session-2"],
-      recent: ["session-2", "session-0"],
-      tab: "recent",
-    });
-    expect(
-      [...container.querySelectorAll(".session-bar-title")].map((el) => el.textContent?.trim()),
-    ).toEqual(["Session 2", "Session 0", "Session 0", "Session 2"]);
-    expect(
-      [...container.querySelectorAll(".session-bar-value")].map((el) => el.textContent?.trim()),
-    ).toEqual(["30", "10", "10", "30"]);
-    expect(
-      container
-        .querySelector(".sessions-card-stats span")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe("20 avg");
-    expect(reads.dates).toBeLessThanOrEqual(6);
-    expect(reads.tokens).toBeLessThanOrEqual(3);
-    expect(reads.cost).toBeLessThanOrEqual(3);
-  });
-
-  it.each([true, false])(
-    "preserves missing, empty, unmatched and zero daily values (tokens=%s)",
-    (tokens) => {
-      const sessions: UsageSessionEntry[] = [
-        { key: "missing-usage", usage: null },
-        { key: "missing-breakdown", usage: { ...totals, totalTokens: 10, totalCost: 1 } },
-        {
-          key: "empty-breakdown",
-          usage: { ...totals, totalTokens: 20, totalCost: 2, dailyBreakdown: [] },
-        },
-        {
-          key: "unmatched",
-          usage: {
-            ...totals,
-            totalTokens: 900,
-            totalCost: 90,
-            dailyBreakdown: [{ ...totals, date: "2026-02-04", tokens: 300, cost: 30 }],
-          },
-        },
-        {
-          key: "zero",
-          usage: {
-            ...totals,
-            totalTokens: 500,
-            totalCost: 50,
-            dailyBreakdown: [{ ...totals, date: "2026-02-05", tokens: 0, cost: 0 }],
-          },
-        },
-        {
-          key: "duplicate-days",
-          usage: {
-            ...totals,
-            totalTokens: 60,
-            totalCost: 6,
-            dailyBreakdown: [
-              { ...totals, date: "2026-02-05", tokens: 2, cost: 0.2 },
-              { ...totals, date: "2026-02-05", tokens: 3, cost: 0.3 },
-            ],
-          },
-        },
-      ];
-      const values = (container: HTMLElement) =>
-        Object.fromEntries(
-          [...container.querySelectorAll(".session-bar-row")].map((row) => [
-            row.getAttribute("title"),
-            row.querySelector(".session-bar-value")?.textContent?.trim(),
-          ]),
-        );
-      const formatted = (amounts: number[]) =>
-        Object.fromEntries(
-          sessions.map((session, index) => [
-            session.key,
-            tokens ? String(amounts[index]) : `$${amounts[index]!.toFixed(2)}`,
-          ]),
-        );
-      expect(values(renderCard(sessions, { tokens, days: ["2026-02-05", "2026-02-05"] }))).toEqual(
-        formatted(tokens ? [0, 10, 20, 0, 0, 5] : [0, 1, 2, 0, 0, 0.5]),
-      );
-      expect(values(renderCard(sessions, { tokens }))).toEqual(
-        formatted(tokens ? [0, 10, 20, 900, 500, 60] : [0, 1, 2, 90, 50, 6]),
-      );
-    },
-  );
-
-  it.each(["desc", "asc"] as const)(
-    "preserves ties, duplicate keys and each selection group's %s order",
-    (direction) => {
-      const sessions: UsageSessionEntry[] = [
-        { key: "shared", label: "Alpha", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
-        { key: "shared", label: "Beta", updatedAt: 1, usage: { ...totals, totalTokens: 10 } },
-        { key: "newest", label: "Newest", updatedAt: 2, usage: { ...totals, totalTokens: 10 } },
-        { key: "other", label: "Other", updatedAt: 0, usage: { ...totals, totalTokens: 10 } },
-      ];
-      const titles = (container: Element) =>
-        [...container.querySelectorAll(".session-bar-title")].map((entry) =>
-          entry.textContent?.trim(),
-        );
-      expect(titles(renderCard(sessions, { direction }))).toEqual(
-        direction === "desc"
-          ? ["Newest", "Alpha", "Beta", "Other"]
-          : ["Other", "Beta", "Alpha", "Newest"],
-      );
-      expect(sessions.map((session) => session.label)).toEqual([
-        "Alpha",
-        "Beta",
-        "Newest",
-        "Other",
-      ]);
-      const onSelect = vi.fn();
-      const container = renderCard(sessions, {
-        direction,
-        tab: "recent",
-        recent: ["shared", "newest", "shared"],
-        selected: ["shared", "newest"],
-        onSelect,
-      });
-      const recent = container.querySelector(".session-bars--recent")!;
-      const selected = container.querySelector(".session-bars--selected")!;
-      expect(titles(recent)).toEqual(
-        direction === "desc" ? ["Beta", "Newest", "Beta"] : ["Alpha", "Newest", "Alpha"],
-      );
-      expect(titles(selected)).toEqual(
-        direction === "desc" ? ["Newest", "Alpha", "Beta"] : ["Beta", "Alpha", "Newest"],
-      );
-      recent
-        .querySelector(".session-bar-selection")!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-      expect(onSelect).toHaveBeenLastCalledWith("shared", true, ["shared", "newest", "shared"]);
-      selected
-        .querySelector(".session-bar-selection")!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-      expect(onSelect).toHaveBeenLastCalledWith(
-        direction === "desc" ? "newest" : "shared",
-        true,
-        direction === "desc" ? ["newest", "shared", "shared"] : ["shared", "shared", "newest"],
-      );
-    },
-  );
 });

@@ -39,6 +39,68 @@ function validationStatements(queries: string[]): string[] {
   );
 }
 
+it("admits a restarted current schema before repeated version and migration probes", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-restart-") };
+  const first = openOpenClawStateDatabase({ env });
+  first.db
+    .prepare(
+      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+    )
+    .run("restart.fixture", '"retained"', 1);
+  closeOpenClawStateDatabaseForTest();
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    const restarted = openOpenClawStateDatabase({ env });
+    expect(observation.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
+      1,
+    );
+    expect(
+      observation.queries.filter((sql) =>
+        /select "value_json" from "config_machine_state"/iu.test(sql),
+      ),
+    ).toHaveLength(1);
+    expect(
+      observation.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql)),
+    ).toHaveLength(1);
+    expect(
+      restarted.db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("restart.fixture"),
+    ).toEqual({ value_json: '"retained"' });
+    restarted.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    expect(() => assertSupportedStateSchemaVersion(restarted.db, restarted.path)).toThrow(
+      /newer schema version/iu,
+    );
+  } finally {
+    observation.restore();
+  }
+});
+
+it("refuses corrupt current-version state on restart without a clean integrity receipt", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-unclean-") };
+  const pathname = openOpenClawStateDatabase({ env }).path;
+  closeOpenClawStateDatabaseForTest();
+  // Persisted invalid bytes model an earlier process that never published clean-close proof.
+  const replacement = `${pathname}.unclean`;
+  copyFileSync(pathname, replacement);
+  {
+    using database = new DatabaseSync(replacement);
+    database.exec(`PRAGMA foreign_keys = OFF;
+      INSERT INTO acp_replay_events
+        (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+        VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0)`);
+  }
+  renameSync(replacement, pathname);
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(/foreign_key_check/iu);
+    expect(observation.queries.some((sql) => /^PRAGMA integrity_check\b/iu.test(sql))).toBe(true);
+    expect(observation.queries.some((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql))).toBe(true);
+  } finally {
+    observation.restore();
+  }
+});
+
 it("checks integrity once before index repair and once after rebuilding the index", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-repair-") };
   const pathname = openOpenClawStateDatabase({ env }).path;
@@ -68,13 +130,19 @@ it("checks integrity once before index repair and once after rebuilding the inde
     closeOpenClawStateDatabaseForTest();
     observation.queries.length = 0;
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
     observation.restore();
   }
 });
 
-it("reuses shared-state admission after DDL revalidation, readers, and writer retirement", () => {
+it("reuses live shared-state admission and revalidates after the final reader and writer close", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -82,18 +150,27 @@ it("reuses shared-state admission after DDL revalidation, readers, and writer re
     CREATE INDEX checkonce_unrelated_value ON checkonce_unrelated(value)`);
   // Equal catalog definitions cannot prove that metadata rows survived arbitrary DDL.
   assertExistingOpenClawStateRuntimeSchema(first.db, pathname);
+  const survivingReader = openOpenClawStateReadOnlyLocation(pathname, pathname);
   closeOpenClawStateDatabaseForTest();
   const observation = observeSqliteReadSql(StatementSync.prototype);
   try {
     const second = openOpenClawStateDatabase({ env });
     expect(second.db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
+    survivingReader.close();
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env });
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
     const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
     reader.close();
     expect(reopened.db.isOpen).toBe(true);
     expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
+    survivingReader.close();
     observation.restore();
   }
 });
@@ -183,7 +260,7 @@ it.each(["required definition", "newer header"] as const)(
   },
 );
 
-it.each(["missing table", "newer header"] as const)(
+it.each(["missing table", "missing index", "newer header"] as const)(
   "readmits startup checkpoint storage after a tracked %s change",
   (change) => {
     const root = directories.make("state-checkonce-checkpoint-");
@@ -217,12 +294,17 @@ it.each(["missing table", "newer header"] as const)(
     peer.exec(
       change === "missing table"
         ? "DROP TABLE state_leases"
-        : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+        : change === "missing index"
+          ? "DROP INDEX idx_state_leases_expiry"
+          : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
     callback.mockClear();
-    if (change === "missing table") {
+    if (change !== "newer header") {
       expect(read()).toBe(0);
       expect(callback).toHaveBeenCalledOnce();
+      expect(
+        peer.prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_state_leases_expiry'").get(),
+      ).toEqual({ name: "idx_state_leases_expiry" });
     } else {
       expect(read).toThrow(/newer schema version/iu);
       expect(callback).not.toHaveBeenCalled();

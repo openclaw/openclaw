@@ -1,15 +1,15 @@
-import { nothing, render } from "lit";
 import { expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
-import { renderAgents } from "./view.ts";
+import { Agents } from "./view.tsx";
 
 it("opens agent avatar selection from the keyboard and respects the busy state", async () => {
   const container = document.createElement("div");
   document.body.append(container);
   const props = createAgentViewTestProps();
+  const mounted = mountSolid(Agents, props, container);
   try {
-    render(renderAgents(props), container);
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!input) {
       throw new Error("Missing avatar file input");
@@ -26,16 +26,14 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
     await userEvent.keyboard(" ");
     expect(openPicker).toHaveBeenCalledTimes(2);
 
-    render(
-      renderAgents({ ...props, overview: { ...props.overview, identitySaving: true } }),
-      container,
-    );
+    mounted.update({ ...props, overview: { ...props.overview, identitySaving: true } });
     expect(button.disabled).toBe(true);
     button.click();
     expect(openPicker).toHaveBeenCalledTimes(2);
   } finally {
     vi.restoreAllMocks();
-    render(nothing, container);
+    mounted.dispose();
+
     container.remove();
   }
 });

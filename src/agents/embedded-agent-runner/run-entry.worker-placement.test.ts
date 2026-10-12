@@ -1,5 +1,6 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertSupportedTurn } from "../../gateway/worker-environments/worker-turn-payload.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -8,6 +9,9 @@ import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
 const state = setupRunEntryTestState();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("runEmbeddedAgentEntry worker placement", () => {
   it.each(["provider replacement", "cancellation", "lifecycle rotation"] as const)(
@@ -80,9 +84,11 @@ describe("runEmbeddedAgentEntry worker placement", () => {
               },
             }
           : {};
+      setRuntimeConfigSnapshot(cfg);
       const placement = {
         assertCompactionSuccessorAllowed: () => {},
         resolveRuntimeOverride: vi.fn(async () => "openclaw"),
+        usesWorkerInference: async () => true,
         executeLocalTurn: async <T>(_claim: unknown, run: () => Promise<T>) => run(),
         executeTurn: vi.fn(),
       };
@@ -141,6 +147,9 @@ describe("runEmbeddedAgentEntry worker placement", () => {
             agentHarnessRuntimeOverride: requestedRuntime ?? "openclaw",
           });
         }
+      }
+      for (const [fallback] of state.runWithModelFallback.mock.calls) {
+        expect(fallback.skipAuthProfileRuntime).toBe(true);
       }
     },
   );

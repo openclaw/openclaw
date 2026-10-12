@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import "../styles/hub-tabs.css";
+import { reclaimHubTabFocus, rememberHubTabFocus } from "./hub-tabs-focus.ts";
 import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
 
 type HubTabOption<T extends string> = {
@@ -28,44 +29,9 @@ type HubTabsProps<T extends string> = {
   onActivate?: (element: HTMLElement) => void;
 };
 
-// Keyboard activation unmounts a route-owned strip, so the destination strip
-// reclaims focus on first render. The timeout prevents an aborted navigation
-// from stealing focus later.
-const PENDING_FOCUS_WINDOW_MS = 2000;
 // Web Awesome selects its first tab when `active` is empty. A truthy value that
 // matches no panel preserves an intentional no-selection state.
 const NO_ACTIVE_TAB = "__openclaw-hub-tabs-no-active__";
-let pendingFocus: { hubId: string; tab: string; at: number; source: Element } | null = null;
-
-function reclaimFocus(hubId: string, tab: string, element: Element | undefined) {
-  if (!element || pendingFocus?.hubId !== hubId || pendingFocus.tab !== tab) {
-    return;
-  }
-  const pending = pendingFocus;
-  if (Date.now() - pending.at > PENDING_FOCUS_WINDOW_MS) {
-    pendingFocus = null;
-    return;
-  }
-  // The ref fires while the strip is still inside Lit's template fragment.
-  // A task lets both Lit and Web Awesome finish connecting before focus moves.
-  window.setTimeout(() => {
-    if (pendingFocus !== pending) {
-      return;
-    }
-    pendingFocus = null;
-    const currentFocus = document.activeElement;
-    if (
-      element.isConnected &&
-      Date.now() - pending.at <= PENDING_FOCUS_WINDOW_MS &&
-      (currentFocus === pending.source ||
-        currentFocus === document.body ||
-        currentFocus === document.documentElement)
-    ) {
-      (element as HTMLElement).focus();
-    }
-  }, 0);
-}
-
 export function renderHubTabs<T extends string>(props: HubTabsProps<T>): TemplateResult {
   const variant = props.variant ?? "primary";
   const requestedActive = props.requestedActive ?? props.active;
@@ -94,12 +60,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
           }
           if (keyboard) {
             event.preventDefault();
-            pendingFocus = {
-              hubId: props.id,
-              tab: tab.value,
-              at: Date.now(),
-              source: activeElement,
-            };
+            rememberHubTabFocus(props.id, tab.value, activeElement);
           }
           props.onSelect(tab.value);
           props.onActivate?.(activeElement);
@@ -125,7 +86,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 activate(event, true);
               }
             }}
-            ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}
+            ${selected ? ref((element) => reclaimHubTabFocus(props.id, tab.value, element)) : nothing}
           >
             ${tab.label}${
               tab.count == null

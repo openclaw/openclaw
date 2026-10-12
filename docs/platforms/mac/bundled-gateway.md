@@ -28,9 +28,22 @@ duplicated. Existing independently managed installations keep their current
 lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
 their always-on service.
 
+Before launching an app-hosted Gateway, the app saves a local authentication
+token when neither configuration nor the child environment supplies credentials
+and token authentication is selected or implicit. Existing credentials, secret
+references, and other authentication modes are preserved. If the token cannot
+be saved, setup stops with a retryable error. This also applies to a local
+Gateway hosted alongside a remote primary connection.
+
+The app also preserves remote fallback credentials, configuration includes,
+trusted dotenv credentials, and enabled login-shell environment imports.
+It leaves authentication unchanged when a credential source is unreadable or
+cannot be resolved safely. Trusted dotenv files are the profile's `.env` and,
+for the default state directory, `~/.config/openclaw/gateway.env`.
+
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
-`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use APFS
-clone-on-write when available and are published atomically after provenance and
+`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
+directory clone when available, falling back to a file copy, and are published atomically after provenance and
 Bun checks succeed. The child and app-managed Bun service use the concrete
 build directory so each process keeps its matching package and SQLite library.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
@@ -58,7 +71,7 @@ retain their existing startup policies.
 
 When the native app creates identity, device-auth, or approval tables before
 the worker starts, node startup completes that recognized version-zero database
-through the canonical initializer before plugins read their state. Existing
+through the shared initializer before plugins read their state. Existing
 native rows are preserved. This does not migrate an already-versioned shared
 Gateway database or adopt unknown or occupied bootstrap state.
 
@@ -71,10 +84,14 @@ Homebrew, or administrator access. Connecting an AI provider can still require
 internet access.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
-current bundled CLI with Bun and the included SQLite library. It also links
-`openclaw-mac` beside it and adds that bin directory to the usual shell profile
-files. An existing operator-created `openclaw` file is preserved; only the
-app's own wrapper or a recognized `install-cli.sh` wrapper is replaced.
+current bundled CLI with Bun and the included SQLite library. When the app runs
+from a persistent location, it also links `openclaw-mac` beside it, and the
+default profile adds that bin directory to the usual shell profile files. Named
+profiles, and copies running from Downloads, the Desktop, a disk image, or a
+temporary directory such as `/tmp`, leave shell profiles unchanged; run their
+wrapper by its full path, such as `~/.openclaw-<profile>/bin/openclaw`. An
+existing operator-created `openclaw` file is preserved; only the app's own
+wrapper or a recognized `install-cli.sh` wrapper is replaced.
 
 Unbundled DEBUG builds retain the developer installer and channel chooser.
 That installer uses a private temporary directory for downloads and build tools,
@@ -275,6 +292,10 @@ Logging:
   [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
 ## App-hosted lifecycle and updates
+
+During local startup, readiness probes own the retry cadence and deadline.
+Connection refusals while the Gateway boots do not leave an exponential
+connection delay that holds up a ready Gateway.
 
 The app restarts a crashed child with a delay that doubles from one second to
 30 seconds, resetting after 60 healthy seconds. Five rapid failures stop the

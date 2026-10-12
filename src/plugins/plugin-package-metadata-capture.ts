@@ -15,7 +15,6 @@ import {
 } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
-import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
@@ -221,7 +220,6 @@ export function capturePluginPackageMetadata(
   copy: (source: string, target: string) => void,
   isRetainedReference?: (source: string, real: string) => boolean,
   resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
-  recordFileProbe?: (source: string) => void,
 ) {
   const manifest = path.join(destination, "package.json");
   copy(path.join(root, "package.json"), manifest);
@@ -252,9 +250,6 @@ export function capturePluginPackageMetadata(
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
       const insideRoot = isPathInside(root, filename);
-      if (insideRoot) {
-        recordFileProbe?.(filename);
-      }
       if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
         const real = fs.realpathSync(input);
         if (
@@ -552,14 +547,12 @@ export function createPluginPackageMetadataCapture(params: {
       boundary,
       copy,
       hasSource,
-      recordMissingMetadata,
     }: {
       root: string;
       destination: string;
       boundary: string;
       copy: (source: string, target: string) => void;
       hasSource: (source: string) => boolean;
-      recordMissingMetadata?: (source: string) => void;
     }) {
       type PackageScope = {
         source: string;
@@ -594,11 +587,11 @@ export function createPluginPackageMetadataCapture(params: {
             }
             return parsed;
           };
-        } else {
-          recordMissingMetadata?.(source);
-          if (scopeDirectory !== boundary && isPathInside(boundary, path.dirname(scopeDirectory))) {
-            scope = captureScopeMetadata(path.dirname(scopeDirectory));
-          }
+        } else if (
+          scopeDirectory !== boundary &&
+          isPathInside(boundary, path.dirname(scopeDirectory))
+        ) {
+          scope = captureScopeMetadata(path.dirname(scopeDirectory));
         }
         capturedScopes.set(scopeDirectory, scope);
         return scope;
@@ -662,8 +655,6 @@ export function createPluginSourceCapture() {
     }
     throw error;
   }
-  const inputs = new Map<string, PluginSourceInput>();
-  const pendingInputs = new Set<string>();
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
@@ -673,7 +664,6 @@ export function createPluginSourceCapture() {
     }
     try {
       const value = capture();
-      verifyPluginSourceInputs(inputs, pendingInputs);
       return { value, additions: [...additions] };
     } catch (error) {
       // Another specifier must not admit files from an incomplete capture transaction.
@@ -682,7 +672,6 @@ export function createPluginSourceCapture() {
       }
       throw error;
     } finally {
-      pendingInputs.clear();
       additions.clear();
     }
   };
@@ -705,8 +694,6 @@ export function createPluginSourceCapture() {
     captureFailures.clear();
   };
   return {
-    inputs,
-    pendingInputs,
     additions,
     capture: acquire,
     assertModuleAvailable,

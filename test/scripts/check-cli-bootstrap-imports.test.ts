@@ -176,7 +176,7 @@ describe("check-cli-bootstrap-imports", () => {
     writeFixture(
       root,
       "dist/client.js",
-      'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\n',
+      'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\nimport "@openclaw/proc-safe/errors";\nimport "@openclaw/proc-safe/identity";\n',
     );
 
     expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([]);
@@ -222,12 +222,18 @@ describe("check-cli-bootstrap-imports", () => {
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
-  it("reports unexpected external packages in the native hook relay static graph", () => {
+  it.each([
+    "commander",
+    "@openclaw/proc-safe",
+    "@openclaw/proc-safe/darwin",
+    "@openclaw/proc-safe/identity-extra",
+    "@openclaw/proc-safe/identity/private",
+  ])("reports unexpected relay import %s", (specifier) => {
     const root = makeTempRoot();
-    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "commander";\n');
+    writeFixture(root, "dist/native-hook-relay/entry.js", `import "${specifier}";\n`);
 
     expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
-      'Native hook relay static graph imports unexpected package "commander" from dist/native-hook-relay/entry.js.',
+      `Native hook relay static graph imports unexpected package "${specifier}" from dist/native-hook-relay/entry.js.`,
     ]);
   });
 

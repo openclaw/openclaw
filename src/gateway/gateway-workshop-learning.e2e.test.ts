@@ -27,7 +27,6 @@ type ProviderRequest = {
     output?: unknown;
     content?: Array<{ text?: string }>;
   }>;
-  tools?: Array<{ name?: string }>;
 };
 
 function respondWithTool(
@@ -90,7 +89,6 @@ describe("Gateway automatic Workshop learning", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const providerErrors: unknown[] = [];
-      const providerRequests: ProviderRequest[] = [];
       const reviewRequests: ProviderRequest[] = [];
       const laterForegroundRequests: ProviderRequest[] = [];
       const reviewStarted = createDeferred();
@@ -142,7 +140,6 @@ describe("Gateway automatic Workshop learning", () => {
                 return;
               }
               const payload = JSON.parse(await readText(request)) as ProviderRequest;
-              providerRequests.push(payload);
               // Runtime context can append a user-role item after the actual request.
               if (
                 payload.input?.some(
@@ -212,7 +209,7 @@ describe("Gateway automatic Workshop learning", () => {
               models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
               plugins: { slots: { memory: "none" } },
               tools: { profile: "coding" },
-              skills: { workshop: { autonomous: { mode: "auto" } } },
+              skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
             } satisfies OpenClawConfig;
             const workshop = resolveWorkshopSkillsDir(config, "main");
             const skillFile = path.join(workshop, "map-publication", "SKILL.md");
@@ -310,23 +307,6 @@ describe("Gateway automatic Workshop learning", () => {
                 { runId: laterAccepted.runId, timeoutMs: 30_000 },
                 { timeoutMs: 35_000 },
               );
-              console.log(
-                "WORKSHOP_GATEWAY_OVERLAP_OBSERVATION",
-                JSON.stringify({
-                  accepted,
-                  completed,
-                  laterAccepted,
-                  laterCompleted,
-                  source,
-                  sourceEntry: loadSessionEntry(scope),
-                  originalTranscript,
-                  currentTranscript: loadTranscriptEventsSync(source),
-                  providerRequests,
-                  laterForegroundRequests,
-                  reviewRequests,
-                  providerErrors,
-                }),
-              );
               expect(laterCompleted.status).toBe("ok");
               expect(laterForegroundRequests).toHaveLength(1);
               expect(reviewRequests).toHaveLength(1);
@@ -349,7 +329,19 @@ describe("Gateway automatic Workshop learning", () => {
                 timeout: 80_000,
                 interval: 100,
               })
-              .toContain("💾 Learned:");
+              .toContain("💾 Learned:")
+              .catch(async (cause: unknown) => {
+                throw new Error(
+                  JSON.stringify({
+                    reviewResults: reviewRequests.map((request) =>
+                      request.input?.findLast((item) => item.type === "function_call_output"),
+                    ),
+                    changes: await listWorkshopChanges("main"),
+                    providerErrors,
+                  }),
+                  { cause },
+                );
+              });
             const skill = await fs.readFile(skillFile, "utf8");
             const support = await fs.readFile(supportFile, "utf8");
             const outside = await fs.readFile(outsideFile, "utf8");

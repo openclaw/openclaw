@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  parseFiniteNumber as readFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
@@ -187,10 +184,7 @@ export function createTalkTranscriptionRelaySession(
   enforceTranscriptionSessionLimits(params.connId);
   assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TRANSCRIPTION_SESSION_TTL_MS);
-  if (expiresAtMs === undefined) {
-    throw new Error("Transcription relay session expiry is outside the supported Date range");
-  }
+  const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
   const talk = createTalkSessionController(
     {
       sessionId: transcriptionSessionId,

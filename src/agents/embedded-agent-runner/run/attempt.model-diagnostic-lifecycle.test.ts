@@ -100,11 +100,88 @@ describe("model diagnostic lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    "throw",
+    "promise rejection",
+    "iterator failure",
+    "iterator factory failure",
+    "result rejection",
+    "resolved stream setup failure",
+    "EOF without result",
+  ] as const)(
+    "finishes request activity once after %s without admitting cache usage",
+    async (kind) => {
+      const failure = new Error("Synthetic provider failure");
+      const onFinished = vi.fn();
+      const onTerminal = vi.fn();
+      const onSucceeded = vi.fn();
+      const context = { nextCallId: () => "call-1", onFinished, onTerminal, onSucceeded };
+      const source = () => {
+        if (kind === "throw") {
+          throw failure;
+        }
+        if (kind === "promise rejection") {
+          return Promise.reject(failure);
+        }
+        if (kind === "iterator failure") {
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  throw failure;
+                },
+              };
+            },
+          };
+        }
+        if (kind === "iterator factory failure") {
+          return {
+            [Symbol.asyncIterator]() {
+              throw failure;
+            },
+          };
+        }
+        if (kind === "result rejection") {
+          return Object.assign((async function* () {})(), {
+            result: async () => {
+              throw failure;
+            },
+          });
+        }
+        if (kind === "resolved stream setup failure") {
+          return Promise.resolve({
+            async *[Symbol.asyncIterator]() {},
+            get result() {
+              throw failure;
+            },
+          });
+        }
+        return (async function* () {})();
+      };
+      const wrapped = wrap(source as unknown as StreamFn, context);
+      let caught: unknown;
+      try {
+        const response = await wrapped({} as never, { messages: [] });
+        await drain(response);
+        if (kind === "result rejection") {
+          await response.result();
+        }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(kind === "EOF without result" ? undefined : failure);
+      expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
+      expect(onTerminal).not.toHaveBeenCalled();
+      expect(onSucceeded).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["stop", "error"] as const)(
     "notifies terminal %s once after deferred EOF settlement",
     async (stopReason) => {
       const onTerminal = vi.fn();
       const onSucceeded = vi.fn();
+      const onFinished = vi.fn();
       const source = createAssistantMessageEventStream();
       source.end(
         makeAssistantMessageFixture({
@@ -113,17 +190,24 @@ describe("model diagnostic lifecycle", () => {
           errorMessage: undefined,
         }),
       );
-      const wrapped = wrap(() => source, { agentId: "agent-1", onTerminal, onSucceeded });
+      const wrapped = wrap(() => source, {
+        agentId: "agent-1",
+        onTerminal,
+        onSucceeded,
+        onFinished,
+      });
       const events = await collect(async () => {
         const response = await wrapped({} as never, { messages: [] });
         await drain(response);
         expect(onTerminal).not.toHaveBeenCalled();
         expect(onSucceeded).not.toHaveBeenCalled();
+        expect(onFinished).not.toHaveBeenCalled();
         await response.result();
         await response.result();
         await drain(response);
       });
       expect(onTerminal).toHaveBeenCalledOnce();
+      expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
       expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
       expect(events.map((event) => event.type)).toEqual([
         "model.call.started",

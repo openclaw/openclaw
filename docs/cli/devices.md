@@ -75,7 +75,7 @@ openclaw devices reject <requestId>
 ### `openclaw devices join-code`
 
 Mint a single-use node onboarding URL with administrator access to the
-Gateway. Paste the printed `npx -y openclaw connect <url> --service --session-host`
+Gateway. Paste the printed `npx -y openclaw@<gateway-version> connect <url> --service --session-host`
 command on the machine to enroll it as a background service that can run agent
 sessions. Use only trusted shared infrastructure; for a command-only node,
 omit `--session-host`. This join URL is not a mobile app setup code; for
@@ -85,6 +85,17 @@ Android/iOS use [`openclaw qr`](/cli/qr) instead.
 openclaw devices join-code
 openclaw devices join-code --json
 ```
+
+The npm version comes from the Gateway that minted the URL, not the invoking
+CLI. Source checkouts and unpublished versions use a matching npm channel tag
+when it resolves, otherwise unpinned `openclaw`, with a matching-build note.
+Registry checks take at most two seconds.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+
+JSON preserves `joinUrl` and `command` (the default service/session-host command),
+and adds `serviceCommand` (command-only node service), `installedCommand` (uses
+the existing installation), and optional `versionNote` (matching-build guidance).
 
 Join-code creation and redemption are core Gateway operations; no pairing
 plugin needs to be enabled. The URL must be reachable from the joining machine.

@@ -132,7 +132,7 @@ Group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`)
 ## Goals
 
 - Talk to OpenClaw via Teams DMs, group chats, or channels.
-- Keep routing deterministic: replies always go back to the channel they arrived on.
+- Replies always go back to the channel they arrived on.
 - Default to safe channel behavior (mentions required unless configured otherwise).
 
 <details>
@@ -140,7 +140,7 @@ Group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`)
 
 ### How it works
 
-1. Ensure the Microsoft Teams plugin is available (bundled in current releases).
+1. Check that the Microsoft Teams plugin is available (bundled in current releases).
 2. Create an **Azure Bot** (App ID + secret + tenant ID).
 3. Build a **Teams app package** referencing the bot, including the [RSC permissions](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest).
 4. Upload/install the Teams app into a team (or personal scope for DMs).

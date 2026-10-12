@@ -68,6 +68,7 @@ const { prepareNodeHostRuntime } =
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.loadConfig.mockResolvedValue(null);
+  fixture.runtime.close.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -89,6 +90,8 @@ function startWorkerFixture(
     ) => { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } };
   } = {},
 ) {
+  // The private worker owns stdin; this shared test process does not.
+  const destroyStdin = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
   const events = new EventEmitter();
   const input = Object.assign(events, {
     close: () => {
@@ -146,6 +149,7 @@ function startWorkerFixture(
       try {
         input.close();
         await running;
+        expect(destroyStdin).toHaveBeenCalled();
         if (!options.prepared) {
           expect(fixture.runtime.close).toHaveBeenCalledOnce();
           expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();

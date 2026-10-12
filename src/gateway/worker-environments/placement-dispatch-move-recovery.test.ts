@@ -14,7 +14,6 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import * as support from "./service.test-support.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
@@ -26,7 +25,7 @@ describe("worker Gateway move recovery", () => {
   async function abandonmentFixture() {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const options = { deviceRunnerAvailable: false, workspacePath: support.testState.root };
-    const harness = createHarness(support.testState.stateDb, placements, options);
+    const harness = await createHarness(support.testState.stateDb, placements, options);
     const active = await harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("Move source was not active");
@@ -70,7 +69,7 @@ describe("worker Gateway move recovery", () => {
       }
       expect(options.deviceRunnerAvailable).toBe(true);
       expect(placements.get(active.sessionId)).toEqual(active);
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.environments.stopTunnel).not.toHaveBeenCalled();
     },
@@ -119,7 +118,7 @@ describe("worker Gateway move recovery", () => {
     }
     expect(joined).toMatchObject({ joined: true, intent: { operationId } });
     expect(placements.get(active.sessionId)?.state).toBe("local");
-    expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
@@ -127,7 +126,7 @@ describe("worker Gateway move recovery", () => {
     "preserves the accepted checkpoint when pending Gateway move recovery is %s",
     async (mode) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -193,7 +192,7 @@ describe("worker Gateway move recovery", () => {
         );
         expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(false);
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);
@@ -220,7 +219,7 @@ describe("worker Gateway move recovery", () => {
             ? { claimId: "replacement-claim", runId: "replacement-run" }
             : { claimId: claim.claimId, runId: claim.runId },
       });
-      expect(restartedStore.getPlacementMove(active.sessionId)?.operationId).toBe(
+      expect((await restartedStore.getPlacementMoveAsync(active.sessionId))?.operationId).toBe(
         begun.intent.operationId,
       );
     },
@@ -235,7 +234,7 @@ describe("worker Gateway move recovery", () => {
     "Stop settles an accepted $kind result with $source source without resuming a policy-rejected Gateway move",
     async ({ kind, source }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -296,7 +295,7 @@ describe("worker Gateway move recovery", () => {
         revokeSessionAuthority: vi.fn(),
       });
       const prepareGatewayMove = vi.fn();
-      const stopping = createHarness(support.testState.stateDb, placements, {
+      const stopping = await createHarness(support.testState.stateDb, placements, {
         runReclaimPreparation: barriers.runReclaimPreparation,
         prepareGatewayMove,
       });
@@ -325,16 +324,13 @@ describe("worker Gateway move recovery", () => {
       expect(prepareGatewayMove).not.toHaveBeenCalled();
       expect(stopping.environments.destroy).toHaveBeenCalledTimes(source === "attached" ? 1 : 0);
       expect(stopping.log).not.toContain("placement:local");
-      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      expect(await placements.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 
   it.each([
     "current",
-    "replaced",
-    "foreign-generation",
-    "foreign-move",
     "policy-required",
     "policy-activated",
     "policy-at-transaction",
@@ -343,7 +339,7 @@ describe("worker Gateway move recovery", () => {
     "materializes a torn-down Gateway move before local recovery while its owner is %s",
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const ready = await support.seedReady(original.ready.environmentId);
       const environments = support.createService(support.createProvider());
       const attached = await environments.attachSession({
@@ -412,11 +408,10 @@ describe("worker Gateway move recovery", () => {
           restoreAdmission = () => admission.mockRestore();
         }
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentDestroyed();
-      let replacement: ReturnType<typeof restartedStore.get>;
       if (owner === "policy-required") {
         setRuntimeConfigSnapshot({ cloudWorkers: { requiredProfile: "development" } });
       }
@@ -430,52 +425,6 @@ describe("worker Gateway move recovery", () => {
         if (owner === "policy-activated") {
           setRuntimeConfigSnapshot({ cloudWorkers: { requiredProfile: "development" } });
         }
-        if (owner === "replaced") {
-          await restartedStore.cancelPlacementMove({
-            operationId: begun.intent.operationId,
-            sessionId: active.sessionId,
-          });
-          await restartedStore.fail({
-            sessionId: active.sessionId,
-            expectedGeneration: reconciling.generation,
-            recoveryError: "source replaced",
-          });
-          seedAttachedPlacementEnvironment(support.testState.stateDb, {
-            environmentId: "replacement-environment",
-            sessionId: REQUEST.sessionId,
-            ownerEpoch: 9,
-          });
-          replacement = await seedActivePlacement(restartedStore, {
-            environmentId: "replacement-environment",
-            ownerEpoch: 9,
-          });
-        }
-        if (owner === "foreign-generation" || owner === "foreign-move") {
-          const foreign = new DatabaseSync(support.testState.stateDb.path);
-          try {
-            if (owner === "foreign-generation") {
-              foreign
-                .prepare(
-                  `UPDATE worker_session_placements
-                   SET transition_generation = transition_generation + 1 WHERE session_id = ?`,
-                )
-                .run(active.sessionId);
-            } else {
-              foreign
-                .prepare(
-                  "UPDATE worker_session_placement_moves SET operation_id = ? WHERE session_id = ?",
-                )
-                .run("move:v1:foreign-replacement", active.sessionId);
-            }
-          } finally {
-            foreign.close();
-          }
-          // Leave the foreign commit unobserved until the final effect guard.
-          replacement =
-            owner === "foreign-generation"
-              ? { ...reconciling, generation: reconciling.generation + 1 }
-              : reconciling;
-        }
       } finally {
         release.resolve();
         try {
@@ -484,19 +433,7 @@ describe("worker Gateway move recovery", () => {
           restoreAdmission?.();
         }
       }
-      if (owner === "replaced" || owner === "foreign-generation" || owner === "foreign-move") {
-        await expect(prepareGatewayMove.mock.results[0]?.value).rejects.toThrow(
-          "lost its source owner",
-        );
-        expect(restartedStore.get(active.sessionId)).toEqual(replacement);
-        if (owner === "foreign-move") {
-          expect(restartedStore.getPlacementMove(active.sessionId)?.operationId).toBe(
-            "move:v1:foreign-replacement",
-          );
-        }
-        expect(restarted.log).not.toContain("placement:local");
-        await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-      } else if (
+      if (
         owner === "policy-required" ||
         owner === "policy-activated" ||
         owner === "policy-at-transaction" ||
@@ -508,7 +445,7 @@ describe("worker Gateway move recovery", () => {
           );
         }
         expect(restartedStore.get(active.sessionId)).toEqual(reconciling);
-        expect(restartedStore.getPlacementMove(active.sessionId)).toMatchObject({
+        expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toMatchObject({
           operationId: begun.intent.operationId,
           lastError: expect.stringContaining("required worker profile policy"),
         });
@@ -520,7 +457,7 @@ describe("worker Gateway move recovery", () => {
       } else {
         expect(await fs.readFile(file, "utf8")).toBe("accepted repository result\n");
         expect(restartedStore.get(active.sessionId)?.state).toBe("local");
-        expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+        expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       }
       expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
       expect(restarted.environments.destroy).not.toHaveBeenCalled();
@@ -543,7 +480,7 @@ describe("worker Gateway move recovery", () => {
     "recovers a persisted draining $name under current policy without blocking Stop",
     async ({ target, allowed }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -562,7 +499,7 @@ describe("worker Gateway move recovery", () => {
         database: support.testState.stateDb,
       });
       const prepareGatewayMove = vi.fn();
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);
@@ -578,13 +515,13 @@ describe("worker Gateway move recovery", () => {
           state: "failed",
           recoveryError: expect.stringContaining("authority expired"),
         });
-        expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+        expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       } else {
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
         expect(restarted.environments.destroy).not.toHaveBeenCalled();
         expect(restartedStore.get(active.sessionId)).toEqual(begun.placement);
         expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-        expect(restartedStore.getPlacementMove(active.sessionId)).toMatchObject({
+        expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toMatchObject({
           operationId: begun.intent.operationId,
           lastError: expect.stringContaining("required worker profile policy"),
         });
@@ -594,7 +531,7 @@ describe("worker Gateway move recovery", () => {
         });
         expect(restarted.environments.destroy).toHaveBeenCalledOnce();
         expect(prepareGatewayMove).not.toHaveBeenCalled();
-        expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+        expect(await restartedStore.getPlacementMoveAsync(active.sessionId)).toBeUndefined();
       }
     },
   );

@@ -48,6 +48,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
       agentId: "main",
       agentDir: testState.path("agent"),
       outputTextPolicy: "strict-visible",
+      thinkLevel: "off",
     });
     const complete = vi.spyOn(sessionObserverModel, "defaultCompleteModel").mockImplementation(() =>
       trackAsyncWork(async () => {
@@ -81,7 +82,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
         log: createSubsystemLogger("test/subscriptions-shutdown"),
       });
       if (phase === "before startup") {
-        expect(unsubs.sessionActivitySummaries.ensure(target).state).toBe("unavailable");
+        expect((await unsubs.sessionActivitySummaries.ensure(target)).state).toBe("unavailable");
         expect(prepared).not.toHaveBeenCalled();
         expect(complete).not.toHaveBeenCalled();
         return;

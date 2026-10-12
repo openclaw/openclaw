@@ -14,6 +14,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -56,7 +57,8 @@ suite.define(() => {
         const undo = page.getByRole("button", { name: "Undo", exact: true });
         expect(await undo.count()).toBe(0);
         if (transition === "navigate") {
-          await page.getByRole("link", { name: "Agents", exact: true }).click();
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
           await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
         }

@@ -244,7 +244,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               ) {
                 // Native sends could use account defaults without a target. Resolve that
                 // owner fact before core routing and source-reply receipts require it.
-                const target = resolveOutboundTarget({ channel, plugin, cfg, accountId });
+                const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
                 if (!target.ok) {
                   throw target.error;
                 }
@@ -549,7 +549,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
       work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to,
             cfg,
@@ -867,7 +867,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         };
         const threadId = normalizeOptionalString(request.threadId);
         try {
-          const resolvedTarget = resolveGatewayOutboundTarget({
+          const resolvedTarget = await resolveGatewayOutboundTarget({
             channel,
             to: request.to.trim(),
             cfg,

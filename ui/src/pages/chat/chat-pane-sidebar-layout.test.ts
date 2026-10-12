@@ -10,7 +10,7 @@ import {
   sidebarRegionCallbacks,
 } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
   openSlot,

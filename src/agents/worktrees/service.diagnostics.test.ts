@@ -207,13 +207,12 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const args = gitCommandArgs(argv);
       if (args[0] === "worktree" && args[1] === "remove") {
-        // A real held child models Git after it has removed the first tracked file.
+        // Hold Git unregistration after the checkout's files have been renamed away.
         const partial = await realRunCommand(
           [
             process.execPath,
             "-e",
-            'const fs = require("node:fs"); fs.unlinkSync(process.argv[1]); process.stdout.write(String(process.pid) + "\\n"); const timer = setInterval(() => { if (fs.existsSync(process.argv[2])) clearInterval(timer); }, 10);',
-            path.join(created.path, "README.md"),
+            'const fs = require("node:fs"); process.stdout.write(String(process.pid) + "\\n"); const timer = setInterval(() => { if (fs.existsSync(process.argv[1])) clearInterval(timer); }, 10);',
             release,
           ],
           {

@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -7,6 +6,7 @@ import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-aut
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
@@ -18,7 +18,6 @@ import { createSecretStoreWriteService } from "../../gateway/server-methods/secr
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -58,7 +57,7 @@ it("leaves image steering with its owner when there is no pending question", asy
 
 it.each([
   ...(["caller", "prepared-claim", "prepared-cancel"] as const).flatMap((path) =>
-    (["current", "foreign-policy", "creator-closed"] as const).map((change) => ({ path, change })),
+    (["current", "policy", "creator-closed"] as const).map((change) => ({ path, change })),
   ),
   ...(["legacy-run", "custom-run"] as const).flatMap((path) =>
     (["current", "persist-policy", "persist-generation"] as const).map((change) => ({
@@ -92,7 +91,7 @@ it.each([
         sandboxMode: "off",
       },
     );
-    // Seed writes schedule maintenance; drain it before racing the foreign policy writer.
+    // Drain seed maintenance before measuring the final authority read.
     for (const agentId of ["main", "policy"]) {
       await closeOpenClawAgentDatabaseByPathAsync(
         resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
@@ -227,19 +226,9 @@ it.each([
       toolAuthorityPreparation: preparation,
     };
     const revokePolicy = () =>
-      // Setup starts worker maintenance; share its writer lane without publishing the mutation.
-      runOpenClawAgentWriteAdmission({ agentId: "policy", env: state.env }, ({ canonicalPath }) => {
-        const peer = new DatabaseSync(canonicalPath);
-        try {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(policyKey);
-        } finally {
-          peer.close();
-        }
-      });
+      updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () => ({
+        sandboxMode: undefined,
+      }));
     const pending = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, gatewayContextResolver: () => context },
       () =>
@@ -296,7 +285,7 @@ it.each([
           "question did not reach its final session read",
         );
       }
-      if (change === "foreign-policy") {
+      if (change === "policy") {
         await revokePolicy();
       } else if (change === "creator-closed") {
         controller.abort(new Error("question creator closed during final read"));

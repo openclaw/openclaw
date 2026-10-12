@@ -7,6 +7,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgentLoopContinue } from "../../../packages/agent-core/src/agent-loop.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   persistSessionTranscriptTurn,
@@ -85,13 +89,21 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   tempRoots.cleanup();
   runAttempt.mockReset();
 });
 
-function fenceProjection(target: SessionTranscriptRuntimeTarget) {
+type ProjectionFence = {
+  held: Promise<void>;
+  joined: Promise<void>;
+  expectDirty: () => void;
+  release: () => void;
+};
+
+function fenceProjection(target: SessionTranscriptRuntimeTarget): ProjectionFence {
   const databaseOptions = { agentId: target.agentId };
   const database = openOpenClawAgentDatabase(databaseOptions);
   // Existing fault-injection pattern: the real owner must rebuild this projection.
@@ -152,6 +164,85 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
 }
 
 describe("embedded retry transcript ownership", () => {
+  it("waits for an earlier transcript rewrite before starting a foreground attempt", async () => {
+    const root = tempRoots.make("openclaw-foreground-projection-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const workspaceDir = path.join(root, "workspace");
+    const agentDir = path.join(root, "agent");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(agentDir, { recursive: true });
+    const config = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4-mini"]);
+    setRuntimeConfigSnapshot(config);
+    const target = {
+      agentId: "main",
+      sessionId: "foreground-projection",
+      sessionKey: "agent:main:foreground-projection",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const history = [{ role: "user" as const, content: "Retain this fact.", timestamp: 1 }];
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(target, {
+      messages: history.map((message) => ({ eventId: "seed", message })),
+      touchSessionEntry: false,
+    });
+    await reconciliation.waitForSessionTranscriptIndexReconcile({ agentId: target.agentId });
+    const fence = fenceProjection(target);
+    await fence.held;
+    const waiting = createDeferred();
+    const waitForProjection = reconciliation.waitForSessionTranscriptProjection;
+    vi.spyOn(reconciliation, "waitForSessionTranscriptProjection").mockImplementation((...args) => {
+      const pending = waitForProjection(...args);
+      waiting.resolve();
+      return pending;
+    });
+    runAttempt.mockImplementationOnce(async () => {
+      const manager = await SessionManager.openAsync(target, workspaceDir, {
+        maxBytes: 4096,
+        maxEvents: 20,
+      });
+      expect(manager.buildSessionContext().messages).toEqual(history);
+      return makeEmbeddedRunnerAttempt({
+        sessionIdUsed: target.sessionId,
+        assistantTexts: ["Retained."],
+      });
+    });
+    const outcome = runEmbeddedAgent({
+      ...target,
+      agentDir,
+      workspaceDir,
+      config,
+      prompt: "Recall the fact.",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      timeoutMs: 30_000,
+      runId: "foreground-projection-run",
+      enqueue: immediateEnqueue,
+    }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      expect(
+        await Promise.race([
+          waiting.promise.then(() => "projection-wait"),
+          outcome.then((result) => result),
+        ]),
+      ).toBe("projection-wait");
+      fence.expectDirty();
+      expect(runAttempt).not.toHaveBeenCalled();
+      fence.release();
+      await expect(outcome).resolves.toMatchObject({
+        result: { payloads: [{ text: "Retained." }] },
+      });
+    } finally {
+      fence.release();
+      await outcome;
+      await fence.joined;
+      await reconciliation.waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+    }
+  });
+
   it.each([
     ["detached", false, "active", false, "disconnect"],
     ["durable", true, "active", false, "disconnect"],
@@ -184,6 +275,8 @@ describe("embedded retry transcript ownership", () => {
         api: "openai-responses" as const,
         input: ["text" as const],
       };
+      const config = createEmbeddedAgentRunnerOpenAiConfig([model.id]);
+      setRuntimeConfigSnapshot(config);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
@@ -265,15 +358,17 @@ describe("embedded retry transcript ownership", () => {
       history.push(erroredAssistant);
       const waiting = createDeferred();
       const secondAttempt = createDeferred();
+      let fence: ProjectionFence | undefined;
       const waitForProjection = reconciliation.waitForSessionTranscriptProjection;
       const waitSpy = vi
         .spyOn(reconciliation, "waitForSessionTranscriptProjection")
         .mockImplementation((...args) => {
           const pending = waitForProjection(...args);
-          waiting.resolve();
+          if (fence) {
+            waiting.resolve();
+          }
           return pending;
         });
-      let fence: ReturnType<typeof fenceProjection> | undefined;
       let firstManager: EmbeddedRunAttemptParams["sessionManager"];
       const controller = new AbortController();
       runAttempt
@@ -377,7 +472,7 @@ describe("embedded retry transcript ownership", () => {
           ...target,
           agentDir,
           workspaceDir,
-          config: createEmbeddedAgentRunnerOpenAiConfig([model.id]),
+          config,
           sessionPersistence,
           sessionManager: callerManager,
           prompt: "Check the results.",
@@ -401,7 +496,7 @@ describe("embedded retry transcript ownership", () => {
           fence!.expectDirty();
           if (!callerOwned) {
             expect(runAttempt).toHaveBeenCalledOnce();
-            expect(waitSpy).toHaveBeenCalledOnce();
+            expect(waitSpy).toHaveBeenCalledTimes(2);
             if (abort) {
               controller.abort();
               await expect(outcome).resolves.toMatchObject({ error: { name: "AbortError" } });

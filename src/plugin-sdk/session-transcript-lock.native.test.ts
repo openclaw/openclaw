@@ -6,6 +6,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -18,6 +19,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withSessionTranscriptWriteLock } from "./session-transcript-runtime.js";
 
 async function seed(env: NodeJS.ProcessEnv) {
+  await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionId: "locked", sessionKey: "agent:main:locked", env };
   await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   return { ...scope, storePath: openOpenClawAgentDatabase(scope).path };

@@ -25,7 +25,10 @@ import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-w
 import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type {
+  PendingRegistryWrite,
+  RegistrySourceQueue,
   SubagentRegistryWriteAuthority,
+  SubagentRegistryWriteFailure,
   SubagentRegistryWorkerWrite,
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
@@ -40,7 +43,7 @@ import {
   rememberSubagentRunVersion,
   subagentRunRecordVersion,
 } from "./subagent-registry.store.codec.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
+import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   bindSubagentRunRuntimeKey,
@@ -54,25 +57,6 @@ import {
 } from "./subagent-run-generation.js";
 
 type Admission = OpenClawStateWorkerContext["admission"];
-type PendingRegistryWrite = {
-  runIds: ReadonlySet<string>;
-  admission: Admission;
-  settled: ReturnType<typeof createDeferredCore<void>>;
-  uncertain?: SubagentRegistryWriteError;
-  killClaim?: SubagentRunRecord;
-  rekeys?: Array<{
-    from: string;
-    to: string;
-    owner: object;
-    sourceIdentity: string;
-    destinationIdentity: string;
-  }>;
-};
-type RegistrySourceQueue = {
-  admission: Admission;
-  tails: Map<string, Promise<void>>;
-  restore?: Promise<void>;
-};
 const pendingWrites = new Set<PendingRegistryWrite>();
 const sourceQueues = new Set<RegistrySourceQueue>();
 
@@ -155,21 +139,11 @@ export class SubagentRegistryVersionConflictError extends Error {
   }
 }
 
-class SubagentRegistryConflictError extends Error {
-  override name = "SubagentRegistryConflictError";
-  constructor(
-    readonly runIds: readonly string[],
-    readonly attempts: number,
-  ) {
-    super(`Subagent registry rows changed during ${attempts} mutation attempts`);
-  }
-}
-
 export class SubagentRegistryWriteError extends Error {
   constructor(
-    readonly outcome: "not-committed" | "committed" | "unknown",
+    readonly outcome: SubagentRegistryWriteFailure["outcome"],
     cause: unknown,
-    readonly publication?: "published" | "superseded",
+    readonly publication?: SubagentRegistryWriteFailure["publication"],
   ) {
     let failure = cause;
     if (outcome === "unknown" && !hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -247,11 +221,10 @@ function publishRows(
   }
 }
 
-async function refreshRows(
-  runs: Map<string, SubagentRunRecord>,
+export async function readVersionedSubagentRows(
   runIds: readonly string[],
   context: OpenClawStateWorkerContext,
-): Promise<void> {
+) {
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "subagents.runs", scope: { kind: "ids", runIds } },
@@ -261,17 +234,19 @@ async function refreshRows(
   if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection || !reply.versions) {
     throw new Error("Subagent version refresh did not return authoritative rows");
   }
-  const postimages = new Map<string, SubagentRunRecord | null>();
   for (const runId of runIds) {
     const row = reply.runs.get(runId);
-    if (!row && reply.versions.get(runId)) {
+    const version = reply.versions.get(runId);
+    if (!row && version) {
       throw new SubagentRegistryMutationRejectedError(
         "Subagent mutation found an unreadable durable row",
       );
     }
-    postimages.set(runId, row ?? null);
+    if (row && version) {
+      rememberSubagentRunVersion(row, version);
+    }
   }
-  publishRows(runs, postimages, context, reply.versions);
+  return reply;
 }
 
 type SubagentRunMutationReceipt<T> = SubagentRunMutation<T> & {
@@ -405,6 +380,7 @@ function commitRows<T>(
       deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
       versions: [...versions].map(([runId, version]) => ({ runId, version })),
       terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
+      registrationCohort: structuredClone(planned.registrationCohort),
     };
     let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
@@ -495,111 +471,96 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
   let published = false;
   try {
     await Promise.all(predecessors);
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      authority.assertCurrent();
-      const rows = new Map<string, SubagentRunRecord>();
-      for (const runId of runIds) {
-        const entry = runs.get(runId);
-        if (entry) {
-          rows.set(runId, immutableSubagentRun(entry));
-        }
-      }
-      const versions = new Map(runIds.map((id) => [id, subagentRunRecordVersion(rows.get(id))]));
-      const planned = plan(rows);
-      if (isPromiseLike(planned)) {
-        void Promise.resolve(planned).catch(() => {});
-        throw new Error("Subagent mutation plans must remain synchronous");
-      }
-      for (const [id, row] of planned.postimages ?? []) {
-        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Subagent mutation writes an unadmitted row",
-          );
-        }
-        if (row) {
-          bindSubagentRunRuntimeKey(row, runtimeKeyFor(rows.get(id), row));
-        }
-      }
-      pending.rekeys = [...(planned.rekeys ?? [])].map(([from, to]) => {
-        const source = rows.get(from);
-        const destination = planned.postimages?.get(to);
-        if (
-          !source ||
-          !destination ||
-          rows.has(to) ||
-          planned.postimages?.get(from) !== null ||
-          !pending.runIds.has(to) ||
-          !isQueuedSubagentRunRekey(source, destination) ||
-          getSubagentRunRuntimeKey(source) !== getSubagentRunRuntimeKey(destination)
-        ) {
-          throw new SubagentRegistryMutationRejectedError(
-            "Queued subagent rekey does not retain its admitted execution",
-          );
-        }
-        return {
-          from,
-          to,
-          owner: getSubagentRunRuntimeKey(source),
-          sourceIdentity: getSubagentRunIdentity(source),
-          destinationIdentity: getSubagentRunIdentity(destination),
-        };
-      });
-      if (!options.commit && !planned.postimages?.size && !planned.terminalEvents?.length) {
-        return planned.value;
-      }
-      let committed: SubagentRunMutationReceipt<P["value"]>;
-      try {
-        committed = options.commit
-          ? await options.commit(planned, versions, authority)
-          : await commitRows(planned, versions, context, authority);
-      } catch (error) {
-        if (!(error instanceof SubagentRegistryVersionConflictError)) {
-          throw error;
-        }
-        await refreshRows(runs, runIds, context);
-        if (attempt === 3) {
-          throw new SubagentRegistryConflictError(error.runIds, attempt);
-        }
-        continue;
-      }
-      try {
-        authority.assertDatabase();
-        const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
-        for (const [id, row] of postimages) {
-          if (!pending.runIds.has(id) || (row && row.runId !== id)) {
-            throw new SubagentRegistryCommitReceiptError(
-              "Registry receipt writes an unadmitted row",
-            );
-          }
-          if (row) {
-            // Planned rows were bound before commit; receipt-only rows bind here.
-            const plannedRow = planned.postimages?.get(id);
-            const key = plannedRow
-              ? getSubagentRunRuntimeKey(plannedRow)
-              : runtimeKeyFor(rows.get(id), row);
-            bindSubagentRunRuntimeKey(row, key);
-          }
-        }
-        publishRows(runs, postimages, context, committed.versions, () => {
-          published = true;
-          for (const notice of committed.notices ?? []) {
-            enqueueSessionStateNotice(notice);
-          }
-          options.onPublished?.(postimages, committed.value);
-        });
-        return committed.value;
-      } catch (error) {
-        if (error instanceof SubagentRegistryCommitReceiptError) {
-          throw error;
-        }
-        throw new SubagentRegistryWriteError(
-          "committed",
-          error,
-          published ? "published" : "superseded",
-        );
+    authority.assertCurrent();
+    const rows = new Map<string, SubagentRunRecord>();
+    for (const runId of runIds) {
+      const entry = runs.get(runId) ?? options.preparedRows?.get(runId);
+      if (entry) {
+        rows.set(runId, immutableSubagentRun(entry));
       }
     }
-    throw new Error("Subagent mutation exhausted its admission loop");
+    const versions = new Map(runIds.map((id) => [id, subagentRunRecordVersion(rows.get(id))]));
+    const planned = plan(rows);
+    if (isPromiseLike(planned)) {
+      void Promise.resolve(planned).catch(() => {});
+      throw new Error("Subagent mutation plans must remain synchronous");
+    }
+    for (const [id, row] of planned.postimages ?? []) {
+      if (!pending.runIds.has(id) || (row && row.runId !== id)) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Subagent mutation writes an unadmitted row",
+        );
+      }
+      if (row) {
+        bindSubagentRunRuntimeKey(row, runtimeKeyFor(rows.get(id), row));
+      }
+    }
+    pending.rekeys = [...(planned.rekeys ?? [])].map(([from, to]) => {
+      const source = rows.get(from);
+      const destination = planned.postimages?.get(to);
+      if (
+        !source ||
+        !destination ||
+        rows.has(to) ||
+        planned.postimages?.get(from) !== null ||
+        !pending.runIds.has(to) ||
+        !isQueuedSubagentRunRekey(source, destination) ||
+        getSubagentRunRuntimeKey(source) !== getSubagentRunRuntimeKey(destination)
+      ) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Queued subagent rekey does not retain its admitted execution",
+        );
+      }
+      return {
+        from,
+        to,
+        owner: getSubagentRunRuntimeKey(source),
+        sourceIdentity: getSubagentRunIdentity(source),
+        destinationIdentity: getSubagentRunIdentity(destination),
+      };
+    });
+    if (!options.commit && !planned.postimages?.size && !planned.terminalEvents?.length) {
+      return planned.value;
+    }
+    // The Gateway owns runtime writes. An out-of-band conflict fails without
+    // replaying the plan; canonical restore or restart refreshes its rows.
+    const committed: SubagentRunMutationReceipt<P["value"]> = options.commit
+      ? await options.commit(planned, versions, authority)
+      : await commitRows(planned, versions, context, authority);
+    try {
+      authority.assertDatabase();
+      const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
+      for (const [id, row] of postimages) {
+        if (!pending.runIds.has(id) || (row && row.runId !== id)) {
+          throw new SubagentRegistryCommitReceiptError("Registry receipt writes an unadmitted row");
+        }
+        if (row) {
+          // Planned rows were bound before commit; receipt-only rows bind here.
+          const plannedRow = planned.postimages?.get(id);
+          const key = plannedRow
+            ? getSubagentRunRuntimeKey(plannedRow)
+            : runtimeKeyFor(rows.get(id), row);
+          bindSubagentRunRuntimeKey(row, key);
+        }
+      }
+      publishRows(runs, postimages, context, committed.versions, () => {
+        published = true;
+        for (const notice of committed.notices ?? []) {
+          enqueueSessionStateNotice(notice);
+        }
+        options.onPublished?.(postimages, committed.value);
+      });
+      return committed.value;
+    } catch (error) {
+      if (error instanceof SubagentRegistryCommitReceiptError) {
+        throw error;
+      }
+      throw new SubagentRegistryWriteError(
+        "committed",
+        error,
+        published ? "published" : "superseded",
+      );
+    }
   } catch (error) {
     if (
       error instanceof SubagentRegistryCommitReceiptError ||

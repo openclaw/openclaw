@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import {
+  __setFsSafeTestHooksForTest,
+  holdWindowsSharingLock,
+  setWindowsFileAttributes,
+} from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRebindableDirectoryAlias } from "../test-utils/symlink-rebind-race.js";
@@ -29,21 +32,6 @@ async function expectRejectCode(promise: Promise<unknown>, expected: string | Re
   } else {
     expect(code).toMatch(expected);
   }
-}
-
-function loadWindowsFileApi() {
-  const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
-  const kernel32 = koffi.load("kernel32.dll");
-  return {
-    createFile: kernel32.func(
-      "intptr_t __stdcall CreateFileW(const char16_t *path, uint32_t access, uint32_t share, void *security, uint32_t disposition, uint32_t attributes, void *templateFile)",
-    ),
-    closeHandle: kernel32.func("int __stdcall CloseHandle(intptr_t handle)"),
-    getFileAttributes: kernel32.func("uint32_t __stdcall GetFileAttributesW(const char16_t *path)"),
-    setFileAttributes: kernel32.func(
-      "int __stdcall SetFileAttributesW(const char16_t *path, uint32_t attributes)",
-    ),
-  };
 }
 
 describe("removePathWithinRoot", () => {
@@ -746,14 +734,8 @@ describe("removePathWithinRoot", () => {
       await fs.writeFile(sentinel, "retained");
       const identity = await fs.lstat(target, { bigint: true });
       const sentinelIdentity = await fs.lstat(sentinel, { bigint: true });
-      const { createFile, closeHandle } = loadWindowsFileApi();
-      // FILE_SHARE_READ | FILE_SHARE_WRITE intentionally omits FILE_SHARE_DELETE.
-      // libuv's DELETE open must fail until this non-inheritable handle closes.
-      const handle = BigInt(
-        createFile(path.toNamespacedPath(target), 0x80000000, 3, null, 3, 0, null),
-      );
+      const lock = holdWindowsSharingLock(target);
       try {
-        expect(handle).not.toBe(-1n);
         expect(identity.isFile()).toBe(true);
         expect(identity.dev).not.toBe(0n);
         expect(identity.ino).not.toBe(0n);
@@ -770,9 +752,7 @@ describe("removePathWithinRoot", () => {
         });
         expect(await fs.readFile(target, "utf8")).toBe("held contents");
       } finally {
-        if (handle !== -1n) {
-          expect(closeHandle(handle)).not.toBe(0);
-        }
+        lock.close();
       }
 
       await removePathWithinRoot({ rootDir: root, relativePath: "held.txt", force: false });
@@ -797,19 +777,12 @@ describe("removePathWithinRoot", () => {
       await fs.writeFile(sentinel, "retained");
       const identity = await fs.lstat(target, { bigint: true });
       const sentinelIdentity = await fs.lstat(sentinel, { bigint: true });
-      const { getFileAttributes, setFileAttributes } = loadWindowsFileApi();
-      const nativePath = path.toNamespacedPath(target);
-      const originalAttributes = getFileAttributes(nativePath);
-      expect(originalAttributes).not.toBe(0xffffffff);
       expect(identity.isFile()).toBe(true);
       expect(identity.dev).not.toBe(0n);
       expect(identity.ino).not.toBe(0n);
       try {
-        // FILE_ATTRIBUTE_NORMAL is valid alone; retain other attributes when adding READONLY.
-        expect(setFileAttributes(nativePath, (originalAttributes & ~0x80) | 0x1)).not.toBe(0);
-        const attributes = getFileAttributes(nativePath);
-        expect(attributes).not.toBe(0xffffffff);
-        expect(attributes & 0x1).toBe(0x1);
+        setWindowsFileAttributes(target, { readOnly: true });
+        expect((await fs.stat(target)).mode & 0o222).toBe(0);
         expect(await fs.lstat(target, { bigint: true })).toMatchObject({
           dev: identity.dev,
           ino: identity.ino,
@@ -841,8 +814,7 @@ describe("removePathWithinRoot", () => {
           expect(remaining.isFile()).toBe(true);
           expect(remaining).toMatchObject({ dev: identity.dev, ino: identity.ino });
           expect(await fs.readFile(target, "utf8")).toBe("read-only contents");
-          expect(setFileAttributes(nativePath, originalAttributes)).not.toBe(0);
-          expect(getFileAttributes(nativePath)).toBe(originalAttributes);
+          setWindowsFileAttributes(target, { readOnly: false });
         }
       }
     },

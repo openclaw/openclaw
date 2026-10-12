@@ -76,14 +76,14 @@ describe("AppSidebar transient menus", () => {
       `.sidebar-rail [data-sidebar-entry="${entry}"]`,
     )!;
     expect(pin).not.toBeNull();
-    const trigger = pin.querySelector<HTMLButtonElement>("button[slot=trigger]")!;
-    expect(trigger.getAttribute("aria-label")).toContain("Reorder");
-    const menu = pin.querySelector<
+    pin.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, composed: true, cancelable: true }),
+    );
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<
       HTMLElement & { open: boolean; updateComplete: Promise<boolean> }
-    >("wa-dropdown")!;
-    // The dropdown owns trigger interaction; these jsdom cases exercise its public
-    // open state and the renderer's stale-hide/target boundaries, not popup geometry.
-    menu.open = true;
+    >(".sidebar-rail-pin-menu")!;
+    expect(menu).not.toBeNull();
     await menu.updateComplete;
     expect(menu.open).toBe(true);
     expect(menu.closest("openclaw-menu-surface")).toBeNull();

@@ -61,9 +61,8 @@ describe("exact-run announcement results", () => {
     testing.setDepsForTest({
       findTranscriptEvent,
       getRuntimeConfig: () => ({}),
-      resolveAgentIdFromSessionKey: () => "main",
       resolveSessionStorePathCore: () => "/tmp/completed-session-store",
-      readSubagentSessionEntry: () =>
+      readSubagentSessionEntry: async () =>
         deletedSession ? undefined : { sessionId: "completed-session", updatedAt: 1 },
       findSessionTranscriptArchiveEventReadOnly: async (scope, runId) => {
         expect(scope).toEqual({
@@ -96,6 +95,32 @@ describe("exact-run announcement results", () => {
   afterEach(() => {
     testing.setDepsForTest();
     published.clear();
+  });
+
+  it("reads only a raw child's recorded owner and retains unknown-owner captured output", async () => {
+    const child = completedChild("captured answer");
+    child.childSessionKey = "global";
+    child.childAgentId = "worker";
+    child.execution.transcriptTarget = undefined;
+    const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (scope) => ({
+      event: assistant(child.runId, `${scope.agentId} full answer`),
+    }));
+    testing.setDepsForTest({
+      findTranscriptEvent,
+      getRuntimeConfig: () => ({}),
+      resolveSessionStorePathCore: () => "/synthetic/shared.sqlite",
+      readSubagentSessionEntry: async () => ({ sessionId: "child-session", updatedAt: 1 }),
+    });
+
+    await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
+      text: "worker full answer",
+    });
+    findTranscriptEvent.mockClear();
+    child.childAgentId = undefined;
+    await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
+      text: "captured answer",
+    });
+    expect(findTranscriptEvent).not.toHaveBeenCalled();
   });
 
   it("announces the complete exact-run final while lifecycle evidence remains bounded", async () => {

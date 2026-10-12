@@ -34,6 +34,10 @@ export function registerAbsentChildRestoreOwnershipTest() {
       const entry = makeRunRecord({
         runId: "absent-actor-restart",
         childSessionKey,
+        childSessionIdentity: {
+          sessionId: "absent-actor-session",
+          lifecycleRevision: "absent-actor-revision",
+        },
         execution: { status: "interrupted", startedAt: 1 },
       });
       const warn = vi.fn();
@@ -112,6 +116,10 @@ export function registerRawChildRestoreOwnershipTest(
         runId,
         childSessionKey,
         childAgentId: "research",
+        childSessionIdentity: {
+          sessionId: "research-restore-session",
+          lifecycleRevision: "research-restore-revision",
+        },
         createdAt: startedAt,
         expectsCompletionMessage: true,
         endedReason: "subagent-complete",

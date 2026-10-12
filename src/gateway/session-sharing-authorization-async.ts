@@ -36,7 +36,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     return { error: input.error };
   }
   const cfg = params.context.getRuntimeConfig();
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [target]);
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
   params.assertInvocationCurrent?.();
   return withSessionSharingTarget(

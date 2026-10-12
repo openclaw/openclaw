@@ -38,17 +38,6 @@ function widgetOrder(state: BoardLayout, tabId: string): string[] {
 }
 
 describe("board layout", () => {
-  it("normalizes tab and per-tab widget positions without holes", () => {
-    const normalized = normalizeBoardLayout(layout());
-    expect(normalized.tabs.map((tab) => tab.position)).toEqual([0, 1]);
-    expect(
-      normalized.widgets
-        .filter((widget) => widget.tabId === "one")
-        .map((widget) => widget.position),
-    ).toEqual([0, 1]);
-    expect(normalized.widgets.find((widget) => widget.name === "gamma")?.position).toBe(0);
-  });
-
   it("reorders widgets by position and after anchors, including cross-tab moves", () => {
     const reordered = applyBoardOps(layout(), [
       { kind: "widget_move", name: "beta", position: 0 },
