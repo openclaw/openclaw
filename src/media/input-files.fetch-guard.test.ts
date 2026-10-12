@@ -358,79 +358,36 @@ describe("guarded input file URL fetches", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels ignored HTTP error bodies", async () => {
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("server error"));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
-        status: 503,
-        statusText: "Service Unavailable",
-      }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
-
-    await expect(
-      extractFileContentFromSource({
-        source: { type: "url", url: "https://example.com/file.bin" },
-        limits: {
-          ...createFileSourceLimits(["application/octet-stream"], true),
-          maxBytes: 1024,
-        },
-      }),
-    ).rejects.toThrow("Failed to fetch: 503 Service Unavailable");
-
-    expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancels ignored bodies when content-length exceeds the byte limit", async () => {
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
+  it.each([
+    [
+      "cancels ignored HTTP error bodies",
+      () => new TextEncoder().encode("server error"),
+      () => ({ status: 503, statusText: "Service Unavailable" }),
+      "Failed to fetch: 503 Service Unavailable",
+    ],
+    [
+      "cancels ignored bodies when content-length exceeds the byte limit",
+      () => new Uint8Array([1, 2, 3, 4]),
+      () => ({
         status: 200,
         headers: { "content-length": "2048", "content-type": "application/octet-stream" },
       }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
-
-    await expect(
-      extractFileContentFromSource({
-        source: { type: "url", url: "https://example.com/file.bin" },
-        limits: {
-          ...createFileSourceLimits(["application/octet-stream"], true),
-          maxBytes: 1024,
-        },
+      "Content too large: 2048 bytes",
+    ],
+    [
+      "rejects malformed content-length before reading input files",
+      () => new Uint8Array([1, 2, 3, 4]),
+      () => ({
+        status: 200,
+        headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
       }),
-    ).rejects.toThrow("Content too large: 2048 bytes");
-
-    expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects malformed content-length before reading input files", async () => {
+      "invalid content-length header: 1e9",
+    ],
+  ] as const)("%s", async (_name, createChunk, createResponseInit, expectedError) => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        controller.enqueue(createChunk());
       },
       cancel() {
         canceled = true;
@@ -438,10 +395,7 @@ describe("guarded input file URL fetches", () => {
     });
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
-        status: 200,
-        headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
-      }),
+      response: new Response(stream, createResponseInit()),
       release,
       finalUrl: "https://example.com/file.bin",
     });
@@ -454,7 +408,7 @@ describe("guarded input file URL fetches", () => {
           maxBytes: 1024,
         },
       }),
-    ).rejects.toThrow("invalid content-length header: 1e9");
+    ).rejects.toThrow(expectedError);
 
     expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
