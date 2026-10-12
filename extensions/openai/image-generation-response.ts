@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeoutGuarded,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -13,9 +12,10 @@ import {
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  fetchWithSsrFGuard,
   mergeSsrFPolicies,
   ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-policy";
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalObjectRecord,
   isRecord,
@@ -27,6 +27,7 @@ type ResponseParams = Pick<
   "allowPrivateNetwork" | "ssrfPolicy" | "dispatcherPolicy"
 > & {
   operation: string;
+  providerUrl: string;
   defaultMimeType: string;
   maxImages: number;
   maxDownloads: number;
@@ -52,12 +53,23 @@ export async function readOpenAIImageGenerationResponse(
     timeoutMs,
   });
   if (isRecord(payload) && Array.isArray(payload.data)) {
+    const providerOrigin = new URL(params.providerUrl).origin;
+    const dispatcherPolicy = params.dispatcherPolicy;
+    // Target TLS identity and hostname overrides belong to the provider origin.
+    const externalDispatcherPolicy =
+      dispatcherPolicy?.mode === "explicit-proxy"
+        ? { ...dispatcherPolicy, proxyTls: undefined, pinnedHostname: undefined }
+        : dispatcherPolicy
+          ? { ...dispatcherPolicy, connect: undefined, pinnedHostname: undefined }
+          : undefined;
     const downloadOptions = {
-      ssrfPolicy: mergeSsrFPolicies(
+      policy: mergeSsrFPolicies(
         params.ssrfPolicy,
         ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
       ),
-      dispatcherPolicy: params.dispatcherPolicy,
+      resolveDispatcherPolicy: (url: URL) =>
+        url.origin === providerOrigin ? dispatcherPolicy : externalDispatcherPolicy,
+      useEnvProxyForEligibleUrls: true,
       auditContext: "openai-image-download",
     };
     const entries: unknown[] = [];
@@ -76,13 +88,13 @@ export async function readOpenAIImageGenerationResponse(
         throw new Error(`${params.operation} returned too many image URLs`);
       }
       downloads += 1;
-      const { response: download, release } = await fetchWithTimeoutGuarded(
+      const { response: download, release } = await fetchWithSsrFGuard({
+        ...downloadOptions,
         url,
-        { method: "GET" },
-        timeoutMs(),
-        fetch,
-        downloadOptions,
-      );
+        init: { method: "GET" },
+        timeoutMs: timeoutMs(),
+        fetchImpl: fetch,
+      });
       try {
         await assertOkOrThrowHttpError(download, "OpenAI image download failed", {
           bodyTimeoutMs: timeoutMs,

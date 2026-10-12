@@ -879,6 +879,7 @@ export function buildOpenAIImageGenerationProvider(
       try {
         const images = await readOpenAIImageGenerationResponse(response, {
           operation,
+          providerUrl: url,
           deadline,
           timeoutMs,
           maxImages: count,
