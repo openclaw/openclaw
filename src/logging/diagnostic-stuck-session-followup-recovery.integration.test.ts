@@ -151,6 +151,12 @@ describe("stuck session follow-up recovery", () => {
         { sampleLiveness: () => null, recoverStuckSession: recover },
       );
       await vi.advanceTimersByTimeAsync(30_000);
+      const recoveryWaitMs = testCase.requestTimeoutMs ?? 30_000;
+      if (recoveryWaitMs > 30_000) {
+        expect(recover).not.toHaveBeenCalled();
+        expect(abort).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(recoveryWaitMs - 30_000);
+      }
       expect(recover).toHaveBeenCalledOnce();
       if (testCase.progress === "semantic") {
         emitCoreSemanticRunProgressDiagnosticEvent({ ...ref, reason: "assistant:progress" });
@@ -190,7 +196,7 @@ describe("stuck session follow-up recovery", () => {
         expect(outcomes).toMatchObject([{ status: "aborted", action: "abort_embedded_run" }]);
         expect(abort).toHaveBeenCalledOnce();
         expect(ranQueued).toHaveBeenCalledOnce();
-        expect(waits).toEqual([30_000]);
+        expect(waits).toEqual([recoveryWaitMs]);
       }
     } finally {
       stopGatewayDiagnosticHeartbeat();
