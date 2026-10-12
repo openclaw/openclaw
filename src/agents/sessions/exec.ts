@@ -1,6 +1,7 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { waitForCommandSpawn } from "../../process/exec-spawn.js";
 import { createCommandTerminationController } from "../../process/exec-termination.js";
 import { spawnCommand } from "../../process/exec.js";
@@ -116,104 +117,101 @@ export async function execCommand(
         await waitForCommandSpawn(proc);
       }
       waitingForSpawn = false;
-      return new Promise<ExecResult>((resolve) => {
-        const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
-        let childExited = false;
-        proc.nodeChildProcess.once("exit", () => {
-          childExited = true;
-        });
-        let settled = false;
-        const termination = createCommandTerminationController({
-          child: proc.nodeChildProcess,
-          cancelController,
-          processTree: { mode: "graceful" },
-          killGraceMs: FORCE_KILL_GRACE_MS,
-          isChildExited: () => childExited,
-          isCommandSettled: () => settled,
-        });
-        terminationController = termination;
+      const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
+      let childExited = false;
+      proc.nodeChildProcess.once("exit", () => {
+        childExited = true;
+      });
+      let settled = false;
+      const termination = createCommandTerminationController({
+        child: proc.nodeChildProcess,
+        cancelController,
+        processTree: { mode: "graceful" },
+        killGraceMs: FORCE_KILL_GRACE_MS,
+        isChildExited: () => childExited,
+        isCommandSettled: () => settled,
+      });
+      terminationController = termination;
 
-        const captures: Record<"stdout" | "stderr", OutputCapture> = {
-          stdout: { text: "", truncatedChars: 0 },
-          stderr: { text: "", truncatedChars: 0 },
-        };
-        const decoders = {
-          stdout: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
-          stderr: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
-        };
-        const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
-        const truncateOutput = options?.maxOutputChars !== undefined;
-        let outputLimitExceeded: "stdout" | "stderr" | undefined;
-        const captureOutput = (stream: "stdout" | "stderr", chunk: string): boolean => {
-          const before = captures[stream].truncatedChars;
-          captures[stream] = appendCapturedOutput(
-            captures[stream],
-            chunk,
-            maxOutputChars,
-            truncateOutput,
-          );
-          if (!truncateOutput && captures[stream].truncatedChars > before && !outputLimitExceeded) {
-            outputLimitExceeded = stream;
-            return true;
-          }
-          return false;
-        };
-        const finish = async (code: number) => {
-          if (settled) {
+      const captures: Record<"stdout" | "stderr", OutputCapture> = {
+        stdout: { text: "", truncatedChars: 0 },
+        stderr: { text: "", truncatedChars: 0 },
+      };
+      const decoders = {
+        stdout: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
+        stderr: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
+      };
+      const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
+      const truncateOutput = options?.maxOutputChars !== undefined;
+      let outputLimitExceeded: "stdout" | "stderr" | undefined;
+      const captureOutput = (stream: "stdout" | "stderr", chunk: string): boolean => {
+        const before = captures[stream].truncatedChars;
+        captures[stream] = appendCapturedOutput(
+          captures[stream],
+          chunk,
+          maxOutputChars,
+          truncateOutput,
+        );
+        if (!truncateOutput && captures[stream].truncatedChars > before && !outputLimitExceeded) {
+          outputLimitExceeded = stream;
+          return true;
+        }
+        return false;
+      };
+
+      // Output pipes may fail independently; process termination remains authoritative.
+      const ignoreOutputStreamError = () => {};
+      for (const stream of ["stdout", "stderr"] as const) {
+        proc[stream]?.on("error", ignoreOutputStreamError);
+        proc[stream]?.on("data", (data) => {
+          if (!acceptingOutput) {
             return;
           }
-          settled = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
+          if (captureOutput(stream, decodeCapturedOutput(decoders[stream], data))) {
+            killProcess();
           }
-          if (options?.signal) {
-            options.signal.removeEventListener("abort", killProcess);
-          }
-          await termination.settle();
-          for (const stream of ["stdout", "stderr"] as const) {
-            captureOutput(stream, decoders[stream].flush());
-          }
-          if (outputLimitExceeded) {
-            captures.stderr = appendCapturedOutput(
-              captures.stderr,
-              `${captures.stderr.text ? "\n" : ""}exec ${outputLimitExceeded} exceeded output limit ${maxOutputChars} chars`,
-              maxOutputChars,
-              true,
-            );
-          }
-          resolve({
-            stdout: captures.stdout.text,
-            stderr: captures.stderr.text,
-            stdoutTruncatedChars: captures.stdout.truncatedChars || undefined,
-            stderrTruncatedChars: captures.stderr.truncatedChars || undefined,
-            outputLimitExceeded,
-            code: outputLimitExceeded ? 1 : code,
-            killed,
-          });
-        };
+        });
+      }
 
-        // Output pipes may fail independently; process termination remains authoritative.
-        const ignoreOutputStreamError = () => {};
+      if (killed) {
+        killProcess();
+      }
+      try {
+        const code = await proc.then(
+          (result) => result.exitCode ?? (result.failed ? 1 : 0),
+          () => 1,
+        );
+        settled = true;
+        clearTimeout(timeoutId);
+        options?.signal?.removeEventListener("abort", killProcess);
+        const cleanup = await termination.settle();
         for (const stream of ["stdout", "stderr"] as const) {
-          proc[stream]?.on("error", ignoreOutputStreamError);
-          proc[stream]?.on("data", (data) => {
-            if (!acceptingOutput) {
-              return;
-            }
-            if (captureOutput(stream, decodeCapturedOutput(decoders[stream], data))) {
-              killProcess();
-            }
-          });
+          captureOutput(stream, decoders[stream].flush());
         }
-
-        if (killed) {
-          killProcess();
+        if (outputLimitExceeded) {
+          captures.stderr = appendCapturedOutput(
+            captures.stderr,
+            `${captures.stderr.text ? "\n" : ""}exec ${outputLimitExceeded} exceeded output limit ${maxOutputChars} chars`,
+            maxOutputChars,
+            true,
+          );
         }
-        void proc
-          .then((result) => finish(result.exitCode ?? (result.failed ? 1 : 0)))
-          .catch(() => finish(1))
-          .finally(releaseOutput);
-      });
+        const result: ExecResult = {
+          stdout: captures.stdout.text,
+          stderr: captures.stderr.text,
+          stdoutTruncatedChars: captures.stdout.truncatedChars || undefined,
+          stderrTruncatedChars: captures.stderr.truncatedChars || undefined,
+          outputLimitExceeded,
+          code: outputLimitExceeded ? 1 : code,
+          killed,
+        };
+        if (cleanup === "uncertain") {
+          throw new CommandProcessCleanupError({ cause: result });
+        }
+        return result;
+      } finally {
+        releaseOutput();
+      }
     })();
     if (options?.signal?.aborted) {
       killProcess();
