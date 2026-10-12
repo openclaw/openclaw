@@ -277,7 +277,6 @@ export function executeSharedStateCommand(
     );
   }
   if (
-    command.type === "sessionUpstream.current" ||
     command.type === "sessionUpstream.settle" ||
     command.type === "sessionUpstream.upsert" ||
     command.type === "sessionUpstream.delete"

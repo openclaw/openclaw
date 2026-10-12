@@ -227,7 +227,7 @@ function UpdateRunContent(props: { run: UpdateRunRecord | null; connected: boole
   );
 }
 
-export const UpdateRunView = defineSolidBridge<{ run: UpdateRunRecord | null; connected: boolean }>(
+defineSolidBridge<{ run: UpdateRunRecord | null; connected: boolean }>(
   "openclaw-update-run-view",
   UpdateRunContent,
   {

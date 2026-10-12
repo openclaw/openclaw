@@ -221,16 +221,16 @@ describe("automatic security review event resolution", () => {
     );
   });
 
-  it.each(["pull_request_target", "workflow_dispatch"])(
+  it.each(["pull_request_target", "issue_comment"])(
     "resolves %s through current PR metadata",
     (eventName) => {
       const result = evaluate({
         eventName,
         event: {
-          action: "opened",
+          action: eventName === "issue_comment" ? "created" : "opened",
           pull_request: { number: 42 },
-          inputs: { pull_request: "42" },
-          sender: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+          issue: { number: 42, pull_request: {} },
+          comment: { body: "/allow-dependencies-change" },
         },
       });
       expect(result).toMatchObject({
@@ -393,11 +393,70 @@ describe("automatic security review event resolution", () => {
     expect(result.requests.at(-1)?.path).toBe(route);
   });
 
+  it.each<{
+    action: string;
+    body: string | null;
+    previousBody?: string;
+    issueOnly?: boolean;
+    selected: boolean;
+  }>([
+    ...[
+      {
+        action: "created",
+        body: " \r\n /allow-dependencies-change \r\n/allow-security-sensitive-change\n",
+      },
+      { action: "edited", body: "Removed", previousBody: "/allow-dependencies-change" },
+      { action: "edited", body: "/allow-dependencies-change", previousBody: "Thanks" },
+      { action: "deleted", body: "/allow-security-sensitive-change" },
+    ].map(({ action, body, previousBody }) => ({ action, body, previousBody, selected: true })),
+    ...[
+      { action: "created", body: "Thanks" },
+      { action: "deleted", body: "Thanks" },
+      { action: "created", body: "/allow-dependencies-change-extra" },
+      { action: "created", body: "/allow-dependencies-change\nThanks" },
+      { action: "created", body: "> /allow-dependencies-change" },
+      { action: "created", body: "```text\n/allow-security-sensitive-change\n```" },
+      { action: "edited", body: "Removed", previousBody: "Please post /allow-dependencies-change" },
+      { action: "created", body: "/ALLOW-DEPENDENCIES-CHANGE" },
+      { action: "created", body: " \r\n " },
+      { action: "deleted", body: null },
+      { action: "created", body: "/allow-security-sensitive-change", issueOnly: true },
+    ].map(({ action, body, previousBody, issueOnly }) => ({
+      action,
+      body,
+      previousBody,
+      issueOnly,
+      selected: false,
+    })),
+  ])(
+    "selects only approval command activity: %j",
+    ({ action, body, previousBody, issueOnly, selected }) => {
+      const result = evaluate({
+        eventName: "issue_comment",
+        event: {
+          action,
+          issue: { number: 42, ...(issueOnly ? {} : { pull_request: {} }) },
+          comment: { body },
+          changes: { body: { from: previousBody } },
+        },
+      });
+      expect(result).toMatchObject({
+        status: 0,
+        matrix: { include: selected ? [{ pr: 42, head }] : [] },
+      });
+      if (selected) {
+        expect(result.published).toMatchObject([
+          { body: { context: "openclaw/ci-gate", state: "pending" } },
+        ]);
+      } else {
+        expect(result.requests).toEqual([]);
+      }
+    },
+  );
+
   it.each([
     { id: 1, login: "maintainer", type: "User" },
-    { id: 41898282, login: "github-actions[bot]", type: "User" },
-    { id: 1, login: "github-actions[bot]", type: "Bot" },
-    { id: 2, login: "clawsweeper[bot]", type: "Bot" },
+    { id: 41898282, login: "github-actions[bot]", type: "Bot" },
   ])("rejects a dispatch from $login ($type, $id) before any API request", (sender) => {
     const result = evaluate({
       eventName: "workflow_dispatch",
