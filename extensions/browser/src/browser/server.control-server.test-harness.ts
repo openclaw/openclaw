@@ -545,7 +545,8 @@ vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 
-vi.mock("./chrome.js", () => ({
+vi.mock("./chrome.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.js")>()),
   isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => state.reachable),
   isChromeReachable: vi.fn(async () => state.reachable),

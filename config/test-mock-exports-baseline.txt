@@ -225,7 +225,6 @@
 ["extensions/browser/src/browser/server.auth-fail-closed.test.ts","./server-lifecycle.js","fce93cc40d52c13bc8ea5d5b812119c3df3a6509b7409652fa44e975c94e2313",1]
 ["extensions/browser/src/browser/server.control-server.test-harness.ts","./cdp.js","96045293b8e094fe4800518f88aefef3f5997246fdc1e4843b1c8c901e2726a9",1]
 ["extensions/browser/src/browser/server.control-server.test-harness.ts","./chrome-mcp.js","7cc6d08e8e25994b8e85f293b0d9ad87c1e283fed0205d0d2bfc0ca75da0acba",1]
-["extensions/browser/src/browser/server.control-server.test-harness.ts","./chrome.js","7c6d6fcac2564ec3f07a2985dcc3dc3d9bae0ad53134f843a22d2f97d484de71",1]
 ["extensions/browser/src/browser/server.control-server.test-harness.ts","./pw-ai.js","041429a443c24ac0dd5ffe455fbe2ce85b7bcac38415d288e8132fbb0df3b500",1]
 ["extensions/browser/src/browser/server.control-server.test-harness.ts","./screenshot.js","fce3146bca38f8d731c0b7687483e8a3e08bc130606b8561de6f90f7f627401c",1]
 ["extensions/browser/src/browser/session-tab-cleanup.test.ts","./session-tab-registry.js","a11eaba49adc1ef5fbc4c96469b274bc970e3a02f166a831481f62a19840d675",1]
