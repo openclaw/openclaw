@@ -40,6 +40,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
@@ -619,6 +622,66 @@ describe("session event target custody", () => {
       });
     },
   );
+
+  it("re-admits an accepted deferred occurrence after the operator publishes a new config", async () => {
+    await withTargetFixture(async ({ env }) => {
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      let adoption: TurnAdoptionLifecycle | undefined;
+      dispatch.mockImplementationOnce(
+        async (params: { replyOptions?: { turnAdoptionLifecycle?: TurnAdoptionLifecycle } }) => {
+          adoption = params.replyOptions?.turnAdoptionLifecycle;
+          adoption?.onDeferred?.();
+          return { deferredToActiveRun: true };
+        },
+      );
+      const operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: "original-session",
+        resetTriggered: false,
+      });
+      try {
+        const receipt = enqueueSessionEventForHost("Process completed", {
+          agentId: "main",
+          sessionKey,
+          source: "exec",
+          expectedTarget: target,
+        });
+        await expect(receipt.accepted).resolves.toMatchObject({ ok: true });
+        const onAdopted = adoption?.onAdopted;
+        if (!onAdopted || !adoption) {
+          throw new Error(
+            "Expected a deferred turn adoption lifecycle for the accepted occurrence",
+          );
+        }
+        // The operator publishes a new config after acceptance, before the occurrence starts.
+        setRuntimeConfigSnapshot({
+          ...getRuntimeConfigSnapshot(),
+          tools: { deny: ["write", "message"] },
+        });
+
+        const adoptionResult = await onAdopted().then(
+          () => "adopted" as const,
+          (error: unknown) => error,
+        );
+        adoption.onSettled?.();
+        operation.complete();
+        const outcome = await receipt.settled;
+        expect(
+          adoptionResult,
+          `adoption=${String(adoptionResult)} outcome=${JSON.stringify(outcome)} queued=${peekSystemEventEntries(sessionKey).length}`,
+        ).toBe("adopted");
+        await expect(receipt.settled).resolves.toMatchObject({
+          status: "completed",
+          executionStarted: false,
+          delivered: false,
+        });
+        // An accepted occurrence that never started stays under this owner's custody.
+        expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual([receipt.id]);
+      } finally {
+        replyRunTesting.resetReplyRunRegistry();
+      }
+    });
+  });
 
   it("settles a pending occurrence as cancelled when ephemeral queues close", async () => {
     await withTargetFixture(async ({ env }) => {

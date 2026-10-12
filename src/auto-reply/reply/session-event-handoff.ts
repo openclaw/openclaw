@@ -96,8 +96,11 @@ export function enqueueSessionEventForHost(
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
-  const cfg = getSessionEventRuntimeConfig();
-  const configPublication = getRuntimeConfigSnapshotMetadata();
+  // The policy snapshot this occurrence was admitted under. An accepted occurrence that has
+  // not started is re-admitted under the current policy instead of being destroyed; see
+  // assertOwnerCurrent.
+  let cfg = getSessionEventRuntimeConfig();
+  let configPublication = getRuntimeConfigSnapshotMetadata();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
   const sessionKey = resolveSessionEventKey(agentId, options.sessionKey);
@@ -215,9 +218,19 @@ export function enqueueSessionEventForHost(
     options.assertCurrent?.();
     options.expectedTarget?.assertCurrent?.();
     assertAgentRunLifecycleGenerationCurrent(generation);
-    const currentConfig = getSessionEventRuntimeConfig();
+    let currentConfig = getSessionEventRuntimeConfig();
     if (currentConfig !== cfg || getRuntimeConfigSnapshotMetadata() !== configPublication) {
-      throw new Error("Session event configuration changed; retry under the current policy");
+      // A policy publication change only re-decides the policy facts for an occurrence that was
+      // already accepted and has neither started nor attempted delivery. Keep it under this
+      // owner's custody under the current policy; the destination identity checks below still
+      // run against the refreshed config, so a real move, replacement, or deletion still fails.
+      const acceptedNotStarted = (accepted || deferred) && !started && !deliveryAttempted;
+      if (!acceptedNotStarted) {
+        throw new Error("Session event configuration changed; retry under the current policy");
+      }
+      cfg = currentConfig;
+      configPublication = getRuntimeConfigSnapshotMetadata();
+      currentConfig = cfg;
     }
     resolveConfiguredAgentId(currentConfig, agentId);
     if (resolveSessionStorePathCore(currentConfig.session?.store, { agentId, env }) !== storePath) {
@@ -301,7 +314,13 @@ export function enqueueSessionEventForHost(
       }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
-      if (options.preserveOccurrenceOnRejection && !adopted && !started) {
+      // An occurrence that was accepted but never started and never attempted delivery returns
+      // to passive custody. No settlement path may destroy an event the user still owes a reply
+      // to; a later turn readmits it under the current policy.
+      const retainCustody =
+        (options.preserveOccurrenceOnRejection && !adopted && !started) ||
+        ((accepted || deferred) && !started && !deliveryAttempted);
+      if (retainCustody) {
         ownership.release();
       } else {
         ownership.cancel();
