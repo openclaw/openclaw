@@ -8,7 +8,9 @@ class FixtureObserver {
 
 export function stubResizeObserver(): void {
   vi.stubGlobal("ResizeObserver", FixtureObserver);
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
 }
 
 /** Non-layout rendering fixtures only; geometry tests own their delivery clock. */
