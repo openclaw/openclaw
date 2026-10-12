@@ -225,6 +225,55 @@ describe("plugin-owned CLI native tool policy", () => {
     },
   );
 
+  it("keeps an explicit full session unrestricted by configured workspaceOnly for native file tools", async () => {
+    const { context } = await createExecution({
+      config: {
+        tools: {
+          allow: ["read"],
+          fs: { workspaceOnly: true },
+          exec: { security: "full", ask: "off" },
+        },
+      },
+      sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "full" },
+      nativeTools: ["Read"],
+    });
+
+    await runPlugin(context, async function* (execution) {
+      await expect(
+        requestNativeTool(execution, "Read", { file_path: "/etc/hostname" }),
+      ).resolves.toMatchObject({ behavior: "allow" });
+      yield SUCCESS_RESULT;
+    });
+  });
+
+  it("keeps a bounded session contained at its recorded root when config disables workspaceOnly", async () => {
+    const { context } = await createExecution({
+      config: {
+        tools: {
+          allow: ["read"],
+          exec: { security: "full", ask: "off" },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sdk-session",
+        updatedAt: 1,
+        permissionMode: "workspace",
+        sessionRoot: path.join(process.cwd(), "session-root"),
+      },
+      nativeTools: ["Read"],
+    });
+
+    await runPlugin(context, async function* (execution) {
+      await expect(
+        requestNativeTool(execution, "Read", { file_path: "/etc/hostname" }),
+      ).resolves.toEqual({
+        behavior: "deny",
+        message: expect.stringMatching(/^Path escapes sandbox root/),
+      });
+      yield SUCCESS_RESULT;
+    });
+  });
+
   it("maps native Grep to read policy and its native path schema", async () => {
     const workspaceDir = path.join(process.cwd(), "native-grep-workspace");
     const projectNativeToolAuthority = (tools: readonly string[]) =>

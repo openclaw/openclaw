@@ -64,8 +64,14 @@ async function createPluginToolPermissionHandler(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<(request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult>> {
   const run = params.context.params;
-  const { permission, policySessionKey, policyAgentId, effectiveToolPolicies, fsWorkspaceOnly } =
-    await nativePolicy.resolveCliNativeToolPolicy(params.context);
+  const {
+    permission,
+    policySessionKey,
+    policyAgentId,
+    effectiveToolPolicies,
+    fsWorkspaceOnly,
+    fsRoot,
+  } = await nativePolicy.resolveCliNativeToolPolicy(params.context);
   const preparedCwd = params.context.cwd ?? params.context.workspaceDir;
   const assertNativeFilePath = async (filePath: string, nativeCwd?: string) => {
     if (!fsWorkspaceOnly) {
@@ -80,7 +86,10 @@ async function createPluginToolPermissionHandler(params: {
     await assertSandboxPath({
       filePath,
       cwd: cwd && path.isAbsolute(cwd) ? cwd : preparedCwd,
-      root: params.context.workspaceDir,
+      // The admitted session posture owns the filesystem root: an explicit
+      // bounded session pins its recorded root; otherwise containment falls
+      // back to the admitted execution workspace.
+      root: fsRoot,
     });
   };
   const grants = new Set<string>();
