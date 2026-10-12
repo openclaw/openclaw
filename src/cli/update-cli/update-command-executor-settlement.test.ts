@@ -236,6 +236,7 @@ it.each([
   async ({ kind, cleanupResult }) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const admitted = createDeferredCore();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const cancelled = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     let signal: AbortSignal | undefined;
@@ -312,6 +313,7 @@ it.each(["direct", "delegated"] as const)(
   "delivers a bounded %s timeout while its callback remains pending",
   async (kind) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const admitted = createDeferredCore();
     const finish = createDeferredCore();
     let signal: AbortSignal | undefined;
@@ -510,6 +512,7 @@ it.each(["forced", "uncertain"] as const)(
 
 it("preserves activation timeout provenance without a cause cycle after uncertain cleanup", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   const deadline = createUpdateOperationDeadline();
   const admitted = createDeferredCore();
   const cancelled = createDeferredCore();
@@ -556,4 +559,33 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
     }
   };
   visit(result);
+});
+
+it("keeps the update operation deadline bounded when the wall clock rewinds", async () => {
+  vi.useFakeTimers();
+  const onExpired = vi.fn();
+  const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>(onExpired);
+  const budget = 1000;
+  deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
+  const finish = createDeferredCore();
+  const work = deadline
+    .run(async () => {
+      await finish.promise;
+    })
+    .catch((error: unknown) => error);
+  await setImmediate();
+  expect(deadline.signal.aborted).toBe(false);
+  // Advance 500ms; both clocks move together so far.
+  await vi.advanceTimersByTimeAsync(500);
+  // A clock correction rewinds the wall clock by 90s. A wall-clock-based
+  // remaining budget would compute ~90.5s; the monotonic deadline must
+  // still fire at the original 1000ms budget.
+  vi.setSystemTime(Date.now() - 90_000);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(deadline.signal.aborted).toBe(true);
+  expect(onExpired).toHaveBeenCalledTimes(1);
+  finish.resolve();
+  const result = await work;
+  expect(result).toBeInstanceOf(UpdateActivationTimeoutError);
+  vi.useRealTimers();
 });
