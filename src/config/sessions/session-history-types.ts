@@ -19,9 +19,11 @@ import type {
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.types.js";
 import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
+import type { readSessionTranscriptHistoryEventPageFromProjection } from "./session-accessor.sqlite-history-query.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -181,6 +183,13 @@ export type ChatHistoryDisplayResult =
 
 export type SessionHistoryWorkerRequest =
   | {
+      kind: "history-event-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1];
+      };
+    }
+  | {
       kind: "active-accounting";
       params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
     }
@@ -271,6 +280,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }

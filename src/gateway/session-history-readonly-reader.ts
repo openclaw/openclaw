@@ -3,7 +3,10 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../co
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
-import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import {
+  readSessionTranscriptHistoryEventPageFromProjection,
+  readTranscriptDisplayDeltaFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -134,6 +137,12 @@ export function createReadonlySessionHistoryReader(
     () => (sourceDatabases ??= resolveSourceDatabases?.()),
   );
   return {
+    readHistoryEventPage: (
+      options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1],
+    ) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptHistoryEventPageFromProjection(projection, options),
+      ),
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
         database: projection.database.db,

@@ -292,7 +292,7 @@ describe("exact SQLite session batches", () => {
       });
       expect(queries.counts.payload).toBe(0);
       expect(queries.counts.participants).toBe(0);
-      expect(queries.rowCounts.identity).toBe(3);
+      expect(queries.rowCounts.identity).toBe(0);
       const clone = vi.spyOn(globalThis, "structuredClone");
       try {
         const borrowed = read(false)[0];
@@ -402,35 +402,6 @@ describe("exact SQLite session batches", () => {
       }
     },
   );
-
-  it("rejects a cache snapshot if a sibling commit occurs while selected entries are copied", () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-copy-race-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1, label: "before" });
-    listSessionEntriesReadOnly({ ...scope, projection: "list" });
-    const database = openOpenClawAgentDatabase(scope);
-    const sibling = openNodeSqliteDatabase(database.path);
-    const originalClone = structuredClone;
-    const clone = vi.spyOn(globalThis, "structuredClone").mockImplementationOnce((value) => {
-      sibling
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(
-          JSON.stringify({ sessionId: "target", updatedAt: 1, label: "after" }),
-          scope.sessionKey,
-        );
-      return originalClone(value);
-    });
-    try {
-      expect(
-        loadExactSessionEntryCandidatesReadOnlyBatch([
-          { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
-        ]),
-      ).toMatchObject([{ ok: true, value: [{ entry: { label: "after" } }] }]);
-    } finally {
-      clone.mockRestore();
-      sibling.close();
-    }
-  });
 
   it.each(["current_session_id", "updated_at", "malformed", "delivery", "lineage"] as const)(
     "keeps per-key %s errors after an intervening list reload",

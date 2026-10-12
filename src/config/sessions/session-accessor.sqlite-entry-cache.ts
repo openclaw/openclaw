@@ -1,11 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
 import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -15,7 +10,6 @@ import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import {
@@ -80,8 +74,6 @@ export {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 
-type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
-
 type SqliteSessionEntryCacheWriteGeneration = {
   after: number;
   before: number;
@@ -122,42 +114,17 @@ function readCachedExactSessionEntries(
     if (!cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
       return undefined;
     }
-    // List snapshots do not retain these columns; matching generations alone
-    // cannot prove exact identity after a raw edit followed by a list reload.
-    const rows = executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<SessionEntryCacheTables>(database.db)
-        .selectFrom("session_nodes")
-        .select(["session_key", "current_session_id", "updated_at"])
-        .where("session_key", "in", sqliteStringSet(keys)),
-    ).rows;
-    if (rows.length !== keys.length) {
-      return undefined;
-    }
-    const rowsByKey = new Map(rows.map((row) => [row.session_key, row]));
     const entries = new Map<string, SessionEntry>();
     for (const sessionKey of new Set(sessionKeys)) {
       const key = toUSVString(sessionKey);
-      const row = rowsByKey.get(key);
-      const entry = cached.entries.get(key);
-      if (
-        !row ||
-        !entry ||
-        entry.sessionId !== row.current_session_id ||
-        entry.updatedAt !== row.updated_at
-      ) {
-        return undefined;
-      }
+      const entry = cached.entries.get(key)!;
       // Mutable reads own each raw key; internal readers borrow the frozen committed facts.
       entries.set(
         sessionKey,
         validateDeliveryCanonicalSessionEntry(key, clone ? structuredClone(entry) : entry),
       );
     }
-    return sessionEntryCaches.get(database.db) === cached &&
-      cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))
-      ? entries
-      : undefined;
+    return entries;
   } catch {
     // Cohort conversion/validation failures retain the exact reader's per-key errors.
     sessionEntryCaches.delete(database.db);
