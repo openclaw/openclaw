@@ -2,13 +2,14 @@ import type { Command } from "commander";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { NativeBrowserPolicyReport } from "../browser/native-policy.js";
+import { registerBrowserPolicySetupCommands } from "./browser-cli-policy-setup.js";
 import { runBrowserCliRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 
 export function registerBrowserPolicyCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ): void {
-  browser
+  const policyCommand = browser
     .command("policy")
     .description("Inspect the running browser's effective native enterprise policy")
     .action(async (_opts, command: Command) => {
@@ -34,4 +35,5 @@ export function registerBrowserPolicyCommands(
         },
       });
     });
+  registerBrowserPolicySetupCommands(policyCommand, parentOpts);
 }

@@ -31,16 +31,13 @@ import {
   BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
   BROWSER_NATIVE_HOST_NAME,
 } from "./extension-native-host.constants.js";
+import { shellQuote } from "./native-shell-quote.js";
 import { isValidProfileName } from "./profiles.js";
 
 const OWNED_LAUNCHER_MARKER = "# OpenClaw native messaging bootstrap v1";
 
 function nativeMessagingRoot(): string {
   return path.join(resolveInstallStateDir(), "browser", "native-messaging");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export async function resolveNativeHostPath(pluginRoot: string): Promise<string> {

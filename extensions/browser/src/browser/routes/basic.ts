@@ -12,6 +12,10 @@ import { buildBrowserDoctorReport } from "../doctor.js";
 import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
 import { BrowserError } from "../errors.js";
 import {
+  nativePolicySetupRequestSchema,
+  planNativeBrowserPolicySetup,
+} from "../native-policy-setup.js";
+import {
   inspectNativeBrowserPolicy,
   nativePolicyAvailability,
   summarizeNativePolicy,
@@ -338,6 +342,33 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     );
   });
 
+  registerBasicProfilePost(app, ctx, "/policy/setup/plan", async ({ req, res, profileCtx }) => {
+    const request = nativePolicySetupRequestSchema.safeParse(req.body);
+    if (!request.success) {
+      return jsonError(
+        res,
+        400,
+        "Use inspect, remove, or install with a nonempty native policy JSON object of at most 64 KiB.",
+      );
+    }
+    const plan = await runProfileRouteOperation({
+      profileCtx,
+      signal: req.signal,
+      assertCurrent: req.assertCurrent,
+      run: async (signal) => {
+        const report = await inspectProfileNativePolicy(req, profileCtx, signal);
+        signal.throwIfAborted();
+        const result = await planNativeBrowserPolicySetup({
+          report,
+          profile: profileCtx.profile,
+          request: request.data,
+        });
+        signal.throwIfAborted();
+        return result;
+      },
+    });
+    res.json(plan);
+  });
   app.get("/system-profiles", async (req, res) => {
     await sendBasicJsonResponse(res, async () => ({
       systemProfiles: await createBrowserProfilesService(ctx).listSystemProfiles(

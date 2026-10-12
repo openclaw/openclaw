@@ -114,6 +114,79 @@ For example, `URLBlocklist` is not a complete network firewall and does not
 replace network-level controls. See the
 [Chrome policy reference](https://chromeenterprise.google/policies/).
 
+### Set up local policy
+
+Automatic setup supports managed Linux profiles with native executable paths
+`/opt/google/chrome/chrome` or `/opt/google/chrome/google-chrome` for Google
+Chrome, and `/usr/local/share/chromium/chrome-linux/chrome` for the tested
+Chromium deployment. Other layouts, including Snap, Flatpak and custom builds,
+require their administrator's native installation instructions.
+
+```bash
+openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw policy setup --file policy.json
+```
+
+Supply a native policy JSON object, at most 64 KiB. For example:
+
+```json validate=false
+{ "URLBlocklist": ["blocked.example.com"] }
+```
+
+Setup checks the running browser before reading your file. It previews the
+browser host name, browser, native target, existing policy and requested changes.
+The target is
+`/etc/opt/chrome/policies/managed/openclaw.json` for Google Chrome or
+`/etc/chromium/policies/managed/openclaw.json` for Chromium. This mandatory
+machine policy affects all users, profiles and sessions of that browser.
+
+Approve the export to create a private `openclaw-policy.json` artifact on the
+CLI machine. Use `--output <new-path>` to choose a new file, or `--yes` after
+reviewing the preview for a non-interactive export. Without confirmation,
+system policy stays unchanged. Exporting is preparation, not installation.
+
+Copy the artifact to the browser host as `openclaw-policy.json`. From its
+directory, review and run the administrator command printed by setup. It
+requires root access and checks that the previewed artifact has not changed.
+OpenClaw does not run privileged installation through the Gateway. If sudo is
+denied, ask the browser host administrator to perform this step.
+
+Reload `chrome://policy` on the browser host and restart the browser only if
+native diagnostics require it. Then check the original request and control:
+
+```bash
+openclaw browser --browser-profile openclaw policy verify --file policy.json
+```
+
+Verification compares fresh native values, provider diagnostics and browser
+control readiness. Requested values that are missing, rejected, ignored,
+overridden, masked or restart-pending prevent a successful result. Native
+warnings remain visible. Test an allowed and a blocked destination through
+OpenClaw before relying on navigation restrictions.
+A policy that disables remote debugging also disables OpenClaw control; inspect
+and manage it through the browser administrator's tools.
+
+Run `setup` again with a new file to plan an update. To remove only the policy
+introduced by this flow:
+
+```bash
+openclaw browser --browser-profile openclaw policy remove
+```
+
+Removal also requires the printed administrator command and native activation.
+Inspect `policy` and `doctor --deep` afterward: other administrator policies
+can remain effective. Setup preserves other files and refuses to replace or
+remove a foreign, linked or unreadable `openclaw.json` artifact. It does not
+restart other browser sessions.
+
+Local setup is unavailable for attached or remote CDP browsers, Chrome MCP,
+the extension relay, other operating systems and other browser products.
+The fixed paths above do not verify Snap, Flatpak or custom policy namespaces;
+use their administrator's deployment mechanism and inspect native policy manually.
+Existing MDM policy
+continues to be enforced by the browser; OpenClaw does not generate MDM payloads
+or enroll devices. See the [Chromium Linux policy setup guide](https://www.chromium.org/administrators/linux-quick-start/).
+
 ## If the command is missing
 
 If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.openclaw/openclaw.json`. When `plugins.allow` is present, list the bundled browser plugin explicitly unless the config already has a root `browser` block:

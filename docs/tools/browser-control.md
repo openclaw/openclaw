@@ -21,7 +21,7 @@ this variable the browser control runtime still works through the CLI and
 agent tools, but nothing listens on the loopback control port.
 
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
-- Native enterprise policy: `GET /policy` (see [CLI policy guidance](/cli/browser#native-enterprise-policy))
+- Native enterprise policy: `GET /policy`; local setup preview: `POST /policy/setup/plan` (see [CLI policy guidance](/cli/browser#native-enterprise-policy))
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
