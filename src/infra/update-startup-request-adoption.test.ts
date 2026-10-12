@@ -15,6 +15,11 @@ vi.mock("./update-check.js", async (importOriginal) => ({
   checkUpdateStatus,
 }));
 
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.9",
+}));
+
 it.each(["complete", "close"] as const)(
   "preserves early status and update admission discovery when the scheduler attaches (%s)",
   async (outcome) => {
