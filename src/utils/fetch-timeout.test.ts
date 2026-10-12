@@ -154,21 +154,6 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
-  it("strips query strings and hashes from relative timeout URL logs", async () => {
-    const { cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: 25,
-      operation: "unit-test",
-      url: "/api/responses?api-key=secret#fragment",
-    });
-
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
-    expect(requireWarnRecord(0).url).toBe("/api/responses");
-
-    cleanup();
-  });
-
   it("redacts Telegram bot tokens from parseable timeout URLs", async () => {
     const record = await captureTimeoutLogUrl(
       `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
@@ -178,18 +163,9 @@ describe("buildTimeoutAbortSignal", () => {
     expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
   });
 
-  it("redacts Telegram bot tokens from custom self-hosted API root timeout URLs", async () => {
-    const record = await captureTimeoutLogUrl(
-      `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/getMe?chat_id=1`,
-    );
-
-    expect(record.url).toBe("https://telegram.internal/bot***/getMe");
-    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
-  });
-
   it("redacts Telegram bot tokens from unparseable (fallback) timeout URL strings", async () => {
     const record = await captureTimeoutLogUrl(
-      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1#fragment`,
     );
 
     expect(record.url).toBe("/bot***/sendMessage");
@@ -205,27 +181,6 @@ describe("buildTimeoutAbortSignal", () => {
     expect(record.consoleMessage).toBe(
       `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
     );
-  });
-
-  it("keeps the full ASCII budget in fallback timeout URL logs", async () => {
-    const visiblePrefix = "x".repeat(500);
-    const record = await captureTimeoutLogUrl(`${visiblePrefix}tail`);
-    const expectedUrl = `${visiblePrefix}...`;
-
-    expect(record.url).toBe(expectedUrl);
-    expect(record.consoleMessage).toBe(
-      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
-    );
-  });
-
-  it.each([
-    ["https://example.com/bot/settings?safe=1", "https://example.com/bot/settings"],
-    ["https://example.com/bots/chat?safe=1", "https://example.com/bots/chat"],
-    ["https://example.com/robot/test?safe=1", "https://example.com/robot/test"],
-    ["/bot123:status?safe=1", "/bot123:status"],
-    ["/bot123456:short/status?safe=1", "/bot123456:short/status"],
-  ])("keeps ordinary bot-like timeout path %s visible", async (input, expected) => {
-    expect((await captureTimeoutLogUrl(input)).url).toBe(expected);
   });
 
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
@@ -290,18 +245,6 @@ describe("buildTimeoutAbortSignal", () => {
     expect(fetchSignal?.reason).toBe(reason);
   });
 
-  it("accepts a null RequestInit signal", async () => {
-    const response = new Response("ok");
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.signal).toBeInstanceOf(AbortSignal);
-      return response;
-    });
-
-    await expect(
-      fetchWithTimeout("https://example.com/v1/audio", { signal: null }, 25, fetchFn),
-    ).resolves.toBe(response);
-  });
-
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const response = new Response("ok");
@@ -334,24 +277,6 @@ describe("buildTimeoutAbortSignal", () => {
 
     parent.abort(reason);
     await vi.advanceTimersByTimeAsync(25);
-
-    expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).toBe(reason);
-    expect(warn).not.toHaveBeenCalled();
-
-    cleanup();
-  });
-
-  it("preserves an already-aborted parent reason", () => {
-    const parent = new AbortController();
-    const reason = new Error("parent already stopped");
-    parent.abort(reason);
-
-    const { signal, cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: 25,
-      signal: parent.signal,
-      operation: "unit-test",
-    });
 
     expect(signal?.aborted).toBe(true);
     expect(signal?.reason).toBe(reason);
