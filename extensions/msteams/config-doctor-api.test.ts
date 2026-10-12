@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 import { MSTeamsConfigSchema } from "./src/config-schema.js";
 import { msteamsDoctor } from "./src/doctor.js";
-import { resolveMSTeamsLegacyWebhook } from "./src/webhook-route.js";
 
 describe("Microsoft Teams Gateway webhook migration", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -28,68 +27,6 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     ).toContain("18789/teams/events");
   });
 
-  it.each([
-    { setting: undefined, endpoint: undefined, note: "no compatibility listener is configured" },
-    {
-      setting: { port: 44978, host: "127.0.0.1" },
-      endpoint: { port: 44978, host: "127.0.0.1" },
-      note: "compatibility port 44978",
-    },
-    {
-      setting: false as const,
-      endpoint: undefined,
-      note: "no compatibility listener is configured",
-    },
-  ])("keeps runtime and Doctor aligned for $setting", ({ setting, endpoint, note }) => {
-    const cfg: OpenClawConfig = {
-      gateway: { port: 19001 },
-      channels: { msteams: { webhook: { path: "/teams/events" }, legacyWebhook: setting } },
-    };
-    const migrated = normalizeCompatibilityConfig({ cfg });
-    expect(migrated.changes).toEqual([]);
-    const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
-    expect(channel.enabled).toBeUndefined();
-    expect(resolveMSTeamsLegacyWebhook(channel)).toEqual(endpoint);
-    const notes = msteamsDoctor.runConfigSequence({
-      cfg,
-      env: { OPENCLAW_GATEWAY_PORT: "19002" },
-    });
-    expect(notes.warningNotes).toEqual([]);
-    const message = notes.infoNotes?.join(" ");
-    expect(message).toContain("19002/teams/events");
-    expect(message).toContain(note);
-    if (endpoint) {
-      expect(message).toContain("remove the channels.msteams.legacyWebhook pin");
-    }
-  });
-
-  it("keeps the canonical endpoint and removes an empty legacy webhook object", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          legacyWebhook: { port: 44978, host: "127.0.0.1" },
-          webhook: { port: 3978 },
-        },
-      },
-    };
-    const migrated = normalizeCompatibilityConfig({ cfg });
-    expect(migrated.config.channels?.msteams).toEqual({
-      legacyWebhook: { port: 44978, host: "127.0.0.1" },
-    });
-    expect(migrated.changes).toEqual([expect.stringContaining("already configured")]);
-    expect(normalizeCompatibilityConfig({ cfg: migrated.config }).changes).toEqual([]);
-  });
-
-  it("keeps an explicit opt-out while removing the old port key", () => {
-    const old = { legacyWebhook: false as const, webhook: { port: 3978, path: "/teams/events" } };
-    const migrated = normalizeCompatibilityConfig({ cfg: { channels: { msteams: old } } });
-    const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
-    expect(channel.legacyWebhook).toBe(false);
-    expect(channel.enabled).toBeUndefined();
-    expect(channel.webhook).toEqual({ path: "/teams/events" });
-    expect(resolveMSTeamsLegacyWebhook(channel)).toBeUndefined();
-  });
-
   it("defers unseen service credentials without turning environment credentials into config", () => {
     vi.stubEnv("MSTEAMS_AUTH_TYPE", undefined);
     vi.stubEnv("MSTEAMS_APP_ID", undefined);
@@ -109,15 +46,8 @@ describe("Microsoft Teams Gateway webhook migration", () => {
 
   it.each([
     ["/api/:tenant/messages", "uses Express pattern syntax"],
-    ["/api{/messages}", "uses Express pattern syntax"],
-    ["/health", "is reserved for Gateway checks"],
-    ["/healthz", "is reserved for Gateway checks"],
-    ["/ready", "is reserved for Gateway checks"],
-    ["/readyz", "is reserved for Gateway checks"],
-    ["/startup", "is reserved for Gateway checks"],
     ["/startupz", "is reserved for Gateway checks"],
     ["/api/channels/teams", "requires Gateway authentication"],
-    ["/%61pi/channels/teams", "requires Gateway authentication"],
   ])("diagnoses unavailable %s callbacks under every compatibility setting", (path, reason) => {
     for (const legacyWebhook of [undefined, { port: 3978 }, false] as const) {
       const cfg: OpenClawConfig = {

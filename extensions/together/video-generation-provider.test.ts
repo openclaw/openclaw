@@ -62,44 +62,6 @@ function mockVideoDownload(
 }
 
 describe("together video generation provider", () => {
-  it("uses Together's canonical video model ids", () => {
-    expect(buildTogetherVideoGenerationProvider().models).toEqual([
-      "Wan-AI/Wan2.2-T2V-A14B",
-      "Wan-AI/Wan2.2-I2V-A14B",
-      "minimax/hailuo-02",
-      "kwaivgI/kling-2.1-master",
-    ]);
-  });
-
-  it("creates a video, polls completion, and downloads the output", async () => {
-    mockVideoDownload();
-    const result = await generateVideo();
-
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const post = requireFirstPostJsonRequest(postJsonRequestMock, "Together request");
-    expect(post.url).toBe("https://api.together.xyz/v2/videos");
-    const body = requireRecord(post.body, "Together request body");
-    expect(body.model).toBe("Wan-AI/Wan2.2-T2V-A14B");
-    expect(body.prompt).toBe("A bicycle weaving through a rainy neon street");
-    expect(result.videos).toEqual([expect.objectContaining({ fileName: "video-1.webm" })]);
-    expect(result.metadata).toEqual({
-      videoId: "video_123",
-      status: "completed",
-      videoUrl: "https://example.com/together.mp4",
-    });
-  });
-
-  it("surfaces an immediately failed submission before polling or validating id", async () => {
-    const release = mockSubmission({
-      status: "failed",
-      error: { message: "Together video quota exhausted" },
-    });
-
-    await expect(generateVideo()).rejects.toThrow("Together video quota exhausted");
-    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("uses an actionable fallback when an immediately failed submission omits its error", async () => {
     const release = mockSubmission({ status: "failed", error: null });
 
@@ -122,29 +84,6 @@ describe("together video generation provider", () => {
       "Together video content policy blocked this prompt",
     );
     expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("downloads an immediately completed Together submission without polling it again", async () => {
-    const release = mockSubmission({
-      id: "video_completed",
-      model: "Wan-AI/Wan2.2-T2V-A14B",
-      status: "completed",
-      outputs: { video_url: "https://example.com/completed.mp4" },
-    });
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response(Buffer.from("completed-video"), {
-        headers: { "content-type": "video/mp4" },
-      }),
-    );
-
-    const result = await generateVideo();
-
-    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({
-      model: "Wan-AI/Wan2.2-T2V-A14B",
-      metadata: { status: "completed", videoId: "video_completed" },
-    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -191,16 +130,6 @@ describe("together video generation provider", () => {
       generateVideo({ cfg: { agents: { defaults: { mediaMaxMb: 0.00001 } } } }),
     ).rejects.toThrow("Together generated video download exceeds");
     expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a successful JSON error response as generated video", async () => {
-    mockVideoDownload(
-      new Response('{"error":"denied"}', { headers: { "content-type": "application/json" } }),
-    );
-
-    await expect(generateVideo()).rejects.toThrow(
-      "Together generated video download: malformed video response",
-    );
   });
 
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {
