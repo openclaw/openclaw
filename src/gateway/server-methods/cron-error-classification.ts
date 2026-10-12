@@ -9,6 +9,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message === CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE ||
     message.startsWith("unknown cron job id:") ||
     message.startsWith("cron job already exists:") ||
+    message.startsWith("cron job limit reached:") ||
     message.includes("cron job id must not be blank") ||
     message.includes("cron declarationKey") ||
     message.includes("cron displayName") ||

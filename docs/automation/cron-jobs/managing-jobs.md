@@ -221,6 +221,8 @@ Automation jobs, run history, and quarantined malformed jobs live in the shared 
 
 Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
 
+Set `cron.maxJobs` to limit how many jobs clients can create, for example on a hosted or shared Gateway. Once that many jobs exist, new jobs from the agent tool, CLI, Control UI, or Gateway API are refused with `cron job limit reached` until the counted total falls below `cron.maxJobs`; updating an existing job is unaffected. Enabled, disabled, and plugin-created jobs (such as memory dreaming) count toward the limit, but plugins and the Gateway are never refused; heartbeat monitors do not count. Lowering the limit keeps existing jobs. Unset means no limit.
+
 Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 <AccordionGroup>

@@ -126,6 +126,7 @@ export async function add(
       options: {
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
+        enforceJobLimit: opts?.enforceJobLimit,
         createdActor: opts?.createdActor,
         sourceConversation: opts?.sourceConversation,
         skillLibrarySelections: opts?.skillLibrarySelections,

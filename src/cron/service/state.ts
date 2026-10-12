@@ -436,6 +436,8 @@ export type CronAddOptions = {
   enabledExplicit?: boolean;
   /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
   systemOwned?: boolean;
+  /** Set by the Gateway `cron.add` method: `cron.maxJobs` refuses client creates, not trusted in-process ones. */
+  enforceJobLimit?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;
   /** Authenticated caller provenance stamped by the service, never public input. */

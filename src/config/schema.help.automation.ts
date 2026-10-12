@@ -108,6 +108,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
+  "cron.maxJobs":
+    "Limits how many automation jobs clients can create on this Gateway. Once this many jobs exist, new jobs from the agent tool, CLI, Control UI, or Gateway API are refused until the counted total falls below `cron.maxJobs`; updating a job or re-declaring it by declarationKey is not a new job. Enabled, disabled, and plugin-created jobs count; heartbeat monitors do not. Jobs that plugins or the Gateway create internally are never refused. Default: no limit.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.webhookSsrfPolicy":
