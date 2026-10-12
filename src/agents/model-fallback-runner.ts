@@ -105,6 +105,8 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** Provenance for configured lists projected into an override. Omitted means absolute caller order. */
+  fallbacksOverrideSource?: "configured";
   requestedRouteResolution?: ModelFallbackRouteResolution;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
@@ -166,6 +168,7 @@ async function runWithModelFallbackInternal<T>(
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    fallbacksOverrideSource: params.fallbacksOverrideSource,
     requestedRouteResolution: params.requestedRouteResolution,
     manifestPlugins: params.manifestPlugins,
   });
@@ -627,8 +630,10 @@ async function runWithModelFallbackInternal<T>(
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
       selectionChanged = true;
-      // The outer owner must apply runtime changes before selecting another model.
+      // The outer owner must apply runtime or fallback-consent changes before
+      // selecting another model; this chain was built for the previous consent.
       if (
+        err.modelFallbackPolicyChanged ||
         hasDifferentLiveSessionRuntimeSelection({
           error: err,
           currentAgentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride,

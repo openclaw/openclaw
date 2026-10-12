@@ -13,7 +13,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type {
@@ -366,3 +366,114 @@ describe("getReplyFromConfig fallback availability", () => {
     });
   });
 });
+
+it.each([undefined, "configured"] as const)(
+  "delivers through configured session preference without replacing the selection (%s)",
+  async (modelFallbackPolicy) => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackAuthStore(agentDir);
+      const baseConfig = makeModelFallbackConfig();
+      const sessionKey = "agent:test:telegram:preference";
+      const storePath = path.join(path.dirname(agentDir), "sessions.json");
+      const cfg: OpenClawConfig = {
+        ...baseConfig,
+        agents: {
+          ...baseConfig.agents,
+          defaults: {
+            ...baseConfig.agents?.defaults,
+            workspace: workspaceDir,
+            model: { primary: "openai/mock-1", fallbacks: ["groq/mock-other", "groq/mock-2"] },
+            modelPolicy: { allow: [] },
+            models: { "openai/mock-1": { fallbackPriority: ["groq/mock-2"] } },
+          },
+          entries: { test: { agentDir, workspace: workspaceDir } },
+        },
+        session: { store: storePath },
+      };
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionId: "session-preference-reply",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "mock-1",
+          modelOverrideSource: "user",
+          modelFallbackPolicy,
+        },
+      );
+      runEmbeddedAttemptMock.mockImplementation(async (attempt) => {
+        const failed = attempt.provider === "openai";
+        const assistant = buildEmbeddedRunnerAssistant({
+          provider: attempt.provider,
+          model: attempt.modelId,
+          stopReason: failed ? "error" : "stop",
+          ...(failed
+            ? { errorMessage: "401 invalid API key" }
+            : {
+                content: [{ type: "text", text: "preferred fallback reply" }],
+              }),
+        });
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: failed ? [] : ["preferred fallback reply"],
+          lastAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        });
+      });
+      const ctx: MsgContext = {
+        Body: "hello",
+        From: "telegram:preference",
+        To: "telegram:preference",
+        ChatType: "direct",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: sessionKey,
+        CommandAuthorized: true,
+      };
+      const replyConfig = withFullRuntimeReplyConfig(cfg);
+      setRuntimeConfigSnapshot(replyConfig, replyConfig);
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      try {
+        await withReplyDispatcher({
+          dispatcher,
+          run: async () => {
+            const replies = await getReplyFromConfig(ctx, undefined, replyConfig);
+            for (const payload of Array.isArray(replies) ? replies : replies ? [replies] : []) {
+              dispatcher.sendFinalReply(payload);
+            }
+          },
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+      if (modelFallbackPolicy === "configured") {
+        expect(
+          delivered.some((payload) => payload.text?.includes("preferred fallback reply")),
+        ).toBe(true);
+        expect(
+          runEmbeddedAttemptMock.mock.calls
+            .filter(([attempt]) => attempt.provider === "groq")
+            .map(([attempt]) => attempt.modelId),
+        ).toEqual(["mock-2"]);
+      } else {
+        expect(delivered.some((payload) => payload.isError)).toBe(true);
+        expect(countProviderAttempts("groq")).toBe(0);
+      }
+      const savedEntry = loadSessionEntry({ sessionKey, storePath });
+      expect(savedEntry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "mock-1",
+        modelOverrideSource: "user",
+      });
+      expect(savedEntry?.modelFallbackPolicy).toBe(modelFallbackPolicy);
+      expect(cfg.agents?.defaults?.model).toEqual({
+        primary: "openai/mock-1",
+        fallbacks: ["groq/mock-other", "groq/mock-2"],
+      });
+    });
+  },
+);

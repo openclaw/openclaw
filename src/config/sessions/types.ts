@@ -515,6 +515,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * explicit configured-default selection that blocks parent inheritance.
      */
     modelOverrideSource?: "auto" | "user" | "default";
+    /** Session-only model preference: keep the configured ladder without changing defaults. */
+    modelFallbackPolicy?: "configured";
     /** Present only when providerOverride/modelOverride are a canonical route pair. */
     modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */

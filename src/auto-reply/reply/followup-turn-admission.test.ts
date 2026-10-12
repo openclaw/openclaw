@@ -126,6 +126,27 @@ beforeEach(() => {
 
 describe("admitFollowupTurn", () => {
   it.each([
+    { before: "configured" as const, after: undefined },
+    { before: undefined, after: "configured" as const },
+  ])("captures fallback policy $after at the admission fence", async ({ before, after }) => {
+    const queued = createRun();
+    queued.run.modelFallbackPolicy = before;
+    state.admitReply.mockImplementationOnce(async ({ captureRunSelection }) => {
+      await Promise.resolve();
+      queued.run.modelFallbackPolicy = after;
+      captureRunSelection();
+      // A later preference edit must not rewrite the admitted turn's captured choice.
+      queued.run.modelFallbackPolicy = before;
+      return { status: "owned", operation: createOperation() };
+    });
+    const result = await admitFollowupTurn({ queued, defaults: createDefaults() });
+    expect(result.kind).toBe("admitted");
+    if (result.kind === "admitted") {
+      expect(result.turn.queued.run.modelFallbackPolicy).toBe(after);
+    }
+  });
+
+  it.each([
     { sessionKey: " agent:main:session ", expected: "agent:main:session" },
     { sessionKey: undefined, expected: "legacy-target" },
   ])("preserves the admitted transcript target $expected", async ({ sessionKey, expected }) => {

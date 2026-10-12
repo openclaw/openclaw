@@ -276,6 +276,7 @@ describe("plugin session extension SessionEntry projection", () => {
 
   it("rejects sessionEntrySlotKey values that collide with SessionEntry fields", () => {
     const reservedSlots = {
+      fallbackPolicy: "modelFallbackPolicy",
       workflow: "updatedAt",
       "main-recovery": "mainRestartRecovery",
       recovery: "subagentRecovery",

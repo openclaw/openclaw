@@ -59,6 +59,9 @@ async function reconcileAgentPatchedSessionModel(params: {
     },
     (entry) => {
       params.assertCurrent?.();
+      if (entry.modelFallbackPolicy === "configured") {
+        return null;
+      }
       const marker = entry.modelFallback;
       if (marker?.source !== "agent-patch") {
         return null;
@@ -92,6 +95,7 @@ async function reconcileAgentPatchedSessionModel(params: {
         modelOverride: marker.prevModelOverride,
         providerOverride: marker.prevProviderOverride,
         modelOverrideSource: marker.prevModelOverrideSource,
+        modelFallbackPolicy: marker.prevModelFallbackPolicy,
         modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
         modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
         modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,

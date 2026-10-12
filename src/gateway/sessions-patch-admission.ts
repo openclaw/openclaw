@@ -49,7 +49,7 @@ export function validateSessionPatchAdmission(params: {
     }
   }
   if (
-    ("model" in patch || "agentRuntime" in patch) &&
+    ("model" in patch || "agentRuntime" in patch || "modelFallbackPolicy" in patch) &&
     isModelSelectionLocked(params.existingEntry)
   ) {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);

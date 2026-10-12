@@ -183,6 +183,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":
     'Allowed model override refs. Accepts aliases, full "provider/model" refs, and provider wildcards such as "openai/*". Empty permits any model.',
+  "agents.defaults.models.*.fallbackPriority":
+    "Prefer these already-configured fallback models when this exact model is selected. Never adds candidates or changes strict or caller-owned fallback lists. Agent metadata inherits when omitted; an empty list clears inherited priority.",
   "agents.defaults.models.*.agentRuntime":
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":

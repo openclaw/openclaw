@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { inheritSessionSelection, SessionLabelOwnerIndex } from "./session-entry-selection.js";
+import {
+  inheritSessionSelection,
+  selectSessionModelOverride,
+  SessionLabelOwnerIndex,
+} from "./session-entry-selection.js";
 import type { SessionEntry } from "./types.js";
 
 describe("inheritSessionSelection", () => {
@@ -28,6 +32,32 @@ describe("inheritSessionSelection", () => {
       authProfileOverrideSource: "auto",
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("carries a configured session preference only together with its selection", () => {
+    const parent: SessionEntry = {
+      sessionId: "preferred-parent",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "fixture-preferred",
+      modelOverrideSource: "user",
+      modelFallbackPolicy: "configured",
+    };
+    expect(inheritSessionSelection(parent)).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "fixture-preferred",
+      modelOverrideSource: "user",
+      modelFallbackPolicy: "configured",
+    });
+    expect(selectSessionModelOverride(parent)).toMatchObject({
+      modelOverride: "fixture-preferred",
+      modelFallbackPolicy: "configured",
+    });
+    const withoutSelection = { ...parent, providerOverride: undefined, modelOverride: undefined };
+    expect(inheritSessionSelection(withoutSelection).modelFallbackPolicy).toBeUndefined();
+    expect(selectSessionModelOverride(withoutSelection).modelFallbackPolicy).toBeUndefined();
+    const { modelFallbackPolicy: _policy, ...strictParent } = parent;
+    expect(inheritSessionSelection(strictParent).modelFallbackPolicy).toBeUndefined();
   });
 
   it("inherits an explicit configured-default selection", () => {

@@ -16,6 +16,7 @@ import {
 } from "./agent-harness-completion-scope.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -25,6 +26,8 @@ import {
 type AgentCommandRecoveryFixture = {
   state: {
     runAgentAttemptMock: Mock;
+    runWithModelFallbackMock: Mock;
+    resolveEffectiveModelFallbacksMock: Mock;
     resolveAgentDeliveryPlanWithSessionRouteMock: Mock;
     commandWarnMock: Mock;
     emitAgentEventMock: Mock;
@@ -71,6 +74,38 @@ export async function withStoredAgentCommandRecoverySession(
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it.each([
+    { before: "configured" as const, after: undefined },
+    { before: undefined, after: "configured" as const },
+  ])("retries command with committed fallback policy $after", async ({ before, after }) => {
+    const {
+      state,
+      agentCommand,
+      setupBareStoredSession,
+      setupSingleAttemptFallback,
+      makeSuccessResult,
+    } = getFixture();
+    setupBareStoredSession({ modelFallbackPolicy: before });
+    setupSingleAttemptFallback();
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new LiveSessionModelSwitchError({
+        provider: "openai",
+        model: "gpt-5.4",
+        modelFallbackPolicy: after,
+      }),
+    );
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.resolveEffectiveModelFallbacksMock.mockClear();
+    await agentCommand({ message: "hello", to: "+1234567890" });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1]?.[0]).toMatchObject({
+      modelFallbackPolicy: after,
+    });
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionEntry: expect.objectContaining({ modelFallbackPolicy: after }),
+    });
+  });
+
   it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
     const fixture = getFixture();
     const { state, agentCommand, setupSingleAttemptFallback, makeSuccessResult } = fixture;

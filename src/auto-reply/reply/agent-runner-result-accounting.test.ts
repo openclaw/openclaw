@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -64,6 +64,7 @@ import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 
 function createParams(
   authProfileOverrideCompactionCount?: number,
+  selection: Partial<SessionEntry> = {},
 ): Parameters<typeof accountFollowupTurn>[0] {
   let entry: SessionEntry = {
     sessionId: "session-1",
@@ -72,6 +73,7 @@ function createParams(
     ...(authProfileOverrideCompactionCount === undefined
       ? {}
       : { authProfileOverrideCompactionCount }),
+    ...selection,
   };
   const sessionStore = { main: entry };
   const turn = {
@@ -186,6 +188,42 @@ describe("accountFollowupTurn", () => {
           nextAuthProfileIdSource: expectedSource,
         }),
       );
+    },
+  );
+
+  it.each([
+    { name: "keeps", persistedPolicy: "configured", expected: "configured" },
+    { name: "withdraws", persistedPolicy: undefined, expected: undefined },
+  ] as const)(
+    "$name persisted fallback consent on queued work after a fallback transition",
+    async ({ persistedPolicy, expected }) => {
+      const queueState =
+        await vi.importActual<typeof import("./queue/state.js")>("./queue/state.js");
+      mocks.refreshQueuedFollowupSession.mockImplementationOnce(
+        queueState.refreshQueuedFollowupSession,
+      );
+      const params = createParams(undefined, {
+        providerOverride: "anthropic",
+        modelOverride: "claude",
+        modelOverrideSource: "user",
+        modelFallbackPolicy: persistedPolicy,
+      });
+      const queue = queueState.getFollowupQueue("main", { mode: "followup" });
+      onTestFinished(() => {
+        queueState.clearFollowupQueue("main");
+      });
+      const waiting = {
+        ...params.turn.queued.run,
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user" as const,
+        modelFallbackPolicy: "configured" as const,
+      };
+      queue.items.push({ prompt: "waiting prompt", enqueuedAt: 1, run: waiting });
+
+      await accountFollowupTurn(params);
+
+      expect(waiting).toMatchObject({ provider: "openai", model: "gpt-4o" });
+      expect(waiting.modelFallbackPolicy).toBe(expected);
     },
   );
 });

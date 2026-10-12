@@ -69,6 +69,7 @@ function resolveSelectionFromSessionEntry(params: {
   return {
     provider,
     model,
+    modelFallbackPolicy: entry?.modelFallbackPolicy,
     ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
     authProfileIdSource: authProfileId ? resolveCollapsedSessionAuthPinSource(entry) : undefined,
@@ -128,6 +129,7 @@ export function prepareLiveModelSwitchAfterRun(params: {
       agentHarnessId: entry.agentHarnessId,
       providerOverride: entry.providerOverride,
       modelOverride: entry.modelOverride,
+      modelFallbackPolicy: entry.modelFallbackPolicy,
       agentRuntimeOverride: entry.agentRuntimeOverride,
       authProfileOverride: entry.authProfileOverride,
       authProfileOverrideSource: entry.authProfileOverrideSource,
@@ -153,6 +155,7 @@ function hasDifferentLiveSessionModelSelection(
     !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
     modelSelectionDiffers ||
+    current.modelFallbackPolicy !== next.modelFallbackPolicy ||
     normalizeOptionalString(current.agentRuntimeOverride) !== next.agentRuntimeOverride ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
@@ -174,6 +177,7 @@ export async function shouldSwitchToLiveModel(params: {
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
+  currentModelFallbackPolicy?: "configured";
   currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
@@ -209,6 +213,7 @@ export async function shouldSwitchToLiveModel(params: {
       {
         provider: params.currentProvider,
         model: params.currentModel,
+        modelFallbackPolicy: params.currentModelFallbackPolicy,
         agentRuntimeOverride: params.currentAgentRuntimeOverride,
         authProfileId: params.currentAuthProfileId,
         authProfileIdSource: params.currentAuthProfileIdSource,

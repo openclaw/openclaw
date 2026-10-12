@@ -93,6 +93,7 @@ import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
+import { applyModelFallbackPolicyPatch } from "./sessions-patch-model-fallback.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 type SessionPatchProjectionParams = {
@@ -486,15 +487,17 @@ function* projectSessionPatchSteps(
   }
   if ("model" in patch) {
     const statusModelPatch = isSessionStatusModelPatchOrigin();
-    const agentModelFallback = isAgentSessionModelPatchOrigin()
-      ? next.modelFallback?.source === "agent-patch"
-        ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
-        : createAgentPatchedSessionModelFallback({
-            ...resolveSessionModelRef(cfg, next, sessionAgentId),
-            entry: next,
-            ts: now,
-          })
-      : undefined;
+    const agentModelFallback =
+      isAgentSessionModelPatchOrigin() &&
+      !(patch.model === null && next.modelFallbackPolicy === "configured")
+        ? next.modelFallback?.source === "agent-patch"
+          ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
+          : createAgentPatchedSessionModelFallback({
+              ...resolveSessionModelRef(cfg, next, sessionAgentId),
+              entry: next,
+              ts: now,
+            })
+        : undefined;
     if (!statusModelPatch) {
       delete next.modelFallback;
     }
@@ -627,6 +630,7 @@ function* projectSessionPatchSteps(
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
+        modelFallbackPolicy: patch.modelFallbackPolicy ?? undefined,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
@@ -636,9 +640,14 @@ function* projectSessionPatchSteps(
         delete next.liveModelSwitchPending;
       }
     }
-    if (agentModelFallback) {
+    if (agentModelFallback && next.modelFallbackPolicy !== "configured") {
       next.modelFallback = agentModelFallback;
     }
+  }
+
+  const fallbackPolicyError = applyModelFallbackPolicyPatch(next, patch);
+  if (fallbackPolicyError) {
+    return invalid(fallbackPolicyError);
   }
 
   if (typeof rawThinking === "string") {

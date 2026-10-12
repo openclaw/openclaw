@@ -89,6 +89,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
     'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+  "agents.entries.*.models.*.fallbackPriority":
+    "Prefer these already-configured fallback models when this exact model is selected. Never adds candidates or changes strict or caller-owned fallback lists. Agent metadata inherits when omitted; an empty list clears inherited priority.",
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":

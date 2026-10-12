@@ -331,3 +331,33 @@ describe("resolveCronFallbacksOverride", () => {
     ]);
   });
 });
+
+describe("model-specific cron fallback priority", () => {
+  it.each([undefined, [], ["alpha/other", "beta/peer"]].map((fallbacks) => ({ fallbacks })))(
+    "prioritizes configured peers but preserves payload fallback order $fallbacks",
+    ({ fallbacks }) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: {
+            model: { primary: "alpha/main", fallbacks: ["alpha/other", "beta/peer"] },
+            models: { "alpha/main": { fallbackPriority: ["beta/peer"] } },
+          },
+        },
+      };
+      const result = resolveCronPreflightCandidates({
+        cfg,
+        agentId: "main",
+        provider: "alpha",
+        model: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "fixture",
+          model: "alpha/main",
+          ...(fallbacks === undefined ? {} : { fallbacks }),
+        }),
+      }).map(({ provider, model }) => `${provider}/${model}`);
+      expect(result).toEqual(["alpha/main", ...(fallbacks ?? ["beta/peer", "alpha/other"])]);
+    },
+  );
+});

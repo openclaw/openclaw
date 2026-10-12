@@ -313,3 +313,68 @@ export async function runTrustedClaudeCompletionForTest({
   });
   return { context, childSessionKey: trustedChildSessionKey, childEntry: trustedChildEntry };
 }
+
+export type EmbeddedAttemptFixtureOverrides = Omit<
+  Partial<RunAgentAttemptOverrides>,
+  "agentDir" | "workspaceDir" | "sessionEntry"
+> & {
+  config?: OpenClawConfig;
+  sessionEntry?: Partial<SessionEntry>;
+  additionalSessionEntries?: Record<string, Partial<SessionEntry>>;
+};
+
+export async function runOpenClawEmbeddedAttemptFixture({
+  overrides,
+  storePath,
+  tmpDir,
+  runStoredAttempt,
+  writeSessionStoreSeed,
+  runEmbeddedAgentMock,
+}: {
+  overrides: EmbeddedAttemptFixtureOverrides;
+  storePath: string;
+  tmpDir: string;
+  runStoredAttempt: (
+    overrides: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
+  ) => Promise<unknown>;
+  writeSessionStoreSeed: (store: Record<string, SessionEntry>) => Promise<void>;
+  runEmbeddedAgentMock: Mock;
+}): Promise<void> {
+  const {
+    runId = "run-embedded-live-stream-gate",
+    sessionKey = `agent:main:direct:${runId}`,
+    sessionEntry: entry,
+    additionalSessionEntries = {},
+    config = { session: { store: storePath } },
+    opts,
+    ...attempt
+  } = overrides;
+  const sessionEntry = makeSessionEntry(`session-${runId}`, entry);
+  const sessionStore = { [sessionKey]: sessionEntry };
+  for (const [additionalSessionKey, additionalEntry] of Object.entries(additionalSessionEntries)) {
+    sessionStore[additionalSessionKey] = makeSessionEntry(
+      `${additionalSessionKey}-session`,
+      additionalEntry,
+    );
+  }
+  await writeSessionStoreSeed(sessionStore);
+  runEmbeddedAgentMock.mockResolvedValueOnce({
+    meta: { durationMs: 1 },
+  } satisfies EmbeddedAgentRunResult);
+  await runStoredAttempt({
+    originalProvider: "openai",
+    cfg: config,
+    sessionEntry,
+    sessionKey,
+    sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+    body: "stream gate",
+    runId,
+    opts: {
+      message: "stream gate",
+      ...opts,
+    },
+    messageChannel: "telegram",
+    sessionStore,
+    ...attempt,
+  });
+}
