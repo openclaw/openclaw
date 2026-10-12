@@ -383,6 +383,9 @@ When the list refreshes, sessions that have disappeared, left the current filter
 or been replaced are deselected. A replacement never inherits the old session's
 selection. Bulk deletion remains bound to the sessions you selected, including
 while its confirmation dialog is open.
+If you select a replacement while the earlier deletion is still finishing, its
+late confirmation keeps your new selection and the replacement's details open.
+It does not switch the current conversation away from the replacement.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
