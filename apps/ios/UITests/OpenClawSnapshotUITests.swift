@@ -870,8 +870,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
+        // With the keyboard hidden, a completed reply keeps the question anchor until the reader jumps.
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "reader-reply-anchored")
+        XCTAssertTrue(submitted.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(submitted, named: "anchored question after completed reply")
+        self.attachScreenshot(named: "reader-completed-block-anchored")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         let finalReply = app.staticTexts.matching(NSPredicate(
@@ -888,6 +891,49 @@ final class OpenClawSnapshotUITests: XCTestCase {
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         XCTAssertTrue(finalReply.exists)
+    }
+
+    func testNewlySentTurnWithCompletedReplyKeepsQuestionAnchor() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone question-anchor proof only")
+        self.continueAfterFailure = false
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        self.waitForEnabled(input)
+        input.tap()
+        let prompt = String(repeating: "Keep the question visible while its reply arrives.\n", count: 9) +
+            "SENT_TURN_QUESTION_ANCHOR"
+        input.typeText(prompt)
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+        let question = app.staticTexts.matching(NSPredicate(format: "label == %@", prompt)).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        // The fixture stores the complete reply synchronously with send, before returning its acknowledgment.
+        let reply = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@",
+            "I can help with", "SENT_TURN_QUESTION_ANCHOR")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(
+            jump.waitForExistence(timeout: 3),
+            "A newly sent turn with a completed reply and hidden keyboard must keep the question anchor")
+        XCTAssertGreaterThanOrEqual(question.frame.minY, transcript.frame.minY)
+        XCTAssertTrue(question.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(question, named: "newly sent question remains anchored")
+        self.attachScreenshot(named: "sent-turn-completed-reply-question-anchored")
+        jump.tap()
+        XCTAssertTrue(jump.waitForNonExistence(timeout: 3))
+        self.assertElementHasRenderedContent(reply, named: "completed reply after explicit latest jump")
+        self.attachScreenshot(named: "sent-turn-explicit-latest-jump")
     }
 
     func testUnknownOutcomeStepUsesLocalToolTitle() throws {
@@ -961,6 +1007,94 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
+    func testManualReaderDoesNotJumpDuringToolStream() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-long-chat-fixture", "--openclaw-tall-reply-fixture",
+                "--openclaw-hold-initial-chat-run", "--openclaw-reader-tool-churn-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        self.waitForEnabled(input)
+        input.tap()
+        input.typeText("Keep running tools while I read the earlier transcript.")
+        app.buttons["chat-send-message"].tap()
+        let transcript = try self.chatTranscript(in: app)
+        // Reader ownership must survive tool growth even with the composer focused.
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let anchor = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "OPENCLAW_LONG_CHAT_LATEST")).firstMatch
+        XCTAssertTrue(anchor.frame.intersects(transcript.frame))
+        let originalY = anchor.frame.minY
+        let readiness = self.readinessMarker(in: app)
+        XCTAssertNotEqual(readiness.value as? String, "ready:chat:tools=20")
+        self.attachScreenshot(named: "manual-reader-before-tool-stream")
+        self.waitForValue("ready:chat:tools=20", of: readiness, timeout: 30)
+        XCTAssertTrue(anchor.frame.intersects(transcript.frame))
+        XCTAssertEqual(anchor.frame.minY, originalY, accuracy: 2)
+        self.assertElementHasRenderedContent(anchor, named: "manual reader during tool churn")
+        XCTAssertTrue(app.buttons["Jump to latest reply"].exists)
+        self.attachScreenshot(named: "manual-reader-after-20-tool-stream-updates")
+    }
+
+    func testLongTranscriptFlingScrolling() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-scroll-stress-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        XCTAssertTrue(app.staticTexts["SCROLL_QUESTION_59"].waitForExistence(timeout: 10))
+        for index in 0..<16 {
+            if index < 8 { transcript.swipeDown(velocity: .fast) }
+            else { transcript.swipeUp(velocity: .fast) }
+            self.attachScreenshot(named: "fling-\(index)")
+        }
+        let jump = app.buttons["Jump to latest reply"].firstMatch
+        if jump.exists { jump.tap() }
+        XCTAssertTrue(app.staticTexts["SCROLL_QUESTION_59"].waitForExistence(timeout: 5))
+    }
+
+    func testStreamingReplyKeepsQuestionAnchorAfterKeyboardDismissedSend() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-long-chat-fixture", "--openclaw-hold-initial-chat-run",
+                "--openclaw-streaming-layout-fixture", "--openclaw-growing-stream-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"].waitForExistence(timeout: 8))
+        let input = self.chatMessageInput(in: app)
+        self.waitForEnabled(input)
+        input.tap()
+        let prompt = "Name three European capital cities."
+        input.typeText(prompt)
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        app.buttons["chat-send-message"].tap()
+        let question = app.staticTexts[prompt]
+        XCTAssertTrue(question.waitForExistence(timeout: 8))
+        let streaming = app.descendants(matching: .any)["chat-streaming-assistant-body"].firstMatch
+        XCTAssertTrue(streaming.waitForExistence(timeout: 10))
+        let tail = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "GROWING_LIVE_TAIL_12"))
+            .firstMatch
+        XCTAssertTrue(tail.waitForExistence(timeout: 12))
+        let transcript = try self.chatTranscript(in: app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(question.frame.intersects(transcript.frame))
+        XCTAssertLessThanOrEqual(question.frame.maxY, composer.frame.minY + 1)
+        self.assertElementHasRenderedContent(question, named: "anchored question after 12 streaming chunks")
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "growing-stream-question-anchored-after-12-chunks")
+        jump.tap()
+        let growingTailVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            tail.frame.maxY <= composer.frame.minY + 1 && tail.frame.intersects(transcript.frame)
+        }, object: tail)
+        XCTAssertEqual(XCTWaiter.wait(for: [growingTailVisible], timeout: 5), .completed)
+        self.attachScreenshot(named: "growing-stream-tail-visible-after-explicit-jump")
+    }
+
     func testExistingSessionRestoresLatestOutput() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
         self.launchApp(
@@ -968,10 +1102,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 initialTab: "chat",
                 initialDestination: "chat",
                 name: "existing-session-latest-output"),
-            additionalArguments: ["--openclaw-long-chat-fixture"])
+            additionalArguments: ["--openclaw-long-chat-fixture", "--openclaw-tall-reply-fixture"])
         let app = try XCTUnwrap(self.app)
 
-        let latest = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        let latest = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "OPENCLAW_LONG_CHAT_LATEST")).firstMatch
         XCTAssertTrue(latest.waitForExistence(timeout: 8))
         let composer = app.otherElements["chat-composer-surface"]
         XCTAssertTrue(composer.waitForExistence(timeout: 3))
@@ -2411,5 +2546,385 @@ extension OpenClawSnapshotUITests {
             }
             element.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
         }
+    }
+}
+
+extension OpenClawSnapshotUITests {
+    func testLongHistoryPrependPreservesReaderAndTrueLatest() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-history-anchor-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let latest = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "HISTORY_ANCHOR_599:")).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        XCTAssertTrue(latest.frame.intersects(transcript.frame), "Opening must show the true latest message")
+        self.attachScreenshot(named: "long-history-true-latest-opening")
+        for boundaryIndex in [499, 398] {
+            let boundary = app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH %@", "HISTORY_ANCHOR_\(boundaryIndex):")).firstMatch
+            let earlier = app.buttons["chat-load-earlier-history"]
+            for _ in 0..<80 {
+                transcript.swipeDown(velocity: .fast)
+                if earlier.exists, !earlier.isEnabled { break }
+            }
+            XCTAssertTrue(earlier.exists && !earlier.isEnabled, "Pull-down must load the next 101 messages")
+            XCTAssertTrue(boundary.exists && boundary.frame.intersects(transcript.frame))
+            let before = boundary.frame.minY
+            self.attachScreenshot(named: "long-history-before-prepend-\(boundaryIndex)")
+            let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                !earlier.exists || earlier.isEnabled
+            }, object: earlier)
+            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 8), .completed)
+            self.attachScreenshot(named: "long-history-after-prepend-\(boundaryIndex)")
+            XCTAssertTrue(
+                boundary.exists && boundary.frame.intersects(transcript.frame), "Reading row must stay visible")
+            XCTAssertEqual(
+                boundary.frame.minY, before, accuracy: 12, "101-row prepend must preserve screen position")
+        }
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.exists)
+        jump.tap()
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            latest.exists && latest.frame.intersects(transcript.frame) && latest.isHittable
+        }, object: latest)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 8), .completed)
+        self.attachScreenshot(named: "long-history-true-latest-return")
+    }
+
+    func testLoadingEarlierHistoryPreservesReadingPosition() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-history-anchor-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let boundary = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "HISTORY_ANCHOR_12:")).firstMatch
+        let earlier = app.buttons["chat-load-earlier-history"]
+        for _ in 0..<12 {
+            transcript.swipeDown(velocity: .slow)
+            if earlier.exists, !earlier.isEnabled { break }
+        }
+        XCTAssertTrue(earlier.exists && !earlier.isEnabled, "Pulling to the oldest row must request a page")
+        XCTAssertTrue(boundary.exists && boundary.frame.intersects(transcript.frame))
+        let before = boundary.frame.minY
+        self.attachScreenshot(named: "history-anchor-before-prepend")
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !earlier.exists || earlier.isEnabled
+        }, object: earlier)
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 5), .completed)
+        self.attachScreenshot(named: "history-anchor-after-prepend")
+        XCTAssertTrue(boundary.exists && boundary.frame.intersects(transcript.frame))
+        XCTAssertEqual(
+            boundary.frame.minY,
+            before,
+            accuracy: 12,
+            "Prepending must preserve the old row's screen position")
+    }
+
+    func testHistoryFirstPageAppearsBeforeOptionalMetadataCompletes() throws {
+        self.terminateCurrentApp()
+        let app = self.configuredApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            screenshotMode: true,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture",
+                "--openclaw-delayed-metadata-fixture", "--openclaw-voice-reentry-fixture",
+            ])
+        self.app = app
+        app.launch()
+        let transcript = app.scrollViews["chat-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        let final = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_FINAL:")).firstMatch
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            final.exists && final.frame.intersects(transcript.frame) && final.isHittable
+        }, object: final)
+        let result = XCTWaiter.wait(for: [visible], timeout: 3)
+        self.attachScreenshot(named: "first-history-page-before-optional-metadata")
+        XCTAssertEqual(result, .completed, "Loaded messages must not remain blank while models refresh")
+        self.assertElementHasRenderedContent(final, named: "first page latest reply")
+        try self.startNewChatFromSidebar()
+        XCTAssertTrue(app.staticTexts["OTHER_CHAT_FIXTURE"].waitForExistence(timeout: 8))
+        try self.selectSidebarDestination("Overview")
+        let primaryChat = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH[c] %@", "Molty, chat")).firstMatch
+        XCTAssertTrue(primaryChat.waitForExistence(timeout: 8))
+        primaryChat.tap()
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            final.exists && final.frame.intersects(transcript.frame) && final.isHittable
+        }, object: final)
+        let returnResult = XCTWaiter.wait(for: [returned], timeout: 4)
+        self.attachScreenshot(named: "cached-history-reentry-before-optional-metadata")
+        XCTAssertEqual(returnResult, .completed, "Session reentry must show the restored latest page promptly")
+    }
+
+    func testDisclosurePrependPreservesReaderWithMoreHistory() throws {
+        try self.assertDisclosurePrependPreservesReader(moreHistory: true)
+    }
+
+    func testDisclosurePrependPreservesReaderWhenHistoryExhausted() throws {
+        try self.assertDisclosurePrependPreservesReader(moreHistory: false)
+    }
+
+    private func assertDisclosurePrependPreservesReader(moreHistory: Bool) throws {
+        self.continueAfterFailure = false
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-disclosure-prepend-fixture"] +
+                (moreHistory ? ["--openclaw-disclosure-more-history-fixture"] : []))
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let reading = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "DISCLOSURE_READING_0:")).firstMatch
+        let earlier = app.buttons["chat-load-earlier-history"]
+        for _ in 0..<12 {
+            transcript.swipeDown(velocity: .slow)
+            if earlier.exists, !earlier.isEnabled { break }
+        }
+        XCTAssertTrue(earlier.exists && !earlier.isEnabled, "Pulling to the boundary must request its work page")
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        let before = reading.frame.minY
+        let suffix = moreHistory ? "more" : "exhausted"
+        self.attachScreenshot(named: "disclosure-before-\(suffix)")
+        let disclosure = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-")).firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5), "The page must add a completed-work disclosure")
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        XCTAssertEqual(
+            reading.frame.minY, before, accuracy: 12,
+            "An unchanged message anchor must still preserve the reading row after disclosure layout")
+        self.attachScreenshot(named: "disclosure-after-\(suffix)")
+        if moreHistory {
+            XCTAssertTrue(earlier.exists && !earlier.isEnabled, "The follow-on request must be awaited")
+            XCTAssertEqual(
+                reading.frame.minY, before, accuracy: 12, "The reader must stay fixed during the next request")
+            let older = app.staticTexts.matching(
+                NSPredicate(format: "label BEGINSWITH %@", "DISCLOSURE_OLDER:")).firstMatch
+            XCTAssertTrue(older.waitForExistence(timeout: 6), "Paging must continue after preserving the disclosure")
+        } else {
+            let exhausted = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in !earlier.exists }, object: earlier)
+            XCTAssertEqual(XCTWaiter.wait(for: [exhausted], timeout: 3), .completed)
+        }
+        XCTAssertTrue(reading.exists && reading.frame.intersects(transcript.frame))
+        XCTAssertEqual(reading.frame.minY, before, accuracy: 12, "The final page must preserve the same reading row")
+        self.attachScreenshot(named: "disclosure-finished-\(suffix)")
+    }
+
+    func testEarlierHistoryContinuesPastEmptyProjectedPage() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture",
+                "--openclaw-paged-history-short-fixture", "--openclaw-empty-history-page-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let earlier = app.buttons["chat-load-earlier-history"]
+        XCTAssertTrue(earlier.waitForExistence(timeout: 3))
+        earlier.tap()
+        // No second tap or scroll: an empty projected page must not strand older visible history.
+        let replies = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_PREVIOUS_FINAL_"))
+        XCTAssertTrue(
+            replies.firstMatch.waitForExistence(timeout: 5),
+            "One request must continue through the empty page to visible history")
+        // Preservation keeps those rows above the viewport; only after proving automatic paging may we scroll.
+        for _ in 0..<6 {
+            let isVisible = replies.allElementsBoundByIndex.contains {
+                $0.isHittable && $0.frame.intersects(transcript.frame)
+            }
+            if isVisible { break }
+            transcript.swipeDown(velocity: .fast)
+        }
+        XCTAssertTrue(replies.allElementsBoundByIndex.contains {
+            $0.isHittable && $0.frame.intersects(transcript.frame)
+        }, "The automatically loaded page must be readable")
+        self.attachScreenshot(named: "earlier-history-after-empty-projected-page")
+    }
+
+    func testEarlierHistoryButtonWorksBeforeMetadataCompletes() throws {
+        self.terminateCurrentApp()
+        let app = self.configuredApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            screenshotMode: true,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture",
+                "--openclaw-paged-history-short-fixture", "--openclaw-delayed-metadata-fixture",
+            ])
+        self.app = app
+        app.launch()
+        let transcript = app.scrollViews["chat-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        let earlier = app.buttons["chat-load-earlier-history"]
+        XCTAssertTrue(earlier.waitForExistence(timeout: 3))
+        XCTAssertTrue(earlier.isEnabled, "Reading must not wait for optional metadata")
+        self.attachScreenshot(named: "short-newest-page-before-metadata")
+        earlier.tap()
+        let earlierReplies = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "AUDIT_PREVIOUS_FINAL_"))
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            earlierReplies.allElementsBoundByIndex.contains { $0.isHittable && $0.frame.intersects(transcript.frame) }
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        let renderedReply = try XCTUnwrap(earlierReplies.allElementsBoundByIndex.first {
+            $0.isHittable && $0.frame.intersects(transcript.frame)
+        })
+        self.assertElementHasRenderedContent(renderedReply, named: "earlier reply before optional metadata")
+        self.attachScreenshot(named: "earlier-page-through-explicit-reader-button")
+    }
+
+    func testPagedHistoryCanBeReadBackToOldestAndReturnToLatest() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture",
+                "--openclaw-paged-history-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let final = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_FINAL:")).firstMatch
+        XCTAssertTrue(final.waitForExistence(timeout: 8))
+        XCTAssertTrue(final.frame.intersects(transcript.frame))
+        self.attachScreenshot(named: "paged-history-newest-page")
+        let oldest = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "AUDIT_OLDEST_HISTORY_QUESTION:")).firstMatch
+        var reachedOldest = false
+        for index in 0..<80 {
+            transcript.swipeDown(velocity: .fast)
+            if oldest.exists, oldest.frame.intersects(transcript.frame), oldest.isHittable {
+                reachedOldest = true
+                break
+            }
+            if index % 12 == 0 { self.attachScreenshot(named: "paged-history-reading-\(index)") }
+        }
+        XCTAssertTrue(reachedOldest, "Swiping must fetch older pages and reach the original question")
+        self.assertElementHasRenderedContent(oldest, named: "original question after paging")
+        XCTAssertFalse(app.buttons["chat-load-earlier-history"].exists, "The end of history must be explicit")
+        self.attachScreenshot(named: "paged-history-original-question")
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.exists)
+        jump.tap()
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            final.exists && final.frame.intersects(transcript.frame) && final.isHittable
+        }, object: final)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 8), .completed)
+        self.assertElementHasRenderedContent(final, named: "latest reply after paging")
+        self.attachScreenshot(named: "paged-history-returned-to-latest")
+    }
+
+    func testT299RichTranscriptFirstHistorySwipeRemainsResponsive() throws {
+        for largeText in [false, true] {
+            var flags = ["--openclaw-audit-fixture", "--openclaw-swarm-chat-fixture"]
+            if largeText {
+                flags += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+            }
+            self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: flags)
+            let app = try XCTUnwrap(self.app)
+            let transcript = try self.chatTranscript(in: app)
+            let model = app.buttons["chat-composer-inline-model"]
+            XCTAssertTrue(model.waitForExistence(timeout: 8))
+            let final = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_FINAL:")).firstMatch
+            XCTAssertTrue(final.waitForExistence(timeout: 8))
+            XCTAssertTrue(final.frame.intersects(transcript.frame), "Fixture did not restore the live edge")
+            self.attachScreenshot(named: "T299-rich-before-\(largeText)")
+            for index in 0..<6 {
+                transcript.swipeDown()
+                XCTAssertTrue(model.exists, "Composer query stopped responding after history swipe \(index)")
+                XCTAssertTrue(app.wait(for: .runningForeground, timeout: 2))
+                self.attachScreenshot(named: "T299-rich-history-\(largeText)-\(index)")
+            }
+            let jump = app.buttons["Jump to latest reply"]
+            XCTAssertTrue(jump.exists)
+            jump.tap()
+            XCTAssertTrue(final.frame.intersects(transcript.frame), "Jump did not restore the final answer")
+            self.attachScreenshot(named: "T299-rich-returned-to-live-edge-\(largeText)")
+        }
+    }
+
+    func testManualReturnThroughRichHistoryDoesNotTeleportBack() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture", "--openclaw-swarm-chat-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let final = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_FINAL:")).firstMatch
+        XCTAssertTrue(final.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "manual-return-initial-layout")
+        XCTAssertTrue(final.frame.intersects(transcript.frame))
+        let historical = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_LAZY_PREFIX:"))
+        for _ in 0..<36 {
+            transcript.swipeDown(velocity: .fast)
+            if historical.allElementsBoundByIndex.contains(where: { $0.frame.intersects(transcript.frame) }) { break }
+        }
+        XCTAssertTrue(historical.allElementsBoundByIndex.contains { $0.frame.intersects(transcript.frame) })
+        self.attachScreenshot(named: "manual-return-rich-start")
+        var newestObservedTurn = -1
+        var reachedLatest = false
+        for index in 0..<36 {
+            let start = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.85))
+            let end = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.15))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+            let visible = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_PREVIOUS_FINAL_"))
+                .allElementsBoundByIndex.filter { $0.frame.intersects(transcript.frame) && !$0.frame.isEmpty }
+            let turns = visible.compactMap { element -> Int? in
+                let suffix = element.label.components(separatedBy: "AUDIT_PREVIOUS_FINAL_").last ?? ""
+                return Int(suffix.components(separatedBy: ":").first ?? "")
+            }
+            if let newest = turns.max() {
+                XCTAssertGreaterThanOrEqual(
+                    newest,
+                    newestObservedTurn,
+                    "Swipe toward latest teleported back at swipe \(index)")
+                newestObservedTurn = max(newestObservedTurn, newest)
+            }
+            if index % 4 == 0 { self.attachScreenshot(named: "manual-return-rich-\(index)") }
+            if final.isHittable, final.frame.intersects(transcript.frame) {
+                reachedLatest = true
+                break
+            }
+        }
+        XCTAssertTrue(reachedLatest, "Manual downward reading must reach latest without the jump button")
+        self.attachScreenshot(named: "manual-return-rich-finished")
+    }
+
+    func testT299RichHistoryWindowCrossingRemainsResponsive() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-audit-fixture", "--openclaw-audit-long-fixture", "--openclaw-swarm-chat-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let model = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 8))
+        let final = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "AUDIT_FINAL:")).firstMatch
+        XCTAssertTrue(final.waitForExistence(timeout: 8))
+        XCTAssertTrue(final.frame.intersects(transcript.frame))
+        let historical = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "AUDIT_LAZY_PREFIX:"))
+        func lazyPrefixIsVisible() -> Bool {
+            historical.allElementsBoundByIndex.contains { $0.frame.intersects(transcript.frame) }
+        }
+        self.attachScreenshot(named: "T299-large-rich-live-edge")
+        for index in 0..<36 {
+            transcript.swipeDown(velocity: .fast)
+            XCTAssertTrue(model.exists, "Large rich history stopped responding on fling \(index)")
+            if lazyPrefixIsVisible() { break }
+            if index % 8 == 0 { self.attachScreenshot(named: "T299-large-rich-history-\(index)") }
+        }
+        XCTAssertTrue(lazyPrefixIsVisible(), "Never traversed the marked lazy history batch")
+        self.attachScreenshot(named: "T299-large-rich-lazy-prefix-history")
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.exists)
+        jump.tap()
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: final)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 8), .completed)
+        XCTAssertTrue(final.frame.intersects(transcript.frame))
+        self.attachScreenshot(named: "T299-large-rich-jumped-to-live-edge")
     }
 }

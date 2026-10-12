@@ -41,9 +41,36 @@ struct ChatReaderScrollStateTests {
 
         let transition = chatReaderUserTransition(
             previousID: previousUserID,
-            visibleIDs: [previousUserID, newUserID])
+            visibleIDs: [previousUserID, newUserID],
+            liveTurnID: newUserID)
 
         #expect(transition == .added(newUserID))
+    }
+
+    @Test func `history hydration after opening is not a new turn`() {
+        let previous = UUID()
+        let restored = UUID()
+        #expect(chatReaderUserTransition(
+            previousID: previous,
+            visibleIDs: [previous, restored],
+            liveTurnID: nil) == .unchanged)
+    }
+
+    @Test func `late first history row is not a new turn`() {
+        #expect(chatReaderUserTransition(
+            previousID: nil,
+            visibleIDs: [UUID()],
+            liveTurnID: nil) == .unchanged)
+    }
+
+    @Test func `a live user anchors even when narration adds a later boundary`() {
+        let previous = UUID()
+        let user = UUID()
+        let notice = UUID()
+        #expect(chatReaderUserTransition(
+            previousID: previous,
+            visibleIDs: [previous, user, notice],
+            liveTurnID: user) == .added(user))
     }
 
     @Test func `removed transient content does not offer a latest jump`() {
@@ -76,10 +103,13 @@ struct ChatReaderScrollStateTests {
         #expect(chatReaderScrollReleasesFollow(.animating))
     }
 
-    @Test func `idle, touch-down, and deceleration phases keep the follow target`() {
+    @Test func `idle alone does not release following`() {
         #expect(!chatReaderScrollReleasesFollow(.idle))
-        #expect(!chatReaderScrollReleasesFollow(.tracking))
-        #expect(!chatReaderScrollReleasesFollow(.decelerating))
+    }
+
+    @Test func `touch down cancels following before a streaming tick can move the reader`() {
+        #expect(chatReaderScrollReleasesFollow(.tracking))
+        #expect(chatReaderScrollReleasesFollow(.decelerating))
     }
 
     @Test func `streaming at the live edge never offers a latest jump`() {
