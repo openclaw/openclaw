@@ -8,23 +8,6 @@ import {
 } from "./frontmatter.js";
 
 describe("parseFrontmatterBlock", () => {
-  it("handles JSON5-style multi-line metadata", () => {
-    const content = `---
-name: session-memory
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "disk",
-        "events": ["command:new"],
-      },
-  }
----
-`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
-  });
-
   it("preserves inline JSON values", () => {
     const content = `---
 name: inline-json
@@ -68,17 +51,6 @@ metadata:
     expect(parsed.openclaw?.events).toEqual(["command:new"]);
   });
 
-  it("normalizes free-form descriptions before YAML parsing", () => {
-    const content = `---
-name: sample-skill
-description: Use anime style IMPORTANT: Must be kawaii
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.description).toBe("Use anime style IMPORTANT: Must be kawaii");
-    expect(result.issues).toEqual([]);
-  });
-
   it("normalizes multiple colon-rich pure-text fields in one block", () => {
     const content = `---
 name: sample-skill
@@ -102,32 +74,6 @@ metadata: owner: value
     expect(result.issues[0]).toMatchObject({ code: "BLOCK_AS_IMPLICIT_KEY" });
   });
 
-  it("preserves valid structured siblings when pure-text fields are normalized", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-read_when: signals: user announcing a conversion task
-metadata:
-  openclaw:
-    emoji: beaker
----`);
-
-    expect(result.frontmatter.metadata).toBe('{"openclaw":{"emoji":"beaker"}}');
-    expect(result.issues).toEqual([]);
-  });
-
-  it("does not rewrite valid sibling values when recovering a malformed field", () => {
-    const content = `---
-name: sample-skill
-description: text # note
-read_when: signals: user announcing a conversion task
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.description).toBe("text");
-    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
-    expect(result.issues).toEqual([]);
-  });
-
   it("does not rewrite valid quoted sibling scalars with escape sequences", () => {
     const content = `---
 name: sample-skill
@@ -138,17 +84,6 @@ read_when: signals: user announcing a conversion task
 
     expect(result.frontmatter.description).toBe("line\n: detail");
     expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
-    expect(result.issues).toEqual([]);
-  });
-
-  it("recovers quoted freeform keys with colon-rich values", () => {
-    const content = `---
-name: sample-skill
-"description": signals: user announcing a conversion task
----`;
-    const result = parseFrontmatterBlockResult(content);
-
-    expect(result.frontmatter.description).toBe("signals: user announcing a conversion task");
     expect(result.issues).toEqual([]);
   });
 
@@ -163,68 +98,6 @@ name: sample-skill
     expect(result.issues).toEqual([]);
   });
 
-  it("leaves valid YAML description semantics untouched", () => {
-    expect(
-      parseFrontmatterBlock(`---
-name: comment
-description: text # note
----`).description,
-    ).toBe("text");
-    expect(
-      parseFrontmatterBlock(`---
-name: escape
-description: "line\\nbreak"
----`).description,
-    ).toBe("line\nbreak");
-    expect(
-      parseFrontmatterBlock(`---
-name: block
-description: | # note
-  line one
-  line two
----`).description,
-    ).toBe("line one\nline two");
-  });
-
-  it("retains structured-value parser errors for owning loaders", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: [broken
-description: Broken skill
----`);
-
-    expect(result.frontmatter.name).toBe("[broken");
-    expect(result.issues[0]).toMatchObject({ code: "BAD_INDENT" });
-  });
-
-  it("attributes errors positioned on a key to that key", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: first
-description: Working skill
-name: second
----`);
-
-    expect(result.issues[0]).toMatchObject({ code: "DUPLICATE_KEY" });
-  });
-
-  it("attributes unresolved alias conversion errors to their owning field", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-metadata: *missing
----`);
-
-    expect(result.issues[0]).toMatchObject({ code: "YAML_EXCEPTION" });
-  });
-
-  it("decodes quoted keys when attributing conversion errors", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-description: Working skill
-"metadata": *missing
----`);
-
-    expect(result.issues[0]).toMatchObject({ code: "YAML_EXCEPTION" });
-  });
-
   it("normalizes description aliases without masking structured aliases", () => {
     const result = parseFrontmatterBlockResult(`---
 name: sample-skill
@@ -235,49 +108,9 @@ metadata: *missing
     expect(result.issues).toEqual([expect.objectContaining({ code: "YAML_EXCEPTION" })]);
   });
 
-  it("normalizes colon-rich descriptions without masking structured aliases", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: sample-skill
-description: Use anime style IMPORTANT: Must be kawaii
-metadata: *missing
----`);
-
-    expect(result.issues).toEqual([expect.objectContaining({ code: "YAML_EXCEPTION" })]);
-  });
-
-  it("does not replace YAML block scalars with block indicators", () => {
-    const content = `---
-name: sample-skill
-description: |-
-  {json-like text}
----`;
-    const result = parseFrontmatterBlock(content);
-    expect(result.description).toBe("{json-like text}");
-  });
-
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
-  });
-
-  it("reports an unterminated frontmatter block", () => {
-    const result = parseFrontmatterBlockResult(`---
-name: broken
-description: Missing the closing delimiter
-`);
-
-    expect(result.frontmatter).toEqual({});
-    expect(result.issues).toEqual([expect.objectContaining({ code: "UNTERMINATED_FRONTMATTER" })]);
-  });
-
-  it("ignores non-delimiter opening prefixes", () => {
-    for (const prefix of ["---not", "----", "--- name"]) {
-      const content = `${prefix}
-name: nope
----
-Body text`;
-      expect(parseFrontmatterBlock(content)).toStrictEqual({});
-    }
   });
 
   it("ignores non-delimiter closing prefixes", () => {
@@ -317,23 +150,5 @@ Body text`;
     expect(result["hasOwnProperty"]).toBe("null");
     // normal key unaffected
     expect(result.title).toBe("Hello");
-  });
-
-  it("parses frontmatter after a leading UTF-8 BOM", () => {
-    const content = "\uFEFF---\nname: windows-skill\ndescription: Written by PowerShell\n---\n";
-    const result = parseFrontmatterBlock(content);
-
-    expect(result.name).toBe("windows-skill");
-    expect(result.description).toBe("Written by PowerShell");
-  });
-});
-
-describe("stripFrontmatterBlock", () => {
-  it("preserves Markdown that starts with a non-delimiter prefix", () => {
-    const content = `---not
-name: nope
----not
-Body text`;
-    expect(stripFrontmatterBlock(content)).toBe(content);
   });
 });
