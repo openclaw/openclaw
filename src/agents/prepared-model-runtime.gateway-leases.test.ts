@@ -7,6 +7,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { Model } from "../llm/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
@@ -16,6 +17,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -179,5 +181,67 @@ describe("prepared model runtime Gateway leases", () => {
       fixture.state.agentDir("other"),
     );
     expect(unrelated.registries).toEqual([]);
+  });
+
+  it("resolves a published discovery model when the session workspace differs", async () => {
+    const input = await publishGateway();
+    const published = expectDefined(
+      await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      "configured dispatch runtime",
+    );
+    const configured = expectDefined(
+      getPreparedModelRuntimeSnapshot({
+        agentId: "default",
+        agentDir: published.agentDir,
+        config: input.config,
+        workspaceDir: published.workspaceDir,
+      }),
+      "configured snapshot",
+    );
+    const discovered: Model<"openai-completions"> = {
+      id: "glm-5.3-flash",
+      name: "GLM",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://synthetic.invalid",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 8192,
+      maxTokens: 1024,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    await configured.loadFullModelCatalog?.({ refresh: true });
+    const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(configured)?.catalogInventory;
+    expect(inventory, "configured published catalog").toBeTruthy();
+    (inventory!.runtimeModels as Map<string, readonly Model[]>).set("zai", [discovered]);
+    expect(configured.readPublishedModels?.().get("zai")).toContainEqual(
+      expect.objectContaining({ id: "glm-5.3-flash", provider: "zai" }),
+    );
+
+    const outside = "/tmp/outside-169205";
+    expect(outside).not.toBe(published.workspaceDir);
+    await using foreign = await acquireAgentRunPreparedModelRuntime({
+      ...input,
+      agentDir: published.agentDir,
+      workspaceDir: outside,
+    });
+    const foreignModel = foreign.snapshot.readPublishedModels?.()?.get("zai")?.[0];
+    expect(foreign.snapshot.workspaceDir).toBe(outside);
+    expect(foreignModel).toMatchObject({ id: "glm-5.3-flash", provider: "zai" });
+    console.log(
+      `outside-workspace resolved zai/${foreignModel?.id} cwd=${foreign.snapshot.workspaceDir}`,
+    );
+
+    await using home = await acquireAgentRunPreparedModelRuntime({
+      ...input,
+      agentDir: published.agentDir,
+      workspaceDir: published.workspaceDir,
+    });
+    const homeModel = home.snapshot.readPublishedModels?.()?.get("zai")?.[0];
+    expect(home.snapshot.workspaceDir).toBe(published.workspaceDir);
+    expect(homeModel).toMatchObject({ id: "glm-5.3-flash", provider: "zai" });
+    console.log(
+      `workspace-session resolved zai/${homeModel?.id} cwd=${home.snapshot.workspaceDir}`,
+    );
   });
 });

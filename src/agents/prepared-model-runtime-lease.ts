@@ -290,13 +290,21 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         `prepared model runtime publication was superseded for ${input.agentDir}`,
       );
     }
+    // Discovery rows are published for the configured agent. Execution cwd stays on the run snapshot.
     const catalogOwner =
       configuredOwner &&
       ownerKey({
         ...configuredOwner.input,
+        workspaceDir: undefined,
         loadRuntimePlugins: false,
         runtimePluginSelections: undefined,
-      }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
+      }) ===
+        ownerKey({
+          ...input,
+          workspaceDir: undefined,
+          loadRuntimePlugins: false,
+          runtimePluginSelections: undefined,
+        })
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
