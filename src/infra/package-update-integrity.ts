@@ -174,25 +174,36 @@ export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boo
  */
 const DRIFT_SWEEP_CONCURRENCY = 32;
 
-async function sweepForDrift(
+export async function sweepForDrift(
   observed: ReadonlyArray<{ file: string; stat: BigIntStats }>,
   read: <T>(operation: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
   for (let start = 0; start < observed.length; start += DRIFT_SWEEP_CONCURRENCY) {
     const batch = observed.slice(start, start + DRIFT_SWEEP_CONCURRENCY);
-    const results = await Promise.all(
+    // A resource failure is not drift: callers only take their
+    // directory-identity fallback for `isPackageIntegrityResourceError`, so a
+    // budget exhausted here must surface as that error rather than as a
+    // tree-changed refusal. Drift evidence still wins when both are present.
+    const outcomes = await Promise.all(
       batch.map(async (entry) => {
         try {
           const current = await read(() => fs.lstat(entry.file, { bigint: true }));
-          return packageStatUnchanged(entry.stat, current);
-        } catch {
+          return { drift: !packageStatUnchanged(entry.stat, current) };
+        } catch (error) {
+          if (isPackageIntegrityResourceError(error)) {
+            return { resource: error };
+          }
           // An entry that vanished or became unreachable is drift too.
-          return false;
+          return { drift: true };
         }
       }),
     );
-    if (results.includes(false)) {
+    if (outcomes.some((outcome) => outcome.drift)) {
       throw new Error("Package rollback tree changed during verification");
+    }
+    const resource = outcomes.find((outcome) => outcome.resource)?.resource;
+    if (resource) {
+      throw resource;
     }
   }
 }
