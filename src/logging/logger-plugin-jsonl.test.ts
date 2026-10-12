@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, assert, expect, it, vi } from "vitest";
 import { createSubsystemLogger, getChildLogger } from "../plugin-sdk/logging-core.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginRegistry } from "../plugins/registry.js";
@@ -100,6 +100,7 @@ it("keeps plugin file records raw while console and tail redact independently", 
   expect(result.console[0]).toMatchObject({ password: "***", count: 3 });
   expect(JSON.stringify(result.console)).not.toContain(secret);
   const tail = await readConfiguredLogTail();
+  assert(tail.lines[0] !== undefined);
   expect(JSON.parse(tail.lines[0])["1"]).toEqual({ password: "***", count: 3 });
   expect(tail.lines.join("\n")).not.toContain(secret);
 });
@@ -114,6 +115,7 @@ it.each([
   expect(result.records[0]["1"].value).toBe(value);
   expect(result.console[0].value).toBe("***");
   const tail = await readConfiguredLogTail();
+  assert(tail.lines[0] !== undefined);
   expect(JSON.parse(tail.lines[0])["1"].value).toBe("***");
 });
 
@@ -122,7 +124,9 @@ it("refreshes exact-secret and custom egress policies without rewriting raw file
   const result = await logFromPlugin("registry proof", { value: 987654321, nested: [987654321] });
   expect(result.records[0]["1"]).toEqual({ value: 987654321, nested: [987654321] });
   expect(result.console[0]).toMatchObject({ value: "***", nested: ["***"] });
-  expect(JSON.parse((await readConfiguredLogTail()).lines[0])["1"]).toEqual({
+  const initialTail = await readConfiguredLogTail();
+  assert(initialTail.lines[0] !== undefined);
+  expect(JSON.parse(initialTail.lines[0])["1"]).toEqual({
     value: "***",
     nested: ["***"],
   });
@@ -131,7 +135,9 @@ it("refreshes exact-secret and custom egress policies without rewriting raw file
   ]);
   expect(reloaded.records[0]["1"].value).toBe("reload-private");
   expect(reloaded.console[0].value).toBe("***");
-  expect(JSON.parse((await readConfiguredLogTail()).lines[0])["1"].value).toBe("***");
+  const reloadedTail = await readConfiguredLogTail();
+  assert(reloadedTail.lines[0] !== undefined);
+  expect(JSON.parse(reloadedTail.lines[0])["1"].value).toBe("***");
 });
 
 it("writes valid raw overflow metadata and masks it when tailed", async () => {
@@ -184,6 +190,7 @@ it.each([
     const tail = await readConfiguredLogTail();
     expect(tail.lines.join("\n")).not.toContain("private-value");
     expect(tail.lines.join("\n")).not.toContain("opaque-key");
+    assert(tail.lines[0] !== undefined);
     const record = JSON.parse(tail.lines[0]);
     expect(record["2"].password).toBe("***");
     expect(record.message).not.toContain("1234");

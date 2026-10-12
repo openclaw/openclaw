@@ -1,7 +1,7 @@
 // Log tail redaction tests cover scrubbing sensitive data from tailed logs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -76,6 +76,7 @@ it("redacts raw JSON credentials and default tokens with custom tail patterns", 
   const tail = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configFile }, () =>
     readConfiguredLogTail(),
   );
+  assert(tail.lines[0] !== undefined);
   const redacted = JSON.parse(tail.lines[0]);
   expect(redacted).toMatchObject({
     password: "***",

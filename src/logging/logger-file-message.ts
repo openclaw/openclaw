@@ -39,7 +39,7 @@ export function serializeFileLogRecord(
   const ancestors: object[] = [];
   // Materialize native values once so the display message cannot invoke toJSON again.
   const materialized: unknown = JSON.parse(
-    JSON.stringify(record, function (key, value: unknown) {
+    JSON.stringify(record, function (_key, value: unknown) {
       while (ancestors.length > 0 && ancestors.at(-1) !== this) {
         ancestors.pop();
       }

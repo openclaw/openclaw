@@ -1127,6 +1127,13 @@ export function redactSensitiveLines(
   if (lines.length === 0 || resolved.mode === "off") {
     return selectedLines ? lines.filter((_, index) => selectedLines[index]) : lines;
   }
+  const recordRedaction = {
+    ...resolved,
+    // Partial PEM context belongs to the complete batch, not each JSON record.
+    patterns: resolved.patterns.map((pattern) =>
+      pattern.source === PEM_REDACT_PATTERN_SOURCE ? PEM_REDACT_MATCHER : pattern,
+    ),
+  };
   return redactJsonRecord(
     lines
       .map((line) => {
@@ -1139,12 +1146,13 @@ export function redactSensitiveLines(
         if (record === null || typeof record !== "object" || !isPlainRedactableObject(record)) {
           return line;
         }
-        return JSON.stringify(
+        const redacted = JSON.stringify(
           redactLogRecordForTransport(record, {
-            redaction: resolved,
+            redaction: recordRedaction,
             message: getFileLogRedactionMessage(record),
           }),
         );
+        return redacted === JSON.stringify(record) ? line : redacted;
       })
       .join("\n"),
     { value: { structured: false, primitiveMask: false }, children: new Map() },
