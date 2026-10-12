@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { resolveProjectedSessionContextTokens } from "../../../config/sessions/context-token-provenance.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
@@ -11,13 +12,9 @@ import {
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { OuterContextTokenMeta } from "./context-token-meta.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
-import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-
-type OuterContextTokenMeta = Parameters<
-  typeof prepareEmbeddedRunTerminal
->[0]["outerContextTokenMeta"];
 
 const payloadMocks = vi.hoisted(() => ({
   buildEmbeddedRunPayloads: vi.fn<typeof buildEmbeddedRunPayloads>(),
@@ -651,6 +648,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     bridgeCalls?: { search: number; describe: number; call: number };
     config?: unknown;
     assistantProvider?: string;
+    assistantModel?: string;
     provider?: string;
     model?: string;
     outerContextTokenMeta?: OuterContextTokenMeta;
@@ -666,7 +664,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     const assistant = {
       ...assistantMessage("stop"),
       provider: statsInput.assistantProvider ?? provider,
-      model,
+      model: statsInput.assistantModel ?? model,
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
     const usageAccumulator = createUsageAccumulator();
@@ -762,6 +760,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
 
     const verified = await prepareStats({
+      assistantProvider: " COST-TEST-PROVIDER ",
+      assistantModel: " cost-model ",
       outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
     });
     expect(verified.agentMeta).toMatchObject({
@@ -807,6 +807,31 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       contextTokensSource: "runtime",
     });
   });
+
+  it.each([
+    { name: "provider", assistantProvider: "other-provider", assistantModel: undefined },
+    { name: "model", assistantProvider: undefined, assistantModel: "other-model" },
+    { name: "case-distinct model", assistantProvider: undefined, assistantModel: "Cost-model" },
+  ])(
+    "does not let a reported $name inherit the prepared model's trusted window",
+    async (identity) => {
+      const { agentMeta } = await prepareStats({
+        ...identity,
+        attempt: { agentHarnessId: "openclaw" },
+        outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
+      });
+      expect(agentMeta.contextTokensSource).toBe("resolved");
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: { ...agentMeta, modelProvider: agentMeta.provider },
+          provider: agentMeta.provider,
+          model: agentMeta.model,
+          agentHarnessId: agentMeta.agentHarnessId,
+          resolvedContextTokens: undefined,
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it("reports the terminal physical attempt's redacted credential source", async () => {
     const prepared = await prepareStats({

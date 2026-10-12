@@ -47,7 +47,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
-  contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "synthetic" | "resolved-v1";
   agentHarnessId?: string;
   /** Sanitized provider-policy refusal attached to this physical attempt. */
   providerRefusal?: {

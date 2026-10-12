@@ -256,7 +256,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextWindowInfo).toEqual({ source: "default", tokens: 200_000 });
-    expect(result.contextTokensSource).toBeUndefined();
   });
 
   it("rejects an authored context window below the floor despite a larger contextTokens cap", () => {
@@ -347,7 +346,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
         nativeModelOwned: false,
       });
       expect(inference.contextTokenBudget).toBe(contextTokens);
-      expect(inference.contextTokensSource).toBe("resolved-v1");
       expect(inference.effectiveModel.contextWindow).toBe(contextTokens);
       expect(inference.effectiveModel.maxTokens).toBe(128_000);
       expect(runtimeModel.contextWindow).toBe(1_000_000);
@@ -379,7 +377,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "modelsConfig",
       tokens: 1_000_000,
     });
-    expect(result.contextTokensSource).toBeUndefined();
     expect(result.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -407,7 +404,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       source: "model",
       tokens: 272_000,
     });
-    expect(result.contextTokensSource).toBe("resolved-v1");
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
@@ -444,12 +440,10 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const selected = resolve("200k");
     expect(selected.contextTokenBudget).toBe(200_000);
-    expect(selected.contextTokensSource).toBeUndefined();
     expect(selected.effectiveModel.contextWindow).toBe(200_000);
 
     const unselected = resolve(undefined);
     expect(unselected.contextTokenBudget).toBe(1_000_000);
-    expect(unselected.contextTokensSource).toBeUndefined();
     expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
   });
 
@@ -488,7 +482,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 
     const discovered = resolve({ contextWindow: "200k" });
     expect(discovered.contextTokenBudget).toBe(200_000);
-    expect(discovered.contextTokensSource).toBeUndefined();
     expect(discovered.effectiveModel.contextWindow).toBe(200_000);
 
     const configured = resolve({
@@ -505,7 +498,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       } satisfies OpenClawConfig,
     });
     expect(configured.contextTokenBudget).toBe(200_000);
-    expect(configured.contextTokensSource).toBeUndefined();
     expect(configured.effectiveModel.contextWindow).toBe(200_000);
 
     // Without a selection the declared default resolves to the wider option, so
@@ -563,7 +555,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextTokenBudget).toBe(budget);
-    expect(result.contextTokensSource).toBe(model === undefined ? "resolved-v1" : undefined);
     if (cap === undefined) {
       expect(result).not.toHaveProperty("authoredContextTokenCap");
     } else {
@@ -590,7 +581,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
 
     expect(result.contextTokenBudget).toBe(32_000);
-    expect(result.contextTokensSource).toBeUndefined();
     expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 32_000,
