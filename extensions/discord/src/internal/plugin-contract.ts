@@ -11,6 +11,7 @@ import type {
   GatewayVoiceStateUpdateData,
 } from "discord-api-types/v10";
 import type { WebSocket } from "ws";
+import type { DiscordGatewayChannelInfo } from "./gateway-channel-inventory.js";
 
 export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[number];
 export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
@@ -42,6 +43,10 @@ export interface GatewayPluginContract {
   fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T>;
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null;
   takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null;
+  // Required: an optional hydration probe would let a caller's "cannot answer
+  // yet" fallback hold a gateway's backlog forever.
+  getGatewayChannelInfo(channelId: string): DiscordGatewayChannelInfo | undefined;
+  isGatewayChannelInventoryHydrating(guildId: string): boolean;
 }
 
 export interface VoicePluginContract {

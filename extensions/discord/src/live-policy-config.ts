@@ -10,5 +10,6 @@ export function selectDiscordLivePolicyConfig(config: DiscordAccountConfig) {
     guilds: config.guilds,
     allowBots: config.allowBots,
     dangerouslyAllowNameMatching: config.dangerouslyAllowNameMatching,
+    mentionPatterns: config.mentionPatterns,
   };
 }

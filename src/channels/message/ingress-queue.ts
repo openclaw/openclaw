@@ -434,12 +434,34 @@ export function createChannelIngressQueue<
         recordAttempt: releaseOptions?.recordAttempt,
         lastError: releaseOptions?.lastError,
       }),
-    fail: async (value, failOptions) =>
-      await execute("channelIngress.fail", {
-        ...mutation(value, failOptions.failedAt ?? now()),
-        reason: failOptions.reason,
-        message: failOptions.message,
-      }),
+    async fail(value, failOptions) {
+      try {
+        return await execute(
+          "channelIngress.fail",
+          {
+            ...mutation(value, failOptions.failedAt ?? now()),
+            reason: failOptions.reason,
+            message: failOptions.message,
+            ...(failOptions.generation
+              ? { generation: { updatedAt: failOptions.generation.updatedAt } }
+              : {}),
+          },
+          undefined,
+          undefined,
+          // Checked on this thread at the write's transaction and commit grants.
+          failOptions.isCurrent,
+        );
+      } catch (error) {
+        // A refused grant rolls the write back: nothing was failed.
+        if (
+          error instanceof ChannelIngressClaimPolicyConflict &&
+          (await error.settled).kind === "completed"
+        ) {
+          return false;
+        }
+        throw error;
+      }
+    },
     async resubmit(id, resubmitOptions) {
       const result = await execute("channelIngress.resubmit", {
         queueName,

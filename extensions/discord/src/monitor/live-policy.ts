@@ -16,6 +16,13 @@ import { resolveDiscordRestFetch } from "./rest-fetch.js";
 type ResolvedAllowlist = Awaited<ReturnType<typeof resolveDiscordAllowlistConfig>>;
 export type DiscordLivePolicy = {
   isCurrent: () => boolean;
+  /**
+   * True only while the exact config this policy was read from is still the
+   * published one. Stricter than `isCurrent`: it also covers every cfg-level
+   * mention input (agent roster, identities and patterns, global group-chat
+   * patterns, broadcast participants, command config) for terminal decisions.
+   */
+  isConfigCurrent: () => boolean;
   accountId: string;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
@@ -126,6 +133,10 @@ export function createDiscordLivePolicyReader(params: {
             cfg === currentConfig || authoredRevision === authoredPolicyRevision(currentConfig)
           );
         },
+        isConfigCurrent: () =>
+          !params.abortSignal?.aborted &&
+          useInitialPolicy === initialPolicyActive &&
+          readConfig() === cfg,
         accountId: params.accountId,
         cfg,
         discordConfig: { ...discordConfig, groupPolicy, guilds: resolved.guildEntries },

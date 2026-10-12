@@ -172,6 +172,32 @@ describe("Discord live account policy", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("refreshes the Discord mention-pattern policy and pins verdicts to their config", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { discord: { token: "synthetic-token", mentionPatterns: { denyIn: ["c1"] } } },
+    };
+    publish(cfg);
+    const read = createDiscordLivePolicyReader({ cfg, accountId: "default" });
+    const startup = await read();
+    expect(startup.discordConfig.mentionPatterns).toEqual({ denyIn: ["c1"] });
+    expect(startup.isConfigCurrent()).toBe(true);
+    // Re-reading the same published config keeps the snapshot current.
+    expect(await read()).toBe(startup);
+    expect(startup.isConfigCurrent()).toBe(true);
+
+    publish({ channels: { discord: { token: "synthetic-token" } } });
+    expect(startup.isCurrent()).toBe(false);
+    expect(startup.isConfigCurrent()).toBe(false);
+    expect((await read()).discordConfig.mentionPatterns).toBeUndefined();
+
+    // A cfg-level classifier input (agents, broadcast, messages.groupChat)
+    // leaves the access policy current but not the classified snapshot.
+    const current = await read();
+    publish({ ...current.cfg, broadcast: { "discord:c1": ["helper"] } } as OpenClawConfig);
+    expect(current.isCurrent()).toBe(true);
+    expect(current.isConfigCurrent()).toBe(false);
+  });
+
   it("keeps explicitly scoped configuration independent of another runtime", async () => {
     publish(config(["global"]));
     const scoped = config(["scoped"]);

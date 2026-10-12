@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import type { ExpressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,6 +22,7 @@ import type {
   ChannelIngressClaimSnapshot,
   ChannelIngressListInput,
   ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueRecordGeneration,
   ChannelIngressRow,
   ChannelIngressScope,
 } from "./ingress-queue.types.js";
@@ -39,6 +41,16 @@ function executeMutation(
 ): boolean {
   return affectedRows(executeSqliteQuerySync(db, query)) > 0;
 }
+
+/**
+ * Every transition writes an updated_at strictly past anything a reader could
+ * have seen, even under a frozen or stepped-back clock, so (event_id,
+ * updated_at) names one row generation. Generation-fenced writes rely on it.
+ */
+const nextUpdatedAt = (
+  eb: ExpressionBuilder<Pick<DB, "channel_ingress_events">, "channel_ingress_events">,
+  now: number,
+) => eb.fn<number>("max", [eb.val(now), eb("updated_at", "+", 1)]);
 
 // Materialize pending rows in bounded chunks because SQLite's json_valid()
 // rejects some payloads accepted by the queue's JSON.stringify/JSON.parse contract.
@@ -134,7 +146,7 @@ function tombstoneCorruptRow(
                 .end(),
             }),
         ...CLEARED_CLAIM_COLUMNS,
-        updated_at: now,
+        updated_at: nextUpdatedAt(eb, now),
       }))
       .where("queue_name", "=", row.queue_name)
       .where("event_id", "=", row.event_id),
@@ -211,14 +223,14 @@ export function claimChannelIngressInDatabase(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
-      .set({
+      .set((eb) => ({
         status: "claimed",
         claim_token: randomUUID(),
         claim_owner: input.ownerId,
         claimed_at: transitionAt,
-        updated_at: transitionAt,
+        updated_at: nextUpdatedAt(eb, transitionAt),
         ...(input.laneKey ? { lane_key: input.laneKey } : {}),
-      })
+      }))
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
       .where("status", "=", "pending"),
@@ -283,7 +295,7 @@ export function recoverChannelIngressClaimInDatabase(
         ...CLEARED_CLAIM_COLUMNS,
         attempts: eb("attempts", "+", 1),
         last_attempt_at: input.now,
-        updated_at: input.now,
+        updated_at: nextUpdatedAt(eb, input.now),
       }))
       .where("queue_name", "=", current.queue_name)
       .where("event_id", "=", current.event_id)
@@ -316,7 +328,10 @@ export function refreshChannelIngressClaimInDatabase(
 ): boolean {
   return executeMutation(
     db,
-    selectedMutation(db, input).set({ claimed_at: input.now, updated_at: input.now }),
+    selectedMutation(db, input).set((eb) => ({
+      claimed_at: input.now,
+      updated_at: nextUpdatedAt(eb, input.now),
+    })),
   );
 }
 
@@ -326,7 +341,7 @@ export function completeChannelIngressInDatabase(
 ): boolean {
   const update = executeSqliteQuerySync(
     db,
-    selectedMutation(db, input).set({
+    selectedMutation(db, input).set((eb) => ({
       status: "completed",
       completed_at: input.now,
       completed_metadata_json: input.metadataJson,
@@ -335,8 +350,8 @@ export function completeChannelIngressInDatabase(
       ...CLEARED_CLAIM_COLUMNS,
       last_attempt_at: null,
       last_error: null,
-      updated_at: input.now,
-    }),
+      updated_at: nextUpdatedAt(eb, input.now),
+    })),
   );
   if (affectedRows(update) > 0) {
     return true;
@@ -382,18 +397,26 @@ export function releaseChannelIngressInDatabase(
         ? {}
         : { attempts: eb("attempts", "+", 1), last_attempt_at: input.now }),
       ...(input.lastError === undefined ? {} : { last_error: input.lastError }),
-      updated_at: input.now,
+      updated_at: nextUpdatedAt(eb, input.now),
     })),
   );
 }
 
 export function failChannelIngressInDatabase(
   db: DatabaseSync,
-  input: ChannelIngressMutation & { reason: string; message?: string },
+  input: ChannelIngressMutation & {
+    reason: string;
+    message?: string;
+    generation?: ChannelIngressQueueRecordGeneration;
+  },
 ): boolean {
+  // Fenced: only the generation the caller inspected (see nextUpdatedAt).
+  const selected = input.generation
+    ? selectedMutation(db, input).where("updated_at", "=", input.generation.updatedAt)
+    : selectedMutation(db, input);
   return executeMutation(
     db,
-    selectedMutation(db, input).set((eb) => ({
+    selected.set((eb) => ({
       status: "failed",
       failed_at: input.now,
       failed_reason: input.reason,
@@ -405,7 +428,7 @@ export function failChannelIngressInDatabase(
         .else(eb.ref("payload_json"))
         .end(),
       ...CLEARED_CLAIM_COLUMNS,
-      updated_at: input.now,
+      updated_at: nextUpdatedAt(eb, input.now),
     })),
   );
 }
@@ -551,11 +574,11 @@ export function resubmitChannelIngressInDatabase(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
-      .set({
+      .set((eb) => ({
         status: "pending",
         payload_json: row.payload_json === FAILED_NULL_PAYLOAD_SENTINEL ? "null" : row.payload_json,
         received_at: input.now,
-        updated_at: input.now,
+        updated_at: nextUpdatedAt(eb, input.now),
         attempts: 0,
         last_attempt_at: null,
         last_error: null,
@@ -564,7 +587,7 @@ export function resubmitChannelIngressInDatabase(
         ...CLEARED_CLAIM_COLUMNS,
         completed_at: null,
         completed_metadata_json: null,
-      })
+      }))
       .where("queue_name", "=", input.queueName)
       .where("event_id", "=", input.id)
       .where("status", "=", "failed"),

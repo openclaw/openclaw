@@ -838,6 +838,9 @@ describe("channel ingress dead letters", () => {
         channelId: "telegram",
         accountId: "ops",
         stateDir,
+        // Seed clock below every explicit transition time, so each transition's
+        // strictly-forward updatedAt lands on the time that transition passes.
+        now: () => 1,
       });
 
       await queue.enqueue(

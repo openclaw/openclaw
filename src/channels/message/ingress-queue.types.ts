@@ -13,6 +13,15 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIn
   lastError?: string;
 };
 
+/**
+ * One generation of a row. Every transition writes a strictly greater
+ * updatedAt (even under a frozen clock), so it is never reused by a row.
+ */
+export type ChannelIngressQueueRecordGeneration = Pick<
+  ChannelIngressQueueRecord<unknown>,
+  "updatedAt"
+>;
+
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
   TPayload,
   TMetadata
@@ -186,7 +195,19 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   ): Promise<boolean>;
   fail(
     idOrClaim: string | ChannelIngressQueueClaimRef,
-    options: { reason: string; message?: string; failedAt?: number },
+    options: {
+      reason: string;
+      message?: string;
+      failedAt?: number;
+      /** Fail only the generation the caller inspected; a later one is untouched. */
+      generation?: ChannelIngressQueueRecordGeneration;
+      /**
+       * Caller precondition, checked synchronously on the caller's thread when
+       * the write transaction opens and again at its commit grant; false rolls
+       * the write back and the call returns false.
+       */
+      isCurrent?: () => boolean;
+    },
   ): Promise<boolean>;
   /** Additive SDK seam; actual runtime queues support operator resubmission. */
   resubmit?(

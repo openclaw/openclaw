@@ -58,6 +58,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/minimax/speech-provider.test.ts",
   "extensions/minimax/tts.test.ts",
+  "extensions/discord/src/monitor/ingress.stale-backlog.test.ts",
   "extensions/discord/src/monitor/ingress.test.ts",
   "extensions/discord/src/monitor/listeners.thread-delete.session-store.integration.test.ts",
   "extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts",
