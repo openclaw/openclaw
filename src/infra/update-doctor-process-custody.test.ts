@@ -40,10 +40,10 @@ it.skipIf(process.platform === "win32").each([false, true])(
     vi.spyOn(nativeCustody, "createManagedCommandProcessCustody").mockImplementation(
       async (options) => {
         const native = await create(options);
-        const reserve = native.custody.reserve;
+        const reserve = native.custody.reserve.bind(native.custody);
         native.custody.reserve = (argv) => {
           const reservation = reserve(argv);
-          releaseReservation = reservation.settled;
+          releaseReservation = () => reservation.settled();
           return {
             spawned(childIdentity) {
               identity = childIdentity;
