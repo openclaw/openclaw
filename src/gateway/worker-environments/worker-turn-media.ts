@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import {
   detectAndLoadPromptImages,
   hydratePromptMediaMessages,
@@ -123,8 +122,7 @@ export async function prepareWorkerTurnMedia(params: {
       `Cloud worker could not load ${currentImages.failedMediaCount} image attachment(s); resend the attachment and retry.`,
     );
   }
-  const pruned = pruneProcessedHistoryImages(params.history) ?? params.history;
-  const history = await hydratePromptMediaMessages(pruned, mediaOptions);
+  const history = await hydratePromptMediaMessages(params.history, mediaOptions);
   assertCurrent();
 
   const current = prepareInput(

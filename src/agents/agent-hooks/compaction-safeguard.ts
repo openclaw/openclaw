@@ -562,7 +562,6 @@ function formatContextSegments(messages: AgentMessage[]): string[] {
 function formatBoundedContextSection(params: {
   messages: AgentMessage[];
   heading: string;
-  maxChars: number;
   truncatedMarker: string;
   truncatedLoss: CompactionLoss;
 }): ContextSection {
@@ -573,14 +572,14 @@ function formatBoundedContextSection(params: {
 
   let prefix = `${params.heading}\n`;
   let retained = segments;
-  const truncated = !(prefix.length + segments.join("\n").length <= params.maxChars);
+  const truncated = !(prefix.length + segments.join("\n").length <= MAX_SPLIT_TURN_CONTEXT_CHARS);
   if (truncated) {
     prefix += params.truncatedMarker;
     retained = [];
     let usedChars = prefix.length;
     for (const segment of segments.toReversed()) {
       const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-      if (usedChars + segmentChars > params.maxChars) {
+      if (usedChars + segmentChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
         break;
       }
       retained.unshift(segment);
@@ -603,7 +602,6 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
   return formatBoundedContextSection({
     messages,
     heading: "\n\n## Recent turns preserved verbatim",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
@@ -613,7 +611,6 @@ function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection 
   return formatBoundedContextSection({
     messages,
     heading: "**Turn Context (split turn):**\n",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
   });

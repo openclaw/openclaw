@@ -69,6 +69,7 @@ describe("llama-server discovery projection", () => {
         ],
       });
       expect(discoverRowsMock).toHaveBeenCalledWith({
+        allowPrivateNetwork: undefined,
         baseUrl: "http://localhost:8080/v1",
         serverBaseUrl: "http://localhost:8080",
         apiKey: undefined,

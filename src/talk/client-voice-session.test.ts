@@ -7,11 +7,6 @@ import {
 } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
-import {
-  authorizeClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "./client-voice-confirmation.js";
-import { noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance } from "./client-voice-confirmation.test-support.js";
 import { resolveOpenClientVoiceSessionId } from "./client-voice-session-read.js";
 import {
   completeRun,
@@ -26,7 +21,6 @@ import {
   closeRelayVoiceSessionRecord,
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
 } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
@@ -93,7 +87,7 @@ describe("client voice session", () => {
     ).rejects.toThrow("already closed");
   });
 
-  it("marks confirmability by declared capability, relay origin, or observed transcript", async () => {
+  it("preserves declared transcript capability and transport origin", async () => {
     const capable = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -108,14 +102,12 @@ describe("client voice session", () => {
       origin: "relay",
       voiceSessionId: "voice-relay",
     });
-    const binding = (voiceSessionId: string) => ({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
+    expect(clientVoiceSessionTesting.readRecord("main", capable)).toMatchObject({
+      transcriptCapable: true,
+      origin: "client",
     });
-    expect(isClientVoiceSessionConfirmable(binding(capable))).toBe(true);
-    expect(isClientVoiceSessionConfirmable(binding(legacy))).toBe(false);
-    expect(isClientVoiceSessionConfirmable(binding(relay))).toBe(true);
+    expect(clientVoiceSessionTesting.readRecord("main", legacy)?.transcriptCapable).not.toBe(true);
+    expect(clientVoiceSessionTesting.readRecord("main", relay)?.origin).toBe("relay");
   });
 
   it("waits for transcript serialization but not mutation digest delivery", async ({ signal }) => {
@@ -126,22 +118,6 @@ describe("client voice session", () => {
     const voiceSessionId = await createVoiceSession({ voiceSessionId: "voice-durable-close" });
     await recordMutation(voiceSessionId);
     await completeRun(`run-${voiceSessionId}`);
-
-    const confirmation = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId,
-      toolName: "message",
-      toolParams: { channel: "discord", message: "send it" },
-      isConfirmable: () => true,
-      now: 10,
-    });
-    if (confirmation.allowed) {
-      throw new Error("expected a pending voice confirmation");
-    }
-    const confirmationId = confirmation.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("expected a voice confirmation id");
-    }
 
     const transcriptWrite = createDeferred();
     const transcriptEntered = createDeferred();
@@ -199,21 +175,6 @@ describe("client voice session", () => {
     ).toBeUndefined();
     await withinTest(digestEntered.promise, signal);
     expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
-
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "yes",
-      timestamp: 11,
-    });
-    expect(() =>
-      authorizeClientVoiceConfirmation({
-        agentId: "main",
-        voiceSessionId,
-        confirmationId,
-        now: 12,
-      }),
-    ).toThrow("voice confirmation is missing");
 
     digestSend.resolve({ status: "sent" });
     await flushClientVoiceSessionWrites({ agentId: "main", voiceSessionId });

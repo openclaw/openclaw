@@ -150,6 +150,15 @@ TypeScript marks those adapters deprecated. They retain their result shapes and
 completion timing until the next Plugin SDK major and an explicitly approved
 breaking release. No schema, retained data, or update migration changes.
 
+GitHub publication's opaque requester and synchronous lifecycle methods, plus
+personal OAuth `cancelAuthorization` and `disconnect`, share the
+`github-publication` runtime warning budget. The personal OAuth methods retain
+their synchronous results until the same removal gate; migrate to
+`cancelAuthorizationAsync` and `disconnectAsync`. Follow the
+[V2 request and lifecycle migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
+for required host capabilities and callback ordering. This does not change the
+warning policy of the placement reader family.
+
 ### Channel pairing allowlists
 
 `readChannelAllowFromStoreSync` from `openclaw/plugin-sdk/channel-pairing` is
@@ -819,20 +828,24 @@ references are triage signals, not published-artifact proof.
 
 ### TTS preference resolution
 
-Host reply dispatch now prepares the machine-owned TTS preference path through
-the shared-state reader and carries that fact through prompt and delivery work.
-The released `resolveTtsPrefsPath(config)` call in
-`openclaw/plugin-sdk/agent-runtime` and `openclaw/plugin-sdk/tts-runtime` still
-returns a `string` synchronously. `buildTtsSystemPromptHint(config, agentId,
-options)` also keeps its synchronous return value, and the existing asynchronous
-`maybeApplyTtsToPayload` call does not require prepared preferences.
+Await `resolveTtsPrefsPathAsync(config)` from
+`openclaw/plugin-sdk/agent-runtime` or `openclaw/plugin-sdk/tts-runtime` to resolve
+the machine-owned preference path through the shared-state reader. Explicit
+config and environment paths retain their precedence. Host prompt, status,
+command, and speech preparation carry the resolved preferences through their
+existing operations instead of reopening the state store.
 
-The `tts-preferences-sync-resolution` compatibility record retains the legacy
-synchronous resolution path. Removal requires a public preparation contract,
-migration of published plugin readers, and explicit approval for a breaking
-Plugin SDK release at the next major-version gate. No removal date or runtime
-warning is introduced. Existing plugins need no change for this host update;
-preference-file reads, stored data, and update behavior stay the same.
+The released `resolveTtsPrefsPath(config)` call still returns a `string`
+synchronously, but is deprecated and emits a bounded warning when it needs
+legacy resolution. `buildTtsSystemPromptHint(config, agentId, options)` retains
+its synchronous return value; hosts pass prepared preferences to keep it free
+of state-store reads. The asynchronous `maybeApplyTtsToPayload` call continues
+to prepare preferences when none are supplied.
+
+The `tts-preferences-sync-resolution` compatibility record retains the released
+signatures until the next Plugin SDK major, migration of published plugin
+readers, and explicit approval of a breaking release. Preference files, stored
+data, and update behavior are unchanged.
 
 ### Media legacy projection
 

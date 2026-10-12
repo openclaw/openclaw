@@ -75,7 +75,7 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
     const requests = observeEntryReaderRequests();
     try {
       expect((await read(keys.slice(0, 64))).entries).toHaveLength(64);
-      expect((await read(keys.slice(64, 128))).entries).toHaveLength(64);
+      expect((await read(keys.slice(64, 127))).entries).toHaveLength(63);
       expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
       expect(requests.count()).toBeGreaterThan(0);
       requests.clear();
@@ -220,9 +220,30 @@ it("observes native and worker entry, participant, and membership writes after c
       });
     const requests = observeEntryReaderRequests();
     try {
-      expect((await read()).entries[0]?.entry.sessionId).toBe("same-session");
+      const initial = await read();
+      expect(initial.entries[0]?.entry.sessionId).toBe("same-session");
       requests.clear();
       expect((await read()).members?.[sessionKey]).toEqual([]);
+      expect(requests.count()).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 2 },
+      );
+      expect(await read()).toEqual(initial);
+      expect(requests.count()).toBe(0);
+      replaceSessionEntrySync(scope, {
+        sessionId: "same-session",
+        updatedAt: 3,
+        label: "receipt-only",
+      });
+      expect(
+        (await readSessionEntriesFromStoreInWorker({ ...scope, sessionKeys: [sessionKey] }))
+          .entries[0]?.entry.label,
+      ).toBe("receipt-only");
+      expect(requests.count()).toBe(1);
+      expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
+      requests.clear();
+      expect((await read()).entries[0]?.entry.label).toBe("receipt-only");
       expect(requests.count()).toBe(0);
       expect((await readMissing()).entries).toEqual([]);
       requests.clear();

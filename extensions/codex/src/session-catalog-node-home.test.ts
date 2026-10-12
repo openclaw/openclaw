@@ -86,8 +86,8 @@ function createHomeFixture(entries: EntrySummary[] = []) {
     ],
     invoke,
   });
-  vi.spyOn(runtimeFixture.runtime.agent.session, "getSessionEntry").mockImplementation(
-    ({ sessionKey }) =>
+  vi.spyOn(runtimeFixture.runtime.agent.session, "getSessionEntryAsync").mockImplementation(
+    async ({ sessionKey }) =>
       runtimeFixture.entries.find((candidate) => candidate.sessionKey === sessionKey)?.entry,
   );
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };

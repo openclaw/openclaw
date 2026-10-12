@@ -41,6 +41,8 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
+    (host.navigationView === "pages" &&
+      host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionMutationError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||
@@ -73,8 +75,6 @@ export function captureSidebarSnapshotModel(
     roster: bootRoster,
     mode: host.sidebarAgentsMode,
     navigationView: host.navigationView,
-    navigationScope: host.navigationScope,
-    scopesEquivalent: host.navigationCatalog.scopesEquivalent,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
         host.getSessionNavigationState().toSidebarSession(row),

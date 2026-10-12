@@ -1,4 +1,4 @@
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { createLazyXaiVideoGenerationProvider as createLazyXaiVideoGenerationProviderCore } from "./lazy-capability-provider-factories.js";
 
 export {
@@ -6,5 +6,5 @@ export {
   createLazyXaiMediaUnderstandingProvider,
 } from "./lazy-capability-provider-factories.js";
 export function createLazyXaiVideoGenerationProvider() {
-  return createLazyXaiVideoGenerationProviderCore({ isProviderApiKeyConfigured });
+  return createLazyXaiVideoGenerationProviderCore({ isProviderApiKeyConfiguredAsync });
 }

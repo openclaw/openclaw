@@ -218,6 +218,13 @@ priority. Omitted or truncated notes are marked. Notes may repeat because CLI
 bindings do not track which OpenClaw notes the native session has consumed.
 Transient runtime context and notes excluded from model context are not replayed.
 
+Claude Code registers OpenClaw MCP tools as `mcp__openclaw__<name>` and can
+defer them behind ToolSearch. The Claude CLI backend explains this mapping in
+the system prompt only when OpenClaw MCP tools are exposed to the invocation.
+Message delivery guidance is included only when `message` is exposed: it uses `mcp__openclaw__message`, and a deferred tool
+can be loaded with `select:mcp__openclaw__<name>`. This helps fresh sessions
+discover the delivery tool when a conversation requires message-tool-only replies.
+
 Keep Claude Code updated, especially if OpenClaw reports an incompatible
 installed executable:
 
@@ -356,9 +363,14 @@ When prompt content changes, a compatible CLI session can resume with an OpenCla
 context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
-the same turn appears once. Stored OpenClaw and native transcript text remains
-unchanged. For unmatched imported user turns, chat history removes generated
-resume notes and queued system-event prefixes from the display copy only.
+the same turn appears once. Queued system events, including model-switch notices,
+are ignored for matching even after generated conversation metadata and recent
+chat history. Stored OpenClaw and native transcript text remains unchanged.
+For unmatched imported user turns, chat history removes generated
+resume notes, historical requester guidance, and queued system-event prefixes
+from the display copy only. Historical requester guidance is recognized by its
+complete generated prefix; matching canonical user text and later quoted
+guidance remain unchanged.
 Recognized runtime prompts, such as default heartbeat, exec-completion, restart
 recovery, and native compaction prompts, are hidden rather than shown as human
 messages. Matching canonical user turns and quoted text in later content blocks

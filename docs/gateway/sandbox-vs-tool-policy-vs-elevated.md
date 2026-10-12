@@ -40,7 +40,7 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.
 
 An operator role with `sandbox: "required"` overrides agent mode, cannot be
-escaped through elevated execution or host overrides, and fails closed when its
+escaped through elevated execution or host overrides, and blocks execution when its
 sandbox cannot be provisioned. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 

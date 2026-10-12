@@ -388,6 +388,24 @@ OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
 
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
+
 ### Embedded attempt preparation
 
 Embedded `prep stages` summaries separate two tool-preparation intervals:

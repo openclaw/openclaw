@@ -16,13 +16,8 @@ import {
 } from "./placement-record.js";
 import { find, fromRow, getRequired, query, turnClaimValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { clearWorkerTurnToolState } from "./placement-session-tool-operations.kernel.js";
 import {
-  assertNoRunningWorkerSessionToolOperations,
-  clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.kernel.js";
-import { parseWorkerSessionPlacementState } from "./placement-state.js";
-import {
-  publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
   publishPlacementWorkspaceJournalState,
 } from "./placement-turn-authority.js";
@@ -32,7 +27,10 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
+import {
+  assertSessionWorkspaceUnreserved,
+  selectActiveSessionWorkspaceReservation,
+} from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -63,6 +61,22 @@ function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
       ...turnClaimValues(null),
       updated_at_ms: nowMs,
     });
+}
+
+export function clearLocalTurnClaimsInDatabase(
+  db: DatabaseSync,
+  path: string,
+  nowMs: number,
+): WorkerSessionPlacementRecord[] {
+  const placements = executeSqliteQuerySync(
+    db,
+    releaseTurnQuery(db, nowMs).where("turn_claim_owner", "=", "local").returningAll(),
+  ).rows.map(fromRow);
+  for (const placement of placements) {
+    publishPlacementTurnClaimState(db, placement, placement.state);
+    deferTurnClaimRelease(db, path, placement.sessionId);
+  }
+  return placements;
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
@@ -104,7 +118,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     options: { allowDraining?: boolean } = {},
   ): { claim: WorkerSessionTurnClaim; placement: WorkerSessionPlacementRecord } => {
     const identity = normalizeIdentity(input);
-    assertSessionWorkspaceUnreserved(db, identity.sessionId);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
     const owner: WorkerSessionTurnOwner =
@@ -132,6 +145,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       updated_at_ms: updatedAtMs,
     };
     const placementQuery = query(db);
+    const reservation = selectActiveSessionWorkspaceReservation(db, identity.sessionId);
     const admissible = (
       eb: ExpressionBuilder<
         Pick<StateDatabase, "worker_session_placements">,
@@ -167,16 +181,38 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     const statement = local
       ? placementQuery
           .insertInto("worker_session_placements")
-          .values({
-            session_id: identity.sessionId,
-            agent_id: identity.agentId,
-            session_key: identity.sessionKey,
-            state: "local",
-            ...claimValues,
-            turn_claim_generation: 0,
-            created_at_ms: updatedAtMs,
-            state_changed_at_ms: updatedAtMs,
-          })
+          .columns([
+            "session_id",
+            "agent_id",
+            "session_key",
+            "state",
+            "turn_claim_owner",
+            "turn_claim_id",
+            "turn_claim_run_id",
+            "turn_claim_owner_epoch",
+            "updated_at_ms",
+            "turn_claim_generation",
+            "created_at_ms",
+            "state_changed_at_ms",
+          ])
+          .expression(
+            placementQuery
+              .selectNoFrom((eb) => [
+                eb.val(identity.sessionId).as("session_id"),
+                eb.val(identity.agentId).as("agent_id"),
+                eb.val(identity.sessionKey).as("session_key"),
+                eb.val("local").as("state"),
+                eb.val(claimValues.turn_claim_owner).as("turn_claim_owner"),
+                eb.val(claimValues.turn_claim_id).as("turn_claim_id"),
+                eb.val(claimValues.turn_claim_run_id).as("turn_claim_run_id"),
+                eb.val(claimValues.turn_claim_owner_epoch).as("turn_claim_owner_epoch"),
+                eb.val(updatedAtMs).as("updated_at_ms"),
+                eb.val(0).as("turn_claim_generation"),
+                eb.val(updatedAtMs).as("created_at_ms"),
+                eb.val(updatedAtMs).as("state_changed_at_ms"),
+              ])
+              .where((eb) => eb.not(eb.exists(reservation))),
+          )
           .onConflict((conflict) =>
             conflict
               .column("session_id")
@@ -193,10 +229,12 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             turn_claim_generation: eb.ref("transition_generation"),
           }))
           .where("session_id", "=", identity.sessionId)
-          .where(admissible);
+          .where(admissible)
+          .where((eb) => eb.not(eb.exists(reservation)));
     const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
     if (!row) {
       // Failed admissions alone need a diagnostic read; the successful path is one write.
+      assertSessionWorkspaceUnreserved(db, identity.sessionId);
       const current = find(db, identity.sessionId);
       if (
         current &&
@@ -313,7 +351,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     }
     // Local claims cannot authorize worker tools, so only worker claims own this cleanup.
     if (claim.owner.kind === "worker") {
-      assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
       clearWorkerTurnToolState(db, { sessionId, claimId });
     }
     return placement;
@@ -367,7 +404,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (!environment && !hasCurrentWorkspaceResultClaim(db, claim)) {
           throw new Error(`Session ${sessionId} workspace result owner changed before release`);
         }
-        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
         const statement = releaseTurnQuery(db, now());
         clearWorkerWorkspacePendingResult(db, sessionId);
@@ -435,7 +471,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             `Session ${sessionId} workspace result owner changed before cancellation`,
           );
         }
-        assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
         clearWorkerTurnToolState(db, { sessionId, claimId });
         clearWorkerWorkspacePendingResult(db, sessionId);
         return publishTurnRelease(
@@ -453,27 +488,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     },
 
     clearLocalTurnClaimsAfterRestart(this: void): number {
-      return write((db) => {
-        const placements = executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("worker_session_placements")
-            .select(["session_id", "state"])
-            .where("turn_claim_owner", "=", "local"),
-        ).rows;
-        const result = executeSqliteQuerySync(
-          db,
-          releaseTurnQuery(db, now()).where("turn_claim_owner", "=", "local"),
-        );
-        if (result.numAffectedRows !== BigInt(placements.length)) {
-          throw new Error("Local turn claims changed during restart recovery");
-        }
-        for (const { session_id: sessionId, state } of placements) {
-          publishPlacementTurnClaimCleared(db, sessionId, parseWorkerSessionPlacementState(state));
-          deferTurnClaimRelease(db, path, sessionId);
-        }
-        return placements.length;
-      });
+      return write((db) => clearLocalTurnClaimsInDatabase(db, path, now()).length);
     },
 
     async waitForTurnClaimRelease(

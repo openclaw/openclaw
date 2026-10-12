@@ -412,7 +412,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
                 },
               };
               let memoryCloses = 0;
-              const createMemory = await createGatewayMemoryCloseRegistryFactory(memoryConfig);
+              const createMemory = createGatewayMemoryCloseRegistryFactory(memoryConfig);
               const memory = createMemory(async () => {
                 memoryCloses += 1;
               });

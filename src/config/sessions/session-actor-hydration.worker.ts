@@ -368,9 +368,11 @@ export function hydrateSessionActorState(
       writeToken,
       dependencySessionIds: [],
       entry,
+      hasBoard: Boolean(selected?.actor_has_board),
       participants,
       members,
       pendingInputs: [],
+      completionKeys: [],
       transcript: {
         version: contextVersion,
         watermark: { generation: contextVersion.generation, maxSeq: contextVersion.rawSeq },
@@ -412,6 +414,7 @@ export function hydrateSessionActorState(
 /** Derives disclosure only from the actor's owned postimage, without touching SQLite. */
 export function projectSessionActorHotState(state: SessionActorStoredState): SessionActorHotState {
   const hot = structuredClone(state.hot);
+  hot.hasBoard = state.hasBoard;
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),
@@ -422,6 +425,7 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
+  hot.completionKeys = [...state.completions.keys()];
   hot.transcript.idempotency = [...state.transcript.identities.values()].flatMap((row) =>
     row.message_idempotency_key
       ? [{ key: row.message_idempotency_key, eventId: row.event_id, rawSeq: row.seq }]

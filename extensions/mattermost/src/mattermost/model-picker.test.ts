@@ -1,6 +1,7 @@
 // Mattermost tests cover model picker plugin behavior.
 import path from "node:path";
 import {
+  getSessionEntryAsync,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -153,7 +154,7 @@ describe("Mattermost model picker", () => {
     });
   });
 
-  it("falls back to the routed agent default model when no override is stored", () => {
+  it("falls back to the routed agent default model when no override is stored", async () => {
     const testDir = tempDirs.make("case-", sessionRoot);
     const cfg: OpenClawConfig = {
       session: {
@@ -185,13 +186,14 @@ describe("Mattermost model picker", () => {
     };
 
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
           sessionKey: "agent:support:main",
         },
         data: providerData,
+        sessionEntry: undefined,
       }),
     ).toBe("openai/gpt-5");
   });
@@ -250,25 +252,44 @@ describe("Mattermost model picker", () => {
     };
 
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
           sessionKey: directSessionKey,
         },
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          agentId: "support",
+          storePath: supportStorePath,
+          sessionKey: directSessionKey,
+        }),
       }),
     ).toBe("openai/gpt-5");
     expect(
-      resolveMattermostModelPickerCurrentModel({
+      await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: {
           agentId: "support",
           sessionKey: childSessionKey,
         },
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          agentId: "support",
+          storePath: supportStorePath,
+          sessionKey: childSessionKey,
+        }),
+      }),
+    ).toBe("anthropic/claude-sonnet-4-5");
+    expect(
+      await resolveMattermostModelPickerCurrentModel({
+        cfg,
+        route: {
+          agentId: "support",
+          sessionKey: `${parentSessionKey}:thread:new-thread`,
+        },
+        data,
+        sessionEntry: undefined,
       }),
     ).toBe("anthropic/claude-sonnet-4-5");
   });

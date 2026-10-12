@@ -1,8 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  applySessionPatchProjection,
-  loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { applySessionPatchProjection } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { parseSessionLabel } from "../../sessions/session-label.js";
@@ -26,8 +24,10 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
     // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
     if (!title) {
       const entry =
-        loadSessionEntryReadOnly({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
-        params.sessionEntry;
+        (await readSessionEntryReadOnlyInWorker({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        })) ?? params.sessionEntry;
       const current = normalizeOptionalString(entry?.label);
       const suggestionEntry = entry ? { ...entry, label: undefined } : undefined;
       const suggestion = deriveSessionTitle(suggestionEntry);
@@ -78,14 +78,8 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
       return nameReply(`Couldn't rename the session: ${result.error}`);
     }
     if (params.sessionStore && params.sessionKey && params.storePath) {
-      const entry = loadSessionEntryReadOnly({
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
-      if (entry) {
-        params.sessionStore[params.sessionKey] = entry;
-        params.sessionEntry = entry;
-      }
+      params.sessionStore[params.sessionKey] = result.entry;
+      params.sessionEntry = result.entry;
     }
     markCommandSessionMetadataChanged(params);
     return nameReply(`✅ Session renamed to “${result.entry.label}”.`);

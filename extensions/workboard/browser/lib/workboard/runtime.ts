@@ -12,11 +12,6 @@ export type WorkboardClientContext = {
   requestUpdate?: () => void;
 };
 
-export type WorkboardLoadToken = {
-  queuedAfterGeneration?: number;
-  catalogOnly: boolean;
-};
-
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
@@ -28,10 +23,9 @@ type WorkboardRuntime = {
   state?: WorkboardUiState;
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
-  loadToken?: WorkboardLoadToken;
+  loadClient?: GatewayBrowserClient;
+  loadCatalogOnly?: boolean;
   loadError?: string;
-  loadGeneration?: number;
-  liveRefreshGeneration?: number;
   liveChangeEpoch?: string;
   liveHighestSeenRevision?: number;
   liveAppliedRevision?: number;
@@ -42,17 +36,6 @@ type WorkboardRuntime = {
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
-export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
-  const runtime = getWorkboardRuntime(host);
-  const generation = (runtime.loadGeneration ?? 0) + 1;
-  runtime.loadGeneration = generation;
-  return generation;
-}
-
-export function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
-  return getWorkboardRuntime(host).loadGeneration === generation;
-}
-
 export function invalidateWorkboardLoads(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const state = runtime.state;
@@ -67,15 +50,14 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
     }
   }
   delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
-  delete runtime.loadToken;
+  delete runtime.loadClient;
+  delete runtime.loadCatalogOnly;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   const loadInFlight = Boolean(runtime.loadPromise);
-  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
   if (runtime.liveRefreshRetryTimer) {
     clearTimeout(runtime.liveRefreshRetryTimer);
     delete runtime.liveRefreshRetryTimer;

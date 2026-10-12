@@ -28,7 +28,7 @@ import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   bootstrap: vi.fn(async () => "Agent context fixture."),
   createRelay: vi.fn(() => ({
     relaySessionId: "test-relay",
@@ -39,8 +39,9 @@ const mocks = vi.hoisted(() => ({
   transcriptionProviders: vi.fn(() => []),
 }));
 
+// mock-isolation: Keep provider registration and credential state outside handler tests.
 vi.mock("../../../talk/provider-resolver.js", () => ({
-  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProviders: () => [] }));
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
@@ -139,7 +140,7 @@ beforeEach(async () => {
   Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
     value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
   });
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider,
     providerConfig: {},
     capabilities: provider.capabilities,

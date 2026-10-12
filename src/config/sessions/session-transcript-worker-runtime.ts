@@ -1,18 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
-import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import {
-  sessionHistoryCleanupError,
-  unwrapSessionTranscriptWorkerReply,
-} from "./session-history-worker-errors.js";
+import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { withSessionHistoryReadAdmission } from "./session-transcript-worker-read-admission.js";
 import {
   createSessionHistoryWorkerReaders,
@@ -29,7 +23,6 @@ import {
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
   type HistoryDatabaseResource,
-  type SessionDatabaseCleanup,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -45,10 +38,7 @@ export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 const log = createSubsystemLogger("sessions/history-worker");
 const historyPrewarms = new WeakMap<
   HistoryDatabaseResource,
-  Map<
-    SessionHistoryWorkerLane,
-    { promise: Promise<void>; pending: boolean; retiredSequence: number }
-  >
+  Map<SessionHistoryWorkerLane, { promise: Promise<void>; pending: boolean }>
 >();
 
 export function runSessionBranchSummaryWorkerRequest(
@@ -80,41 +70,30 @@ export async function prewarmSessionHistoryWorker(
       historyPrewarms.set(resource, prewarms);
     }
     const existing = prewarms.get(lane);
-    if (
-      existing &&
-      (existing.pending ||
-        (!lane.rotation &&
-          existing.retiredSequence === lane.retiredSequence &&
-          resource.nativeSequences.has(lane)))
-    ) {
+    if (existing && (existing.pending || resource.nativeSequences.has(lane))) {
       return await existing.promise;
     }
-    const completion = createDeferredCore();
-    const prewarm = {
-      promise: completion.promise,
+    const prewarm: { promise: Promise<void>; pending: boolean } = {
+      promise: withSessionHistoryWorkerDatabase(
+        options,
+        (owner) =>
+          owner.prewarm({
+            env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+          }),
+        lane,
+      ).then(
+        () => {
+          prewarm.pending = false;
+        },
+        (error: unknown) => {
+          prewarms.delete(lane);
+          log.debug(`Session history worker prewarm failed: ${String(error)}`);
+        },
+      ),
       pending: true,
-      retiredSequence: lane.retiredSequence,
     };
     prewarms.set(lane, prewarm);
-    void withSessionHistoryWorkerDatabase(
-      options,
-      (owner) =>
-        owner.prewarm({
-          env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
-        }),
-      lane,
-    ).then(
-      () => {
-        prewarm.pending = false;
-        completion.resolve();
-      },
-      (error: unknown) => {
-        prewarms.delete(lane);
-        log.debug(`Session history worker prewarm failed: ${String(error)}`);
-        completion.resolve();
-      },
-    );
-    await completion.promise;
+    await prewarm.promise;
   } catch (error) {
     log.debug(`Session history worker prewarm failed: ${String(error)}`);
   }
@@ -127,49 +106,28 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
-  let entryReadSource: (CapturedSessionEntryReadSource & { databaseIdentity: string }) | undefined;
+  let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
       throw new WorkerTaskError("Session history database read was revoked", "unavailable");
-    }
-    if (entryReadSource) {
-      assertExistingDatabaseIdentity(
-        database.path,
-        `file:${entryReadSource.databaseIdentity}`,
-        entryReadSource.databaseBirthtime,
-      );
     }
   };
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   owned.pending++;
   refreshDatabaseWorkerPressureSubscription();
-  let countsReleased = false;
-  let releaseFinished = false;
-  const releaseCleanup: SessionDatabaseCleanup = { run: async () => release() };
+  let released = false;
   const release = () => {
-    if (releaseFinished) {
+    if (released) {
       return;
     }
-    // Keep the existing database resource registered until all release steps succeed.
-    owned.cleanups.add(releaseCleanup);
-    if (!countsReleased) {
-      countsReleased = true;
-      owned.pending--;
-      lane.pending--;
-    }
-    try {
-      armDatabaseWorkerIdleRetirement(lane);
-      owned.cleanups.delete(releaseCleanup);
-      pruneHistoryDatabases();
-      releaseFinished = true;
-    } catch (error) {
-      owned.cleanups.add(releaseCleanup);
-      throw error;
-    }
+    released = true;
+    owned.pending--;
+    lane.pending--;
+    armDatabaseWorkerIdleRetirement(lane);
+    pruneHistoryDatabases();
   };
   try {
-    assertCurrent();
     const runRequest: SessionHistoryWorkerRequestRunner = async (
       prepare,
       inputBytes,
@@ -178,23 +136,16 @@ export function retainSessionHistoryWorkerDatabase(
       onRequest,
       timeoutMs = 60_000,
     ) => {
-      assertCurrent();
       const validation = captureOpenClawAgentDatabaseReadValidation(database);
-      const assertRequestCurrent = () => {
-        assertCurrent();
-        validation?.assertCurrent();
-      };
-      let sequence = 0;
       let retirement: Promise<void> | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
       return withSessionHistoryReadAdmission(
         { ...options, ...database, lane },
         {
-          knownSource: entryReadSource !== undefined,
+          knownSource,
           timeoutMs,
           signal,
           aborters: owned.aborters,
-          assertCurrent: assertRequestCurrent,
         },
         async (admit, requestLane) => {
           try {
@@ -202,11 +153,9 @@ export function retainSessionHistoryWorkerDatabase(
               runWithSqliteDatabaseAdmissionTurn([database.path], () =>
                 requestLane.pool.run(
                   () => {
-                    assertRequestCurrent();
+                    assertCurrent();
                     const input = prepare();
-                    assertRequestCurrent();
-                    sequence = ++requestLane.nativeSequence;
-                    owned.nativeSequences.set(requestLane, sequence);
+                    owned.nativeSequences.set(requestLane, ++requestLane.nativeSequence);
                     return {
                       ...input,
                       database,
@@ -221,10 +170,8 @@ export function retainSessionHistoryWorkerDatabase(
                       ? (value, context) => {
                           const effect = (async () => {
                             context.signal.throwIfAborted();
-                            assertRequestCurrent();
                             const response = await onRequest(value, context.signal);
                             context.signal.throwIfAborted();
-                            assertRequestCurrent();
                             return response ?? { input: null, timeoutMs };
                           })();
                           hostEffects.add(effect);
@@ -261,35 +208,13 @@ export function retainSessionHistoryWorkerDatabase(
                 received.kind === "session-diagnostic-text") &&
               received.source
             ) {
-              const source = received.source;
-              if (
-                source.agentId !== database.agentId ||
-                source.path !== database.path ||
-                (entryReadSource &&
-                  (entryReadSource.databaseIdentity !== source.databaseIdentity ||
-                    entryReadSource.databaseBirthtime !== source.databaseBirthtime))
-              ) {
-                throw new Error("Session entry read changed its retained physical owner");
-              }
-              // Retain the identity that actually supplied the row, not a later stat of its locator.
-              entryReadSource = source;
+              knownSource = true;
             }
-            assertRequestCurrent();
             const value = receive(received);
             if (reply.ok && reply.closedHistoryDatabase) {
               await settleSessionHistoryWorkerEviction(requestLane, reply.closedHistoryDatabase);
             }
-            assertRequestCurrent();
             return value;
-          } catch (error) {
-            if (sequence > 0) {
-              try {
-                await (retirement ?? rotateDatabaseWorkers(requestLane));
-              } catch (cleanupError) {
-                throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
-              }
-            }
-            throw error;
           } finally {
             // Cancellation removes queued effects; accepted writes still retain settlement custody.
             await Promise.allSettled(hostEffects);
@@ -298,64 +223,33 @@ export function retainSessionHistoryWorkerDatabase(
       );
     };
     const owner: SessionHistoryWorkerDatabase = {
-      generation: owned.generation,
       assertCurrent,
       ...createSessionHistoryWorkerReaders(runRequest),
     };
     return { owner, release };
   } catch (error) {
-    try {
-      release();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "Session history reader admission cleanup failed",
-        { cause: cleanupError },
-      );
-    }
+    release();
     throw error;
   }
 }
 
-/** Capture every selected store before yielding; a closed target cannot join a later generation. */
+/** Retain each selected reader for the operation. */
 export async function withSessionHistoryWorkerDatabases<T>(
   options: readonly SessionHistoryDatabaseTarget[],
   operation: (owners: readonly SessionHistoryWorkerDatabase[]) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
   const retained: ReturnType<typeof retainSessionHistoryWorkerDatabase>[] = [];
-  let outcome: { value: T } | { error: unknown };
   try {
     for (const target of options) {
       retained.push(retainSessionHistoryWorkerDatabase(target, lane));
     }
-    const value = await operation(retained.map(({ owner }) => owner));
-    for (const { owner } of retained) {
-      owner.assertCurrent();
-    }
-    outcome = { value };
-  } catch (error) {
-    outcome = { error };
-  }
-  const cleanupErrors: unknown[] = [];
-  for (const retainedRead of retained.toReversed()) {
-    try {
+    return await operation(retained.map(({ owner }) => owner));
+  } finally {
+    for (const retainedRead of retained.toReversed()) {
       retainedRead.release();
-    } catch (error) {
-      cleanupErrors.push(error);
     }
   }
-  if (cleanupErrors.length > 0) {
-    throw new AggregateError(
-      [...("error" in outcome ? [outcome.error] : []), ...cleanupErrors],
-      "Session history read scope cleanup failed",
-      { cause: "error" in outcome ? outcome.error : cleanupErrors[0] },
-    );
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
 }
 
 /** Single-target callers retain the same batch admission and revocation boundary. */
@@ -381,14 +275,13 @@ export async function runProcessHeldHistoryTask(
   historyClearTimeout(historyLane.idleTimer);
   historyLane.idleTimer = undefined;
   refreshDatabaseWorkerPressureSubscription();
-  let sequence = 0;
   let retirement: Promise<void> | undefined;
   try {
     await historyLane.rotation;
     const value = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(
       await historyLane.pool.run(
         () => {
-          sequence = ++historyLane.nativeSequence;
+          historyLane.nativeSequence++;
           return { kind: "cli-process-history", request };
         },
         {
@@ -413,15 +306,6 @@ export async function runProcessHeldHistoryTask(
       throw new Error("Unexpected process-held history reply");
     }
     return value;
-  } catch (error) {
-    if (sequence > 0) {
-      try {
-        await (retirement ?? rotateDatabaseWorkers(historyLane));
-      } catch (cleanupError) {
-        throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
-      }
-    }
-    throw error;
   } finally {
     historyLane.pending--;
     armDatabaseWorkerIdleRetirement(historyLane);

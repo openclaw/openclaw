@@ -30,7 +30,7 @@ Principles:
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
-- **Native shell.** The board is Lit components in the Control UI shell
+- **Native shell.** The board uses Solid components in the Control UI shell
   (the same design system as the rest of the app). Data reports render directly.
   Custom executable widgets use sandboxed iframes; Browser dashboards reuse the
   Browser panel and its navigation controls.
@@ -54,6 +54,13 @@ Principles:
 | Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
+
+The dashboard gallery requests `sessions.list` with `rowMode: "dashboard"`.
+Rows retain card display, navigation, and membership facts; model, usage,
+permission, and participant details remain available through `sessions.describe`.
+The gallery uses the shared session-event reconciler and paced fallback refresh.
+Omitted fields never clear richer session facts already held by another view.
+Other session lists retain their existing compact or full projections.
 
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears

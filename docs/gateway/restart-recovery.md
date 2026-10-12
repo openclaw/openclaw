@@ -869,8 +869,19 @@ through their normal completion path as soon as startup restores requester owner
 without waiting for the periodic registry sweep. The sweep remains a retry backstop.
 The crash-loop breaker pauses this settlement too; the same sweep retries when
 the breaker's recovery window ends.
+Startup restores completed runs directly from the registry. Any retained delivery
+keeps its normal session and ownership checks. Unfinished runs still reconcile
+the current child session before resuming.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
+For native children with completion notifications disabled, recovery sends a
+private continuation to the original parent when its saved session identity still
+matches. Normal successful completion stays quiet. A reset or cancellation does
+not authorize a continuation into a replacement parent session.
+Cancelled turns can retain a cleanup lease briefly. That lease does not make them
+restart candidates; an immediate Gateway restart preserves their terminal outcome.
+Finished executions whose final reply is still pending retain their recovery
+custody, as do turns interrupted by the restart itself.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or
@@ -887,7 +898,10 @@ already completed, assign a replacement, or finish the remaining work itself.
 Recovery does not automatically replay child commands or duplicate running work.
 An interruption alone is not a blocker; the parent continues until the request
 is finished or a specific blocker requires user input or unavailable authority.
-Existing cleanup and retention settings still apply.
+Interrupted native children retain their session history even when configured
+with `cleanup: "delete"`, so the parent can inspect and continue the unfinished
+work. Successful runs keep their configured cleanup behavior; normal history
+retention still applies.
 
 Startup retires superseded requester completion claims through the registry's
 cleanup owner before restoring the surviving claim.
