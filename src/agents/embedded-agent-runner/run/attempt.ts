@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -451,7 +451,7 @@ async function runEmbeddedAttemptOwned(
       // Run-completed diagnostics carry the model's raw final-answer text for
       // content capture; the finally-phase cleanup reads it from the shared state.
       executionState.diagnosticFinalResponse = resolveDiagnosticModelContentCapturePolicy(
-        getRuntimeConfig(),
+        getRuntimeConfigSnapshot(),
       ).outputMessages
         ? resolveFinalMessageRawText(
             executionResult.currentAttemptAssistant ??

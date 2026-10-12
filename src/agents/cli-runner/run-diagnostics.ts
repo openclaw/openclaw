@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { truncateDiagnosticContent } from "../../infra/diagnostic-content.js";
 /** Trusted run hierarchy for Claude Code CLI-backed agent turns. */
 import {
@@ -130,7 +130,9 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   const startedAt = Date.now();
   let phase: ClaudeCliRunPhase = "prepare";
   let unsubscribeCommentary: (() => void) | undefined;
-  const contentCapturePolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  const contentCapturePolicy = resolveDiagnosticModelContentCapturePolicy(
+    getRuntimeConfigSnapshot(),
+  );
   let capturedContent: { userPrompt?: string; finalResponse?: string } | undefined;
   // True when publication produced at least one gated, non-empty field; an empty
   // publication (policy off, or all fields filtered) attaches no private data.

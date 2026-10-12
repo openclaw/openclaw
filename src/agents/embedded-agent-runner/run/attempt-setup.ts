@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
@@ -429,7 +429,7 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
     const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
     // Mirror the CLI run lifecycle: content is stored, gated, and bounded once
     // at completion; the exporter re-checks the policy before span placement.
-    const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+    const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
     const messageContent: { userPrompt?: string; finalResponse?: string } | undefined =
       (contentPolicy.inputMessages && params.prompt) ||
       (contentPolicy.outputMessages && extra?.finalResponse)

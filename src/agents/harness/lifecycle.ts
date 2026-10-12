@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { assertContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   joinDiagnosticContent,
@@ -64,7 +64,7 @@ function agentRunMessageContent(
   prompt: string | undefined,
   assistant?: Parameters<typeof resolveFinalMessageRawText>[0],
 ): AgentRunMessageContent | undefined {
-  const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const finalText = policy.outputMessages ? resolveFinalMessageRawText(assistant) : undefined;
   const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
   const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
@@ -248,7 +248,7 @@ function emitAgentHarnessRunCompleted(params: {
   // forward the message so the error span shows more than a bare category.
   const errorMessage =
     outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
-  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const finalAssistantText = contentPolicy.outputMessages
     ? resolveFinalMessageRawText(
         result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
@@ -293,7 +293,7 @@ function createAgentHarnessLifecycleDiagnostics(
   let agentRunTrace = finalizing ? createRunTrace() : undefined;
   let agentRunStartedAt = finalizing ? startedAt : 0;
   let phase: AgentHarnessLifecyclePhase = "prepare";
-  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const harnessContent =
     contentPolicy.inputMessages && params.prompt
       ? { userPrompt: truncateDiagnosticContent(params.prompt) }
@@ -455,8 +455,9 @@ export async function runAgentHarnessLifecycleFinalization(
       outcome: "completed",
       messageContent: agentRunMessageContent(params.prompt, result.result.assistant),
     });
-    const finalizationContentPolicy =
-      resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+    const finalizationContentPolicy = resolveDiagnosticModelContentCapturePolicy(
+      getRuntimeConfigSnapshot(),
+    );
     const finalizationVisibleText = finalizationContentPolicy.outputMessages
       ? resolveFinalAssistantRawText(result.result.assistant)
       : undefined;

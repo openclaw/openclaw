@@ -1,5 +1,5 @@
 // Message.processed diagnostic emission with captureContent-gated private content.
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfigSnapshot } from "../config/config.js";
 import { truncateDiagnosticContent } from "../infra/diagnostic-content.js";
 import {
   emitInternalDiagnosticEvent,
@@ -22,7 +22,9 @@ export function emitMessageProcessedDiagnosticEvent(
 ): void {
   // Gate each message content field on its own captureContent policy field so that
   // enabling input capture does not leak output text and vice versa.
-  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
+  // Capture degrades to off when async runtime-config preparation has not run;
+  // the observability path must not throw on an unprepared snapshot.
+  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
   const messageContent: { userPrompt?: string; finalResponse?: string } | undefined =
     contentPolicy.inputMessages || contentPolicy.outputMessages
       ? {
