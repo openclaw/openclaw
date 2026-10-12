@@ -39,6 +39,7 @@ export function createRuntime(
   cancelSessionWork: WorkerPlacementSessionWorkCancellation = vi.fn(async () => {}),
 ) {
   return createGatewayWorkerPlacementRuntime({
+    initialPlacements: placements.list(),
     scheduler: createTestGatewayScheduler(),
     getCommittedRuntimeConfig: getRuntimeConfig,
     placements,

@@ -161,6 +161,7 @@ export function buildOpenAIResponsesParams(
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
+  retainUserProvenance = false,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -177,6 +178,7 @@ export function buildOpenAIResponsesParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
     replayMode,
+    retainUserProvenance,
   });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
