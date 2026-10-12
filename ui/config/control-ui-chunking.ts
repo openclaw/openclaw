@@ -177,7 +177,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                minSize: 16 * 1024,
+                // Fold small post-port partitions back into their boot parents;
+                // route membership and the maximum chunk size stay unchanged.
+                minSize: 128 * 1024,
                 maxSize: (route === "shared" ? 1280 : 1408) * 1024,
               };
             }),
