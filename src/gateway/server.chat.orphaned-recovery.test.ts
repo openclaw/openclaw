@@ -217,17 +217,16 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(recovered?.archivedAt).toBeUndefined();
       expect(recovered?.mainRestartRecovery).toBeUndefined();
       expect(recovered?.restartRecoveryRuns).toBeUndefined();
-      const userMessages = (await loadTranscriptEvents({ ...target, sessionId })).flatMap(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.role === "user"
+      // Captured model-prompt metadata can repeat text without creating another user turn.
+      const transcript = JSON.stringify(
+        (await loadTranscriptEvents({ ...target, sessionId })).flatMap((event) =>
+          isRecord(event) && event.type === "message" && isRecord(event.message)
             ? [event.message.content]
             : [],
+        ),
       );
-      expect(userMessages.filter((content) => content === priorMessage)).toHaveLength(1);
-      expect(userMessages.filter((content) => content === nextMessage)).toHaveLength(retry ? 0 : 1);
+      expect(transcript.split(priorMessage)).toHaveLength(2);
+      expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
     }
   };
   await runQaGatewayFixture(

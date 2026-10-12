@@ -211,6 +211,7 @@ describe("worker environment service", () => {
       now: () => support.testState.nowMs,
     });
     const dispatch = createProviderReplayDispatch({
+      initialPlacements: placements.list(),
       placements,
       environments: workerService,
     });

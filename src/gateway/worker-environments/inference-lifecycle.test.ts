@@ -16,8 +16,8 @@ import {
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "../server-methods/chat.abort.test-helpers.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import {
   accept,
   CANCEL,

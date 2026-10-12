@@ -1,3 +1,4 @@
+import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { For, createEffect, createMemo } from "solid-js";
 import type {
@@ -36,7 +37,7 @@ export function revealManualProvider(root: ParentNode): void {
 }
 
 type WebAwesomeSelectEvent = Parameters<
-  NonNullable<JSX.IntrinsicElements["wa-dropdown"]["onWa-select"]>
+  JSX.EventHandler<WaDropdown, CustomEvent<{ item: WaDropdownItem }>>
 >[0];
 
 function restoreProviderTriggerAfterHide(dropdown: HTMLElement) {
@@ -76,8 +77,7 @@ function handleManualProviderSelect(
   onChange: (providerId: string) => void,
 ): void {
   const item = event.detail.item;
-  // SAFETY: this handler is installed on the wa-dropdown host, which owns currentTarget.
-  const dropdown = event.currentTarget as WaDropdown;
+  const dropdown = event.currentTarget;
   const value = item.value;
   if (!value) {
     return;
