@@ -8,6 +8,7 @@ const enablePluginWithCapabilityConsent = vi.hoisted(() => vi.fn());
 const resolvePluginProvidersCore = vi.hoisted(() => vi.fn());
 const debug = vi.hoisted(() => vi.fn());
 
+// mock-isolation: The fixture supplies the inventory instead of discovering installed plugins.
 vi.mock("./manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot,
 }));
