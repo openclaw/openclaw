@@ -82,6 +82,7 @@ function createTransport(outputStdin: TestStdin, replacementStdin = createStdin(
 describe("local meeting realtime audio transport", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it.each([
@@ -137,6 +138,42 @@ describe("local meeting realtime audio transport", () => {
       "audio bridge command must not be empty",
     );
     expect(spawn).toHaveBeenCalledTimes(2);
+    await transport.stop();
+  });
+
+  it.each([
+    ["forward", 60_000],
+    ["backward", -60_000],
+  ] as const)("keeps the barge-in cooldown across a %s wall-clock jump", async (_, shiftMs) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-23T00:00:00.000Z"));
+    const output = createProcess({ stdin: createStdin(true) });
+    const input = createProcess({ stdout: new EventEmitter() });
+    const bargeIn = createProcess({ stdout: new EventEmitter() });
+    const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
+    spawn.mockReturnValueOnce(bargeIn);
+    const transport = createTransportWith({
+      bargeInCooldownMs: 1_000,
+      bargeInInputCommand: ["barge"],
+      bargeInPeakThreshold: 1,
+      bargeInRmsThreshold: 1,
+      spawn: spawn as never,
+    });
+    const onBargeIn = vi.fn(() => true);
+    transport.startBargeInMonitor?.(onBargeIn);
+    const loudAudio = Buffer.from([1, 0]);
+
+    bargeIn.stdout?.emit("data", loudAudio);
+    expect(onBargeIn).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + shiftMs);
+    bargeIn.stdout?.emit("data", loudAudio);
+    expect(onBargeIn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_001);
+    bargeIn.stdout?.emit("data", loudAudio);
+    expect(onBargeIn).toHaveBeenCalledTimes(2);
+
     await transport.stop();
   });
 
