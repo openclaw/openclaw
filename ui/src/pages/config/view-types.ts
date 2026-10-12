@@ -1,4 +1,4 @@
-import type { nothing, TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
@@ -18,7 +18,7 @@ import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/talk/input.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
-import type { TabIconViewProps } from "./view-tab-icon.ts";
+import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
@@ -73,7 +73,7 @@ type AppearancePreferences = Required<
     | "composerHoldToRecord"
   >
 > &
-  Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode">;
+  Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode" | "openLinksInControlUiBrowser">;
 
 export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   onAppearanceChange: (patch: Partial<AppearancePreferences>) => void;
@@ -102,10 +102,10 @@ export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
    *  schema section stays silent instead of claiming the page is empty. */
   embeddedEditor?: boolean;
   /** Control UI rows that belong to the active schema section but are not Gateway config. */
-  sectionPrelude?: TemplateResult;
+  sectionPrelude?: JSX.Element;
   showSectionDocs?: boolean;
   /** Curated content inside the active section; receives the canonical schema editor. */
-  renderSection?: (editor: TemplateResult | typeof nothing) => TemplateResult;
+  renderSection?: (editor: JSX.Element) => JSX.Element;
   formValue: Record<string, unknown> | null;
   activeSection: string | null;
   activeSubsection: string | null;

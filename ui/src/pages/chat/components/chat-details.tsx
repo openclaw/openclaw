@@ -86,11 +86,12 @@ export const ChatDetails = defineSolidBridge<Props>(
       }
     };
     const escape = (event: KeyboardEvent) => {
+      // Dropdown properties change before Lit reflects their attributes.
       if (
         event.key === "Escape" &&
         opened() &&
         !event.defaultPrevented &&
-        !host.querySelector("wa-dropdown[open]")
+        ![...host.querySelectorAll<WaDropdown>("wa-dropdown")].some((menu) => menu.open)
       ) {
         event.preventDefault();
         close(true);

@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 // Control UI tests cover schema composition that changes field requiredness.
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 

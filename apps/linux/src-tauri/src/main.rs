@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod bundled_runtime;
 mod chrome_setup;
 mod cli;
@@ -32,7 +32,7 @@ mod pending_approvals;
 mod quickchat;
 mod quickchat_widgets;
 mod remote_gateway;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod runtime_action;
 mod tray;
 mod updater;
@@ -822,7 +822,7 @@ impl DesktopState {
         if explicit_local {
             self.inner.remote_tunnels.clear();
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let ready = {
             // Startup, app updates, and reconnects only observe the existing service.
             let snapshot = gateway::status(&cli)?;
@@ -842,7 +842,7 @@ impl DesktopState {
             }
             gateway::dashboard(&cli, snapshot)?
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let ready = gateway::ensure_ready(&cli)?;
         self.finish_local_connection(app, cli, ready)
     }
@@ -858,7 +858,7 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let cli = {
             let runtime = bundled_runtime::seed(app)?;
             let cli = match OpenClawCli::discover() {
@@ -883,7 +883,7 @@ impl DesktopState {
             })?;
             cli
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let cli = {
             installer::install(app, channel, false)?;
             let cli = OpenClawCli::discover().map_err(|error| {
@@ -923,10 +923,10 @@ impl DesktopState {
                     .to_string()
             })?
             .mark_onboarding_pending();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         let readiness =
             gateway::status(&cli).and_then(|snapshot| gateway::dashboard(&cli, snapshot));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let readiness = gateway::ensure_ready(&cli);
         let ready = readiness.map_err(|error| {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
@@ -963,7 +963,7 @@ impl DesktopState {
         self.finish_local_connection(app, cli, ready)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn runtime_operation_is_current(&self, app: &AppHandle, selection: u64) -> bool {
         !self.is_quitting()
             && app
@@ -1049,7 +1049,7 @@ impl DesktopState {
             }
             Ok(())
         })?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Ok(cli) = self.resolve_cli() {
             let snapshot = gateway::status(&cli)?;
             if !snapshot.installed && !snapshot.reachable {
