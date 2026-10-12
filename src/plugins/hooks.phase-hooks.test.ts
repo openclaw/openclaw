@@ -589,6 +589,7 @@ it.each([
   { higher: ["local/backup"], lower: [], priority: 10, expected: ["local/backup"] },
   { higher: undefined, lower: ["local/backup"], priority: 10, expected: ["local/backup"] },
   { higher: [], lower: ["local/first"], priority: 0, expected: ["local/first"] },
+  { higher: null as unknown as string[], lower: ["local/backup"], priority: 10, expected: [] },
 ])(
   "keeps the first defined routing overrides after a broken plugin ($priority)",
   async ({ higher, lower, priority, expected }) => {

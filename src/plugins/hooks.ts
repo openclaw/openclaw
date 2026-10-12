@@ -336,7 +336,8 @@ export function createHookRunner(
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
 
-  const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
+  // Hook list overrides restrict what the run may use, so a malformed list closes it.
+  const normalizeHookList = (value: unknown): string[] | undefined => {
     if (value === undefined) {
       return undefined;
     }
@@ -344,13 +345,13 @@ export function createHookRunner(
   };
 
   const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
-    const normalized = normalizeHookToolsAllow(value);
+    const normalized = normalizeHookList(value);
     if (normalized === undefined) {
       return [];
     }
     const attached = Array.isArray(value) ? readToolAllowlistIntersection(value) : undefined;
     return attached
-      ? attached.map((restriction) => normalizeHookToolsAllow(restriction) ?? [])
+      ? attached.map((restriction) => normalizeHookList(restriction) ?? [])
       : [normalized];
   };
 
@@ -1103,7 +1104,7 @@ export function createHookRunner(
         // Keep the first defined override so higher-priority hooks win, including [].
         modelOverride: acc?.modelOverride ?? next.modelOverride,
         providerOverride: acc?.providerOverride ?? next.providerOverride,
-        fallbacksOverride: acc?.fallbacksOverride ?? next.fallbacksOverride,
+        fallbacksOverride: acc?.fallbacksOverride ?? normalizeHookList(next.fallbacksOverride),
       }),
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
