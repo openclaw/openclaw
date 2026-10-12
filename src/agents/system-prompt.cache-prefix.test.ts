@@ -158,7 +158,7 @@ describe("installed skill prompt guidance", () => {
       expect(prompt).not.toContain("<location>");
       expect(prompt).not.toContain(demo.filePath);
       expect(prompt).not.toContain("Before work involving files");
-      expect(render([...skills].reverse())).toBe(prompt);
+      expect(render(skills.toReversed())).toBe(prompt);
       expect(render(skills)).toBe(prompt);
     },
   );
