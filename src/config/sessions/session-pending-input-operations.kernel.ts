@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

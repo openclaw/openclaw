@@ -11,7 +11,7 @@ const loadI18n = useLazyEnglishTest();
 
 describe("Apps English loading", () => {
   it.each([
-    { surface: "Apps", load: () => import("../pages/apps/view.ts") },
+    { surface: "Apps", load: () => import("../pages/apps/view.tsx") },
     {
       surface: "command palette",
       load: () => import("../components/command-palette-catalog-search.ts"),

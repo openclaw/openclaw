@@ -24,9 +24,8 @@ export function createIncognitoSessionClaims(owner: {
   readSnapshotRevision(this: void): number;
   hasUnsettledFacts(this: void): boolean;
   entries: ReadonlyMap<string, IncognitoSessionFacts>;
-  withGrant<T>(this: void, operation: () => T): T;
 }) {
-  const { identity, current, readTopologyRevision, withGrant } = owner;
+  const { identity, current, readTopologyRevision } = owner;
   const claim = (
     sessionKey: string,
     assertBorrowed: () => void,
@@ -50,17 +49,15 @@ export function createIncognitoSessionClaims(owner: {
       sessionKey,
       assertCurrent,
       authorize(authority, stage) {
-        withGrant(() => {
-          authority.assertCurrent();
-          assertCurrent();
-          const facts = current(sessionKey) ?? (!observed ? absent : undefined);
-          if (!facts) {
-            throw new Error("Incognito session facts are unavailable");
-          }
-          authorizeSessionFacts(authority, stage, facts);
-          authority.assertCurrent();
-          assertCurrent();
-        });
+        authority.assertCurrent();
+        assertCurrent();
+        const facts = current(sessionKey) ?? (!observed ? absent : undefined);
+        if (!facts) {
+          throw new Error("Incognito session facts are unavailable");
+        }
+        authorizeSessionFacts(authority, stage, facts);
+        authority.assertCurrent();
+        assertCurrent();
       },
     };
   };
@@ -208,7 +205,7 @@ export function retainIncognitoSessionAuthority(
 }
 
 /** Grant-local facts never escape their command's synchronous authority callback. */
-export function createIncognitoSessionGrants(withGrant: <T>(operation: () => T) => T) {
+export function createIncognitoSessionGrants() {
   type CreationGrant = {
     facts: IncognitoSessionFacts;
     operation: NonNullable<IncognitoSessionAuthority["entryCreation"]>;
@@ -222,21 +219,19 @@ export function createIncognitoSessionGrants(withGrant: <T>(operation: () => T) 
       let commandPreimage: readonly IncognitoSessionFacts[] | undefined;
       return {
         run<T>(operation: () => T): T {
-          return withGrant(() => {
-            const previousCreation = creation;
-            const previousPreimage = preimage;
-            const previousSources = sourceFacts;
-            creation = commandCreation;
-            preimage = commandPreimage;
-            sourceFacts = commandPreimage;
-            try {
-              return operation();
-            } finally {
-              creation = previousCreation;
-              preimage = previousPreimage;
-              sourceFacts = previousSources;
-            }
-          });
+          const previousCreation = creation;
+          const previousPreimage = preimage;
+          const previousSources = sourceFacts;
+          creation = commandCreation;
+          preimage = commandPreimage;
+          sourceFacts = commandPreimage;
+          try {
+            return operation();
+          } finally {
+            creation = previousCreation;
+            preimage = previousPreimage;
+            sourceFacts = previousSources;
+          }
         },
         capture(stage: string, facts: IncognitoSessionFacts[]) {
           if (
@@ -311,7 +306,6 @@ export function bindIncognitoSessionStoreReads(
 
 /** History reads and retained completion fences share the actor's FIFO publication owner. */
 export function bindIncognitoSessionHistory(owner: {
-  assertOutsideGrant(): void;
   assertBorrowed(): void;
   assertActorCurrent(): void;
   current(sessionKey: string): IncognitoSessionFacts | undefined;
@@ -333,7 +327,6 @@ export function bindIncognitoSessionHistory(owner: {
       >,
       signal?: AbortSignal,
     ): Promise<{ assertCurrent(): void; release(): Promise<void> }> {
-      owner.assertOutsideGrant();
       owner.assertBorrowed();
       const input = { ...structuredClone(target), sourceId: randomUUID() };
       const done = createDeferredCore();
