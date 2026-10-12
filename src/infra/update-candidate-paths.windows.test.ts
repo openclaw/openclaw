@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { isPathInside } from "./path-guards.js";
 import {
+  resolveUpdateCandidateAvatar,
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
@@ -84,5 +85,35 @@ describe("Windows extended-length candidate state projection", () => {
     expect(projected).toBe(path.join(CANARY_ROOT, AGENT_RELATIVE));
     expect(path.relative(CANARY_ROOT, projected)).toBe(AGENT_RELATIVE);
     expectSafeProjection(projected);
+  });
+});
+
+describe("Windows candidate avatar projection", () => {
+  const workspace = String.raw`C:\Users\me\clawd`;
+
+  it("resolves drive-less roots against the workspace drive, not the process drive", () => {
+    vi.spyOn(process, "cwd").mockReturnValue(String.raw`D:\Other`);
+    expect(resolveUpdateCandidateAvatar(workspace, String.raw`\Users\me\clawd\a.png`)).toBe(
+      String.raw`.\a.png`,
+    );
+  });
+
+  it.each([
+    [namespaced(workspace), path.join(workspace, "a.png")],
+    [workspace, namespaced(path.join(workspace, "a.png"))],
+  ])("rebases workspace namespace aliases (%s)", (sourceWorkspace, avatar) => {
+    expect(resolveUpdateCandidateAvatar(sourceWorkspace, avatar)).toBe(String.raw`.\a.png`);
+  });
+
+  it("accepts relative aliases that resolve back into the original workspace", () => {
+    expect(resolveUpdateCandidateAvatar(workspace, String.raw`..\clawd\a.png`)).toBe(
+      String.raw`.\a.png`,
+    );
+  });
+
+  it("keeps escaped avatars outside the relocated workspace", () => {
+    expect(resolveUpdateCandidateAvatar(workspace, String.raw`\Users\me\main\a.png`)).toBe(
+      String.raw`C:\Users\me\main\a.png`,
+    );
   });
 });
