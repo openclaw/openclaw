@@ -197,7 +197,9 @@ export class SystemAgentChatEngine {
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     const completed = this.wizard.decorateReply(reply);
-    this.history.push({ role: "user", text: userHistoryText });
+    if (!reply.policyBlocked) {
+      this.history.push({ role: "user", text: userHistoryText });
+    }
     if (completed.text) {
       this.history.push({ role: "assistant", text: completed.text });
     }

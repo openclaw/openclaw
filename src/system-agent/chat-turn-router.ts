@@ -387,6 +387,10 @@ export class ChatTurnRouter {
     if (!loopReply?.text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
+    if (loopReply.policyBlocked) {
+      await this.callbacks.requireVerifiedInference();
+      return { text: loopReply.text, action: "none", policyBlocked: true };
+    }
     this.proposalResolution = undefined;
     if (loopReply.directive) {
       this.clearPendingProposals();
