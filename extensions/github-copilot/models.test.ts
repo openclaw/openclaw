@@ -753,6 +753,46 @@ describe("fetchCopilotModelCatalog", () => {
     });
   });
 
+  it.each<[unknown, string, string, string]>([
+    [undefined, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [null, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [[], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [{ unknown: true }, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/future-api"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [[42, " /v1/chat/completions/ "], "OpenAI", "endpoint-fixture", "openai-completions"],
+    [["/chat/completions", "/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/responses", "/v1/messages"], "Anthropic", "endpoint-fixture", "anthropic-messages"],
+    [["/v1/messages"], "OpenAI", "endpoint-fixture", "anthropic-messages"],
+    [["/v1/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/responses"], "Google", "gemini-endpoint-fixture", "openai-responses"],
+    [["/chat/completions"], "Anthropic", "claude-sonnet-4.5", "openai-completions"],
+    [["/responses"], "Anthropic", "claude-sonnet-4.5", "openai-responses"],
+  ])("uses advertised transport %s for %s/%s (%s)", async (endpoints, vendor, id, api) => {
+    const out = await fetchSelectionFixture([
+      {
+        id,
+        vendor,
+        supported_endpoints: endpoints,
+        capabilities: {
+          type: "chat",
+          limits: { max_context_window_tokens: 1_048_576, max_prompt_tokens: 917_504 },
+        },
+      },
+    ]);
+    const model = expectDefined(out[0], "discovered endpoint fixture");
+    expect(model).toMatchObject({ api, contextWindow: 1_048_576, contextTokens: 917_504 });
+    if (api === "openai-completions") {
+      expect(model.compat).toEqual({
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: "max_tokens",
+      });
+    } else {
+      expect(model.compat?.maxTokensField).toBeUndefined();
+      expect(model.compat?.supportsEagerToolInputStreaming).toBeUndefined();
+    }
+  });
   it("routes each listed model through an endpoint the account lists", async () => {
     const models = await fetchSelectionFixture([
       {
