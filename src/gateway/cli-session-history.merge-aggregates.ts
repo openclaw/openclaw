@@ -12,7 +12,7 @@ import {
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
 
-export type ComparableHistoryMessage = {
+type ComparableHistoryMessage = {
   message: unknown;
   order: number;
   externalIdentityKey?: string;
@@ -81,16 +81,6 @@ export function createLocalTurnBucket(turns: readonly LocalTurn[]): LocalTurnBuc
     openFrom: suffixCounts(turns, (turn) => turn.externalIdentity !== true),
     visits: 0,
   };
-}
-
-export function compareHistoryMessages(
-  a: ComparableHistoryMessage,
-  b: ComparableHistoryMessage,
-): number {
-  if (a.timestamp !== undefined && b.timestamp !== undefined && a.timestamp !== b.timestamp) {
-    return a.timestamp - b.timestamp;
-  }
-  return a.order - b.order;
 }
 
 // The durable reply keeps its key on the row; older transcript metadata nests it.
@@ -171,7 +161,7 @@ function findCoveringSegmentRun(
 // nothing but their turn (the CLI transcript never sees the runId), and turn
 // membership comes from each source's own order, never from timestamps.
 // Each segment stands in for one aggregate at most.
-export function dropCoveredCliAssistantAggregates(
+function dropCoveredCliAssistantAggregates(
   entries: ComparableHistoryMessage[],
 ): ComparableHistoryMessage[] {
   const segmentsByTurn = new Map<number, CliAssistantSegment[]>();

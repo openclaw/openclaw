@@ -154,8 +154,9 @@ const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|tsx?)|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
+// Knip configs are TypeScript, but the core and script Oxlint projects do not include them.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/knip(?:\.[^/]+)?\.config\.ts$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =

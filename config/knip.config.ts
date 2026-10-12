@@ -753,6 +753,9 @@ const config = {
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // Alignment helpers are covered-aggregate test seams. Production reaches them
+    // through createCliAssistantCoverage; the full-tree scan still audits named exports.
+    "src/gateway/cli-session-history.merge-aggregates.ts": ["exports", "types"],
     // Focused startup tests consume this explicit seam; production imports only the bootstrap.
     "src/gateway/server-startup-bootstrap.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
