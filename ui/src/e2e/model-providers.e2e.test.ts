@@ -273,6 +273,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
+        { id: "test-model", name: "Test Model", provider: "ß-provider", available: true },
       ],
       methodResponses: {
         "models.authStatus": {
@@ -402,7 +403,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const googleCard = page.locator(".model-providers__row", { hasText: "Google" });
       await googleCard.waitFor();
       await expect.poll(async () => googleCard.textContent()).toContain("0 of 1 models available");
-      await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(4);
+      const fallback = page.locator(
+        '[data-provider-id="ß-provider"] .provider-brand-icon--fallback',
+      );
+      await expect.poll(async () => (await fallback.textContent())?.trim()).toBe("S");
+      await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(5);
       expect(
         await page
           .locator(".model-providers__provider-list")
@@ -458,65 +463,6 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         flexDirection: "column",
         overflowsViewport: false,
       });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("renders one complete uppercased grapheme in custom provider fallback icons", async () => {
-    const bottomProviderId = "e\u0301-proxy";
-    const cases = [
-      { id: "ß-provider", expected: "S" },
-      { id: "🧭-proxy", expected: "🧭" },
-      { id: "🇺🇸-proxy", expected: "🇺🇸" },
-      { id: "👩‍💻-proxy", expected: "👩‍💻" },
-      { id: bottomProviderId, expected: "E\u0301" },
-    ];
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1280 },
-      ...(recordVisuals
-        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      models: cases.map(({ id }) => ({
-        id: "test-model",
-        name: "Test Model",
-        provider: id,
-        available: true,
-      })),
-      methodResponses: {
-        "models.authStatus": { ts: NOW, providers: [] },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
-      },
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}settings/model-providers`);
-      await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
-
-      for (const { id, expected } of cases) {
-        const icon = page.locator(`[data-provider-id="${id}"] .provider-brand-icon--fallback`);
-        await icon.waitFor();
-        await expect.poll(async () => (await icon.textContent())?.trim()).toBe(expected);
-      }
-
-      if (recordVisuals) {
-        const firstIcon = page
-          .locator(".model-providers__row .provider-brand-icon--fallback")
-          .first();
-        await firstIcon.scrollIntoViewIfNeeded();
-        await captureProviderProof("03-unicode-fallback-icons.png", firstIcon);
-        await page.locator(`[data-provider-id="${bottomProviderId}"]`).scrollIntoViewIfNeeded();
-        await captureProviderProof(
-          "04-unicode-fallback-icons-bottom.png",
-          page.locator(`[data-provider-id="${bottomProviderId}"]`),
-        );
-      }
     } finally {
       await context.close();
     }

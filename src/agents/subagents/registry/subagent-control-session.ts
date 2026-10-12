@@ -14,7 +14,9 @@ import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentKillSession = {
   agentId: string;
@@ -26,6 +28,49 @@ export type SubagentKillSession = {
   release: () => void | Promise<void>;
 };
 
+export function prepareSubagentKillSessionReads(
+  preparations: Array<SubagentKillSession["prepareRead"] | undefined>,
+  assertCurrent: () => void,
+): Promise<void> | undefined {
+  const failures: unknown[] = [];
+  const publications = preparations.flatMap((prepare) => {
+    try {
+      const publication = prepare?.();
+      return publication ? [publication] : [];
+    } catch (error) {
+      if (!isSessionDeliveryGenerationRevokedError(error)) {
+        failures.push(error);
+      }
+      return [];
+    }
+  });
+  const throwFailures = () => {
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Subagent publication readiness failed");
+    }
+  };
+  if (publications.length === 0) {
+    throwFailures();
+    return undefined;
+  }
+  return Promise.allSettled(publications).then((results) => {
+    try {
+      assertCurrent();
+    } catch (error) {
+      failures.push(error);
+    }
+    for (const result of results) {
+      if (result.status === "rejected" && !isSessionDeliveryGenerationRevokedError(result.reason)) {
+        failures.push(result.reason);
+      }
+    }
+    throwFailures();
+  });
+}
+
 /** Retain the original session generation before native cancellation can yield. */
 export async function prepareSubagentKillSession(
   cfg: OpenClawConfig,
@@ -33,6 +78,8 @@ export async function prepareSubagentKillSession(
   assertOwner: () => void,
   expected?: AgentRunSessionTarget,
   childAgentId?: string,
+  original?: SubagentRunRecord["childSessionIdentity"],
+  requesterOwnedRun?: SubagentRunRecord,
 ): Promise<SubagentKillSession> {
   const childOwner = resolveSubagentChildSessionOwner(
     { childSessionKey: sessionKey, childAgentId },
@@ -42,6 +89,40 @@ export async function prepareSubagentKillSession(
   const env = cloneEnvWithPlatformSemantics(process.env);
   const selected = expected?.sessionKey === sessionKey ? { ...expected } : undefined;
   const storePath = selected?.storePath ?? childOwner.storePath;
+  const taskAuthority = requesterOwnedRun && resolveSubagentChildAuthority(requesterOwnedRun);
+  const prepareLegacySession = (
+    currentSession?: Pick<SessionEntry, "sessionId">,
+  ): SubagentKillSession | undefined => {
+    if (
+      requesterOwnedRun?.childSessionKey !== sessionKey ||
+      taskAuthority?.status !== "legacy-unverified" ||
+      taskAuthority.childAgentId !== agentId
+    ) {
+      return undefined;
+    }
+    if (resolveSubagentChildAuthority(requesterOwnedRun, currentSession).status === "mismatch") {
+      throw new Error(
+        "Subagent original session incarnation is unresolved or changed; no child work was changed.",
+      );
+    }
+    assertOwner();
+    return {
+      agentId,
+      storePath,
+      assertCurrent: assertOwner,
+      prepareRead: () => undefined,
+      withPublication: (run) => run(),
+      release: () => {},
+    };
+  };
+  const legacySession = !requesterOwnedRun?.childSessionIdentity?.sessionId
+    ? prepareLegacySession()
+    : selected?.sessionId
+      ? prepareLegacySession({ sessionId: selected.sessionId })
+      : undefined;
+  if (legacySession) {
+    return legacySession;
+  }
   let releaseLifetime: (() => void) | undefined;
   const release = () => {
     releaseLifetime?.();
@@ -55,11 +136,34 @@ export async function prepareSubagentKillSession(
           throw read.error;
         }
         const entry = read.value;
+        // An absent child row is missing evidence, not a conflicting incarnation.
+        const readLegacySession = prepareLegacySession(entry);
+        if (readLegacySession) {
+          return readLegacySession;
+        }
+        if (
+          resolveSubagentChildAuthority(
+            { childSessionKey: sessionKey, childAgentId: agentId, childSessionIdentity: original },
+            entry,
+          ).status !== "verified"
+        ) {
+          throw new Error(
+            "Subagent original session incarnation is unresolved or changed; no child work was changed.",
+          );
+        }
         if (
           selected?.sessionId &&
-          (entry?.sessionId !== selected.sessionId ||
-            (selected.expectedLifecycleRevision !== undefined &&
-              entry?.lifecycleRevision !== selected.expectedLifecycleRevision))
+          resolveSubagentChildAuthority(
+            {
+              childSessionKey: sessionKey,
+              childAgentId: agentId,
+              childSessionIdentity: {
+                sessionId: selected.sessionId,
+                lifecycleRevision: selected.expectedLifecycleRevision,
+              },
+            },
+            entry ?? null,
+          ).status !== "verified"
         ) {
           throw new Error("Subagent session changed during cancellation preparation");
         }

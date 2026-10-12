@@ -274,7 +274,6 @@ export type CronExecutionIdentityAdmission = {
   ingress: ExecutionIdentityAdmissionFacts["ingress"];
   invoker?: ExecutionIdentityAdmissionFacts["invoker"];
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
-  onExecutionStarted?: () => void | Promise<void>;
 };
 
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {

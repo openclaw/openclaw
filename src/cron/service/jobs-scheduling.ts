@@ -9,7 +9,6 @@ import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
-import { CRON_STUCK_RUN_MS } from "../store/run-receipt-store.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
@@ -432,14 +431,12 @@ export function recordScheduleComputeError(params: {
 function normalizeJobTickState(params: {
   state: CronJobPolicyContext;
   job: CronJob;
-  nowMs: number;
   ownership: CronScheduleOwnership;
 }): {
   changed: boolean;
   skip: boolean;
 } {
-  const { state, job, nowMs, ownership } = params;
-  const { log } = state.deps;
+  const { job, ownership } = params;
   let changed = false;
 
   if (!job.state) {
@@ -493,35 +490,6 @@ function normalizeJobTickState(params: {
   }
 
   changed = clearInvalidForcePreservedNextRun(job) || changed;
-
-  const queuedAt = job.state.queuedAtMs;
-  if (
-    typeof queuedAt === "number" &&
-    Math.abs(nowMs - queuedAt) > CRON_STUCK_RUN_MS &&
-    !ownsCronRunMarker(ownership, job.id, queuedAt)
-  ) {
-    log.warn({ jobId: job.id, queuedAtMs: queuedAt }, "cron: clearing stuck queued marker");
-    job.state.queuedAtMs = undefined;
-    changed = true;
-  }
-
-  const runningAt = job.state.runningAtMs;
-  if (
-    typeof runningAt === "number" &&
-    Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
-    !ownership.isJobActive(job.id) &&
-    !ownsCronRunMarker(ownership, job.id, runningAt)
-  ) {
-    log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
-    Object.assign(job.state, { runningAtMs: undefined, runningReceiptId: undefined });
-    delete job.state.runningScheduleChangeId;
-    changed = true;
-    const nextRun = job.state.nextRunAtMs;
-    const lastRun = job.state.lastRunAtMs;
-    const alreadyExecutedSlot =
-      hasScheduledNextRunAtMs(nextRun) && isFiniteTimestamp(lastRun) && lastRun >= nextRun;
-    return { changed, skip: !alreadyExecutedSlot };
-  }
 
   return { changed, skip: false };
 }
@@ -634,7 +602,7 @@ export function recomputeSingleJobForMaintenance(
   ownership: CronScheduleOwnership,
 ): boolean {
   const now = opts.nowMs ?? state.deps.nowMs();
-  const tick = normalizeJobTickState({ state, job, nowMs: now, ownership });
+  const tick = normalizeJobTickState({ state, job, ownership });
   let changed = tick.changed;
   if (tick.skip) {
     return changed;

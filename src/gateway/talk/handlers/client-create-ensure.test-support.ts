@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
@@ -24,8 +23,8 @@ import type { SqliteWorkerAdmissionRequest } from "../../../infra/sqlite-worker-
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { setDisplayName, setUserProfileRole } from "../../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
@@ -60,6 +59,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const fixture = harness.configureProvider(async () => browserSession);
       const profile = ensureProfileForEmail("voice-entry-owner@example.test");
       setUserProfileRole(profile.id, "write");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       Object.assign(fixture.client, sharingPolicyClient({ user: profile.id }));
       const cfg = { ...rolePolicyConfig(), ...fixture.context.getRuntimeConfig() };
       fixture.context.getRuntimeConfig = () => cfg;
@@ -125,16 +125,17 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
   );
 
   it.each([
-    { change: "role", phase: "publication", writer: "foreign" },
-    { change: "display", phase: "publication", writer: "foreign" },
-    { change: "role", phase: "preparation", writer: "owner" },
+    { change: "role", phase: "publication" },
+    { change: "display", phase: "publication" },
+    { change: "role", phase: "preparation" },
   ] as const)(
-    "rechecks a $writer profile $change commit after entry $phase",
+    "preserves voice admission after a profile $change commit during entry $phase",
     async ({ change, phase }) => {
       const key = `agent:main:entry-profile-${change}-${phase}`;
       const fixture = harness.configureProvider(async () => browserSession);
       const profile = ensureProfileForEmail("voice-entry-profile@example.test");
       setUserProfileRole(profile.id, "write");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       Object.assign(fixture.client, sharingPolicyClient({ user: profile.id }));
       const policy = rolePolicyConfig();
       policy.gateway!.roles!.definitions.view!.agents = [];
@@ -143,24 +144,12 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
       let changed = false;
       const changeProfile = () => {
-        if (phase === "preparation") {
+        if (change === "role") {
           setUserProfileRole(profile.id, "view");
-          changed = true;
-          return;
+        } else {
+          setDisplayName(profile.id, "Changed display");
         }
-        const peer = new DatabaseSync(resolveOpenClawStateSqlitePath());
-        try {
-          peer
-            .prepare(
-              change === "role"
-                ? "UPDATE user_profiles SET role = 'view' WHERE id = ?"
-                : "UPDATE user_profiles SET display_name = 'Changed display' WHERE id = ?",
-            )
-            .run(profile.id);
-          changed = true;
-        } finally {
-          peer.close();
-        }
+        changed = true;
       };
       const prepare = sharingGrants.prepareSessionSharingWorkerGrant;
       const creation =

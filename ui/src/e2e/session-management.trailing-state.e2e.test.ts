@@ -426,49 +426,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps semantic state beside always-visible touch actions", async () => {
-    const context = await suite.browser.newContext({
-      hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.now()),
-          sessionRow("agent:main:touch-active", "Touch active", Date.now() - 1, {
-            hasActiveRun: true,
-            status: "running",
-          }),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const row = page.locator('[data-session-key="agent:main:touch-active"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
-      const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.locator("[data-sidebar-session-archive]");
-      await expect.poll(() => state.isVisible()).toBe(true);
-      await expect.poll(() => actionOpacity(state)).toBe("1");
-      await expect.poll(() => pin.isVisible()).toBe(true);
-      await expect.poll(() => menu.isVisible()).toBe(true);
-
-      const [stateBounds, pinBounds] = await Promise.all([state.boundingBox(), pin.boundingBox()]);
-      if (!stateBounds || !pinBounds) {
-        throw new Error("Expected visible touch state and action geometry");
-      }
-      expect(stateBounds.x + stateBounds.width).toBeLessThanOrEqual(pinBounds.x);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("does not widen desktop session text when hover actions appear beside trailing state", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

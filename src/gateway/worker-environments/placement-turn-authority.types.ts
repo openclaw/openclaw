@@ -72,4 +72,5 @@ export type PlacementAuthorityOwner = {
   workspaceResults: Map<string, WorkspaceResultFacts>;
   projections: Map<string, WorkerSessionPlacementReadResult>;
   preservation?: WorkerSessionPlacementRecord[];
+  recoveryCandidatesEmpty?: true;
 };

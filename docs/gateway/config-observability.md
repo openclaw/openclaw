@@ -89,8 +89,8 @@ writer is best-effort, not a lossless compliance archive.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
-- `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** only the default string regex list for log and transcript output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Tool payload redaction is separate and always merges your patterns with the default string list.
-- Redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files; the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
+- `redactPatterns`: regexes for best-effort masking of console output, file logs, diagnostic exports, and OTLP log records. Setting this **replaces** only the default string regex list for log output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Diagnostic helpers merge your patterns with the default string list. Tool arguments, tool results, and session transcript text are not secret-masked.
+- Log and diagnostic redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files. Configuration snapshots, audit output, command-line diagnostics, and credential-bearing URLs retain their masking.
 
 ---
 

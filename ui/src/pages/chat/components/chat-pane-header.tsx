@@ -306,7 +306,7 @@ export function canRevealSessionWorkspace(params: {
   );
 }
 
-export function ChatPaneHeader(props: ChatPaneHeaderProps) {
+function ChatPaneHeader(props: ChatPaneHeaderProps) {
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   const hasSharingControl = () =>
     props.sharingControl !== undefined && props.sharingControl !== emptyLegacyContent;

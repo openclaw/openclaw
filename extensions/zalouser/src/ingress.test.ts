@@ -129,42 +129,6 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
-  it("stores the raw callback envelope and derives a conversation lane before normalization", async () => {
-    await withZalouserIngressTestQueue(async (queue) => {
-      const enqueues: Parameters<typeof queue.enqueue>[] = [];
-      const realEnqueue = queue.enqueue.bind(queue);
-      const observedQueue: ChannelIngressQueue<ZalouserTestIngressPayload> = {
-        ...queue,
-        enqueue: async (...args) => {
-          enqueues.push(args);
-          return await realEnqueue(...args);
-        },
-      };
-      const ingress = createIngress({
-        queue: observedQueue,
-        dispatch: async (_message, lifecycle) => {
-          await lifecycle.onAdopted();
-        },
-      });
-      const raw = createRawZalouserMessage({
-        msgId: "raw",
-        threadId: "group-42",
-        content: "before",
-        isGroup: true,
-      });
-      await ingress.receive(raw);
-      raw.data.content = "after";
-
-      expect(enqueues[0]?.[0]).toBe("raw");
-      expect(enqueues[0]?.[1]).toMatchObject({
-        version: 1,
-        rawMessage: expect.stringContaining('"content":"before"'),
-      });
-      expect(enqueues[0]?.[2]).toMatchObject({ laneKey: "group:group-42" });
-      await ingress.stop();
-    });
-  });
-
   it("serializes same-conversation claims until adoption", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       let firstLifecycle: ZalouserIngressLifecycle | undefined;

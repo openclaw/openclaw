@@ -402,7 +402,7 @@ test.each(mentionCreationOwners)(
           "sessions.create",
           {
             agentId,
-            message: "@Bob review this",
+            message: "@Bob review this: API_TOKEN = computeToken()",
             mentions: [{ profileId: bob.id, start: 0, end: 4 }],
           },
           { client: sender, context, isWebchatConnect: () => true },
@@ -420,7 +420,7 @@ test.each(mentionCreationOwners)(
                   senderProfileId: alice.id,
                   sessionKey: key,
                   agentId,
-                  excerpt: "@Bob review this",
+                  excerpt: "@Bob review this: API_TOKEN = computeToken()",
                 },
               ],
             },

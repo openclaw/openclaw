@@ -12,9 +12,9 @@ import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
 import { maintainCronRunHistory } from "./store/run-history.js";
 import { readCronRunRecordsInDatabase } from "./store/run-history.kernel.js";
-import { releaseLocalCronRunReceiptOwnership } from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
+  finishCronRunReceiptAsync,
   makeCronReceiptJob,
 } from "./store/run-receipt-store.test-support.js";
 
@@ -43,7 +43,6 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
       vi.useFakeTimers();
       vi.setSystemTime(now);
       const gatewayScheduler = createTestGatewayScheduler("fake-timers");
-      let receipt: ReturnType<typeof claimCronRunReceiptForTest> | undefined;
       try {
         await state.writeConfig({
           cron: { enabled: false },
@@ -52,7 +51,7 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
         const storePath = state.statePath("cron/jobs.json");
         const job = makeCronReceiptJob("receipt-owned", "main");
         await saveCronStore(storePath, { version: 1, jobs: [job] });
-        receipt = claimCronRunReceiptForTest(storePath, job, now - 10 * DAY);
+        const receipt = claimCronRunReceiptForTest(storePath, job, now - 10 * DAY);
         for (const [id, status] of [
           ["orphan", "running"],
           ["queued", "queued"],
@@ -95,17 +94,17 @@ it("runs Gateway retention with scheduling disabled and reconciles only unowned 
           ),
         ).toEqual({ status: "running" });
         clearCronJobActive("local-owned", local);
-        releaseLocalCronRunReceiptOwnership(receipt);
-        receipt = undefined;
+        await finishCronRunReceiptAsync({
+          handle: receipt,
+          status: "interrupted",
+          finishedAtMs: now + 5_000,
+        });
         await maintainCronRunHistory(captureOpenClawStateWorkerContext(), () => {});
         expect(readHistory().find((row) => row.id === "receipt-owned")?.status).toBe("lost");
         expect(readHistory().find((row) => row.id === "local-owned")?.status).toBe("lost");
       } finally {
         await stopCronMaintenance();
         await gatewayScheduler.stop();
-        if (receipt) {
-          releaseLocalCronRunReceiptOwnership(receipt);
-        }
         resetCronActiveJobs();
         resetGatewayWorkAdmission();
         vi.useRealTimers();

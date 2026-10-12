@@ -2348,10 +2348,27 @@ jobs:
           fi
           requires_webkit="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
-          import { loadPatternListFromEnv, matchesVitestGlob } from "./test/vitest/vitest.pattern-file.ts";
-          const suite = "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts";
-          const include = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE");
-          process.stdout.write(String(existsSync(suite) && (!include || include.some((pattern) => matchesVitestGlob(suite, pattern)))));
+          import { resolve } from "node:path";
+          const suite = resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts");
+          let requiresWebkit = false;
+          if (existsSync(suite)) {
+            const { createVitest } = await import("vitest/node");
+            const vitest = await createVitest({
+              config: "test/vitest/vitest.ui-e2e.config.ts",
+              configLoader: "runner",
+              watch: false,
+              maxWorkers: Number(process.env.OPENCLAW_VITEST_MAX_WORKERS || 2),
+              shard: `${process.env.VITEST_SHARD_INDEX}/${process.env.VITEST_SHARD_COUNT}`,
+            });
+            try {
+              const sequencer = new vitest.config.sequence.sequencer(vitest);
+              const files = await sequencer.shard(await vitest.globTestSpecifications());
+              requiresWebkit = files.some((file) => file.moduleId === suite);
+            } finally {
+              await vitest.close();
+            }
+          }
+          process.stdout.write(String(requiresWebkit));
           NODE
           )"
           if [[ "$requires_webkit" == "true" ]]; then

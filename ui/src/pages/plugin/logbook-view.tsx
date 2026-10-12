@@ -196,7 +196,7 @@ function LogbookCard(props: {
             )}
           </Show>
           <Show when={props.card.detail}>
-            <p class="logbook-card__detail">{formatUiExternalText(props.card.detail)}</p>
+            <p class="logbook-card__detail">{props.card.detail.trim()}</p>
           </Show>
           <Show when={props.card.distractions.length > 0}>
             <div class="logbook-card__distractions">

@@ -6,6 +6,7 @@ import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
@@ -24,6 +25,7 @@ import {
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
 import * as maintenanceRuntime from "../config/sessions/store-maintenance-runtime.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -548,21 +550,31 @@ it("preserves source authority through transaction and commit grants", async () 
   ).toBeUndefined();
 });
 
-it.each([false, true])(
-  "retains prepared source custody and rechecks its worker rows (changed=%s)",
-  async (changed) => {
-    const scope = await create(`source-target-${changed}`);
-    const sourceScope = await create(`source-row-${changed}`);
+it.each([
+  { operation: "entry", changed: false },
+  { operation: "entry", changed: true },
+  { operation: "transcript", changed: false },
+  { operation: "transcript", changed: true },
+] as const)(
+  "retains prepared $operation source custody and rechecks its worker rows (changed=$changed)",
+  async ({ operation, changed }) => {
+    const sessionId = `source-target-${operation}-${changed}`;
+    const scope = { ...(await create(sessionId)), sessionId };
+    const sourceScope = await create(`source-row-${operation}-${changed}`);
+    let prepared = false;
     let released = false;
     const source = Object.assign(
       () => {
-        throw new Error("Prepared sources must not use the native callback");
+        if (operation === "entry" || prepared) {
+          throw new Error("Prepared sources must not use the native callback");
+        }
       },
       {
         async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
           const observed = await actor.sessions.read(authority, {
             sessionKey: sourceScope.sessionKey,
           });
+          prepared = true;
           return {
             assertCurrent() {
               expect(released).toBe(false);
@@ -592,8 +604,29 @@ it.each([false, true])(
         },
       },
     );
-    const work = withIncognitoSessionActor(actor, () =>
-      patchSessionEntryCore(
+    const work = withIncognitoSessionActor(actor, async () => {
+      if (operation === "transcript") {
+        return await withSessionTranscriptWriteAssertion(scope, source, () =>
+          withTranscriptWriteSequence(scope, async (write) => {
+            if (changed) {
+              await patchSessionEntryCore(sourceScope, () => ({ label: "changed" }));
+            }
+            const message = { role: "assistant", content: "accepted", idempotencyKey: "first" };
+            expect(await write.appendMessage({ message })).toMatchObject({
+              appended: true,
+            });
+            expect(await write.appendMessage({ message })).toMatchObject({
+              appended: false,
+            });
+            expect(
+              await write.appendMessage({ message: { ...message, idempotencyKey: "second" } }),
+            ).toMatchObject({ appended: true });
+            expect(released).toBe(false);
+            return { label: "accepted" };
+          }),
+        );
+      }
+      return await patchSessionEntryCore(
         scope,
         async () => {
           if (changed) {
@@ -607,17 +640,28 @@ it.each([false, true])(
             expect(released).toBe(false);
           },
         },
-      ),
-    );
+      );
+    });
     if (changed) {
       await expect(work).rejects.toThrow("prepared source changed");
     } else {
       await expect(work).resolves.toMatchObject({ label: "accepted" });
     }
     expect(released).toBe(true);
-    expect(
-      (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
-    ).toBe(changed ? undefined : "accepted");
+    if (operation === "entry") {
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
+      ).toBe(changed ? undefined : "accepted");
+    } else {
+      const events = await actor.sessions.transcript(authority, {
+        type: "session.lock.events",
+        input: { sessionKey: scope.sessionKey, sessionId, fence: {} },
+      });
+      assert(!("refusedOwnerSource" in events));
+      expect(events.events.filter((event) => readTranscriptEventMessage(event))).toHaveLength(
+        changed ? 0 : 2,
+      );
+    }
   },
 );
 

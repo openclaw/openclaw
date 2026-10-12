@@ -9,7 +9,7 @@ export class MarkdownBlocks {
   private observedRoot: HTMLElement | undefined;
   private scanPending = false;
   private active = true;
-  private connected = true;
+  private disposed = false;
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -19,7 +19,7 @@ export class MarkdownBlocks {
     typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver((entries) => {
-          if (!this.active || !this.connected) {
+          if (!this.active || this.disposed) {
             return;
           }
           const wrappers = new Set(
@@ -73,17 +73,9 @@ export class MarkdownBlocks {
     }
   }
 
-  setConnected(connected: boolean): void {
-    this.connected = connected;
-    if (connected) {
-      this.scheduleScan();
-    } else {
-      this.release();
-    }
-  }
-
   dispose(): void {
-    this.setConnected(false);
+    this.disposed = true;
+    this.release();
   }
 
   private release(): void {
@@ -99,15 +91,15 @@ export class MarkdownBlocks {
   }
 
   private scheduleScan(): void {
-    if (this.scanPending || !this.active || !this.connected) {
+    if (this.scanPending || !this.active || this.disposed) {
       return;
     }
     this.scanPending = true;
-    // Element directives commit before their children. Coalesce after the commit,
+    // Element refs can attach before their children commit. Coalesce after the commit,
     // and fence queued scans when the host is removed before the microtask runs.
     queueMicrotask(() => {
       this.scanPending = false;
-      if (this.active && this.connected && this.root?.isConnected) {
+      if (this.active && !this.disposed && this.root?.isConnected) {
         this.scan(this.root);
       }
     });
@@ -139,7 +131,7 @@ export class MarkdownBlocks {
         if (!wrapper.querySelector("openclaw-mermaid") && wrapper.querySelector("pre code")) {
           const isCurrent = () =>
             this.active &&
-            this.connected &&
+            !this.disposed &&
             this.root === root &&
             root.isConnected &&
             root.contains(wrapper);
@@ -176,7 +168,7 @@ export class MarkdownBlocks {
           expandButton.setAttribute("aria-controls", viewport.id);
         }
       }
-      // A reconnected host reuses initialized DOM but must reacquire observation.
+      // Retained DOM keeps its controls but must reacquire observation after showing.
       for (const node of [viewport, code]) {
         if (!this.observedNodes.has(node)) {
           this.observedNodes.add(node);

@@ -52,6 +52,7 @@ import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispa
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { holdMetadataThroughSubagentStop } from "./server.private-completion.metadata-overlap.test-support.js";
 import {
+  createPrivateCompletionRequest,
   readPrivateCompletionRecorder,
   registerSessionsSendPrivateCompletionTests,
 } from "./server.private-completion.sessions-send.test-support.js";
@@ -117,19 +118,8 @@ describe("private subagent completion processing receipts", () => {
       .db.prepare("SELECT * FROM session_pending_inputs WHERE session_id = ?")
       .all(sessionId);
   const transcript = () => sessionAccessor.loadTranscriptEventsSync(scope());
-  const request = (message = "Synthetic private child marker") => ({
-    sessionKey,
-    expectedExistingSessionId: sessionId,
-    idempotencyKey: runId,
-    message,
-    deliver: false,
-    sourceReplyDeliveryMode: "automatic",
-    inputProvenance: {
-      kind: "inter_session",
-      sourceTool: "subagent_announce",
-      sourceSessionKey: "agent:main:subagent:synthetic-child",
-    },
-  });
+  const request = (message?: string) =>
+    createPrivateCompletionRequest({ sessionKey, sessionId, runId, message });
   const dispatch = (message?: string, onAccepted?: () => void) =>
     dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", request(message), {
       privateCompletion: true,
@@ -723,6 +713,7 @@ describe("private subagent completion processing receipts", () => {
         agentId: "main",
         sessionKey: childSessionKey,
         defaultSessionId: childSessionId,
+        lifecycleRevision: "private-descendant-original",
       });
       agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
@@ -783,6 +774,8 @@ describe("private subagent completion processing receipts", () => {
         await registerSubagentRun({
           runId: descendantRunId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadSessionEntry(childSessionKey).entry,
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterTurnRunId: runId,

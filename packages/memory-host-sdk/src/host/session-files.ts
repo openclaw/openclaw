@@ -6,12 +6,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
-import {
-  captureSensitiveTextRedactionSnapshot,
-  createSubsystemLogger,
-  getSecretRedactionRegistryRevision,
-  redactSensitiveText,
-} from "./openclaw-runtime-io.js";
+import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
@@ -582,27 +577,12 @@ export async function buildSessionEntry(
           options,
           Boolean(onTranscriptMessage),
         );
-        return snapshot
-          ? buildSessionEntryFromSource(
-              absPath,
-              opts,
-              (text) => redactSensitiveText(text, { mode: "tools" }),
-              snapshot,
-            )
-          : null;
+        return snapshot ? buildSessionEntryFromSource(absPath, opts, snapshot) : null;
       }
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const redaction = captureSensitiveTextRedactionSnapshot();
-        const prepared = await prepareSessionEntryInWorker(absPath, options, redaction);
-        if (redaction.registryRevision === getSecretRedactionRegistryRevision()) {
-          return prepared.entry
-            ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
-            : null;
-        }
-      }
-      throw new Error(
-        "Session transcript redaction changed during preparation; retry the operation.",
-      );
+      const prepared = await prepareSessionEntryInWorker(absPath, options);
+      return prepared.entry
+        ? attachSessionEntryResetRecallCutoff(prepared.entry, prepared.resetRecallCutoff)
+        : null;
     }
     return buildSessionEntryInProcess(absPath, opts);
   };
@@ -616,13 +596,12 @@ export async function buildSessionEntry(
   }
 }
 
-/** The shared transcript worker runs the same projection with task-local redaction. */
+/** The shared transcript worker runs the same projection as inline readers. */
 export async function buildSessionEntryInProcess(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
-  redactText: (text: string) => string = (text) => redactSensitiveText(text, { mode: "tools" }),
 ): Promise<SessionFileEntry | null> {
-  return buildSessionEntryFromSource(absPath, opts, redactText);
+  return buildSessionEntryFromSource(absPath, opts);
 }
 
 /** Project an actor-owned snapshot without reopening its physical store on the caller. */
@@ -650,7 +629,6 @@ export async function buildSessionEntryFromSnapshot(
           }
         : {}),
     },
-    (text) => redactSensitiveText(text, { mode: "tools" }),
     snapshot,
   );
   assertCurrent();
@@ -660,7 +638,6 @@ export async function buildSessionEntryFromSnapshot(
 async function buildSessionEntryFromSource(
   absPath: string,
   opts: BuildSessionEntryOptions,
-  redactText: (text: string) => string,
   preparedSnapshot?: SessionEntrySnapshot,
 ): Promise<SessionFileEntry | null> {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
@@ -852,9 +829,8 @@ async function buildSessionEntryFromSource(
       if (!text) {
         continue;
       }
-      const safe = redactText(text);
       const label = message.role === "user" ? "User" : "Assistant";
-      const renderedLines = renderSessionExportLines(label, safe);
+      const renderedLines = renderSessionExportLines(label, text);
       const memoryProvenance: MemoryEntryProvenance = {
         originClass: classifySessionMessageOrigin(message, turnOrigin),
         sessionKind,

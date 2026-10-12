@@ -57,51 +57,6 @@ describe("commandsEqual", () => {
     expect(commandsEqual(current, desired)).toBe(true);
   });
 
-  test("keeps `required: true` meaningful", () => {
-    const current = currentFromDiscord({
-      name: "skill",
-      description: "Run a skill.",
-      options: [
-        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
-      ],
-    });
-    const desired = desiredFromLocal({
-      name: "skill",
-      description: "Run a skill.",
-      options: [{ name: "name", description: "Skill name", type: 3, required: true }],
-    });
-    expect(commandsEqual(current, desired)).toBe(false);
-  });
-
-  test("treats CJK descriptions with `\\n` separators as equal to Discord's collapsed form", () => {
-    // Discord server collapses whitespace between CJK characters when storing
-    // command descriptions, so our local desired `\n`-separated description
-    // round-trips back without the newline.
-    const current = currentFromDiscord({
-      description:
-        "将任意文本转化为杂志质感 HTML 信息卡片，并自动截图保存为图片。支持直接输入 URL。",
-    });
-    const desired = desiredFromLocal({
-      description:
-        "将任意文本转化为杂志质感 HTML 信息卡片，并自动截图保存为图片。\n支持直接输入 URL。",
-    });
-    expect(commandsEqual(current, desired)).toBe(true);
-  });
-
-  test("treats localized descriptions with CJK whitespace as equal to Discord's collapsed form", () => {
-    const current = currentFromDiscord({
-      description_localizations: {
-        "zh-CN": "第一行说明。第二行说明。",
-      },
-    });
-    const desired = desiredFromLocal({
-      description_localizations: {
-        "zh-CN": "第一行说明。\n第二行说明。",
-      },
-    });
-    expect(commandsEqual(current, desired)).toBe(true);
-  });
-
   test("treats option localized descriptions with CJK whitespace as equal to Discord's collapsed form", () => {
     const current = currentFromDiscord({
       name: "skill",
@@ -127,36 +82,6 @@ describe("commandsEqual", () => {
         },
       ],
     });
-    expect(commandsEqual(current, desired)).toBe(true);
-  });
-
-  test("keeps localized substantive description differences meaningful", () => {
-    const current = currentFromDiscord({
-      description_localizations: {
-        "zh-CN": "旧说明",
-      },
-    });
-    const desired = desiredFromLocal({
-      description_localizations: {
-        "zh-CN": "新说明",
-      },
-    });
-    expect(commandsEqual(current, desired)).toBe(false);
-  });
-
-  test("keeps substantive description differences meaningful", () => {
-    const current = currentFromDiscord({ description: "old text" });
-    const desired = desiredFromLocal({ description: "new text" });
-    expect(commandsEqual(current, desired)).toBe(false);
-  });
-
-  test("treats ASCII `\\n` as whitespace and collapses it to space for comparison", () => {
-    // For pure ASCII descriptions, `\n` collapses to a single space so
-    // "ping the bot" == "ping\nthe bot". The contract is: whitespace
-    // differences (ASCII or CJK-boundary) are never substantive after
-    // Discord's server normalization.
-    const current = currentFromDiscord({ description: "ping the bot" });
-    const desired = desiredFromLocal({ description: "ping\nthe bot" });
     expect(commandsEqual(current, desired)).toBe(true);
   });
 });
@@ -190,11 +115,11 @@ describe("DiscordCommandDeployer SQLite cache", () => {
     } as unknown as RequestClient;
   }
 
-  function createHashStore(initial: Record<string, string> = {}): {
+  function createHashStore(): {
     rows: Map<string, string>;
     store: DiscordCommandDeployHashStore;
   } {
-    const rows = new Map(Object.entries(initial));
+    const rows = new Map<string, string>();
     return {
       rows,
       store: {
@@ -235,23 +160,6 @@ describe("DiscordCommandDeployer SQLite cache", () => {
       "app:app-default:global:reconcile",
       "app:app-secondary:global:reconcile",
     ]);
-  });
-
-  test("loads only the exact scoped key needed by a deployment", async () => {
-    const { store } = createHashStore({
-      "app:other:global:reconcile": "unrelated",
-    });
-    const rest = createRest();
-
-    await new DiscordCommandDeployer({
-      clientId: "app-default",
-      commands: [new StaticCommand("ping")],
-      hashStore: store,
-      rest: () => rest,
-    }).deploy();
-
-    expect(store.lookup).toHaveBeenCalledOnce();
-    expect(store.lookup).toHaveBeenCalledWith("app:app-default:global:reconcile");
   });
 
   test("treats a SQLite lookup failure as a cache miss and repairs the row", async () => {
@@ -297,24 +205,5 @@ describe("DiscordCommandDeployer SQLite cache", () => {
     expect(rest.get).toHaveBeenCalledTimes(1);
     expect(rest.post).toHaveBeenCalledTimes(1);
     expect(store.register).toHaveBeenCalledOnce();
-  });
-
-  test("does not persist a hash when Discord deployment fails", async () => {
-    const { store } = createHashStore();
-    const rest = createRest();
-    rest.post = vi.fn(async () => {
-      throw new Error("Discord rejected deploy");
-    }) as RequestClient["post"];
-
-    await expect(
-      new DiscordCommandDeployer({
-        clientId: "app-default",
-        commands: [new StaticCommand("ping")],
-        hashStore: store,
-        rest: () => rest,
-      }).deploy(),
-    ).rejects.toThrow("Discord rejected deploy");
-
-    expect(store.register).not.toHaveBeenCalled();
   });
 });

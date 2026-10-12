@@ -287,6 +287,8 @@ describe("subagent registry persistence", () => {
     await registerSubagentRun({
       runId: " run-live ",
       childSessionKey: " agent:main:subagent:live-child ",
+      childAgentId: "main",
+      sessionEntry: { sessionId: "session-live-child" },
       controllerSessionKey: " agent:main:subagent:live-controller ",
       requesterSessionKey: " agent:main:main ",
       requesterDisplayKey: "main",
@@ -387,7 +389,13 @@ describe("subagent registry persistence", () => {
     },
   ] as const)("$name", async ({ runId, cleanup, reject }) => {
     const childSessionKey = `agent:main:subagent:${runId}`;
-    await persistRuns([endedRun(runId, { childSessionKey, cleanup })]);
+    await persistRuns([
+      endedRun(runId, {
+        childSessionKey,
+        childSessionIdentity: { sessionId: `sess-${runId}` },
+        cleanup,
+      }),
+    ]);
     const announcement = createDeferred<"retryable">();
     const releaseAnnouncement = () =>
       reject ? announcement.reject(new Error("announce boom")) : announcement.resolve("retryable");
@@ -483,7 +491,10 @@ describe("subagent registry persistence", () => {
 
   it("settles orphaned restored runs through canonical completion", async () => {
     const runId = "run-orphan-restore";
-    await persistRuns([endedRun(runId)], false);
+    await persistRuns(
+      [endedRun(runId, { childSessionIdentity: { sessionId: "sess-orphan-restore" } })],
+      false,
+    );
     await restartRegistry();
     await waitForRegistryWork(() => readPersistedRun(runId)?.cleanupCompletedAt !== undefined);
     expect(readPersistedRun(runId)?.execution).toMatchObject({
@@ -500,6 +511,7 @@ describe("subagent registry persistence", () => {
       const now = Date.now();
       const entry = makeRun(runId, {
         createdAt: now,
+        childSessionIdentity: { sessionId: "admitted-resume-session" },
         expectsCompletionMessage: false,
         execution: { status: "running", startedAt: now },
       });
@@ -602,6 +614,14 @@ describe("subagent registry persistence", () => {
     const entry = makeRun(runId, {
       createdAt: now,
       startedAt: now,
+      childSessionIdentity: {
+        sessionId:
+          change === "worker read failure"
+            ? "read-error-session"
+            : change === "session publication"
+              ? "published-resume-session"
+              : "held-resume-session",
+      },
       expectsCompletionMessage: false,
       execution: { status: "running", startedAt: now },
     });
@@ -860,6 +880,7 @@ describe("subagent registry persistence", () => {
       [
         makeRun(runId, {
           childSessionKey,
+          childSessionIdentity: { sessionId: "sess-stale-aborted-restore" },
           createdAt: now - 3 * 60 * 60 * 1_000,
           startedAt: now - 3 * 60 * 60 * 1_000,
         }),

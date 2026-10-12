@@ -28,6 +28,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -159,6 +160,10 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
         label: "Published label",
         activitySummary: { text: "First input", state: "current" },
       });
+      emitSessionTranscriptUpdate({ target: scope });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+      expect(rowReads).toEqual([]);
       await persistSessionTranscriptTurn(scope, {
         messages: [{ message: { role: "assistant", content: "Second message" } }],
         touchSessionEntry: false,
@@ -168,6 +173,15 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
         hasBoard: true,
         acpMeta: acp,
+        activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+      });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ message: { role: "assistant", content: "Combined entry and transcript" } }],
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+        hasBoard: true,
         activitySummaryWatermark: readSessionTranscriptWatermark(scope),
       });
       expect(rowReads).toEqual([]);

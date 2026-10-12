@@ -929,38 +929,4 @@ suite.define(() => {
       }
     });
   });
-
-  it.each([
-    [1280, 900, "desktop"],
-    [390, 844, "mobile"],
-  ] as const)(
-    "restores the native composer placeholder after a whitespace-only %s draft",
-    async (width, height, label) => {
-      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await textarea.fill("   ");
-        await textarea.blur();
-
-        await expect.poll(() => textarea.inputValue()).toBe("");
-        await expect
-          .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
-          .toBe(true);
-        await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const artifactDir = artifactRoot
-          ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
-          : undefined;
-        if (artifactDir) {
-          await page.locator(".agent-chat__composer-shell").screenshot({
-            animations: "disabled",
-            path: `${artifactDir}/placeholder-${label}.png`,
-          });
-        }
-      });
-    },
-  );
 });

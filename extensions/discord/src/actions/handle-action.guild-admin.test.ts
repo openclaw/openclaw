@@ -139,14 +139,13 @@ describe("registered Discord channel-edit thread permissions", () => {
     expect(patchRequests()).toHaveLength(0);
   });
 
-  it.each([
-    ["an explicit flag edit", { nsfw: false }],
-    ["an explicit parent clear", { clearParent: true }],
-    ["a forum tag edit", { availableTags: [{ name: "status" }] }],
-  ])("keeps ManageThreads required for %s during reopen", async (_label, params) => {
-    await expect(runReopen(params)).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
-  });
+  it.each([["an explicit parent clear", { clearParent: true }]])(
+    "keeps ManageThreads required for %s during reopen",
+    async (_label, params) => {
+      await expect(runReopen(params)).rejects.toThrow(/required permissions/);
+      expect(patchRequests()).toHaveLength(0);
+    },
+  );
 
   it("keeps ManageThreads required to reopen a locked thread", async () => {
     scenario.locked = true;

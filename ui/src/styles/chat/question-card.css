@@ -344,6 +344,53 @@ openclaw-chat-question-panel {
   outline: none;
 }
 
+.chat-question-panel__secret {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-question-panel__secret input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 42px;
+}
+
+.chat-question-panel__secret-toggle {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.chat-question-panel__secret-toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.chat-question-panel__secret-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.chat-question-panel__secret-toggle:disabled {
+  opacity: 0.5;
+}
+
+.chat-question-panel__secret-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .chat-question-panel textarea.chat-question-panel__textarea {
   /* Override the shared field textarea's tall, monospace editor defaults. */
   min-height: 24px;

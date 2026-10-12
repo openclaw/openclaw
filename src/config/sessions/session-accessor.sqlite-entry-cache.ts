@@ -14,6 +14,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import {
   loadSessionEntrySnapshot,
+  projectSessionEntryCacheMetadata,
   projectSessionEntryCacheUpdate,
   readSessionEntrySideMetadata,
   type SessionEntrySideMetadata,
@@ -318,13 +319,7 @@ function publishSqliteSessionEntryCacheUpsert(
     const currentEntry = cached.entries.get(sessionKey);
     if (!update.entry && currentEntry) {
       // Earlier publications in this transaction may have replaced the entry itself.
-      const {
-        owner: _owner,
-        participants: _participants,
-        participantCount: _count,
-        ...metadata
-      } = currentEntry;
-      publishedEntry = freezeJsonSnapshot({ ...metadata, ...sideMetadata });
+      publishedEntry = projectSessionEntryCacheMetadata(currentEntry, sideMetadata);
     }
     if (!publishedEntry) {
       sessionEntryCaches.delete(database.db);
@@ -460,7 +455,7 @@ export function publishSessionEntryCacheParticipantUpdate(
 ): void {
   const { writeGeneration, projectionChanged } = params;
   if (!projectionChanged) {
-    // Count-only contributions do not change list facts, including when the cache is cold.
+    // Count-only contributions retain list facts but invalidate exact participant records.
     if (writeGeneration) {
       publishTrackedCacheUpdate(database, () => {
         const cached = sessionEntryCaches.get(database.db);
@@ -469,6 +464,13 @@ export function publishSessionEntryCacheParticipantUpdate(
         }
       });
     }
+    emitPreparedSessionSharingChange(
+      database,
+      sessionKey,
+      database.agentId,
+      { kind: "participants" },
+      { kind: "marker", sharingChange: "unchanged" },
+    );
     return;
   }
   let facts: SessionRowFacts = { kind: "participants" };

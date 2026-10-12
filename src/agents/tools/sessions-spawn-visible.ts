@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -25,6 +26,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
@@ -62,47 +64,15 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
-import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
+import {
+  correctedVisibleSpawnCall,
+  SessionsSpawnPlacementSchema,
+} from "./sessions-spawn-visible.schema.js";
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
   onSpawnEffectsStart?: () => void;
   assertActive?: () => void;
 };
-
-function correctedVisibleSpawnCall(raw: Record<string, unknown>): string {
-  const corrected = Object.fromEntries(
-    [
-      "task",
-      "user",
-      "taskName",
-      "label",
-      "agentId",
-      "model",
-      "runTimeoutSeconds",
-      "cwd",
-      "expectsCompletionMessage",
-      "sandbox",
-      "context",
-      "placement",
-      "group",
-      "projectId",
-      "projectGitUrl",
-      "worktree",
-      "worktreeName",
-      "worktreeBaseRef",
-    ]
-      .filter((key) => raw[key] !== undefined)
-      .map((key) => [key, raw[key]]),
-  );
-  if (
-    readToolStringParam(raw, "worktreeName") ||
-    readToolStringParam(raw, "worktreeBaseRef") ||
-    (isRecord(raw.placement) && raw.placement.kind === "profile")
-  ) {
-    corrected.worktree = true;
-  }
-  return `sessions_spawn(${JSON.stringify({ ...corrected, runtime: "subagent", visible: true })})`;
-}
 
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;
@@ -240,11 +210,11 @@ export async function maybeSpawnVisibleSession(params: {
     completionOwnerKey: params.options?.completionOwnerKey,
   });
   let assertDelegationCurrent: (() => void) | undefined = undefined;
-  const assertActive = () => {
-    params.options?.assertActive?.();
+  const assertActive = composeSessionSourceAssertion([params.options?.assertActive], (source) => {
+    source();
     params.options?.signal?.throwIfAborted();
     assertDelegationCurrent?.();
-  };
+  });
   const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
@@ -386,7 +356,6 @@ export async function maybeSpawnVisibleSession(params: {
           resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
         : undefined,
   });
-  assertActive();
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
@@ -402,7 +371,6 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
-  assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission,
@@ -495,13 +463,15 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeName ? { worktreeName } : {}),
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
-      response = placement
-        ? await createGatewayCall("sessions.create", createParams, {
-            signal: params.options?.signal,
-            sessionMutationCommitGuard: params.options?.assertActive,
-            timeoutMs: null,
-          })
-        : await createGatewayCall("sessions.create", createParams);
+      response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
+        placement
+          ? createGatewayCall("sessions.create", createParams, {
+              signal: params.options?.signal,
+              sessionMutationCommitGuard: assertActive,
+              timeoutMs: null,
+            })
+          : createGatewayCall("sessions.create", createParams),
+      );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
         error && typeof error === "object" && "details" in error ? error.details : undefined,
@@ -520,6 +490,7 @@ export async function maybeSpawnVisibleSession(params: {
       throw error;
     }
     const childSessionKey = response.key?.trim();
+    const sessionId = response.sessionId?.trim();
     const cloudGatewayCall: InProcessGatewayCaller = (method, request, options) =>
       gatewayCall(method, request, { ...options, resolveGatewayContext });
     const cleanupGateway = resolveGatewayContext
@@ -544,13 +515,13 @@ export async function maybeSpawnVisibleSession(params: {
           }),
         cleanupGateway,
       );
-    if (placement && childSessionKey && response.sessionId) {
+    if (placement && childSessionKey && sessionId) {
       response = {
         ...response,
         ...(await startVisibleCloudSession({
           cfg,
           key: childSessionKey,
-          sessionId: response.sessionId,
+          sessionId,
           profileId: placement.profileId,
           os: placement.os,
           machineClass: placement.machineClass,
@@ -560,21 +531,25 @@ export async function maybeSpawnVisibleSession(params: {
           launchAgent: async (request, assertDispatchCurrent) => {
             if (params.options?.callGateway) {
               assertDispatchCurrent();
-              return await cloudGatewayCall("agent", request, {
-                sessionMutationCommitGuard: assertDispatchCurrent,
-                timeoutMs: null,
-              });
+              return await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                cloudGatewayCall("agent", request, {
+                  sessionMutationCommitGuard: assertDispatchCurrent,
+                  timeoutMs: null,
+                }),
+              );
             }
             return (
-              await callNativeSubagentGateway(
-                {
-                  method: "agent",
-                  params: request,
-                  assertDispatchCurrent,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                },
-                undefined,
-                resolveGatewayContext,
+              await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                callNativeSubagentGateway(
+                  {
+                    method: "agent",
+                    params: request,
+                    assertDispatchCurrent,
+                    timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+                  },
+                  undefined,
+                  resolveGatewayContext,
+                ),
               )
             ).response;
           },
@@ -585,6 +560,7 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     const runId = response.runId?.trim();
+    const lifecycleRevision = response.entry?.lifecycleRevision;
     const runError = response.runError
       ? summarizeVisibleSessionSpawnError(response.runError)
       : "Visible session run failed";
@@ -598,14 +574,14 @@ export async function maybeSpawnVisibleSession(params: {
       cleanupVisibleSpawnSession({
         callGateway: gatewayCall,
         childSessionKey,
-        expectedSessionId: response.sessionId,
-        expectedLifecycleRevision: response.entry?.lifecycleRevision,
+        expectedSessionId: sessionId,
+        expectedLifecycleRevision: lifecycleRevision,
       });
     if (placement && (response.runStarted !== true || !runId)) {
       return {
         status: "error",
         childSessionKey,
-        sessionId: response.sessionId,
+        sessionId,
         ...(runId ? { runId } : {}),
         initialTaskStatus: response.initialTaskStatus ?? "not-sent",
         ...(response.placement ? { placement: response.placement } : {}),
@@ -619,6 +595,15 @@ export async function maybeSpawnVisibleSession(params: {
         childSessionKey,
       };
     }
+    if (!sessionId) {
+      return {
+        status: "error",
+        childSessionKey,
+        runId,
+        error:
+          "Visible run cannot be registered because sessions.create did not return its sessionId. Child kept; inspect this child session and run before retrying. Do not spawn a replacement.",
+      };
+    }
     try {
       if (placement) {
         params.options?.assertActive?.();
@@ -628,6 +613,8 @@ export async function maybeSpawnVisibleSession(params: {
           runId,
           requesterTurnRunId: params.options?.requesterTurnRunId,
           childSessionKey,
+          childAgentId: targetAgentId,
+          sessionEntry: { sessionId, lifecycleRevision },
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           completionRequesterSessionId,
@@ -644,7 +631,6 @@ export async function maybeSpawnVisibleSession(params: {
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
           task: params.task,
           taskName: params.taskName,
-          agentId: targetAgentId,
           requesterAgentId,
           cleanup: "keep",
           label: params.label || undefined,

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { readDescendantSubagentFallbackReply } from "../../../cron/isolated-agent/subagent-followup.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -25,7 +28,6 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
-import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
@@ -34,6 +36,7 @@ import * as completionStore from "../completion/subagent-completion-admission.st
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type {
   GatewayRequest,
@@ -47,6 +50,10 @@ import {
   registerRequesterWakeReceiptBoundaryTests,
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
+import {
+  createGatewayContext,
+  createRequesterWakeSessionFixture,
+} from "./subagent-registry.requester-wake-session.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -132,29 +139,6 @@ vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true })
 const { maybeWakeRequesterAfterAllChildrenSettled: wakeRequester } = await vi.importActual<
   typeof import("../announce/subagent-announce.requester-settle-wake.js")
 >("../announce/subagent-announce.requester-settle-wake.js");
-
-function createGatewayContext() {
-  const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
-    prepareRestartRecovery: () => undefined,
-    dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
-    waitForAgent: (params, timeoutMs, signal) =>
-      callGateway({ method: "agent.wait", params, timeoutMs, signal }),
-    dispatchSessionMethod: (method, params, options) =>
-      callGateway({
-        method,
-        params,
-        timeoutMs: options?.timeoutMs,
-        signal: options?.signal,
-        assertDispatchCurrent: options?.assertCurrent,
-      }),
-    sendRecoveryNotice: async () => {
-      throw new Error("Unexpected recovery notice");
-    },
-  };
-  const context = { recoveryRuntime, chatAbortControllers: new Map() } as GatewayRequestContext;
-  context.resolveGatewayContext = () => context;
-  return context;
-}
 
 vi.mock("../../../config/sessions.js", async () => ({
   ...(await import("../../../config/sessions/targets.js")),
@@ -299,7 +283,6 @@ describe("requester settle wake product flow", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
-      resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveSessionStorePathCore: () => sessionStorePath,
     });
   });
@@ -349,37 +332,11 @@ describe("requester settle wake product flow", () => {
     }
   };
 
-  const spawnVisibleChild = async (params: {
-    runId: string;
-    childSessionKey: string;
-    requesterTurnRunId: string;
-  }) => {
-    const result = await maybeSpawnVisibleSession({
-      raw: { visible: true },
-      task: `finish ${params.runId}`,
-      label: params.runId,
-      runtime: "subagent",
-      sandbox: "inherit",
-      expectsCompletionMessage: true,
-      options: {
-        agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
-        requesterTurnRunId: params.requesterTurnRunId,
-        requesterAgentIdOverride: "main",
-        config: {
-          agents: { entries: { main: {} } },
-          session: { mainKey: "main", scope: "per-sender" },
-        },
-        callGateway: vi.fn(async () => ({
-          key: params.childSessionKey,
-          runStarted: true,
-          runId: params.runId,
-        })) as never,
-        registerRun: registry.registerSubagentRun,
-        countActiveRuns: () => 0,
-      },
-    });
-    expect(result).toMatchObject({ status: "accepted", runId: params.runId });
-  };
+  const { prepareChildSession, spawnVisibleChild } = createRequesterWakeSessionFixture({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    getSessionStore: () => sessionStore,
+    getSessionStorePath: () => sessionStorePath,
+  });
 
   const emitCompleted = (
     runId: string,
@@ -411,6 +368,7 @@ describe("requester settle wake product flow", () => {
 
   registerRequesterStartupAdmissionTests({
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    prepareChildSession,
     getFixture: () => ({ testState, sessionStore, sessionStorePath }),
     createGatewayContext,
     flushOwnedWork,
@@ -420,6 +378,7 @@ describe("requester settle wake product flow", () => {
 
   registerRequesterSelfYieldFollowupTests({
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    prepareChildSession,
     createGatewayContext,
     getLifecycleHandler: () => lifecycleHandler!,
     callGatewayMock,
@@ -434,17 +393,19 @@ describe("requester settle wake product flow", () => {
     },
   });
 
-  it.each(
-    ["alpha", "beta"].flatMap((firstCompleted) =>
+  it.each([
+    ...["alpha", "beta"].flatMap((firstCompleted) =>
       ["same", "distinct", "mixed-unbound", "yielded"].map((mode) => ({
         firstCompleted,
         binding: mode === "yielded" ? "same" : mode,
         yieldedParent: mode === "yielded" ? "alpha" : undefined,
+        rawChild: false,
       })),
     ),
-  )(
-    "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent)",
-    async ({ firstCompleted, binding, yieldedParent }) => {
+    { firstCompleted: "alpha", binding: "same", yieldedParent: "alpha", rawChild: true },
+  ])(
+    "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent, raw=$rawChild)",
+    async ({ firstCompleted, binding, yieldedParent, rawChild }) => {
       vi.setSystemTime(100_000);
       const context = createGatewayContext();
       const otherContext = createGatewayContext();
@@ -460,10 +421,11 @@ describe("requester settle wake product flow", () => {
       const children = ["alpha", "beta"].map((name) => ({
         name,
         runId: `run-${name}`,
-        childSessionKey: `agent:main:subagent:${name}`,
+        childSessionKey: rawChild && name === "alpha" ? "global" : `agent:main:subagent:${name}`,
       }));
       const resolvers: Array<GatewayRequestContext["resolveGatewayContext"]> = [];
       for (const child of children) {
+        const sessionEntry = await prepareChildSession(child.childSessionKey, `sess-${child.name}`);
         const requesterTurnRunId = `requester-${child.name}`;
         const admission = prepareSystemAgentRunAdmission(
           {},
@@ -493,6 +455,8 @@ describe("requester settle wake product flow", () => {
               await registry.registerSubagentRun(
                 createSubagentRunParams({
                   ...child,
+                  childAgentId: "main",
+                  sessionEntry,
                   requesterTurnRunId,
                   requesterAgentId: "main",
                   expectsCompletionMessage: true,
@@ -539,6 +503,19 @@ describe("requester settle wake product flow", () => {
       await waitForDeliveredCleanup(first.runId, {
         allowPendingRequesterSettleWake: first.name !== yieldedParent,
       });
+      if (rawChild) {
+        const settled = registry.getSubagentRunByRunId(first.runId);
+        expect(settled).toMatchObject({
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "sess-alpha", lifecycleRevision: "original" },
+          execution: { status: "terminal" },
+          delivery: { status: "delivered" },
+        });
+        expect(settled?.execution.suppressSessionEffects).not.toBe(true);
+        expect(settled?.requesterSettleWake).toBeUndefined();
+        expect(settled?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(settled?.browserCleanupDispatchedAt).toBeTypeOf("number");
+      }
       expect(registry.getSubagentRunByRunId(second.runId)).toMatchObject({
         execution: { status: "running" },
         delivery: { status: "pending" },
@@ -577,11 +554,31 @@ describe("requester settle wake product flow", () => {
         });
         expect(entry?.requesterSettleWake).toBeUndefined();
       }
+      if (rawChild) {
+        const retained = loadSubagentRegistryFromSqlite().get(first.runId);
+        expect(retained).toMatchObject({
+          childSessionKey: "global",
+          childAgentId: "main",
+          delivery: { status: "delivered" },
+        });
+        expect(retained?.execution.suppressSessionEffects).not.toBe(true);
+        expect(retained?.requesterSettleWake).toBeUndefined();
+        expect(retained?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(retained?.browserCleanupDispatchedAt).toBeTypeOf("number");
+        expect(
+          loadExactSessionEntryReadOnly({
+            agentId: "main",
+            storePath: sessionStorePath,
+            sessionKey: "global",
+          })?.entry,
+        ).toMatchObject({ sessionId: "sess-alpha", lifecycleRevision: "original" });
+      }
     },
   );
 
   registerRequesterWakeReceiptBoundaryTests({
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    prepareChildSession,
     spawnVisibleChild,
     emitCompleted,
     flushOwnedWork,
@@ -918,9 +915,11 @@ describe("requester settle wake product flow", () => {
       const context = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => context);
+      const sessionEntry = await prepareChildSession(child.childSessionKey, "sess-cron-child");
       await registry.registerSubagentRun(
         createSubagentRunParams({
           ...child,
+          sessionEntry,
           requesterSessionKey: cronRunSessionKey,
           requesterDisplayKey: "cron",
           cleanup: "delete",

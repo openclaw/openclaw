@@ -62,13 +62,9 @@ OpenClaw classifies loaded plugins by their registration behavior:
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
-Worker backends can use `stageOpenClawAgentDatabaseSchemaExtension` from
-`openclaw/plugin-sdk/sqlite-worker-runtime` before known derived-table DDL inside
-a managed transaction. Use it only when the operation preserves agent ownership
-metadata and canonical agent tables, indexes, and triggers. The committed receipt
-preserves those existing contracts; unclassified DDL and migrations still require
-their normal schema admission. Private databases without agent admission are
-unaffected.
+Managed agent-database schema extension belongs to private worker backends, not
+the typed public Plugin SDK. Bundled backend authors should follow the
+[private worker schema-extension contract](/reference/database-schemas/worker-access#private-worker-schema-extensions).
 
 ## Related
 

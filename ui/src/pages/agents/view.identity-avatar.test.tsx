@@ -76,6 +76,12 @@ function createView(overrides: Partial<ReturnType<typeof createProps>> = {}) {
   return view;
 }
 
+function avatarRequestUrls() {
+  return fetchAvatar.mock.calls.map(([input]) =>
+    input instanceof Request ? input.url : String(input),
+  );
+}
+
 function avatarImage(view: AgentAvatarView) {
   return view.container.querySelector<HTMLImageElement>(".agent-identity-editor__avatar img");
 }
@@ -132,7 +138,9 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
     expect(avatar?.classList).toContain("is-pending");
     avatarImage(view)?.dispatchEvent(new Event("load"));
     expect(avatar?.classList).not.toContain("is-pending");
-    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(avatarRequestUrls(), "requests after the persisted avatar loads").toEqual([
+      globalThis.location.origin + "/avatar/beta?v=1",
+    ]);
     expect(createObjectURL).toHaveBeenCalledOnce();
   } finally {
     response.resolve(avatarResponse());
@@ -153,6 +161,9 @@ it("renders the upload preview without fetching the persisted settings avatar", 
 });
 
 it("keeps a missing settings avatar on its fallback and recovers on a new revision", async () => {
+  const expectedRequests = [1, 2].map(
+    (revision) => globalThis.location.origin + "/avatar/beta?v=" + revision,
+  );
   fetchAvatar
     .mockResolvedValueOnce(avatarResponse())
     .mockResolvedValueOnce(new Response(null, { status: 404 }))
@@ -163,7 +174,11 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
   });
 
   changeAvatarRevision(view, 2);
-  await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
+  await waitForFast(() =>
+    expect(avatarRequestUrls(), "requests after selecting the missing revision").toEqual(
+      expectedRequests,
+    ),
+  );
   await waitForFast(() => expect(avatarImage(view)).toBeNull());
   updateView(view, {
     overview: {
@@ -173,13 +188,18 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
   });
   expect(avatarImage(view)).toBeNull();
   await expectAvatarFallback(view);
-  expect(fetchAvatar).toHaveBeenCalledTimes(2);
+  expect(avatarRequestUrls(), "requests after showing the fallback and editing the name").toEqual(
+    expectedRequests,
+  );
 
   changeAvatarRevision(view, 3);
   await waitForFast(() => {
     expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-2");
   });
-  expect(fetchAvatar).toHaveBeenCalledTimes(3);
+  expect(avatarRequestUrls()).toEqual([
+    ...expectedRequests,
+    globalThis.location.origin + "/avatar/beta?v=3",
+  ]);
 });
 
 it("keeps a decode failure on its fallback across rerenders until the revision changes", async () => {

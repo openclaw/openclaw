@@ -15,8 +15,6 @@ import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
-  adjudicateActiveCronRunReceiptInDatabase,
-  CronRunReceiptConflictError,
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
@@ -89,14 +87,6 @@ function applyCronReceiptMutation(
   if (mutation.triggerStateChanged) {
     retireCronMutationTriggerState(db, input.storeKey, mutation.jobId);
   }
-  if (mutation.owner) {
-    adjudicateActiveCronRunReceiptInDatabase({
-      database: db,
-      jobId: mutation.jobId,
-      prepared: mutation.owner,
-      finishedAtMs: input.snapshot.nowMs,
-    });
-  }
 }
 
 function cancelChangedQueuedRuns(
@@ -168,7 +158,7 @@ export function mutateCronJobsInWorker(
     input.snapshot,
     database.path,
   );
-  let transactionRefusal: CronJobsStoreChangedError | CronRunReceiptConflictError | undefined;
+  let transactionRefusal: CronJobsStoreChangedError | undefined;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -228,10 +218,7 @@ export function mutateCronJobsInWorker(
             },
           };
         } catch (error) {
-          if (
-            error instanceof CronJobsStoreChangedError ||
-            error instanceof CronRunReceiptConflictError
-          ) {
+          if (error instanceof CronJobsStoreChangedError) {
             transactionRefusal = error;
           }
           throw error;
@@ -250,10 +237,7 @@ export function mutateCronJobsInWorker(
     }
     // Typed refusal is safe only after rollback; uncertain commits retain generic failure.
     return {
-      mutationRefusal:
-        transactionRefusal instanceof CronRunReceiptConflictError
-          ? { kind: "receipt-conflict", receipt: transactionRefusal.receipt }
-          : { kind: "store-changed" },
+      mutationRefusal: { kind: "store-changed" },
     };
   }
 }

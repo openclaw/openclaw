@@ -10,6 +10,7 @@ import {
   loadExactSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
@@ -20,6 +21,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
 import {
@@ -163,7 +165,7 @@ type ResumeMainSessionParams = {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
-  assertCompletionCurrent?: () => void;
+  completionSource?: SessionSourceAssertion;
   recoveryAttempt: number;
   storePath: string;
   sessionKey: string;
@@ -227,7 +229,6 @@ async function resumeMainSessionWithinAdmission(
       ? source.actor.sessions.captureCurrent(params.sessionKey)
       : undefined;
   const taskRemainsOwed = () => {
-    params.assertCompletionCurrent?.();
     if (!harnessCompletion) {
       return true;
     }
@@ -530,6 +531,10 @@ async function resumeMainSessionWithinAdmission(
           throw new Error("Restart recovery admission is no longer current.");
         }
       },
+      prepareDispatchCurrent: () =>
+        runWithAgentToolSourceExecutionScope(params.completionSource, async () => {
+          params.completionSource?.();
+        }),
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
