@@ -291,7 +291,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
                   <>
                     {meta().help}
                     <Show when={meta().help && props.params.schema.default !== undefined}>
-                      <br />
+                      <br />{" "}
                     </Show>
                     {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
                   </>

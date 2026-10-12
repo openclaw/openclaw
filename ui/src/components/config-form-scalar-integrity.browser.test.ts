@@ -17,6 +17,30 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form scalar integrity", () => {
+  it("separates boolean help from its default description", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        runtime: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              default: true,
+              description: "Controls runtime processing.",
+            },
+          },
+        },
+      },
+    });
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { runtime: { enabled: false } },
+      onPatch: vi.fn(),
+    });
+    expect(container.textContent).toContain("Controls runtime processing. Default: true");
+  });
+
   it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
     const container = document.createElement("div");
     document.body.append(container);
