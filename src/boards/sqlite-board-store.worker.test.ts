@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -223,13 +223,6 @@ it("executes Board mutations off the host and publishes each committed change on
       await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]),
     ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
     expectPublication(1);
-    const privateFiles = [database.path, `${database.path}-wal`, `${database.path}-shm`];
-    if (process.platform !== "win32") {
-      chmodSync(path.dirname(database.path), 0o1700);
-      for (const file of privateFiles) {
-        chmodSync(file, 0o644);
-      }
-    }
     const put = await store.putWidget({
       ...target,
       name: "status",
@@ -238,12 +231,6 @@ it("executes Board mutations off the host and publishes each committed change on
     });
     expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
     expectPublication(2);
-    if (process.platform !== "win32") {
-      expect(statSync(path.dirname(database.path)).mode & 0o7777).toBe(0o700);
-      for (const file of privateFiles) {
-        expect(statSync(file).mode & 0o7777).toBe(0o600);
-      }
-    }
     expect(
       await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId),
     ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });

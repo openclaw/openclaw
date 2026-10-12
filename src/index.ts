@@ -153,7 +153,6 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
-    { installDistEsmResolveFastPath },
     { formatUncaughtError },
     { runFatalErrorHooks },
     {
@@ -166,12 +165,10 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     import("./cli/json-output-mode.js"),
     import("./cli/one-shot-exit.js"),
     import("./cli/runtime-cleanup-scope.js"),
-    import("./entry.esm-resolve-fast-path.js"),
     import("./infra/errors.js"),
     import("./infra/fatal-error-hooks.js"),
     import("./infra/unhandled-rejections.js"),
   ]);
-  installDistEsmResolveFastPath(import.meta.url);
 
   const { defaultRuntime, restoreRuntimeTerminalState } = await import("./runtime.js");
   const { exitAfterSignalExitBarriers } = await import("./cli/signal-exit-barrier.js");

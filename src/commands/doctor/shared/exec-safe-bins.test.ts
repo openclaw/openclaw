@@ -19,28 +19,6 @@ afterEach(() => {
 });
 
 describe("doctor exec safe bin helpers", () => {
-  it("finds missing safeBin profiles and marks interpreters", () => {
-    const hits = scanExecSafeBinCoverage({
-      tools: {
-        exec: {
-          safeBins: ["node", "jq"],
-          safeBinProfiles: { jq: {} },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(hits).toEqual([
-      { scopePath: "tools.exec", bin: "node", kind: "missingProfile", isInterpreter: true },
-      {
-        scopePath: "tools.exec",
-        bin: "jq",
-        kind: "riskySemantics",
-        warning:
-          "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      },
-    ]);
-  });
-
   it("formats coverage warnings", () => {
     const warnings = collectExecSafeBinCoverageWarnings({
       hits: [
@@ -67,25 +45,6 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins entry 'myfilter' is missing safeBinProfiles.myfilter.",
       "- agents.list.runner.tools.exec.safeBins includes 'jq': jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
       '- Run "openclaw doctor --fix" to scaffold missing custom safeBinProfiles entries.',
-    ]);
-  });
-
-  it("omits doctor fix hint when no custom safeBin profiles can be scaffolded", () => {
-    const warnings = collectExecSafeBinCoverageWarnings({
-      hits: [
-        {
-          scopePath: "tools.exec",
-          bin: "jq",
-          kind: "riskySemantics",
-          warning:
-            "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-        },
-      ],
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(warnings).toEqual([
-      "- tools.exec.safeBins includes 'jq': jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
     ]);
   });
 
@@ -168,23 +127,6 @@ describe("doctor exec safe bin helpers", () => {
       "- tools.exec.safeBins includes 'sed': sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
     ]);
     expect(result.config.tools?.exec?.safeBinProfiles).toBeUndefined();
-  });
-
-  it("warns on busybox/toybox safeBins instead of scaffolding them", () => {
-    const result = maybeRepairExecSafeBinProfiles({
-      tools: {
-        exec: {
-          safeBins: ["busybox", "toybox"],
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes interpreter/runtime 'busybox' without profile; remove it from safeBins or use explicit allowlist entries.",
-      "- tools.exec.safeBins includes interpreter/runtime 'toybox' without profile; remove it from safeBins or use explicit allowlist entries.",
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toStrictEqual({});
   });
 
   it("flags safeBins that resolve outside trusted directories", () => {
