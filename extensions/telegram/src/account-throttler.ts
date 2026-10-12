@@ -231,6 +231,9 @@ class GroupRequestScheduler {
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
   private retiredReason: Error | null = null;
+  // Actions enqueued but not yet dispatching (queued behind a running
+  // predecessor or pacing): retirement rejects their callers immediately.
+  private readonly pendingActions = new Set<{ reject: (err: unknown) => void }>();
 
   enqueueAction<T>(
     run: () => Promise<T>,
@@ -238,17 +241,25 @@ class GroupRequestScheduler {
   ): Promise<T> {
     const { controller, detach } = bridgeTelegramAbortSignal(signal);
     if (this.retiredReason) {
+      detach();
       return Promise.reject(this.retiredReason);
     }
+    let rejectPending!: (err: unknown) => void;
+    const pending = new Promise<never>((_, reject) => {
+      rejectPending = reject;
+    });
+    const entry = { reject: rejectPending };
+    this.pendingActions.add(entry);
     const result = this.actionTail.then(async () => {
       controller.signal.throwIfAborted();
-      if (this.retiredReason) {
-        throw this.retiredReason;
-      }
+      this.assertNotRetired();
       const waitMs = this.nextActionAtMs - Date.now();
       if (waitMs > 0) {
         await sleepWithAbort(waitMs, controller.signal);
       }
+      // Retirement can land during pacing; never dispatch afterwards.
+      this.assertNotRetired();
+      this.pendingActions.delete(entry);
       try {
         return await run();
       } finally {
@@ -262,27 +273,39 @@ class GroupRequestScheduler {
     );
     return Promise.race([
       result,
+      pending,
       waitForAbortSignal(controller.signal).then(() => {
         throw new DOMException("Chat action canceled", "AbortError");
       }),
     ]).finally(() => {
+      this.pendingActions.delete(entry);
       detach();
       controller.abort();
     });
   }
 
-  /** Rejects new and queued work once the owning account is retired. */
+  /** Rejects new, queued, and not-yet-dispatching work once the owning account is retired. */
   settleForRetirement(reason: Error): void {
     if (this.retiredReason) {
       return;
     }
     this.retiredReason = reason;
+    for (const request of this.pendingActions) {
+      request.reject(reason);
+    }
+    this.pendingActions.clear();
     for (const queue of this.lanes.values()) {
       for (const request of queue) {
         request.reject(reason);
       }
     }
     this.lanes.clear();
+  }
+
+  private assertNotRetired(): void {
+    if (this.retiredReason) {
+      throw this.retiredReason;
+    }
   }
 
   /** Holds priority for a reply until it settles, including its flood waits. */
@@ -451,7 +474,20 @@ function createTelegramAccountThrottler(
       if (method === "sendChatAction") {
         // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
         return scheduler.enqueueAction(
-          () => chatActions.apiTransformer(prev, method, payload, signal),
+          () =>
+            chatActions.apiTransformer(
+              (queuedMethod, queuedPayload, queuedSignal) => {
+                // Retirement can land during the handler's authorization backoff;
+                // final dispatch must never reach the Bot API for a retired token.
+                if (retired) {
+                  throw telegramThrottlerReleasedError;
+                }
+                return prev(queuedMethod, queuedPayload, queuedSignal);
+              },
+              method,
+              payload,
+              signal,
+            ),
           signal,
         );
       }

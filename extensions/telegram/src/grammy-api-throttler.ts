@@ -73,6 +73,7 @@ export function createOwnedGrammyApiThrottler(): OwnedGrammyApiThrottler {
       // timers behind. Pinned bottleneck 2.19.5 — revisit on upgrade.
       for (const group of [groupThrottler, outThrottler]) {
         const groupWithInterval: unknown = group;
+        // SAFETY: Bottleneck 2.19.5 groups expose `interval` as their private auto-cleanup timer.
         const interval = (groupWithInterval as { interval?: ReturnType<typeof setInterval> })
           .interval;
         if (interval !== undefined) {
