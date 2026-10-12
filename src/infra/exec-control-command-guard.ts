@@ -188,6 +188,39 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
   if (!expanded || expanded === ":memory:") {
     return null;
   }
+  if (expanded.toLowerCase().startsWith("file:")) {
+    const uriBody = expanded.slice("file:".length);
+    if (uriBody.startsWith("/")) {
+      // Absolute file URL: keep fileURLToPath semantics (host/percent handling).
+      try {
+        expanded = fileURLToPath(expanded);
+      } catch {
+        const filename = uriBody.split(/[?#]/u, 1)[0] ?? "";
+        if (!filename) {
+          return null;
+        }
+        try {
+          expanded = decodeURIComponent(filename);
+        } catch {
+          expanded = filename;
+        }
+      }
+    } else {
+      // Opaque or variable-bearing file: URI (e.g. "file:$OPENCLAW_STATE_DIR/…")
+      // is not an absolute file URL: fileURLToPath would prefix the literal
+      // variable with "/" and hide it from expansion. Strip the scheme and any
+      // query/fragment, percent-decode, then run the variable expansions below.
+      const filename = uriBody.split(/[?#]/u, 1)[0] ?? "";
+      if (!filename) {
+        return null;
+      }
+      try {
+        expanded = decodeURIComponent(filename);
+      } catch {
+        expanded = filename;
+      }
+    }
+  }
   const stateVariable = expanded.match(
     /^\$(?:OPENCLAW_STATE_DIR|\{OPENCLAW_STATE_DIR\})(?=$|[\\/])/u,
   );
@@ -200,21 +233,6 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
   }
   if (expanded === "~" || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
     expanded = path.join(os.homedir(), expanded.slice(2));
-  }
-  if (expanded.toLowerCase().startsWith("file:")) {
-    try {
-      expanded = fileURLToPath(expanded);
-    } catch {
-      const filename = expanded.slice("file:".length).split(/[?#]/u, 1)[0];
-      if (!filename) {
-        return null;
-      }
-      try {
-        expanded = decodeURIComponent(filename);
-      } catch {
-        expanded = filename;
-      }
-    }
   }
   return expanded;
 }

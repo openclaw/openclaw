@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
@@ -93,6 +94,90 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
           context,
         ),
       ).resolves.toBe("live-state-sqlite");
+    });
+  });
+
+  it("detects live state targets hidden behind file: URI variable spellings", async () => {
+    await withTempDir("openclaw-exec-live-sqlite-uri-", async (root) => {
+      const stateDir = path.join(root, "state with spaces");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(databasePath, "fixture");
+
+      const context = { stateDir, workdir: root };
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          'sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          'sqlite3 "file:${OPENCLAW_STATE_DIR}/state/openclaw.sqlite" "PRAGMA user_version"',
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 -cmd ${quote(`.open ${quote("file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite")}`)} :memory:`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(`sqlite3 "file:${databasePath}?mode=ro"`, context),
+      ).resolves.toBe("live-state-sqlite");
+
+      // Parity with the private-copy allowance is preserved for URI spellings.
+      const copiedDatabasePath = path.join(root, "snapshot", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
+      await fs.writeFile(copiedDatabasePath, "fixture");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 "file:${copiedDatabasePath}?mode=ro"`,
+          context,
+        ),
+      ).resolves.toBeNull();
+    });
+  });
+
+  it("detects file: URI targets spelled with $HOME when state lives under HOME", async () => {
+    await withTempDir("openclaw-exec-live-sqlite-home-", async (root) => {
+      const stateDir = path.join(root, "home", ".openclaw");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(databasePath, "fixture");
+
+      // The guard reads os.homedir(), not process.env.HOME, so mock it the way
+      // other suites do (restored by afterEach restoreAllMocks).
+      vi.spyOn(os, "homedir").mockReturnValue(path.join(root, "home"));
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          'sqlite3 "file:$HOME/.openclaw/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      // Bare $HOME form keeps working.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          'sqlite3 "$HOME/.openclaw/state/openclaw.sqlite" "PRAGMA user_version"',
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      // Tilde URI spelling resolves like bare ~/… for parity (shell does not
+      // expand mid-string tilde, but the guard now normalizes it anyway).
+      await expect(
+        detectUnsafeExecControlShellCommand('sqlite3 "file:~/.openclaw/state/openclaw.sqlite"', {
+          stateDir,
+          workdir: root,
+        }),
+      ).resolves.toBe("live-state-sqlite");
+      // A $HOME URI outside the active state dir stays allowed.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          'sqlite3 "file:$HOME/snapshots/openclaw.sqlite?mode=ro"',
+          { stateDir, workdir: root },
+        ),
+      ).resolves.toBeNull();
     });
   });
 
