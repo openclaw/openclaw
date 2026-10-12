@@ -30,9 +30,10 @@ const emptyDiagnostics = (): DebugData => ({
   dynamic: null,
 });
 type Diagnostics = Awaited<ReturnType<typeof loadGatewayDiagnostics>>;
-type DebugData = Omit<Diagnostics, "status" | "health"> & {
+type DebugData = Omit<Diagnostics, "status" | "health" | "automations"> & {
   status: Diagnostics["status"] | null;
   health: Diagnostics["health"] | null;
+  automations: Diagnostics["automations"] | null;
 };
 
 function DebugPageContent() {
