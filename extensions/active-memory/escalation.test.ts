@@ -5,6 +5,9 @@ describe("active-memory escalation", () => {
   it.each([
     "Do you remember what we decided to deploy tomorrow?",
     "What did we discuss last time?",
+    "What phrase did we use for blindly clicking Enable on Active Memory?",
+    "Which internal shortcut name did you use for this?",
+    "What label did I use for the rollout?",
     "Which database did we choose?",
     "Summarize the conversations from January",
     "¿Qué decidimos para mañana?",
@@ -60,6 +63,11 @@ describe("active-memory escalation", () => {
 
   it.each([
     "How do I configure SQLite?",
+    "What phrase should we use for the confirmation action?",
+    "What phrase do we use for the confirmation action?",
+    "What phrase will we use for the confirmation action?",
+    "What phrase did they use for the confirmation action?",
+    "Which label did the docs use for the setting?",
     "Before we deploy, run the tests",
     "Remember to send the report",
     "Remind me tomorrow",
@@ -130,6 +138,13 @@ describe("active-memory escalation", () => {
       resolveRecallEscalationDecision({
         mode: "escalate",
         message: "What did we decide last time?",
+        hasStrongLaneOneHit: false,
+      }),
+    ).toBe("recall");
+    expect(
+      resolveRecallEscalationDecision({
+        mode: "escalate",
+        message: "What phrase did we use for blindly clicking Enable on Active Memory?",
         hasStrongLaneOneHit: false,
       }),
     ).toBe("recall");
