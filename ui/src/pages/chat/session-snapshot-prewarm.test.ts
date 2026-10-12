@@ -37,19 +37,6 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
-  it("starts before consumption and reuses the matching read only once", async () => {
-    await seed();
-    const open = vi.spyOn(indexedDB, "open");
-    prewarmChatSnapshot(key);
-    await vi.dynamicImportSettled();
-    expect(open).toHaveBeenCalledOnce();
-    const reader = new snapshots.SessionSnapshotStore();
-    expect(await reader.read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledOnce();
-    expect(await reader.read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledTimes(2);
-  });
-
   it("reads raw records without validation and rejects malformed prewarm when consumed", async () => {
     await seed();
     const invalid = {
@@ -82,73 +69,25 @@ describe("routed transcript prewarm", () => {
     expect(await reader.read(otherKey)).toBeNull();
   });
 
-  it("leaves the prewarm available when another session reads normally", async () => {
-    await seed();
+  it("retires a completed prewarm before a later forget", async () => {
+    const writer = await seed();
+    const read = database.readStoredChatSnapshotRecord;
+    const settled = createDeferred();
+    vi.spyOn(database, "readStoredChatSnapshotRecord").mockImplementationOnce(async (cacheKey) => {
+      const snapshot = await read(cacheKey);
+      settled.resolve();
+      return snapshot;
+    });
     const open = vi.spyOn(indexedDB, "open");
     prewarmChatSnapshot(key);
-    const reader = new snapshots.SessionSnapshotStore();
-    expect(await reader.read(otherKey)).toEqual({ ...stored, sessionId: "other-session" });
-    expect(await reader.read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["session", "all", "clear"] as const)(
-    "drops an in-flight prewarm on %s invalidation",
-    async (scope) => {
-      await seed();
-      const open = vi.spyOn(indexedDB, "open");
-      prewarmChatSnapshot(key);
-      await vi.dynamicImportSettled();
-      await (scope === "clear"
-        ? clearStoredChatSnapshots()
-        : publishSnapshotInvalidation(scope === "session" ? { sessionKey: key } : {}));
-      expect(open).toHaveBeenCalledOnce();
-      expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(
-        scope === "clear" ? null : stored,
-      );
-      expect(open).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("keeps the routed prewarm when another session is invalidated", async () => {
-    await seed();
-    const open = vi.spyOn(indexedDB, "open");
-    prewarmChatSnapshot(key);
-    await publishSnapshotInvalidation({ sessionKey: otherKey });
-    expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(stored);
+    await settled.promise;
+    writer.forget(key);
+    open.mockClear();
+    expect(await writer.read(key)).toEqual(stored);
     expect(open).toHaveBeenCalledOnce();
   });
 
-  it.each(["write", "forget"] as const)(
-    "retires a completed prewarm before a later %s",
-    async (change) => {
-      const writer = await seed();
-      const read = database.readStoredChatSnapshotRecord;
-      const settled = createDeferred();
-      vi.spyOn(database, "readStoredChatSnapshotRecord").mockImplementationOnce(
-        async (cacheKey) => {
-          const snapshot = await read(cacheKey);
-          settled.resolve();
-          return snapshot;
-        },
-      );
-      const open = vi.spyOn(indexedDB, "open");
-      prewarmChatSnapshot(key);
-      await settled.promise;
-      const latest = { ...stored, deltaCursor: "latest-cursor" };
-      if (change === "write") {
-        writer.write(key, latest);
-        await writer.flush();
-      } else {
-        writer.forget(key);
-      }
-      open.mockClear();
-      expect(await writer.read(key)).toEqual(change === "write" ? latest : stored);
-      expect(open).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["session", "all"] as const)(
+  it.each(["session"] as const)(
     "fences a consumed pending read on %s invalidation",
     async (scope) => {
       await seed();

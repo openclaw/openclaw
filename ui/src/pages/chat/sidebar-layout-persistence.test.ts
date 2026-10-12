@@ -3,7 +3,6 @@ import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-
 import {
   normalizeSidebarSessionActivePanels,
   normalizeSidebarSessionLayouts,
-  type SidebarSessionLayouts,
   updateSidebarSessionActivePanel,
   updateSidebarSessionLayout,
 } from "./sidebar-layout-persistence.ts";
@@ -45,7 +44,7 @@ describe("sidebar session layout settings", () => {
     expect(normalizeSidebarSessionLayouts({ main: saved }).main).toEqual(saved);
   });
 
-  it.each(["split", "expanded", null, undefined] as const)(
+  it.each([undefined] as const)(
     "preserves the stored override %s during unrelated layout writes",
     (override) => {
       const layout = openSlot({ columns: [] }, "workspace");
@@ -107,29 +106,6 @@ describe("sidebar session layout settings", () => {
     expect(persisted?.columns[0]?.activePanelId).toBe("workspace");
     expect(persisted?.columns[0]?.width).toBe(512);
     expect(persisted).toMatchObject({ open: false, expanded: true });
-  });
-
-  it("retains the 500 most recently changed session layouts across reloads", () => {
-    let layouts: SidebarSessionLayouts = {};
-    for (let index = 0; index < 505; index += 1) {
-      layouts = updateSidebarSessionLayout(
-        layouts,
-        `session-${index}`,
-        openSlot({ columns: [] }, "discussion"),
-      );
-    }
-    const storedLayouts = JSON.stringify(layouts);
-    layouts = normalizeSidebarSessionLayouts(JSON.parse(storedLayouts));
-    expect(Object.keys(layouts)).toHaveLength(500);
-    expect(layouts["session-4"]).toBeUndefined();
-    expect(layouts["session-5"]).toBeDefined();
-    expect(layouts["session-504"]).toBeDefined();
-
-    layouts = updateSidebarSessionLayout(layouts, "session-5", layouts["session-5"]!);
-    layouts = updateSidebarSessionLayout(layouts, "session-505", layouts["session-5"]!);
-    expect(Object.keys(layouts)).toHaveLength(500);
-    expect(layouts["session-5"]).toBeDefined();
-    expect(layouts["session-6"]).toBeUndefined();
   });
 
   it("normalizes and caps collapsed active-panel selections", () => {

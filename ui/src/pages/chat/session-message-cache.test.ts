@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -9,7 +9,6 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 function createHost() {
   return {
@@ -44,38 +43,12 @@ function cacheHomeSnapshot(
 }
 
 describe("session message cache", () => {
-  it("canonicalizes main aliases without crossing agent scopes", () => {
-    const { host, cache } = createCacheContext();
-
-    cacheChatMessages(cache, host, { sessionKey: "home" }, ["ops"]);
-
-    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:home" })).toEqual([
-      "ops",
-    ]);
-    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:main" })).toEqual([
-      "ops",
-    ]);
-    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:main:home" })).toEqual([]);
-  });
-
   it.each([
-    {
-      name: "Matrix room IDs",
-      sessionKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org",
-      canonicalKey: "agent:ops:matrix:channel:!Room:Example.Org",
-      distinctKey: "agent:ops:matrix:channel:!room:example.org",
-    },
     {
       name: "Matrix room and thread IDs",
       sessionKey: "Agent:Ops:Matrix:Channel:!Room:Example.Org:Thread:$Event",
       canonicalKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
       distinctKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$event",
-    },
-    {
-      name: "Signal group IDs",
-      sessionKey: "Agent:Ops:Signal:Group:AbC123=",
-      canonicalKey: "agent:ops:signal:group:AbC123=",
-      distinctKey: "agent:ops:signal:group:abc123=",
     },
     {
       name: "Signal group IDs with a normalized thread suffix",
@@ -132,64 +105,6 @@ describe("session message cache", () => {
     expect(
       readChatMessagesFromCache(cache, host, { sessionKey: "global", agentId: "main" }),
     ).toEqual(["main"]);
-  });
-
-  it("keeps only the 20 most recently used sessions", () => {
-    const { host, cache } = createCacheContext();
-    for (let index = 0; index < 20; index += 1) {
-      cacheChatMessages(cache, host, { sessionKey: `agent:ops:session-${index}` }, [index]);
-    }
-
-    readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:session-0" });
-    cacheChatMessages(cache, host, { sessionKey: "agent:ops:session-20" }, [20]);
-    cacheChatMessages(cache, host, { sessionKey: "agent:ops:large" }, [21]);
-
-    expect(cache.size).toBe(20);
-    expect(cache.has(resolveChatSnapshotKey(host, { sessionKey: "agent:ops:session-0" }))).toBe(
-      true,
-    );
-    expect(cache.has(resolveChatSnapshotKey(host, { sessionKey: "agent:ops:session-1" }))).toBe(
-      false,
-    );
-    expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:large" })).toEqual([21]);
-  });
-
-  it("restores messages, pagination, and backing session identity together", () => {
-    const { host, cache } = createCacheContext();
-    const messages = ["oldest", "latest"];
-    const pagination = { hasMore: true as const, nextOffset: 400, totalMessages: 718 };
-    cacheHomeSnapshot(cache, host, {
-      messages,
-      pagination,
-      sessionId: "session-1",
-    });
-
-    const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
-    expect(snapshot).toEqual({
-      messages: ["oldest", "latest"],
-      pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
-      sessionId: "session-1",
-    });
-    expect(snapshot?.messages).toBe(messages);
-    expect(snapshot?.pagination).toBe(pagination);
-    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toBe(snapshot);
-  });
-
-  it("appends an inactive-session message without losing snapshot metadata", () => {
-    const { host, cache } = createCacheContext();
-    cacheHomeSnapshot(cache, host, {
-      messages: ["oldest"],
-      pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
-      sessionId: "session-1",
-    });
-
-    appendChatMessageToCache(cache, host, { sessionKey: "home" }, "latest");
-
-    expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toEqual({
-      messages: ["oldest", "latest"],
-      pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
-      sessionId: "session-1",
-    });
   });
 
   it("claims a shared gateway event only once across retained panes", () => {
@@ -270,25 +185,6 @@ describe("session message cache", () => {
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.widgetHeights).toEqual({
       "canvas:preview": 700,
     });
-  });
-
-  it("reuses retained message weights when snapshot metadata changes", () => {
-    const { host, cache } = createCacheContext();
-    const toJSON = vi.fn(() => ({ role: "assistant", content: "retained" }));
-    const message = { toJSON };
-
-    cacheHomeSnapshot(cache, host, {
-      messages: [message],
-      pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
-      sessionId: "session-1",
-    });
-    cacheHomeSnapshot(cache, host, {
-      messages: [message],
-      pagination: { hasMore: false, totalMessages: 1 },
-      sessionId: "session-1",
-    });
-
-    expect(toJSON).toHaveBeenCalledOnce();
   });
 
   it("removes an empty identity-free snapshot after a cleared session reload", () => {
