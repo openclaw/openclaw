@@ -9,6 +9,11 @@ import {
   runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../sqlite-transaction.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  requestSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmission,
+} from "../sqlite-worker-operation-admission.js";
 import { PostgresSyncConnection } from "./connection.js";
 
 const anchors: DatabaseSync[] = [];
@@ -51,6 +56,50 @@ function postgresFixture() {
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
 describe("experimental PostgreSQL transaction protocol", () => {
+  it.each(["sqlite", "postgres"] as const)(
+    "leaves transaction and commit admission to the domain on %s",
+    (engine) => {
+      const db = engine === "postgres" ? postgresFixture().db : nativeDatabase();
+      db.exec("CREATE TABLE proof (value INTEGER)");
+      const stages: string[] = [];
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+        if (request.facts !== "domain write") {
+          throw new Error("The domain already owns admission");
+        }
+        stages.push(request.stage);
+        grant();
+      });
+      vi.spyOn(Atomics, "wait").mockImplementation(() => {
+        admission.service();
+        return "ok";
+      });
+      try {
+        const result = withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: "domain write" });
+          return runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              db.exec("INSERT INTO proof (value) VALUES (7)");
+              return 7;
+            },
+            {
+              withCommit(commit) {
+                requestSqliteWorkerOperationAdmission({ stage: "commit", facts: "domain write" });
+                commit();
+              },
+            },
+          );
+        });
+        expect(result).toBe(7);
+        expect(db.isTransaction).toBe(false);
+        expect(stages).toEqual(["transaction", "commit"]);
+        expect(admission.failure).toBeUndefined();
+      } finally {
+        admission.finish();
+      }
+    },
+  );
+
   it.each(["immediate", "deferred", "reserved", "worker", "single-statement"] as const)(
     "uses one locked read-committed transaction for %s writes",
     (mode) => {

@@ -4414,7 +4414,7 @@ jobs:
       - name: Start PostgreSQL service
         run: |
           docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
-            --user postgres postgres:17 bash -ec \
+            --shm-size=1g --user postgres postgres:17 bash -ec \
             'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
              echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
              exec postgres -D /tmp/openclaw-pg -h 0.0.0.0'

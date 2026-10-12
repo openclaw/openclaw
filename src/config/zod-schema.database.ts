@@ -11,10 +11,16 @@ export const DatabaseConfigSchema = z
     }),
     postgres: z
       .strictObject({
-        connection: SecretInputSchema.optional().register(sensitive).register(configUiMetadata, {
-          label: "PostgreSQL Connection (Experimental)",
-          help: "Experimental PostgreSQL connection DSN, required when database.engine is postgres. Prefer a SecretRef; the host resolves it before handing it to database workers. Connection failures never fall back to SQLite.",
-        }),
+        connection: SecretInputSchema.refine(
+          (value) => typeof value === "string" || value.source !== "store",
+          "PostgreSQL bootstrap connection cannot use a store-backed SecretRef; use an env, file or exec SecretRef.",
+        )
+          .optional()
+          .register(sensitive)
+          .register(configUiMetadata, {
+            label: "PostgreSQL Connection (Experimental)",
+            help: "Experimental PostgreSQL connection DSN, required when database.engine is postgres. Use an env/file/exec SecretRef; store-backed refs cannot bootstrap the database. The host resolves it before handing it to database workers. Connection failures never fall back to SQLite.",
+          }),
         schemaPrefix: z
           .string()
           .regex(/^[a-z_][a-z0-9_]{0,26}$/)

@@ -96,7 +96,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   runTransaction<T>(
     operation: () => T,
     options?: { withCommit?: (commit: () => void) => void },
-    ...modes: [readOnly?: boolean, reserved?: boolean, admitWorker?: boolean]
+    ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
     return runPostgresTransactionSync(this, operation, options, ...modes);
   }

@@ -61,7 +61,10 @@ export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
   close(this: void): void;
-  withWriteTransaction<T>(operation: () => T): T;
+  withWriteTransaction<T>(
+    operation: () => T,
+    options?: Parameters<typeof runSqliteImmediateTransactionSync>[2],
+  ): T;
 };
 
 function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
@@ -703,6 +706,7 @@ export function createWorkboardSqliteKernel(
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
     close,
-    withWriteTransaction: (operation) => runSqliteImmediateTransactionSync(db, operation),
+    withWriteTransaction: (operation, options) =>
+      runSqliteImmediateTransactionSync(db, operation, options),
   };
 }
