@@ -2,7 +2,7 @@
 import { html, render } from "lit";
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { GatewayUrlConfirmation } from "./gateway-url-confirmation.ts";
+import { GatewayUrlConfirmation } from "./solid/gateway-url-confirmation.tsx";
 
 const modalModule = vi.hoisted(() => ({ load: vi.fn() }));
 

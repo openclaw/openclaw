@@ -51,7 +51,11 @@ export function installPopoverPolyfill(): () => void {
     writable: true,
     value(this: Element, selector: string) {
       if (selector === ":popover-open") {
-        return this.isConnected && this.hasAttribute("popover") && opened.has(this);
+        if (!this.isConnected || !this.hasAttribute("popover")) {
+          opened.delete(this);
+          return false;
+        }
+        return opened.has(this);
       }
       return matches.call(this, selector);
     },

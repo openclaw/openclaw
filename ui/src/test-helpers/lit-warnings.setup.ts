@@ -72,40 +72,6 @@ if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis))
   });
 }
 
-// JSDOM has no native popover state. Keep browser suites on the real platform.
-if (
-  typeof HTMLElement !== "undefined" &&
-  !("__vitest_browser__" in globalThis) &&
-  !("showPopover" in HTMLElement.prototype)
-) {
-  const shown = new WeakSet<Element>();
-  // oxlint-disable-next-line typescript/unbound-method -- The DOM intrinsic is called with its explicit receiver below.
-  const matches = Element.prototype.matches;
-  Object.defineProperty(Element.prototype, "matches", {
-    configurable: true,
-    writable: true,
-    value(this: Element, selector: string) {
-      return selector === ":popover-open" ? shown.has(this) : matches.call(this, selector);
-    },
-  });
-  Object.defineProperties(HTMLElement.prototype, {
-    showPopover: {
-      configurable: true,
-      writable: true,
-      value(this: HTMLElement) {
-        shown.add(this);
-      },
-    },
-    hidePopover: {
-      configurable: true,
-      writable: true,
-      value(this: HTMLElement) {
-        shown.delete(this);
-      },
-    },
-  });
-}
-
 if (typeof HTMLDialogElement !== "undefined" && !("showModal" in HTMLDialogElement.prototype)) {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true,
