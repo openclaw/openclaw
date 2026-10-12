@@ -39,8 +39,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -210,9 +212,10 @@ beforeEach(async () => {
       return;
     }
     publications.push(
-      publish(update).catch((error: unknown) => {
-        publicationErrors.push(error);
-      }),
+      // Match production subscription ownership: committed broadcasts outlive the producer.
+      runOutsideAsyncWorkScope(() => runWithRetainedGatewayRootWork(() => publish(update))).catch(
+        (error: unknown) => void publicationErrors.push(error),
+      ),
     );
   });
   voiceSessionId = await createOrResumeClientVoiceSession({
@@ -257,9 +260,7 @@ afterEach(async () => {
   }
 });
 
-function scope() {
-  return { agentId, sessionKey: canonicalKey, sessionId, storePath };
-}
+const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
