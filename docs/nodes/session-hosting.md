@@ -341,6 +341,12 @@ the Gateway pauses advisory disk-space checks and retains the last sample for
 that placement. Checks resume on the next scheduled sweep after the current
 runner reconnects. Disabling hosting does not discard the session's workspace.
 
+The Gateway samples the volume containing the placement's remote workspace.
+New placements, placement activity, and runner availability changes refresh the
+sample on the next maintenance pass. An unchanged idle placement reuses its
+successful sample for up to 15 minutes. Samples are advisory and do not block
+turns or workspace writes.
+
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 

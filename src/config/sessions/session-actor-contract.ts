@@ -13,7 +13,10 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
-import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
+import type {
+  SessionEntryBookkeepingReducer,
+  SessionEntryPatchOperation,
+} from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -165,6 +168,7 @@ export type SessionActorPhaseInputs = {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
+    restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
   };
   deliveryPending:
     | {
@@ -245,6 +249,8 @@ export type SessionActorReceipt = {
     after: SessionTranscriptContextVersion;
     /** Includes idempotency adoption, not only newly inserted messages. */
     appendedMessages: SessionTurnCommitted["result"]["appendedMessages"];
+    /** Complete append delta in this generation; absent when payloads are unavailable. */
+    appendedEvents?: Array<{ rawSeq: number; event: unknown; serializedBytes: number }>;
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
@@ -289,7 +295,7 @@ export type SessionActorOutcome<Value> =
     };
 
 export type SessionActorCommitObserver<Value> = {
-  /** Called once with captured native evidence before fallible publication or cleanup. */
+  /** Called once with read-only native evidence before fallible publication or cleanup. */
   committed(outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>): void;
 };
 
@@ -352,7 +358,7 @@ export type SessionActor = SessionActorLifetime &
     readonly target: SessionActorTarget;
     /** Present only when the selected backend owns the storage domain. */
     readonly storage?: SessionActorStorage;
-    /** Detached installed MAIN state; undefined means fenced/missing. Never opens SQLite or dispatches a worker request. */
+    /** Read-only installed MAIN revision; copy before editing. Undefined means fenced/missing. Never dispatches a worker request. */
     snapshot(authority: SessionActorAuthority): SessionActorHotState | undefined;
     read(authority: SessionActorAuthority): Promise<SessionActorHotState>;
     /** Drain retained attempts and accepted descendants; a teardown timeout is not settlement. */

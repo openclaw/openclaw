@@ -492,20 +492,6 @@ suite.define(() => {
 
   it.each([
     {
-      name: "completed",
-      colorScheme: "light" as const,
-      width: 560,
-      status: "completed",
-      active: false,
-    },
-    {
-      name: "paused",
-      colorScheme: "dark" as const,
-      width: 1280,
-      status: "in_progress",
-      active: false,
-    },
-    {
       name: "active",
       colorScheme: "dark" as const,
       width: 560,

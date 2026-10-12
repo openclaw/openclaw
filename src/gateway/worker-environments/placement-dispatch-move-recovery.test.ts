@@ -25,7 +25,7 @@ describe("worker Gateway move recovery", () => {
   async function abandonmentFixture() {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const options = { deviceRunnerAvailable: false, workspacePath: support.testState.root };
-    const harness = createHarness(support.testState.stateDb, placements, options);
+    const harness = await createHarness(support.testState.stateDb, placements, options);
     const active = await harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("Move source was not active");
@@ -126,7 +126,7 @@ describe("worker Gateway move recovery", () => {
     "preserves the accepted checkpoint when pending Gateway move recovery is %s",
     async (mode) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -192,7 +192,7 @@ describe("worker Gateway move recovery", () => {
         );
         expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(false);
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);
@@ -234,7 +234,7 @@ describe("worker Gateway move recovery", () => {
     "Stop settles an accepted $kind result with $source source without resuming a policy-rejected Gateway move",
     async ({ kind, source }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -295,7 +295,7 @@ describe("worker Gateway move recovery", () => {
         revokeSessionAuthority: vi.fn(),
       });
       const prepareGatewayMove = vi.fn();
-      const stopping = createHarness(support.testState.stateDb, placements, {
+      const stopping = await createHarness(support.testState.stateDb, placements, {
         runReclaimPreparation: barriers.runReclaimPreparation,
         prepareGatewayMove,
       });
@@ -339,7 +339,7 @@ describe("worker Gateway move recovery", () => {
     "materializes a torn-down Gateway move before local recovery while its owner is %s",
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const ready = await support.seedReady(original.ready.environmentId);
       const environments = support.createService(support.createProvider());
       const attached = await environments.attachSession({
@@ -408,7 +408,7 @@ describe("worker Gateway move recovery", () => {
           restoreAdmission = () => admission.mockRestore();
         }
       });
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentDestroyed();
@@ -480,7 +480,7 @@ describe("worker Gateway move recovery", () => {
     "recovers a persisted draining $name under current policy without blocking Stop",
     async ({ target, allowed }) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const original = createHarness(support.testState.stateDb, placements);
+      const original = await createHarness(support.testState.stateDb, placements);
       const active = await original.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("Move source was not active");
@@ -499,7 +499,7 @@ describe("worker Gateway move recovery", () => {
         database: support.testState.stateDb,
       });
       const prepareGatewayMove = vi.fn();
-      const restarted = createHarness(support.testState.stateDb, restartedStore, {
+      const restarted = await createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
       });
       restarted.markEnvironmentOwnerEpoch(2);

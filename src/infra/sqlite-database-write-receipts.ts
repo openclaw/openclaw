@@ -3,9 +3,9 @@ import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  SqliteDatabaseGenerationSlot,
   isSqliteDatabaseAdmissionRetired as isRetired,
-  readSqliteDatabaseRecordWriteRevision as readWriteRevision,
+  readSqliteDatabaseGeneration,
+  advanceSqliteDatabaseGeneration,
   type Admission,
 } from "./sqlite-database-admission-record.js";
 import { hasSqlitePostCommitScope } from "./sqlite-post-commit.js";
@@ -42,10 +42,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   ): T {
     const record = owner.admission(database);
     const tracked = record
-      ? Atomics.load(
-          new Int32Array(record.generation),
-          SqliteDatabaseGenerationSlot.writeScopeCount,
-        ) > 0
+      ? readSqliteDatabaseGeneration(record, "writeScopeCount") > 0
       : state.localScopeRevisions.has(database);
     if (!tracked) {
       const value = run();
@@ -57,11 +54,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     const keys = normalizedWriteScopes(scope);
     if (
       record &&
-      record.writeScopes.size <
-        Atomics.load(
-          new Int32Array(record.generation),
-          SqliteDatabaseGenerationSlot.writeScopeCount,
-        )
+      record.writeScopes.size < readSqliteDatabaseGeneration(record, "writeScopeCount")
     ) {
       // Only cold actor-key registration needs metadata exchange. Inactive actors add none.
       owner.exchange(record);
@@ -102,22 +95,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       if (!record.writeScopes.has(key)) {
         record.writeScopes.set(key, new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
         if (threadId === 0) {
-          Atomics.add(
-            new Int32Array(record.generation),
-            SqliteDatabaseGenerationSlot.writeScopeCount,
-            1,
-          );
+          advanceSqliteDatabaseGeneration(record, "writeScopeCount");
         }
         changed = true;
       }
     }
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
-      Atomics.add(
-        new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.publicationRevision,
-        1,
-      );
+      advanceSqliteDatabaseGeneration(record, "publicationRevision");
       owner.publish(record);
     }
   }
@@ -127,13 +112,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     keys: readonly string[],
     pending?: Set<string> | null,
   ): string {
-    const generation = new Int32Array(record.generation);
     return JSON.stringify([
       record.identity,
       record.generationId,
-      Atomics.load(generation, SqliteDatabaseGenerationSlot.schemaRevision),
-      (Atomics.load(generation, SqliteDatabaseGenerationSlot.unscopedWriteRevision) +
-        (pending === null ? 1 : 0)) |
+      readSqliteDatabaseGeneration(record, "schemaRevision"),
+      (readSqliteDatabaseGeneration(record, "unscopedWriteRevision") + (pending === null ? 1 : 0)) |
         0,
       keys.map((key) => [
         key,
@@ -182,10 +165,10 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     state.localScopeRevisions.set(database, revisions);
   }
 
-  /** Per-key receipts survive unrelated committed writes. */
-  function readSqliteDatabaseScopedWriteToken(
+  function readScopedWriteToken(
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
+    includePending = false,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
@@ -197,7 +180,18 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (owner.readRevision(database) === undefined) {
       return undefined;
     }
-    return record ? scopedWriteToken(record, keys) : localScopedWriteToken(database, keys);
+    const pending = includePending ? state.pendingWriteScopes.get(database) : undefined;
+    return record
+      ? scopedWriteToken(record, keys, pending)
+      : localScopedWriteToken(database, keys, pending);
+  }
+
+  /** Per-key receipts survive unrelated committed writes. */
+  function readSqliteDatabaseScopedWriteToken(
+    database: DatabaseSync,
+    scope: string | readonly SqliteDatabaseWriteScope[],
+  ): string | undefined {
+    return readScopedWriteToken(database, scope);
   }
 
   function readSqliteDatabaseScopedWriteTokenForPath(
@@ -218,20 +212,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    const keys = normalizedWriteScopes(scope);
-    const record = owner.admission(database);
-    if (record) {
-      ensureWriteScopes(record, keys);
-    } else {
-      ensureLocalWriteScopes(database, keys);
-    }
-    if (owner.readRevision(database) === undefined) {
-      return undefined;
-    }
-    const pending = state.pendingWriteScopes.get(database);
-    return record
-      ? scopedWriteToken(record, keys, pending)
-      : localScopedWriteToken(database, keys, pending);
+    return readScopedWriteToken(database, scope, true);
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */
@@ -240,7 +221,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (!record || isRetired(record)) {
       return undefined;
     }
-    return `${record.identity}:${readWriteRevision(record)}`;
+    return `${record.identity}:${record.generationId}:${readSqliteDatabaseGeneration(record, "writeRevision")}`;
   }
 
   /** Predict the token published when the current native mutation settles. */
@@ -257,7 +238,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (!record || isRetired(record)) {
       return undefined;
     }
-    return `${record.identity}:${(readWriteRevision(record) + 1) | 0}`;
+    return `${record.identity}:${record.generationId}:${(readSqliteDatabaseGeneration(record, "writeRevision") + 1) | 0}`;
   }
 
   return {
@@ -290,11 +271,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
             Atomics.add(new Int32Array(revision), 0, 1);
           } else if (
             record &&
-            record.writeScopes.size <
-              Atomics.load(
-                new Int32Array(record.generation),
-                SqliteDatabaseGenerationSlot.writeScopeCount,
-              )
+            record.writeScopes.size < readSqliteDatabaseGeneration(record, "writeScopeCount")
           ) {
             // Another isolate may have registered the key after this writer's snapshot.
             unscoped = true;
@@ -307,11 +284,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
           (state.localUnscopedRevisions.get(database) ?? 0) + 1,
         );
         if (record) {
-          Atomics.add(
-            new Int32Array(record.generation),
-            SqliteDatabaseGenerationSlot.unscopedWriteRevision,
-            1,
-          );
+          advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
         }
       }
     },

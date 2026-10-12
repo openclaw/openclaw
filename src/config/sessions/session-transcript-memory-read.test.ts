@@ -14,7 +14,7 @@ import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { readRecentUserAssistantTextForSession } from "./transcript.js";
@@ -140,8 +140,8 @@ describe("memory transcript read adapters", () => {
     await runWithSessionActorStorage(binding, async () => {
       expect(bindSessionTranscriptStoreScope(scope).storePath).toBe(scope.storePath);
       expect(resolveSessionTranscriptReadTarget(scope)).toMatchObject(scope);
-      expect(await loadTranscriptEvents(scope)).toEqual(events);
-      await expect(loadTranscriptEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow(
+      expect(await loadSessionTranscriptEvents(scope)).toEqual(events);
+      await expect(loadSessionTranscriptEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow(
         "too large",
       );
       expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
@@ -202,10 +202,10 @@ describe("memory transcript read adapters", () => {
       ),
     );
     await runWithSessionActorStorage(root.binding, async () => {
-      expect(await loadTranscriptEvents(sibling.scope)).toEqual(sibling.events);
-      expect(await loadTranscriptEvents({ ...sibling.scope, sessionKey: undefined })).toEqual(
-        sibling.events,
-      );
+      expect(await loadSessionTranscriptEvents(sibling.scope)).toEqual(sibling.events);
+      expect(
+        await loadSessionTranscriptEvents({ ...sibling.scope, sessionKey: undefined }),
+      ).toEqual(sibling.events);
       expect(await resolveSessionKeyBySessionIdAsync(sibling.scope)).toBe(sibling.scope.sessionKey);
       expect(
         await resolveSessionTranscriptRuntimeTarget(sibling.scope, undefined, {
@@ -216,12 +216,12 @@ describe("memory transcript read adapters", () => {
         sessionId: "two",
         selectedSessionId: "two-new",
       });
-      expect(await loadTranscriptEvents({ ...otherAgent.scope, sessionKey: undefined })).toEqual(
-        otherAgent.events,
-      );
+      expect(
+        await loadSessionTranscriptEvents({ ...otherAgent.scope, sessionKey: undefined }),
+      ).toEqual(otherAgent.events);
       const before = root.owner.listSessions(authority).length;
       const missing = { ...root.scope, sessionKey: undefined, sessionId: "missing" };
-      expect(await loadTranscriptEvents(missing)).toEqual([]);
+      expect(await loadSessionTranscriptEvents(missing)).toEqual([]);
       expect(
         await readRecentSessionConversationTextAsync(missing, { role: "user", limit: 2 }),
       ).toEqual([]);
@@ -258,7 +258,7 @@ describe("memory transcript read adapters", () => {
     const receipt = { ...anchor, role: "user" as const, logicalTurnId: "current-turn" };
     await runWithSessionActorStorage(binding, () =>
       runWithSessionTranscriptReadFence(receipt, async () => {
-        expect(ids(await loadTranscriptEvents(scope))).toEqual(["one", "user", "answer"]);
+        expect(ids(await loadSessionTranscriptEvents(scope))).toEqual(["one", "user", "answer"]);
         expect(await readLatestTranscriptAssistantTextAsync(scope)).toMatchObject({
           text: "Answer one",
         });

@@ -51,6 +51,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   const pending: Stall[] = [];
   let stopped = false;
   let dropped = 0;
+  let delayMaxMs = 0;
   let depth = 0;
   let startedAt = 0;
   let segmentAt = 0;
@@ -81,6 +82,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
     const at = now();
     segment(at);
     const elapsedMs = at - startedAt;
+    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
     if (elapsedMs > STALL_MS) {
       if (pending.length < MAX_PENDING_STALLS) {
         pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
@@ -101,6 +103,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       }
       pending.length = 0;
       dropped = 0;
+      delayMaxMs = 0;
     },
     enter(name) {
       // Activation can occur within an already-running callback, before its hook was enabled.
@@ -129,7 +132,17 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       const stalls = pending.splice(0);
       const omitted = dropped;
       dropped = 0;
-      return { stalls, dropped: omitted };
+      const maximum = delayMaxMs;
+      delayMaxMs = 0;
+      return { stalls, dropped: omitted, delayMaxMs: maximum };
+    },
+    reset() {
+      pending.length = 0;
+      dropped = 0;
+      delayMaxMs = 0;
+      startedAt = segmentAt = now();
+      longestMs = 0;
+      longestTask = task;
     },
     stop: () => observer.stop(),
   };

@@ -130,7 +130,11 @@ resources requires the reported repair or retry before it can restart. See
 
 Detailed readiness can include the latest completed `eventLoop` diagnostic
 snapshot. The sampler owns observation windows; health reads do not reset a
-pending measurement. No snapshot is available until the first window completes. Its
+pending measurement. Native event-loop delay sampling runs at 20 ms resolution;
+the Gateway publishes completed observations once per second, without waking a
+JavaScript callback for every delay sample. Long blocking callbacks remain part
+of the observation even when they delay the publisher. No snapshot is available
+until the first window completes. Its
 `cpuCoreRatio` measures user and system CPU time across the whole Gateway process,
 including worker and native threads, divided by elapsed wall time. The unit is
 core equivalents: `1` means one CPU core fully occupied over the interval, and
@@ -170,11 +174,13 @@ Tracked worker CPU and the residual are omitted on Bun: its worker API can
 report zero when native counter collection fails. Unsupported or failed native
 APIs on any platform leave the corresponding field absent.
 
-The Control UI's **CPU** box reads the same sampler through `system.info.eventLoop`.
-Its detail overlay shows host usage separately from the process and thread
-breakdown. Process and thread percentages use `100%` for one fully occupied
-core; host usage uses `100%` for all reported logical CPUs. Values show a dash
-until their first complete measurement, or while unavailable.
+The Control UI's **Gateway CPU** box reads the same sampler through
+`system.info.eventLoop`. Its headline shows process core-equivalents: `2.58 cores`
+means about two and a half fully occupied logical CPUs. Build and tool subprocesses
+are excluded. The separate **Host** reading includes all host processes and uses
+`100%` for all reported logical CPUs. In the detail overlay, process and thread
+percentages use `100%` for one fully occupied core. Values show a dash until their
+first complete measurement, or while unavailable.
 
 Event-loop delay and utilization describe the main thread separately. A `cpu`
 degradation reason reports process CPU pressure with delay co-evidence; it does

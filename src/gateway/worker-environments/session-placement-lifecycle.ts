@@ -33,6 +33,8 @@ export type SessionWorkerPlacementContext = {
         | "retireSessionPlacement"
         | "listForReconcile"
         | "listAsync"
+        | "prepareMaintenancePlacements"
+        | "prepareSessionPlacement"
         | "retireSessionPlacementAsync"
         | "prepareRuntimeRefresh"
       >
@@ -347,7 +349,7 @@ export async function prepareSessionWorkerPlacementRetirement(
 }
 
 /** Validate before cancellation; the returned stop remains bound to this placement across drains. */
-export function prepareSessionWorkerPlacementStop(params: {
+export async function prepareSessionWorkerPlacementStop(params: {
   action: "archive" | "delete" | "recover";
   agentId: string;
   authorize?: () => void;
@@ -355,9 +357,9 @@ export function prepareSessionWorkerPlacementStop(params: {
   sessionId?: string;
   sessionKey: string;
   sessionKeys?: readonly string[];
-}): { stop: () => Promise<void>; startBeforeDrain: boolean } {
+}): Promise<{ stop: () => Promise<void>; startBeforeDrain: boolean }> {
   const { agentId, context, sessionId, sessionKey } = params;
-  const expected = readSessionWorkerPlacement(params);
+  const expected = await readSessionWorkerPlacementAsync(params);
   // Cron run aliases share their base's physical session, even after session-id adoption.
   const matches = (candidate: Placement) =>
     candidate.sessionId === sessionId &&

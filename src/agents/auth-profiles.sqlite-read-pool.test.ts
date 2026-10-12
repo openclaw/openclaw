@@ -130,7 +130,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     }
   });
 
-  it("reuses format admission across pool reopen and validates a replacement file", async () => {
+  it("revalidates format after final pool close and rejects a replacement file", async () => {
     await withReaders((agentDir) => {
       const pathname = resolveAuthProfileDatabasePath(agentDir);
       const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
@@ -143,6 +143,17 @@ describe("auth profile sqlite reader lifecycle", () => {
       try {
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
         closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(
+          formatQueries().filter((sql) => /^PRAGMA schema_version\b/iu.test(sql)),
+        ).toHaveLength(1);
+        expect(formatQueries().filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
+          1,
+        );
+        expect(
+          formatQueries().filter((sql) => /FROM main\.sqlite_schema\b/iu.test(sql)),
+        ).toHaveLength(1);
         observed.queries.length = 0;
         expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
         expect(formatQueries()).toEqual([]);

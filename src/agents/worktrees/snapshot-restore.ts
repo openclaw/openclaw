@@ -5,8 +5,9 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from "./capacity.js";
+import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
-import { addManagedWorktree, materializeManagedWorktree } from "./checkout.js";
+import { addManagedWorktree } from "./checkout.js";
 import {
   requireGit,
   worktreePathExists,

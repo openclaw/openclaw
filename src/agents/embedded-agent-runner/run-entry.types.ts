@@ -23,6 +23,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type RunEntryModelResolve = {
   prompt: string;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   images?: readonly { mimeType?: string }[];
   cwd?: string;
   modelSelectionLocked?: boolean;

@@ -1,4 +1,3 @@
-import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -10,6 +9,7 @@ import type {
   ReadSessionMessagesResult,
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
+  SessionTranscriptPageOptions,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read.types.js";
 import type {
@@ -22,6 +22,7 @@ import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -106,7 +107,6 @@ export type ChatHistoryPageParams = {
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
-  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -184,6 +184,13 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "history-event-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptPageOptions;
+      };
+    }
   | {
       kind: "recent-text";
       params: {
@@ -282,6 +289,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "recent-text"; result: SessionRecentConversationText[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }

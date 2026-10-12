@@ -81,7 +81,7 @@ debugging the full tool payload.
 Long tool results have a collapsed preview in the Control UI. **Show full output**
 opens the saved result as plain text; copy and download use that text, not the
 preview. Reloading the conversation reads the same saved result. Inspection is
-subject to the Gateway's message-size limits and configured transcript redaction.
+subject to the Gateway's message-size limits. Tool-result text is not secret-masked.
 Tool-output inspection requests the supported maximum of 2,000,000 characters per
 text field; a result that remains capped is explicitly marked unavailable.
 A preview limit does not mean Codex truncated the model's input.

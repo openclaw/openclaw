@@ -13,6 +13,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "./session-transcript-reconcile-pool.js";
 import {
@@ -64,6 +66,7 @@ afterEach(async () => {
   await closeSessionTranscriptReconcileWorkerPool();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  clearRuntimeConfigSnapshot();
 });
 
 it.each([
@@ -82,6 +85,9 @@ it.each([
     const continuedSession = continuation === "redirtied" ? "first" : "second";
     const stateDir = tempDirs.make("transcript-reconcile-continuation-");
     const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+    setRuntimeConfigSnapshot({
+      session: { store: resolveSessionStorePathCore(undefined, options) },
+    });
     for (const sessionId of ["first", "second"]) {
       await persistSessionTranscriptTurn(
         { ...options, sessionId, sessionKey: `agent:main:${sessionId}` },

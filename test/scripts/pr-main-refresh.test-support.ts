@@ -283,15 +283,6 @@ export function createMainRefreshFixture(
     requiredCheckRows: undefined as
       | Array<{ name: string; bucket: string; state: string }>
       | undefined,
-    reviewComments: [
-      {
-        id: 1,
-        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=42 -->`,
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-      },
-    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -613,8 +604,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
     if (args.includes('POST')) {
       value = { html_url: 'https://example.invalid/pr/42#completion' };
     } else {
-      event({ kind: 'review-comments' });
-      value = [control.reviewComments];
+      value = [[]];
     }
   } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number + '/files?per_page=100') {
     value = [control.metadata.files.map(file => ({

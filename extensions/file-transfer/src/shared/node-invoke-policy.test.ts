@@ -1,5 +1,9 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendFileTransferAudit } from "./audit.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import {
@@ -28,7 +32,12 @@ vi.mock("./policy.js", async (importOriginal) => {
   };
 });
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.mocked(persistLiteralGrant).mockReset();
   vi.mocked(persistLiteralGrant).mockResolvedValue(undefined);
 });

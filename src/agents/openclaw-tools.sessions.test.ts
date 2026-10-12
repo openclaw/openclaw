@@ -9,6 +9,10 @@ import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -150,6 +154,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     installMessagingTestRegistry();
+    setRuntimeConfigSnapshot(TEST_CONFIG);
     await seedSession("agent:main:main");
   });
   afterEach(() =>
@@ -158,6 +163,7 @@ describe("sessions tools", () => {
       resetGatewayWorkAdmission,
       resetSystemEventsForTest,
       resetAdjustedParamsByToolCallIdForTests,
+      clearRuntimeConfigSnapshot,
     ),
   );
   afterAll(() =>
@@ -429,20 +435,20 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_history sets contentRedacted independently of contentTruncated", async () => {
+  it("sessions_history preserves credential text while reporting truncation", async () => {
     const secret = "sk-9876543210fedcba9876";
     mockGatewayResponses({
       "chat.history": { messages: [textAssistant(`${secret} ${"safe text ".repeat(420)}`)] },
     });
-    const result = await getSessionTool("sessions_history").execute("redacted", {
+    const result = await getSessionTool("sessions_history").execute("preserved", {
       sessionKey: "main",
     });
     expect(result.details).toMatchObject({
-      contentRedacted: true,
+      contentRedacted: false,
       contentTruncated: true,
       truncated: true,
     });
-    expect(JSON.stringify(result.details)).not.toContain(secret);
+    expect(JSON.stringify(result.details)).toContain(secret);
   });
 
   it("sessions_send does not redeliver a source reply when history lacks its message-tool result", async () => {

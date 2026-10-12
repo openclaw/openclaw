@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   listUserChannelIdentitiesInDatabase,
   resolveUserChannelIdentityInDatabase,
@@ -23,7 +20,7 @@ import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 export function readUserProfileCommand(
   db: DatabaseSync,
   command: Extract<OpenClawStateReadCommand, { type: `userProfiles.${string}` }>,
-): Extract<OpenClawStateReadResult, { type: `userProfiles.${string}` }> {
+) {
   switch (command.type) {
     case "userProfiles.authority.resolve":
       return readUserProfileAuthorityCommand(db, command);

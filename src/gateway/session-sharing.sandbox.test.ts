@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -61,8 +63,10 @@ describe("session sharing sandbox requirements", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const guest = sandboxRoleClient("view");
       const maintainer = sandboxRoleClient("write");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const guestId = guest.authenticatedUserProfile!.profileId;
       const maintainerId = maintainer.authenticatedUserProfile!.profileId;
       const hostSessionKey = "agent:main:maintainer-host-session";

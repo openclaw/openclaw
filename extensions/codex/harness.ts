@@ -475,6 +475,12 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    withDescendantCancellation: async (params, run) => {
+      const { withCodexSessionDescendantCancellation } =
+        await import("./src/app-server/session-cancellation.js");
+      params.assertCurrent();
+      return withCodexSessionDescendantCancellation(options.bindingStore, params, run);
+    },
     withSessionDeletion: async (params, run) => {
       const { withCodexAppServerSessionDeletion } =
         await import("./src/app-server/session-retirement.js");

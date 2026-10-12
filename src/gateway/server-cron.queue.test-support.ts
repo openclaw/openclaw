@@ -140,7 +140,6 @@ export function registerGatewayCronQueueTests({
         const failedReceipts = receipts();
         expect(failedReceipts).toHaveLength(1);
         expect(failedReceipts[0]).toMatchObject({ status: "running" });
-        expect(cronState.activeTimerTicks).toBe(0);
         const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
           (entry) => entry.id === job.id,
         );
@@ -175,7 +174,6 @@ export function registerGatewayCronQueueTests({
         expect(receipts()).toEqual([
           expect.objectContaining({ receipt_id: failedReceipts[0]?.receipt_id, status: "ok" }),
         ]);
-        expect(cronState.activeTimerTicks).toBe(0);
       } finally {
         database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
       }

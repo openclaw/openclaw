@@ -158,7 +158,7 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  font-weight: var(--wa-font-weight-semibold);
+  font-weight: var(--control-ui-font-weight-semibold);
   text-transform: uppercase;
 }
 
@@ -227,7 +227,7 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-menu-row .picker-select__label {
-  font-weight: var(--wa-font-weight-normal);
+  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
@@ -257,8 +257,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-filter-panel :is(button, a, input):focus-visible {
-  outline: var(--wa-focus-ring);
-  outline-offset: var(--wa-focus-ring-offset);
+  outline: var(--control-ui-focus-ring);
+  outline-offset: var(--control-ui-focus-ring-offset);
 }
 
 /* Accent rings are reserved for keyboard focus: an open trigger keeps its
@@ -304,7 +304,7 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-filter-panel .picker-select__option .picker-select__label {
-  font-weight: var(--wa-font-weight-normal);
+  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .sidebar-session-filter-panel .picker-select__check {

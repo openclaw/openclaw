@@ -8,6 +8,7 @@ import {
   createUpdateDoctorDatabaseWriteCapture,
   DoctorMaintenanceRefusalError,
 } from "../infra/update-doctor-result.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -61,23 +62,74 @@ export async function createDoctorMaintenanceState(options: {
       agentRoot === null
         ? undefined
         : (agentRoot ?? (resourcesParent ? undefined : resolveStateDir(selectedEnv)));
-    await resources?.close(
-      drainRoot === undefined
-        ? undefined
-        : async () => {
-            const { closeOpenClawAgentDatabasesAsync } =
-              await import("../state/openclaw-agent-db-lifecycle.js");
-            await closeOpenClawAgentDatabasesAsync(drainRoot);
-          },
+    const failures: unknown[] = [];
+    const closeScope = async (close: () => Promise<void>, clear: () => void) => {
+      try {
+        await close();
+        clear();
+      } catch (error) {
+        // A disposer can fail after retiring only part of its owned batch. Retry that same
+        // sealed scope once so a transient close cannot strand the stopped Gateway.
+        try {
+          await close();
+          clear();
+          failures.push(error);
+        } catch (retryError) {
+          failures.push(
+            new AggregateError([error, retryError], "Doctor maintenance resource cleanup failed.", {
+              cause: retryError,
+            }),
+          );
+        }
+      }
+    };
+    const currentResources = resources;
+    let resourcesClosed = currentResources === undefined;
+    if (currentResources) {
+      await closeScope(
+        () =>
+          currentResources.close(
+            drainRoot === undefined
+              ? undefined
+              : async () => {
+                  const { closeOpenClawAgentDatabasesAsync } =
+                    await import("../state/openclaw-agent-db-lifecycle.js");
+                  await closeOpenClawAgentDatabasesAsync(drainRoot);
+                },
+          ),
+        () => {
+          resourcesClosed = true;
+        },
+      );
+    }
+    const currentInspections = inspections;
+    if (currentInspections) {
+      await closeScope(
+        () => currentInspections.close(),
+        () => {
+          inspections = undefined;
+        },
+      );
+    }
+    await closeScope(
+      async () => {
+        // Auth inspection readers are pooled separately from canonical agent handles.
+        const { closeAuthProfileReadPool } =
+          await import("../agents/auth-profiles/sqlite-read-pool.js");
+        closeAuthProfileReadPool({ kind: "root", rootPath: resolveStateDir(selectedEnv) });
+      },
+      () => {
+        if (resourcesClosed) {
+          resources = undefined;
+          resourcesParent = undefined;
+        }
+      },
     );
-    await inspections?.close();
-    // Auth inspection readers are pooled separately from canonical agent handles.
-    const { closeAuthProfileReadPool } =
-      await import("../agents/auth-profiles/sqlite-read-pool.js");
-    closeAuthProfileReadPool({ kind: "root", rootPath: resolveStateDir(selectedEnv) });
-    resources = undefined;
-    resourcesParent = undefined;
-    inspections = undefined;
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, "Doctor maintenance resource cleanup failed.");
+    }
   };
   const settleCapture = async () => {
     if (owner && capture && captureAdmitted) {
@@ -122,10 +174,18 @@ export async function createDoctorMaintenanceState(options: {
     }
   };
   const assertOwnerCurrent = (databasePath?: string) => {
-    options.assertCurrent?.();
-    owner!.assertCurrent();
-    if (databasePath !== undefined) {
-      owner!.assertDatabaseAccess(databasePath);
+    const assertCurrent = () => {
+      owner!.assertCurrent(options.assertCurrent);
+      if (databasePath !== undefined) {
+        owner!.assertDatabaseAccess(databasePath);
+      }
+    };
+    // Post-repair work runs outside the checks callback. Its policy reads must
+    // retain the repair scope's cached handles until that scope has drained.
+    if (resources) {
+      resources.run(assertCurrent);
+    } else {
+      owner!.run(assertCurrent);
     }
   };
   const state = {
@@ -137,6 +197,9 @@ export async function createDoctorMaintenanceState(options: {
     },
     get resources() {
       return resources;
+    },
+    get hasOpenResources() {
+      return Boolean(resources || inspections);
     },
     get receipt() {
       return owner ? undefined : capture?.receipt;
@@ -337,11 +400,39 @@ export async function createDoctorMaintenanceState(options: {
         await enterResources(owner!);
       }
     },
-    async release() {
-      await closeResources();
-      await settleCapture();
-      await owner?.release();
-      owner = undefined;
+    /** Returns a settled cleanup failure; throws only while Doctor must retain custody. */
+    async release(): Promise<Error | undefined> {
+      const failures: unknown[] = [];
+      try {
+        await closeResources();
+      } catch (error) {
+        // Uncertain command cleanup or a still-open scope can keep writing: retain
+        // process ownership and publish no receipt.
+        if (hasCommandProcessCleanupError(error) || state.hasOpenResources) {
+          throw error;
+        }
+        failures.push(error);
+      }
+      try {
+        await settleCapture();
+      } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        failures.push(error);
+      }
+      try {
+        await owner?.release();
+        owner = undefined;
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 0) {
+        return undefined;
+      }
+      return failures.length === 1
+        ? toErrorObject(failures[0], "Doctor maintenance state cleanup failed.")
+        : new AggregateError(failures, "Doctor maintenance state cleanup failed.");
     },
   };
   return state;

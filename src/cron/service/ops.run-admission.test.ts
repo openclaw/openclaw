@@ -17,7 +17,7 @@ import { cronStoreKey } from "../store/key.js";
 import { loadCronStoreFromDatabase } from "../store/load.kernel.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import { stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";

@@ -185,10 +185,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props, Methods>(
                           {row().callCount !== undefined && (
                             <span class="chat-subagents__calls">
                               {t(
-                                row().callCount === 1
-                                  ? "chat.subagentsPanel.callsOne"
-                                  : "chat.subagentsPanel.callsMany",
-                                { count: String(row().callCount) },
+                                !row().callCount?.exact
+                                  ? "chat.subagentsPanel.callsAtLeast"
+                                  : row().callCount?.count === 1
+                                    ? "chat.subagentsPanel.callsOne"
+                                    : "chat.subagentsPanel.callsMany",
+                                { count: String(row().callCount?.count) },
                               )}
                             </span>
                           )}

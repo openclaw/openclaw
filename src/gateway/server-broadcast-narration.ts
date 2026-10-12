@@ -90,10 +90,10 @@ export function createGatewayNarrationDelivery(params: {
     socket.once("close", close);
     return connection;
   };
-  subscribers?.onChange((key, connId) => {
+  subscribers?.onChange((key, connId, baselineOnly) => {
     const client = params.clients.getByConnectionId(connId);
     const connection = client && connections.get(client);
-    if (!connection) {
+    if (baselineOnly || !connection) {
       return;
     }
     // A new intent cannot inherit queued text from the previous subscription.

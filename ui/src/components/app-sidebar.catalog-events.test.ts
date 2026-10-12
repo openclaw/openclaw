@@ -13,6 +13,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.ts";
 
 async function mountTab(
@@ -33,14 +34,17 @@ async function mountTab(
     createSessions("main", ["agent:main:main"]),
   );
   sidebar.connected = true;
-  await sidebar.updateComplete;
+  await settleLitElement(sidebar);
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(1);
   return { sidebar, gateway, request };
 }
 
 describe("AppSidebar catalog event refresh", () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    // Keep jsdom's native animation intervals paired with native cleanup.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -103,7 +107,7 @@ describe("AppSidebar catalog event refresh", () => {
     }
     const { gateway, sidebar } = await mountTab(request);
     await sidebar.sessionData.refreshSessionCatalogs();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Stable catalog");
     expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
     if (outcome === "recovered") {
@@ -115,7 +119,7 @@ describe("AppSidebar catalog event refresh", () => {
       await vi.advanceTimersByTimeAsync(999);
       expect(request).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(request).toHaveBeenCalledTimes(3);
       expect(sidebar.textContent).toContain("Updated catalog");
       expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
@@ -129,7 +133,7 @@ describe("AppSidebar catalog event refresh", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(request).toHaveBeenCalledTimes(requests + 1);
       }
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
       expect(sidebar.textContent).toContain("Stable catalog");
       expect(sidebar.sessionData.sessionCatalogRefreshStatus).toMatchObject({
         error: expect.any(String),
@@ -154,7 +158,7 @@ describe("AppSidebar catalog event refresh", () => {
     );
     const { sidebar } = await mountTab(request);
     await vi.advanceTimersByTimeAsync(180_000);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(request.mock.calls.length).toBeGreaterThan(30);
     expect(
       sidebar.querySelector('.sidebar-session-empty-hint--startup[role="status"]')?.textContent,
@@ -172,7 +176,7 @@ describe("AppSidebar catalog event refresh", () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(5_000);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain("Starting up");
     expect(sidebar.querySelector(".sidebar-session-catalog-error")?.textContent).toContain(
       "Inspection failed. Run openclaw doctor --fix.",

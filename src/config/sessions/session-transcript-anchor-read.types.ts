@@ -9,6 +9,7 @@ export type SessionTranscriptAnchorEntry = Pick<
 
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  activePathRelation?: "exact" | "ancestor" | "off-path";
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;

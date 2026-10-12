@@ -149,7 +149,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const database = this.database;
     const generation = {
       database,
-      databaseRevision: database.facts.revision,
       cacheWritesInvalidated: false,
       providerKey,
       identities,
@@ -564,14 +563,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
       if (!published) {
         return false;
-      }
-      if (generation && database === generation.database) {
-        if (published.beforeRevision !== generation.databaseRevision) {
-          generation.cacheWritesInvalidated = true;
-        }
-        // Admission can resume another writer before this continuation runs.
-        // Adopt only the revision captured by our committed publication.
-        generation.databaseRevision = published.databaseRevision;
       }
       this.database.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
         vectorEnabled: this.vector.enabled,

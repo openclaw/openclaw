@@ -17,6 +17,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../../acp/runtime/registry.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -24,6 +25,7 @@ import {
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
@@ -37,11 +39,69 @@ import {
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
+import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
+import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
+
+it.each([false, true])(
+  "plans children without host reads and sees committed requester preferences (proxied completion=%s)",
+  async (proxiedCompletion) => {
+    const completionOwnerKey = "agent:main:completion-owner";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: completionOwnerKey },
+      {
+        sessionId: "completion-owner",
+        updatedAt: 1,
+        sandbox: "required",
+        createdActor: { type: "human", source: "profile", id: "completion-profile" },
+      },
+    );
+    const request = { task: "inherit requester preferences", context: "isolated" as const };
+    const ctx = {
+      agentSessionKey: fixture.parentSessionKey,
+      ...(proxiedCompletion ? { completionOwnerKey } : {}),
+    };
+    for (const [thinkingLevel, fastMode] of [
+      ["low", false],
+      ["high", true],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: fixture.parentSessionKey },
+        { sessionId: "controller", updatedAt: 1, thinkingLevel, fastMode },
+      );
+      const preparation = await resolveSubagentSpawnRequest(request, ctx);
+      if (!preparation.ok) {
+        throw new Error(JSON.stringify(preparation.result));
+      }
+      const sql = observeHostDataSql();
+      try {
+        const plan = await resolveSubagentChildPlan({
+          ...preparation.resolved,
+          request,
+          ctx,
+          sandboxMode: "inherit",
+          swarmEnabled: true,
+        });
+        expect(sql.queries).toEqual([]);
+        if (!plan.ok) {
+          throw new Error(JSON.stringify(plan.result));
+        }
+        expect(plan.resolved).toMatchObject({
+          childRuntimeSandboxed: false,
+          creationPolicy: { actor: { type: "agent", id: "main" } },
+          modelPlan: { initialSessionPatch: { thinkingLevel, fastMode } },
+        });
+      } finally {
+        sql.restore();
+        preparation.resolved.admissionReservation?.release();
+      }
+    }
+  },
+);
 
 it("rejects a spawn cancelled during requester acquisition before starting effects", async () => {
   await writeSubagentSessionEntry({
@@ -124,6 +184,9 @@ it.each([
   "keeps the birth requester window through async $backend launch (original=$originalSessionId, global=$globalRequester)",
   async ({ backend, originalSessionId, globalRequester }) => {
     const requesterSessionKey = globalRequester ? "global" : "agent:main:completion-owner";
+    const controllerSessionKey = globalRequester
+      ? "agent:main:dashboard:controller"
+      : fixture.parentSessionKey;
     const originalLifecycleRevision = originalSessionId
       ? "original-requester-lifecycle"
       : undefined;
@@ -144,6 +207,7 @@ it.each([
       );
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      await captureRuntimeConfigAsyncReader()();
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "worker",
@@ -154,7 +218,7 @@ it.each([
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
-      sessionKey: fixture.parentSessionKey,
+      sessionKey: controllerSessionKey,
       defaultSessionId: "controller-session",
     });
     if (originalSessionId) {
@@ -181,6 +245,7 @@ it.each([
       );
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      await captureRuntimeConfigAsyncReader()();
       managerTesting.resetAcpSessionManagerForTests();
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
@@ -227,7 +292,7 @@ it.each([
       );
     });
     const ctx = {
-      agentSessionKey: fixture.parentSessionKey,
+      agentSessionKey: controllerSessionKey,
       completionOwnerKey: requesterSessionKey,
       onSpawnEffectsStart: rotateRequester,
       ...(globalRequester ? { requesterAgentIdOverride: "main" } : {}),
@@ -240,7 +305,7 @@ it.each([
             ? spawnAcpDirect({ task: "window-bound work", agentId: "main", mode: "run" }, ctx)
             : maybeSpawnVisibleSession({
                 raw: { visible: true },
-                ...(globalRequester ? { agentId: "worker" } : {}),
+                ...(globalRequester ? { requestedAgentId: "worker" } : {}),
                 task: "window-bound work",
                 label: "",
                 runtime: "subagent",
@@ -282,7 +347,7 @@ it.each([
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,
-        controllerSessionKey: fixture.parentSessionKey,
+        controllerSessionKey,
         expectsCompletionMessage: true,
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);

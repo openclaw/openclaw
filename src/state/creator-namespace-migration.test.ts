@@ -1,5 +1,6 @@
 import { backup } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -21,6 +22,7 @@ import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 describe("creator namespace upgrades", () => {
   it("qualifies only proven historical seams atomically and keeps a restorable backup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const options = { agentId: "main", env: state.env };
       const cases = [
         ["operator", "profile"],
@@ -134,6 +136,7 @@ describe("creator namespace upgrades", () => {
 
   it("retains historical cron attribution as unknown through the actual store upgrade", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronStore(storePath, {
         version: 1,

@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
   resolvePersistedAuthProfileOwnerAgentDir,
@@ -20,7 +25,10 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { activateSavedSetupCredential } from "./setup-inference-credential-access.js";
+import {
+  activateSavedSetupCredential,
+  type SetupCredentialActivationReceipt,
+} from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
 
 afterEach(() => {
@@ -244,7 +252,7 @@ describe("setup inference credential provider lifetime", () => {
   );
 });
 
-it("keeps Gateway setup credential ownership through derived SecretRef publication", async () => {
+it("activates and restores setup credentials off-thread while preserving later neighboring writes", async () => {
   await withOpenClawTestState({ label: "setup-auth-publication" }, async (state) => {
     const profileId = "fixture:setup";
     const source: AuthProfileCredential = {
@@ -261,10 +269,20 @@ it("keeps Gateway setup credential ownership through derived SecretRef publicati
       agentDir: state.agentDir(),
       profileId,
     });
-    const receipt = expectDefined(
-      await activateSavedSetupCredential({ agentDir: state.agentDir(), profileId, credential }),
-      "Expected activation receipt",
-    );
+    await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    const observation = observeHostDataSql();
+    let receipt: SetupCredentialActivationReceipt;
+    try {
+      receipt = expectDefined(
+        await activateSavedSetupCredential({ agentDir: state.agentDir(), profileId, credential }),
+        "Expected activation receipt",
+      );
+      expect(
+        observation.queries.filter((sql) => /\bauth_profile_(?:store|state)\b/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     const persisted = captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw;
     expect(persisted).not.toHaveProperty(["profiles", profileId, "setup"]);
     expect(persisted).not.toHaveProperty(["profiles", profileId, "key"]);
@@ -276,5 +294,23 @@ it("keeps Gateway setup credential ownership through derived SecretRef publicati
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBeGreaterThan(revision);
     expect(captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw).toEqual(persisted);
     expect(() => receipt.assertCurrent()).not.toThrow();
+    await updateAuthProfileStoreWithLock({
+      agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater(store) {
+        store.profiles.neighbor = { type: "api_key", provider: "neighbor", key: "fixture-next" };
+        store.usageStats = { neighbor: { lastUsed: 42 } };
+        return true;
+      },
+    });
+    await receipt.rollback();
+    const restored = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    expect(restored.profiles[profileId]).toMatchObject(credential);
+    expect(restored.profiles.neighbor).toEqual({
+      type: "api_key",
+      provider: "neighbor",
+      key: "fixture-next",
+    });
+    expect(restored.usageStats?.neighbor?.lastUsed).toBe(42);
   });
 });

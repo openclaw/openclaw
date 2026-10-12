@@ -33,13 +33,13 @@ export function createHeldWorkspacePreflight() {
   };
 }
 
-export function createRuntime(
+export async function createRuntime(
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
   environments: ReturnType<typeof support.createService>,
   cancelSessionWork: WorkerPlacementSessionWorkCancellation = vi.fn(async () => {}),
 ) {
   return createGatewayWorkerPlacementRuntime({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     scheduler: createTestGatewayScheduler(),
     getCommittedRuntimeConfig: getRuntimeConfig,
     placements,

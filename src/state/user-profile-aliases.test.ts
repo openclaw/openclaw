@@ -17,6 +17,7 @@ import {
   readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
+import { readUserProfileIdentity } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -25,11 +26,7 @@ import {
 } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
-import {
-  ensureProfileForEmail,
-  readUserProfileAliases,
-  resolveUserProfileId,
-} from "./user-profiles.js";
+import { ensureProfileForEmail, readUserProfileAliases } from "./user-profiles.js";
 
 const roots = createTempDirTracker();
 const statePaths: string[] = [];
@@ -287,7 +284,7 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileAliasRevision()).toBe(aliasRevision + 2);
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
-    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
+    expect(readUserProfileIdentity(a.id, options)?.profileId).toBe(c.id);
     expect(readUserProfileSnapshotSync(options).profiles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),

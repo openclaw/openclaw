@@ -34,6 +34,18 @@ If you need transcript storage details, see
 
 ---
 
+Tool arguments, results, and conversation text are not secret-masked in model
+context or persisted transcripts. Reads of `.env` files also preserve their text.
+Logging and diagnostic exports retain secret masking; history size limits,
+media handling, and provider replay normalization described below still apply.
+
+Previously masked history stays as stored; removed text cannot be reconstructed.
+An interrupted private completion from an older release can fail exact-input
+retry validation if its committed input was masked. The retry remains rejected
+rather than treating different secret values as the same input. Start a new
+request after checking the previous attempt's outcome; do not blindly repeat
+actions with side effects.
+
 ## Delivered command exchanges
 
 Slash commands and their delivered replies from the shared dispatcher are ordinary
@@ -238,6 +250,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- SDK Responses replay uses the storage privacy shape and a fixed field order:
+  summaries are empty, cleartext reasoning content is omitted, and completed
+  ciphertext remains unchanged across live continuation and transcript reload.
+  Native ChatGPT Responses retains its upstream Codex payload semantics.
 - Node turns canonicalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same signature bytes. Encrypted reasoning bytes, executable tool arguments,

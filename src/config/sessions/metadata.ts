@@ -103,6 +103,7 @@ export function prepareSessionMetaPatch(params: {
   );
   return {
     group: prepareGroupSessionPatch(params),
+    clearAvatar: params.ctx.ConversationAvatar === "",
     origin: deriveSessionOrigin(params.ctx, {
       skipSystemEventOrigin: params.skipSystemEventOrigin,
     }),

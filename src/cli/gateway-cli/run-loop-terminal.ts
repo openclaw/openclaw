@@ -4,7 +4,6 @@ import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { sameManagedUpdateOwner, type GatewayRunSignalRequest } from "./run-loop-request.js";
-import type { createGatewayRestartRuntimePreparation } from "./run-loop-runtime-preparation.js";
 import type { createGatewayRunSignals } from "./run-loop-signals.js";
 import type { GatewayUpdateSuccessor } from "./update-successor.js";
 
@@ -20,7 +19,6 @@ export function createGatewayRunTerminal(params: {
   >;
   logger: Pick<SubsystemLogger, "info" | "error">;
   updateSuccessor: GatewayUpdateSuccessor;
-  restartRuntime: ReturnType<typeof createGatewayRestartRuntimePreparation>;
   getSignals: () => ReturnType<typeof createGatewayRunSignals>;
   getHost: () => HostLifecycle | undefined;
   getRequest: () => GatewayRunSignalRequest | null;
@@ -45,7 +43,6 @@ export function createGatewayRunTerminal(params: {
     runtime: eagerLifecycleRuntime,
     logger: gatewayLog,
     updateSuccessor,
-    restartRuntime,
     finishLoop,
     completeBoot,
     releaseLockIfHeld,
@@ -55,9 +52,6 @@ export function createGatewayRunTerminal(params: {
   } = params;
   const getManagedUpdateOwner = () => params.getRequest()?.restartIntent?.successorOwner;
   const finishLoopAfterSignals = async (code: number) => {
-    if (restartRuntime.pending) {
-      await restartRuntime.release();
-    }
     for (;;) {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
@@ -77,9 +71,6 @@ export function createGatewayRunTerminal(params: {
     }
     if (!params.isForcedExitStarted()) {
       await params.getSignals().drain();
-    }
-    if (restartRuntime.pending) {
-      await restartRuntime.release();
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;

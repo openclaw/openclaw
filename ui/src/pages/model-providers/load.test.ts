@@ -341,7 +341,12 @@ describe("loadModelProvidersData", () => {
         if (when === "while pending") {
           expect(sent.map(({ method }) => method)).toEqual(["usage.status", "sessions.usage"]);
           expect(sent[0]?.params).toBeUndefined();
-          expect(sent[1]?.params).toMatchObject({ agentScope: "all", groupBy: "family" });
+          expect(sent[1]?.params).toMatchObject({
+            agentScope: "all",
+            groupBy: "family",
+            projection: "overview",
+            limit: 50,
+          });
           expect(sent[1]?.params).not.toHaveProperty("agentId");
           expect(pending.hasPending).toBe(true);
           controller.abort();

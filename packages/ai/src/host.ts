@@ -149,9 +149,7 @@ export interface AiTransportHost {
   resolveSecretSentinel(value: string): string;
   /** Resolves visible headers and host-private request overrides before plugin handoff. */
   unwrapModelTransportSentinels?<T extends Model>(model: T, boundary: string): T;
-  /** Redacts model-visible tool results without treating ordinary source assignments as secrets. */
-  redactModelVisibleSecrets<T>(value: T): T;
-  /** Redacts secret-bearing text in tool payload strings. */
+  /** Redacts transport diagnostic text before logging. */
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
   normalizeAnthropicInlineContentBlocks?: AnthropicInlineContentNormalizer;
@@ -238,7 +236,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   runInDetachedAsyncContext: (run) => run(),
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
-  redactModelVisibleSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>

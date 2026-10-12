@@ -69,20 +69,18 @@ describe("Gateway stored thinking levels", () => {
       resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
       "OpenAI public thinking policy",
     );
+    const modelEntry: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
+      provider: "openai",
+      id: "native-effort-fixture",
+      name: "Native effort fixture",
+      [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
+    };
     const row = (
       entry: SessionEntry,
       catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
     ) => {
       const modelCatalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] | undefined = catalog
-        ? [
-            {
-              provider: "openai",
-              id: "native-effort-fixture",
-              name: "Native effort fixture",
-              [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
-              ...catalog,
-            },
-          ]
+        ? [{ ...modelEntry, ...catalog }]
         : undefined;
       return buildGatewaySessionRow({
         cfg,
@@ -102,11 +100,11 @@ describe("Gateway stored thinking levels", () => {
     expect(row(stored).thinkingLevel).toBe("ultra");
     expect(row(stored, {}).thinkingLevel).toBe("ultra");
     expect(row(stored, { reasoning: true }).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("off");
+    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } })
         .thinkingLevel,
-    ).toBe("off");
+    ).toBe("ultra");
     expect(
       row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
         .thinkingLevel,
@@ -117,6 +115,20 @@ describe("Gateway stored thinking levels", () => {
     });
     expect(nativeUltra.thinkingLevel).toBe("ultra");
     expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
+    expect(
+      projectSessionPatchResult({
+        cfg,
+        targetAgentId: "main",
+        canonicalKey: "agent:main:main",
+        entry: stored,
+        storePath: "/tmp/agents/main/sessions/sessions.json",
+        preparedAcpMeta: null,
+        modelCatalog: [{ ...modelEntry, reasoning: false }],
+      }),
+    ).toMatchObject({
+      entry: { thinkingLevel: "ultra" },
+      resolved: { thinkingLevel: "off" },
+    });
   });
 });
 

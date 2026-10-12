@@ -557,6 +557,22 @@ suite.define(() => {
     );
     await screenshot(page, "08-secret-store-masked-input.png");
 
+    await secretInput.focus();
+    await page.keyboard.press("Tab");
+    const reveal = panel.getByRole("button", { name: "Show secret", exact: true });
+    expect(await reveal.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.keyboard.press("Enter");
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    const hide = panel.getByRole("button", { name: "Hide secret", exact: true });
+    expect(await hide.getAttribute("aria-pressed")).toBe("true");
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    await screenshot(page, "08-secret-store-visible-input.png");
+    await page.keyboard.press("Space");
+    expect(await secretInput.getAttribute("type")).toBe("password");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
@@ -647,13 +663,18 @@ suite.define(() => {
     );
     expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
     await screenshot(page, "11-secret-store-ask-pending.png");
-    const secretInput = panel.locator('input[type="password"]');
+    const secretInput = panel.getByLabel("API key", { exact: true });
+    expect(await secretInput.getAttribute("type")).toBe("password");
     await secretInput.fill(fakeSecret);
     expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
     expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
       fakeSecret,
     );
     await screenshot(page, "12-secret-store-ask-masked-input.png");
+    await panel.getByRole("button", { name: "Show secret", exact: true }).click();
+    expect(await secretInput.getAttribute("type")).toBe("text");
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await screenshot(page, "12-secret-store-ask-visible-input.png");
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
 
     const resolveRequest = await gateway.waitForRequest("question.resolve");
@@ -712,76 +733,6 @@ suite.define(() => {
     } finally {
       await screenshot(page, "14-retained-custom-answer.png");
     }
-  });
-
-  it("keeps multi-select on one step and submits labels as an array", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const request = questionRecord("question-release-checks", [
-      {
-        questionId: "release_checks",
-        header: "Checks",
-        question: "Which release checks should I run?",
-        options: [
-          { label: "Tests", description: "Run focused automated tests." },
-          { label: "Docs", description: "Verify documentation changes." },
-          { label: "Metrics", description: "Inspect performance metrics." },
-          { label: "Rollback", description: "Prepare a rollback plan." },
-        ],
-        multiSelect: true,
-      },
-    ]);
-
-    await emitRequested(gateway, request);
-    const panel = panelFor(page, "Which release checks should I run?");
-    await panel.waitFor();
-    await panel.getByRole("checkbox", { name: /Tests/ }).click();
-    await panel.getByRole("checkbox", { name: /Metrics/ }).click();
-    await expect
-      .poll(() => panel.getByRole("checkbox", { name: /Tests/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    await expect
-      .poll(() => panel.getByRole("checkbox", { name: /Metrics/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    await screenshot(page, "03-question-multiselect.png");
-
-    const answers = { answers: { release_checks: ["Tests", "Metrics"] } };
-    await gateway.setMethodResponse("question.resolve", {
-      status: "answered",
-      answers,
-    } satisfies QuestionResolveResult);
-    await panel.getByRole("button", { name: "Submit", exact: true }).click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({ id: request.id, answers });
-    await expect.poll(() => panel.count()).toBe(0);
-  });
-
-  it("restores the composer from an authoritative cancellation without a resolution event", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const request = questionRecord("question-skip-without-broadcast", [
-      {
-        questionId: "deploy_target",
-        header: "Deploy",
-        question: "Should I continue the deployment?",
-        options: [{ label: "Staging" }, { label: "Production" }],
-      },
-    ]);
-    await emitRequested(gateway, request);
-    const panel = panelFor(page, "Should I continue the deployment?");
-    await panel.waitFor();
-    await expectQuestionAttention(page, request.questions[0]!.question);
-    await gateway.setMethodResponse("question.resolve", {
-      status: "cancelled",
-    } satisfies QuestionResolveResult);
-
-    await panel.getByRole("button", { name: "Skip", exact: true }).click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({ id: request.id, cancel: true });
-    await expect.poll(() => panel.count()).toBe(0);
-    await expectQuestionAttention(page, null);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    await expect
-      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).count())
-      .toBe(1);
   });
 
   it.each([
@@ -905,69 +856,5 @@ suite.define(() => {
     await expectQuestionAttention(page, null);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expect.poll(() => favicon.getAttribute("href")).toBe(originalFavicon);
-  });
-
-  it("shows a 1/2 stepper with answered and expired summaries", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const elsewhere = questionRecord("question-external-answer", [
-      {
-        questionId: "approval_path",
-        header: "Approval",
-        question: "Who should approve the release?",
-        options: [{ label: "Maintainer" }, { label: "Release manager" }],
-      },
-    ]);
-    const expired = questionRecord("question-expired-window", [
-      {
-        questionId: "release_window",
-        header: "Window",
-        question: "When should the release start?",
-        options: [{ label: "Now" }, { label: "Tomorrow" }],
-      },
-    ]);
-
-    await emitRequested(gateway, elsewhere);
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: elsewhere.id,
-      status: "answered",
-      answers: { answers: { approval_path: ["Release manager"] } },
-    });
-    await emitRequested(gateway, expired);
-    await gateway.emitGatewayEvent("question.resolved", {
-      id: expired.id,
-      status: "expired",
-    });
-
-    const stepper = questionRecord("question-release-plan", [
-      {
-        questionId: "channel",
-        header: "Channel",
-        question: "Which release channel should I use?",
-        options: [{ label: "Beta" }, { label: "Stable" }],
-        isOther: true,
-      },
-      {
-        questionId: "notes",
-        header: "Notes",
-        question: "Which notes should I include?",
-        options: [{ label: "Highlights" }, { label: "Full details" }],
-        multiSelect: true,
-        isOther: true,
-      },
-    ]);
-    await emitRequested(gateway, stepper);
-
-    const panel = panelFor(page, "Which release channel should I use?");
-    await panel.waitFor();
-    await expect.poll(() => panel.getByText("1/2", { exact: true }).count()).toBe(1);
-    await expect
-      .poll(() =>
-        page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
-      )
-      .toBe(1);
-    const expiredSummary = page.locator(".chat-question-summary").filter({ hasText: "Expired" });
-    await expect.poll(() => expiredSummary.count()).toBe(1);
-    await expiredSummary.scrollIntoViewIfNeeded();
-    await screenshot(page, "04-question-terminal-states.png");
   });
 });

@@ -12,7 +12,6 @@ import {
 } from "../config/io.health-state.js";
 import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
-import { isPathInside } from "../infra/path-guards.js";
 import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
@@ -80,12 +79,13 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function retireFixtureAdmissions(root: string): void {
-  for (const admission of captureSqliteDatabaseAdmissions()) {
-    if (isPathInside(root, admission.location)) {
-      // Physical admission outlives database close; fixtures own its final removal.
-      retireSqliteDatabaseAdmissionForPath(admission.location);
-      assert.throws(() => fs.fstatSync(admission.descriptor), { code: "EBADF" });
+  const entry = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (entry?.isDirectory()) {
+    for (const name of fs.readdirSync(root)) {
+      retireFixtureAdmissions(path.join(root, name));
     }
+  } else if (entry?.isFile() && root.endsWith(".sqlite")) {
+    retireSqliteDatabaseAdmissionForPath(root);
   }
 }
 
@@ -939,10 +939,10 @@ describe("external shared-state ownership", () => {
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
     const location = database.db.location();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
     const owner = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
     assert(owner);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
     retireSqliteDatabaseAdmissionForPath(database.path);
     assert.throws(() => fs.fstatSync(owner.descriptor), { code: "EBADF" });
     // Persisted startup damage gets a new physical admission, not a live foreign edit.

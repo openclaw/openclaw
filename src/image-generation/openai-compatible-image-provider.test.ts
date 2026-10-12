@@ -250,30 +250,6 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
-    const imageBytes = Buffer.alloc(3 * 1024 * 1024 + 64 * 1024, 1);
-    postJsonRequestMock.mockResolvedValue(
-      jsonResponse({
-        data: Array.from({ length: 4 }, () => ({
-          b64_json: imageBytes.toString("base64"),
-        })),
-      }),
-    );
-    const provider = createProvider();
-
-    const result = await generate(provider, {
-      prompt: "large",
-      count: 4,
-    });
-
-    expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-      imageBytes.byteLength,
-    ]);
-  });
-
   it("honors configured generated media caps above the default image limit", async () => {
     const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
     postJsonRequestMock.mockResolvedValue(

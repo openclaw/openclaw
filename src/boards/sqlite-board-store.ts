@@ -23,16 +23,13 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,
@@ -285,17 +282,8 @@ export class SqliteBoardStore implements BoardStore {
               await prepare();
             }
             assertPreparedCurrent();
-            if (prepare && getOpenClawAgentDatabaseIfOpen(databaseOptions) !== database) {
-              throw new BoardValidationError(
-                "invalid_operation",
-                "board database closed or changed; retry",
-              );
-            }
-            if (
-              nativeSource ||
-              typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
-            ) {
-              // Released opaque/cross-store guards keep synchronous authority and mutation together.
+            if (nativeSource) {
+              // Cross-store and process-held source checks cannot share the target worker's snapshot.
               ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
@@ -514,7 +502,6 @@ export class SqliteBoardStore implements BoardStore {
           async () => {
             this.assertTargetCurrent(capturedTarget, resolved);
             const value = await worker(reader, captured.sessionKey, env, identity);
-            assertExistingDatabaseIdentity(captured.path, identity.key, identity.birthtime);
             reader.assertCurrent();
             return accept(value);
           },

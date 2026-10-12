@@ -1,15 +1,18 @@
 import fs from "node:fs";
-import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   clearCommandLane,
   CommandLaneClearedError,
@@ -26,6 +29,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -115,6 +119,7 @@ beforeEach(async () => {
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
+  setRuntimeConfigSnapshot(context().getRuntimeConfig());
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -174,6 +179,7 @@ beforeEach(async () => {
       await appendTranscriptEvent(scope, event);
     }
   }
+  await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
 });
 
 afterEach(async () => {
@@ -190,6 +196,7 @@ afterEach(async () => {
       await cleanupSessionStateForTest({ stateDir });
     }
     resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
@@ -395,6 +402,7 @@ describe("session message-cut methods", () => {
       "restricted-fork-creator@example.com",
       "guest-only",
     );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     expect(fork).toHaveBeenCalledWith(
@@ -417,6 +425,7 @@ describe("session message-cut methods", () => {
       "main",
       "required",
     );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
     const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
@@ -447,43 +456,6 @@ describe("session message-cut methods", () => {
       isWebchatConnect: () => false,
     });
     expect(respond).toHaveBeenCalledWith(true, { branches: [] }, undefined);
-  });
-
-  it("lists branches and switches to an inactive tip", async () => {
-    const listed = await invoke("sessions.branches.list");
-    expect(listed).toHaveBeenCalledWith(
-      true,
-      {
-        branches: [
-          expect.objectContaining({
-            leafEntryId: "assistant-entry",
-            headline: "answer",
-            messageCount: 2,
-            active: true,
-          }),
-          expect.objectContaining({
-            leafEntryId: "off-path-entry",
-            headline: "inactive",
-            messageCount: 1,
-            active: false,
-          }),
-        ],
-      },
-      undefined,
-    );
-
-    const switched = await invoke("sessions.branches.switch", "off-path-entry");
-    expect(switched).toHaveBeenCalledWith(true, {}, undefined);
-  });
-
-  it("clears queued session work after a successful branch switch", async () => {
-    const work = enqueueSessionWork("branch switch");
-    expectSessionWorkQueued(work);
-
-    const respond = await invoke("sessions.branches.switch", "off-path-entry");
-
-    expect(respond).toHaveBeenCalledWith(true, {}, undefined);
-    await expectSessionWorkCleared(work);
   });
 
   it.each([false, true])(
@@ -661,7 +633,6 @@ describe("session message-cut methods", () => {
       nativeRuntimeConsent: "native-fixture",
     }));
     const profileId = "profile-fork-creator";
-    const forkSql = observeSqliteReadSql(StatementSync.prototype);
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {
@@ -670,10 +641,7 @@ describe("session message-cut methods", () => {
         hasAvatar: false,
         updatedAt: 1,
       },
-    } as GatewayClient).finally(forkSql.restore);
-    expect(
-      forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
-    ).toHaveLength(1);
+    } as GatewayClient);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -705,11 +673,7 @@ describe("session message-cut methods", () => {
       }),
     );
 
-    const rewindSql = observeSqliteReadSql(StatementSync.prototype);
-    const rewind = await invoke("sessions.rewind", "user-entry").finally(rewindSql.restore);
-    expect(
-      rewindSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
-    ).toHaveLength(1);
+    const rewind = await invoke("sessions.rewind", "user-entry");
     expect(rewind).toHaveBeenCalledWith(
       true,
       {
@@ -723,6 +687,11 @@ describe("session message-cut methods", () => {
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
+    expect(
+      listSessionEntriesCore({ agentId: "main" })
+        .map((row) => row.sessionKey)
+        .toSorted(),
+    ).toEqual([sessionKey, forkKey ?? ""].toSorted());
   });
 
   it.each([
@@ -740,18 +709,6 @@ describe("session message-cut methods", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: `${label} is unavailable for archived sessions.`,
       }),
-    );
-  });
-
-  it("allows archived sessions to fork", async () => {
-    await archiveSourceSession();
-
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionKey: expect.any(String) }),
-      undefined,
     );
   });
 

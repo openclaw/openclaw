@@ -268,7 +268,7 @@ async function runDoctorHealthFlowWithResult(
       }
       const { guardUpdateDoctorSchemaUpgrade } =
         await import("../commands/doctor-update-schema-guard.js");
-      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = [];
+      let verifiedSnapshots: readonly BackupSqliteSnapshotFact[] = schemas.verifiedSnapshots ?? [];
       await guardUpdateDoctorSchemaUpgrade({
         schemas,
         runtime: doctorRuntime,
@@ -693,6 +693,7 @@ async function runDoctorHealthFlowWithResult(
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            deferredInspectionCheckIds: updateResult.capture.deferredInspectionCheckIds,
             ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
             ...(updateResult.capture.fileWrites
               ? { configFileWrites: updateResult.capture.fileWrites }

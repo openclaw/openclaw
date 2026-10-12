@@ -429,7 +429,7 @@ OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane.
 
-Regardless of mode, completed target calls persist as bounded, redacted display
+Regardless of mode, completed target calls persist as bounded display
 activity in session history without adding synthetic model turns to replay.
 Search, describe, and call results carry each tool's `id` and `source`.
 Session logs therefore still answer:

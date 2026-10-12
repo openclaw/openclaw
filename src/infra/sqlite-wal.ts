@@ -11,6 +11,7 @@ import {
   runWithSqliteBusyTimeout,
   setSqliteBusyTimeout,
 } from "./sqlite-busy-timeout.js";
+import { readSqliteDatabaseWriteRevision } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -33,6 +34,7 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
+  isSqliteWalWorkerMaintained,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
@@ -79,7 +81,7 @@ export type SqliteWalMaintenance = {
   inspectIdle?: () => "healthy" | "retire";
   /** Retire timer admission and join accepted maintenance before closing its database. */
   stop: () => Promise<void>;
-  /** Final checkpoint; synchronous exit cleanup cancels work without joining it. */
+  /** Native owners checkpoint; delegated handles leave the final checkpoint to worker close. */
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
@@ -101,6 +103,12 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
 /** Restrict inspection connections without changing journal or persistence policy. */
 export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+}
+
+/** Private snapshots publish one standalone file even when their source used WAL. */
+export function configureSqliteSnapshotPragmas(db: DatabaseSync): void {
+  setSqliteBusyTimeout(db, 30_000);
+  db.exec("PRAGMA trusted_schema = OFF; PRAGMA journal_mode = DELETE;");
 }
 
 // auto_vacuum only takes effect when set before the first page is written.
@@ -327,6 +335,7 @@ export function configureSqliteWalMaintenance(
   const maintenanceId = `sqlite-wal:${++nextMaintenanceId}`;
   // The periodic pass sets the vacuum budget; the next run consumes it, ticks add none.
   let nextPageBudget = 0;
+  let completedTickRevision: number | undefined;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -340,11 +349,20 @@ export function configureSqliteWalMaintenance(
     }
     let reclaimedPages = 0;
     const quiet = request.maxPages === 0;
+    const checkpointOnly = quiet && request.checkpointMode === "PASSIVE";
+    const writeRevision = checkpointOnly ? readSqliteDatabaseWriteRevision(db) : undefined;
+    if (
+      writeRevision !== undefined &&
+      writeRevision === completedTickRevision &&
+      checkpointOwner.health?.state === "complete"
+    ) {
+      return { reclaimedPages: 0, checkpoint: checkpointOwner.snapshot };
+    }
     const runTickCheckpoint = (mode: SqliteWalCheckpointMode) =>
       checkpointOwner.checkpoint(mode, { quiet });
-    runMaintenance(() => {
+    const completed = runMaintenance(() => {
       let checkpointed: boolean;
-      if (quiet && request.checkpointMode === "PASSIVE") {
+      if (checkpointOnly) {
         // SQLite never calls the busy handler for PASSIVE; this pass cannot vacuum.
         admit?.("transaction");
         checkpointed = runTickCheckpoint("PASSIVE");
@@ -388,6 +406,10 @@ export function configureSqliteWalMaintenance(
       }
       return checkpointed;
     });
+    // A sibling commit during the checkpoint is picked up by the next tick.
+    // Blocked/error observations keep retrying even without another write.
+    completedTickRevision =
+      completed && checkpointOwner.health?.state === "complete" ? writeRevision : undefined;
     return { reclaimedPages, checkpoint: checkpointOwner.snapshot };
   };
   const maintain = createSqliteWalMaintenanceScheduler(
@@ -465,7 +487,8 @@ export function configureSqliteWalMaintenance(
     },
     close: (closeOptions) => {
       void beginClose();
-      if (invalidated) {
+      if (invalidated || isSqliteWalWorkerMaintained(db)) {
+        // Worker retirement owns the explicit final checkpoint.
         return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on

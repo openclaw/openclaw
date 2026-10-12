@@ -131,7 +131,13 @@ describe("Control UI refresh nudge", () => {
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
 
     harness.update({ client: null, phase: "stopped", hello: null });
-    harness.update({ client: gatewayClient, phase: "connected", hello: mismatchedHello });
+    // The first hello's profile is a scope change; it must not count as a reconnect.
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: mismatchedHello,
+      selfUser: { id: "profile-a" },
+    });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     overlays.dispose();

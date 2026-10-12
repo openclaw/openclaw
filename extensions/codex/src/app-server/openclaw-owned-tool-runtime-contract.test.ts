@@ -3,7 +3,6 @@ import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harnes
 import {
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,
-  mediaToolResult,
   resetOpenClawOwnedToolHooks,
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
@@ -230,39 +229,6 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
           }),
         },
         { runId: "run-message", toolCallId: "call-message" },
-      ),
-    );
-  });
-
-  it("records successful Codex media artifacts from tool results", async () => {
-    const hooks = installOpenClawOwnedToolHooks();
-    const execute = vi.fn(async () =>
-      mediaToolResult("Generated media reply.", "/tmp/reply.opus", true),
-    );
-    const bridge = createBridge(createContractTool({ name: "tts", execute }), {
-      runId: "run-media",
-    });
-    const result = await bridge.handleToolCall(toolCall("tts", "call-media", { text: "hello" }));
-
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Generated media reply." }],
-    });
-    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
-    await vi.waitFor(() =>
-      expectAfterToolCall(
-        hooks,
-        {
-          toolName: "tts",
-          toolCallId: "call-media",
-          result: expect.objectContaining({
-            details: expect.objectContaining({
-              media: expect.objectContaining({ mediaUrl: "/tmp/reply.opus", audioAsVoice: true }),
-            }),
-          }),
-        },
-        { runId: "run-media", toolCallId: "call-media" },
       ),
     );
   });

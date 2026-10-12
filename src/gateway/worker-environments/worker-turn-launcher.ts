@@ -4,13 +4,13 @@ import { withRequiredSessionPlacement } from "../../agents/session-placement-adm
 import type {
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
+  SessionPlacementSandboxParams,
 } from "../../agents/session-placement-admission.js";
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
@@ -64,13 +64,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
   const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
   const requiredAdmission = createRequiredWorkerTurnAdmission(options);
   const provider: SessionPlacementAdmissionProvider & {
-    prepareSandbox(params: {
-      agentId: string;
-      config?: OpenClawConfig;
-      sessionId: string;
-      sessionKey?: string;
-      workspaceDir: string;
-    }): Promise<PreparedSessionPlacementSandbox>;
+    prepareSandbox(params: SessionPlacementSandboxParams): Promise<PreparedSessionPlacementSandbox>;
   } = {
     withRequiredSession: options.withRequiredSession,
     usesWorkerInference: requiredAdmission.usesWorkerInference,
@@ -159,10 +153,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         },
         async () => {
           const restartSignal = getGatewayRestartDrainSignal();
-          const assertCurrent = () => {
-            inputTurn.abortSignal?.throwIfAborted();
-            assertRunCurrent?.();
-          };
+          const assertCurrent = composeSessionSourceAssertion(
+            [assertRunCurrent],
+            (assertSource) => {
+              inputTurn.abortSignal?.throwIfAborted();
+              assertSource();
+            },
+          );
           const runLocalTurn = (
             preparedPlacement?: Parameters<typeof executeLocalTurn>[0]["preparedPlacement"],
           ) =>

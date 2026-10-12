@@ -43,15 +43,11 @@ export {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
-export { loadTranscriptEvents } from "./session-transcript-events.js";
+export { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 export {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
-} from "./session-accessor.sqlite-suffix-read.js";
-export {
-  rewriteAssistantTranscriptMessageForRun,
-  rewriteTranscriptMessageAtAnchor,
-} from "./session-accessor.sqlite-transcript-message-rewrite.js";
+  rewritePreparedAssistantTranscriptMessageForRun as rewriteAssistantTranscriptMessageForRun,
+  rewritePreparedTranscriptMessageAtAnchor as rewriteTranscriptMessageAtAnchor,
+} from "./session-message-rewrite.js";
 export {
   appendTranscriptEvent,
   appendTranscriptMessage,

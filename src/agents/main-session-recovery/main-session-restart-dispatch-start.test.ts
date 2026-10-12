@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { AgentTurnIo } from "../../gateway/agent-turn/types.js";
 import {
   registerChatAbortController,
@@ -48,6 +49,7 @@ vi.mock("../../gateway/agent-turn/agent-turn-service.js", () => ({
 }));
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
   startTurn.mockReset();
@@ -55,6 +57,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
   vi.useRealTimers();

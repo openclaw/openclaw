@@ -25,7 +25,8 @@ import {
 } from "../state/user-profile-writes.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
@@ -33,10 +34,7 @@ import {
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
-import {
-  readRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
@@ -51,7 +49,7 @@ const mocks = githubPublicationTestMocks();
 
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
-type Requester = NonNullable<Parameters<Coordinator["requestForSession"]>[0]["requester"]>;
+type Requester = NonNullable<Parameters<Coordinator["requestForSessionV2"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
 
 export async function createGitHubPublicationRequesterFixture(params: {

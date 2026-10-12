@@ -4,11 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import type {
-  GatewayScheduler,
-  GatewayScheduledJob,
-  GatewaySchedulerScope,
-} from "../../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -131,7 +127,7 @@ export type CronServiceDeps = {
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
-  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
+  /** Revalidate resident policy using the worker's deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -278,7 +274,6 @@ export type CronExecutionIdentityAdmission = {
   ingress: ExecutionIdentityAdmissionFacts["ingress"];
   invoker?: ExecutionIdentityAdmissionFacts["invoker"];
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
-  onExecutionStarted?: () => void | Promise<void>;
 };
 
 type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
@@ -313,20 +308,14 @@ export type CronServiceState = {
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
-  timer: GatewayScheduledJob | null;
   schedulerScope: GatewaySchedulerScope;
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
-  running: boolean;
-  /** Number of timer batches currently executing admitted scheduled work. */
-  activeTimerTicks: number;
   stopped: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
-  /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
-  startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
   /** Accepted manual runs until their terminal history row is written, keyed by runId. */
   queuedManualRuns: Map<string, Promise<unknown>>;
@@ -353,11 +342,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
-    timer: null,
     schedulerScope: deps.scheduler.scope(),
     schedulerDrain: Promise.resolve(),
-    running: false,
-    activeTimerTicks: 0,
     stopped: false,
     lifecycleGeneration: 0,
     schedulingPaused: false,

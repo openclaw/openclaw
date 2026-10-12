@@ -504,9 +504,6 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
       { current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "userProfiles.catalog")) {
-      throw new Error(reply.ok ? "Unexpected profile catalog reply" : reply.message);
-    }
     if (
       profileRevision !== readUserProfileVersion() ||
       bindingRevision !== readUserProfileEmailBindingRevision()
@@ -636,7 +633,14 @@ export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: stri
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
-      commit: () => rows.forEach(([id, row]) => catalog.set(id, row)),
+      commit: () => {
+        for (const id of profileIds) {
+          catalog.delete(id);
+        }
+        for (const [id, row] of rows) {
+          catalog.set(id, row);
+        }
+      },
     });
   }
 }

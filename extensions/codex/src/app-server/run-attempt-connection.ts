@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
@@ -128,7 +128,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Explicit modes replace legacy fields; full also replaces approval-file floors.
     permissionMode: params.permissionMode,
     execOverrides: params.execOverrides,
-    approvals: params.permissionMode === "full" ? undefined : loadExecApprovals(),
+    approvals:
+      params.permissionMode === "full" ? undefined : await loadExecApprovalsReadOnlyAsync(),
     config: params.config,
     agentId: policyAgentId,
   });

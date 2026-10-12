@@ -315,7 +315,8 @@ function createContext(db: DatabaseSync, schema: string) {
   };
 }
 type Context = ReturnType<typeof createContext>;
-const qualified = (ctx: Context, name: string) => `${quote(ctx.result.schema)}.${quote(name)}`;
+const qualified = (ctx: Context, name: string) =>
+  ctx.result.schema ? `${quote(ctx.result.schema)}.${quote(name)}` : quote(name);
 
 type TableMapping = {
   name: string;

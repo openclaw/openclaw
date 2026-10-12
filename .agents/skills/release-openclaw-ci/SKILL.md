@@ -782,6 +782,14 @@ and `--json` prints NDJSON. It exits once the parent and every dispatched child
 are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
 watchers.
 
+Watch candidate events derive the frozen SHA and context ref from the sealed
+execution plan, not monitor scratch prose or the parent's tooling SHA. The tip
+is read freshly; a changed tip labels that candidate superseded without stopping
+observation or claiming qualification of the new tip. Missing evidence or a
+SHA-only context stays unknown. Resume a missing or exited watcher with the same
+command and state path: it performs reads only and suppresses already reported
+terminal and candidate events. Never redispatch merely to restore a watcher.
+
 For the parent's Release Decision, use the transition-only summary watcher:
 
 ```bash

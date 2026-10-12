@@ -9,7 +9,6 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
@@ -22,6 +21,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type {
@@ -35,11 +35,19 @@ export function commitSessionLifecycleProjection(
   { writeTransaction, admit, options }: AgentWorkerOperationContext,
 ) {
   return writeTransaction("session.lifecycle.project", "Session lifecycle", (database) => {
-    assertSessionSubagentRunsCurrent(input, options.env ?? process.env);
     const progressCardResetKeys: string[] = [];
     const projectionReconcileSessionIds: string[] = [];
     const postimages: SessionEntryWritePostimages = new Map();
     const archivedPrevious = new Map<string, SessionEntry>();
+    const upsert = input.projected.upsertedEntries[0];
+    // Compound lifecycle changes keep their ordinary cold-read fallback.
+    const publishActorEntry =
+      input.projected.upsertedEntries.length === 1 &&
+      input.projected.removals.length === 0 &&
+      upsert &&
+      !upsert.resetBoundary
+        ? prepareSessionActorEntryPatch(database, upsert.sessionKey)
+        : undefined;
     const result = commitPreparedSessionEntryLifecycleMutationInDatabase(
       database,
       input,
@@ -98,8 +106,14 @@ export function commitSessionLifecycleProjection(
         { postimages },
       ),
     };
+    if (
+      result.maintenancePlans.every(
+        (plan) => plan.archivedEntries.length === 0 && plan.entryRemovals.length === 0,
+      )
+    ) {
+      publishActorEntry?.(postimages, candidate.publication);
+    }
     const receipt = transferSessionEntryWorkerCandidate(database, admit, candidate);
-    assertSessionSubagentRunsCurrent(input, options.env ?? process.env);
     return receipt;
   });
 }

@@ -11,7 +11,6 @@ import {
   assertSqliteWorkerActorReusable,
   createSqliteWorkerAdmissionWarning,
   captureSqliteWorkerOpen,
-  captureSqliteWorkerRuntime,
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
   closeUnclaimedSharedStateActors,
@@ -56,7 +55,6 @@ import {
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
@@ -105,19 +103,6 @@ export class SqliteWorkerBroker {
     maxMessageBytes: SQLITE_WORKER_MAX_MESSAGE_BYTES,
   });
   private draining?: Promise<void>;
-
-  prepareRuntime(
-    source: Pick<SqliteWorkerStoreOptions, "moduleUrl" | "runtimeGeneration">,
-  ): SqliteWorkerRuntimePreparation | undefined {
-    if (this.draining || source.runtimeGeneration) {
-      return undefined;
-    }
-    return this.lifecycle.prepareRuntime(
-      captureSqliteWorkerRuntime(source.moduleUrl),
-      this.maxWorkers,
-      (slot) => this.createReplyOwner(slot),
-    );
-  }
 
   reserveInputPreparation(
     inputBytes: number,
@@ -221,15 +206,6 @@ export class SqliteWorkerBroker {
       );
     }
     if (actor) {
-      if (options.runtimePreparation) {
-        const unused = await this.lifecycle.consumeRuntimePreparation(options, moduleUrl);
-        if (unused) {
-          unused.pendingOpens -= 1;
-          await waitForSqliteOpen(this.lifecycle.retireEmpty(unused), options.signal);
-        }
-        // Another opener won; reread identity and authority after retiring the unused carrier.
-        return this.openAdmitted({ ...options, runtimePreparation: undefined }, client);
-      }
       if (options.target && actor.databasePath !== databasePath) {
         throw new Error("Ephemeral SQLite handle belongs to another namespace");
       }
@@ -241,7 +217,6 @@ export class SqliteWorkerBroker {
     } else {
       const slot = await this.lifecycle.acquireSlot(
         options,
-        moduleUrl,
         { maxWorkers: this.maxWorkers, maxStores: MAX_STORES },
         (replySlot) => this.createReplyOwner(replySlot),
       );
@@ -329,7 +304,11 @@ export class SqliteWorkerBroker {
         options.retainCleanup,
         this.lifecycle.closeActor.bind(this.lifecycle, owned, maintenanceScope),
       );
-      options.onNativeStopped?.(owned.nativeStopped, () => owned.closeReceipt);
+      options.onNativeStopped?.(
+        owned.nativeStopped,
+        () => owned.closeReceipt,
+        () => owned.openDispatch.openRefused === true,
+      );
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
@@ -633,7 +612,7 @@ export class SqliteWorkerBroker {
     slot.current = job;
     slot.worker.ref();
     job.observation.started();
-    dispatchSqliteWorkerJob(slot, job, (error, retire) => {
+    void dispatchSqliteWorkerJob(slot, job, (error, retire) => {
       // Slot failure owns settlement after joining preparation and native retirement.
       if (slot.current !== job) {
         return;

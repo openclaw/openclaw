@@ -1,6 +1,7 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -43,6 +44,7 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
@@ -50,7 +52,6 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
-import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
   createLazyOllamaNodeInferenceTool,
@@ -97,6 +98,11 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
   authProviderId: OLLAMA_PROVIDER_ID,
   create: async (options) =>
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
+};
+
+const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: OLLAMA_PROVIDER_ID,
+  capabilities: ["image"],
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -832,6 +838,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,

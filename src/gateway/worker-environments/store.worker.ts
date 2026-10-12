@@ -11,6 +11,7 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { readWorkerPlacementsInDatabase } from "./placement-row-codec.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { reconcileAttachedSessionOwners } from "./store-mutations.js";
 import { createWorkerEnvironmentReceipt } from "./store-receipt.js";
@@ -52,6 +53,14 @@ function mutation<Name extends Method, Result>(
         const touched = new Set<string>();
         const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
         const facts = readWorkerEnvironmentFacts(db, [...touched]);
+        if (name === "refreshBootstrapReceipt") {
+          const sessionIds = facts.environments.flatMap((environment) =>
+            environment.state === "attached" ? environment.attachedSessionIds : [],
+          );
+          if (sessionIds.length > 0) {
+            facts.placements = readWorkerPlacementsInDatabase(db, sessionIds);
+          }
+        }
         const receipt = {
           result,
           changed: readTotalChanges(db) !== changesBefore,

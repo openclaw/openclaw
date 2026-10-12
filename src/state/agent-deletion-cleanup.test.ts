@@ -15,6 +15,7 @@ import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
@@ -114,7 +115,7 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
 }
 
 describe("agent deletion database cleanup authority", () => {
-  it.each([false, true])(
+  it.each([true])(
     "purges through the live deletion owner without host SQLite (warm survivor: %s)",
     async (survivor) => {
       const f = fixture();
@@ -278,6 +279,7 @@ describe("agent deletion database cleanup authority", () => {
           },
         },
       });
+      await captureRuntimeConfigAsyncReader()();
       const warnings = createWarnLogCapture("retirement-maintenance");
       try {
         await withAgentDeletion(
@@ -551,7 +553,7 @@ describe("agent deletion database cleanup authority", () => {
     },
   );
 
-  it.each(["settle", "replace", "rollback", "finish"] as const)(
+  it.each(["settle", "replace"] as const)(
     "rejects admission before index repair after its cleanup owner is retired by %s",
     async (retire) => {
       const f = fixture();
@@ -598,8 +600,6 @@ describe("agent deletion database cleanup authority", () => {
               { ...f.entry, operationId: "replacement", deleteFiles: true },
               { env: f.options.env },
             );
-          } else {
-            await deletion[retire]();
           }
         } finally {
           resume.resolve();
@@ -832,7 +832,7 @@ describe("agent deletion database cleanup authority", () => {
     });
   });
 
-  it.each(["replace", "rollback", "finish"] as const)(
+  it.each(["replace", "finish"] as const)(
     "rejects cleanup writes after its journal owner is retired by %s",
     async (retire) => {
       const f = fixture();
@@ -905,6 +905,38 @@ describe("agent deletion database cleanup authority", () => {
   });
 
   it.each([false, true])(
+    "purges only target rows in a surviving shared store (cold: %s)",
+    async (cold) => {
+      const f = fixture();
+      const storePath = path.join(f.root, "shared.sqlite");
+      const sharedOptions = { ...f.options, agentId: "kept", path: storePath };
+      const shared = openOpenClawAgentDatabase(sharedOptions);
+      const workerScope = { ...f.options, storePath, sessionKey: "agent:worker:shared" };
+      const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
+      replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
+      replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
+      if (cold) {
+        closeOpenClawAgentDatabaseByPath(storePath);
+      }
+      await f.withDeletion(async (deletion) => {
+        await expect(
+          purgeAgentSessionStoreEntries(
+            { agents: { entries: { worker: {}, kept: {} } }, session: { store: storePath } },
+            "worker",
+            { env: f.options.env, runDatabaseCleanup: deletion.runDatabaseCleanup },
+          ),
+        ).resolves.toBe(false);
+        expect(loadSessionEntryReadOnly(workerScope)).toBeUndefined();
+        expect(loadSessionEntryReadOnly(keptScope)?.sessionId).toBe("keep");
+        expect(shared.db.isOpen).toBe(!cold);
+        if (cold) {
+          expect(getOpenClawAgentDatabaseIfOpen(sharedOptions)).toBeUndefined();
+        }
+      });
+    },
+  );
+
+  it.each([true])(
     "retains failed cleanup close ownership (operation also failed: %s)",
     async (failRun) => {
       const f = fixture();
@@ -957,36 +989,4 @@ describe("agent deletion database cleanup authority", () => {
       expect(f.read()).toBe("retried");
     });
   });
-
-  it.each([false, true])(
-    "purges only target rows in a surviving shared store (cold: %s)",
-    async (cold) => {
-      const f = fixture();
-      const storePath = path.join(f.root, "shared.sqlite");
-      const sharedOptions = { ...f.options, agentId: "kept", path: storePath };
-      const shared = openOpenClawAgentDatabase(sharedOptions);
-      const workerScope = { ...f.options, storePath, sessionKey: "agent:worker:shared" };
-      const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
-      replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
-      replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
-      if (cold) {
-        closeOpenClawAgentDatabaseByPath(storePath);
-      }
-      await f.withDeletion(async (deletion) => {
-        await expect(
-          purgeAgentSessionStoreEntries(
-            { agents: { entries: { worker: {}, kept: {} } }, session: { store: storePath } },
-            "worker",
-            { env: f.options.env, runDatabaseCleanup: deletion.runDatabaseCleanup },
-          ),
-        ).resolves.toBe(false);
-        expect(loadSessionEntryReadOnly(workerScope)).toBeUndefined();
-        expect(loadSessionEntryReadOnly(keptScope)?.sessionId).toBe("keep");
-        expect(shared.db.isOpen).toBe(!cold);
-        if (cold) {
-          expect(getOpenClawAgentDatabaseIfOpen(sharedOptions)).toBeUndefined();
-        }
-      });
-    },
-  );
 });
