@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createApiKeyCredential,
@@ -600,6 +601,8 @@ describe("SQLite auth storage", () => {
     );
     const left = AuthStorage.forAgent(agentDir);
     const right = AuthStorage.forAgent(agentDir);
+    const refreshEntered = createDeferredCore();
+    const releaseRefresh = createDeferredCore();
     let refreshCalls = 0;
     let activeRefreshes = 0;
     let maxActiveRefreshes = 0;
@@ -613,9 +616,8 @@ describe("SQLite auth storage", () => {
         refreshCalls += 1;
         activeRefreshes += 1;
         maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 50);
-        });
+        refreshEntered.resolve();
+        await releaseRefresh.promise;
         activeRefreshes -= 1;
         return {
           access: "fake-fresh-access",
@@ -630,9 +632,19 @@ describe("SQLite auth storage", () => {
     getAuthStorageOAuthProviderRegistry(left).register(provider);
     getAuthStorageOAuthProviderRegistry(right).register(provider);
 
-    await expect(
-      Promise.all([left.getApiKey("test-oauth"), right.getApiKey("test-oauth")]),
-    ).resolves.toEqual(["fake-fresh-access", undefined]);
+    const ownerKey = left.getApiKey("test-oauth");
+    try {
+      await refreshEntered.promise;
+      const peerKey = right.getApiKey("test-oauth");
+      await expect(peerKey).resolves.toBeUndefined();
+      releaseRefresh.resolve();
+      await expect(Promise.all([ownerKey, peerKey])).resolves.toEqual([
+        "fake-fresh-access",
+        undefined,
+      ]);
+    } finally {
+      releaseRefresh.resolve();
+    }
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
     await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");

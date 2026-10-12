@@ -92,6 +92,8 @@ describe("prepared harness source delivery", () => {
     const loaded = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "prepared-source-delivery" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     // The real runner must not borrow the dispatch mock’s shared /tmp database.
     sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(
       path.join(state.stateDir, "mock-sessions.json"),
@@ -575,7 +577,7 @@ describe("prepared harness source delivery", () => {
     );
     useOpenAIPlatformAuthFixture();
 
-    const runParams: RunEmbeddedAgentInternalParams = {
+    const runParams = {
       agentId: "worker",
       sessionId: "runtime-preparation-hint",
       workspaceDir: state.workspaceDir,
@@ -607,7 +609,9 @@ describe("prepared harness source delivery", () => {
           },
         },
       },
-    };
+    } satisfies RunEmbeddedAgentInternalParams;
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(runParams.config);
     await runEmbeddedAgent(runParams);
 
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(

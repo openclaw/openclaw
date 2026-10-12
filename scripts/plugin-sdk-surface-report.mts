@@ -150,6 +150,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-handler-runtime": 1,
   "approval-reply-runtime": 0,
   "config-contracts": 0,
+  // +1: getRuntimeConfig keeps its shipped cold-load contract while callers prepare
+  // with captureRuntimeConfigAsyncReader and consume readRuntimeConfig.
+  "runtime-config-snapshot": 1,
   "inbound-reply-dispatch": 21,
   "interactive-runtime": 11,
   "ssrf-policy": 1,
@@ -161,7 +164,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
   // +7: released auth-store and TTS methods retain synchronous compatibility.
-  "agent-runtime": 11,
+  // +3: loadAuthProfileStoreForSecretsRuntime -> loadAuthProfileStoreForRuntimeAsync
+  // with readOnly:true and allowKeychainPrompt:false; saveAuthProfileStore ->
+  // provider-auth.updateAuthProfileStoreWithLock. resolveAuthStorePathForDisplay
+  // stays compatible; its resolveAuthStorePathForDisplayAsync replacement is core-internal.
+  "agent-runtime": 14,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
@@ -245,7 +252,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async transcript event/stat read replacements.
       // +1: approved PreparedAgentRunStart contract.
       // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
-      3700,
+      // +2: readRuntimeConfig and captureRuntimeConfigAsyncReader on runtime-config-snapshot.
+      3702,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -272,7 +280,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same bounded stale-read cache factory on collection-runtime.
       // +2: the same transcript read replacement pairs.
       // +1: the same deprecated createSessionHeaderLink.
-      2160,
+      // +2: the same prepared runtime reader and asynchronous config preparation functions.
+      2162,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -287,7 +296,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
       // +2: retained synchronous transcript event/stat reads until the next SDK major.
       // +1: createSessionHeaderLink from shipped 2026.10.1 until plugin-sdk-session-header-link expires.
-      186,
+      // +4: the runtime config getter and three auth/store compatibility pairs named above.
+      190,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

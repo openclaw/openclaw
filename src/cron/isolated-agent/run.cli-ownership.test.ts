@@ -5,6 +5,7 @@ import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -30,9 +31,11 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const sessionId = "cron-cli-diagnostic-session";
 
 function makeCliOwnershipParams(): RunCronAgentTurnParams {
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg);
   return {
     deliveryAttemptFence: null,
-    cfg: {},
+    cfg,
     deps: {},
     job: {
       id: "cli-diagnostic-job",

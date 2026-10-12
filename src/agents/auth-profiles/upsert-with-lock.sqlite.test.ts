@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { prepareOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -32,6 +32,20 @@ import {
   upsertAuthProfileWithLockOrThrow,
 } from "./upsert-with-lock.js";
 
+const authStateFault = useSqliteWorkerFault([
+  {
+    name: "reject_completed_login_state",
+    match: /^(?:insert into|update) auth_profile_state\b/u,
+    sql: `CREATE TEMP TRIGGER reject_completed_login_state BEFORE UPDATE ON main.auth_profile_state
+      BEGIN SELECT RAISE(ABORT, 'injected completed login state failure'); END;`,
+  },
+  {
+    name: "reject_auth_profile_batch_state",
+    match: /^insert into auth_profile_state\b/u,
+    sql: `CREATE TEMP TRIGGER reject_auth_profile_batch_state BEFORE INSERT ON main.auth_profile_state
+      BEGIN SELECT RAISE(ABORT, 'injected auth batch state failure'); END;`,
+  },
+]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
@@ -693,30 +707,19 @@ describe("auth profile batch persistence", () => {
         },
         agentDir,
       );
-      await prepareOpenClawAgentDatabaseExecution(
-        { agentId: "work", path: resolveAuthProfileDatabasePath(agentDir) },
-        () => {},
-      );
-      const database = openOpenClawAgentDatabase({
-        agentId: "work",
-        path: resolveAuthProfileDatabasePath(agentDir),
-      });
-      database.db.exec(`
-        CREATE TRIGGER reject_completed_login_state
-        BEFORE UPDATE ON auth_profile_state
-        BEGIN
-          SELECT RAISE(ABORT, 'injected completed login state failure');
-        END;
-      `);
-
-      await expect(
-        persistAuthProfileBatch({
-          agentDir,
-          profiles: [{ profileId, credential: apiKey("sk-fresh") }],
-          resetFailureState: true,
-          allowOAuthGenerationReplacement: true,
-        }),
-      ).rejects.toThrow("injected completed login state failure");
+      authStateFault.enable(0);
+      try {
+        await expect(
+          persistAuthProfileBatch({
+            agentDir,
+            profiles: [{ profileId, credential: apiKey("sk-fresh") }],
+            resetFailureState: true,
+            allowOAuthGenerationReplacement: true,
+          }),
+        ).rejects.toThrow("injected completed login state failure");
+      } finally {
+        authStateFault.disable();
+      }
 
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
         version: 1,
@@ -783,29 +786,18 @@ describe("auth profile batch persistence", () => {
 
   it("leaves no partial profile batch when the SQLite state write fails", async () => {
     await withAgentDir(async (agentDir) => {
-      await prepareOpenClawAgentDatabaseExecution(
-        { agentId: "work", path: resolveAuthProfileDatabasePath(agentDir) },
-        () => {},
-      );
-      const database = openOpenClawAgentDatabase({
-        agentId: "work",
-        path: resolveAuthProfileDatabasePath(agentDir),
-      });
-      database.db.exec(`
-        CREATE TRIGGER reject_auth_profile_batch_state
-        BEFORE INSERT ON auth_profile_state
-        BEGIN
-          SELECT RAISE(ABORT, 'injected auth batch state failure');
-        END;
-      `);
-
-      await expect(
-        persistAuthProfileBatch({
-          agentDir,
-          profiles: [profile("openai:first", "sk-first"), profile("openai:second", "sk-second")],
-          order: { openai: ["openai:first", "openai:second"] },
-        }),
-      ).rejects.toThrow("injected auth batch state failure");
+      authStateFault.enable(1);
+      try {
+        await expect(
+          persistAuthProfileBatch({
+            agentDir,
+            profiles: [profile("openai:first", "sk-first"), profile("openai:second", "sk-second")],
+            order: { openai: ["openai:first", "openai:second"] },
+          }),
+        ).rejects.toThrow("injected auth batch state failure");
+      } finally {
+        authStateFault.disable();
+      }
 
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
     });

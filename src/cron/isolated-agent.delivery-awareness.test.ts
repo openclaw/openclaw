@@ -1,5 +1,7 @@
 import "./isolated-agent.mocks.js";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   peekSystemEventEntries,
@@ -31,15 +33,18 @@ async function withAnnounce(
   ) => void = () => {},
 ) {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStoreEntries(home, options.entries ?? {});
+    const storePath = path.join(home, ".openclaw", "sessions", "sessions.json");
+    const cfg = makeCfg(home, storePath, {
+      ...options.cfg,
+      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
+    });
+    setRuntimeConfigSnapshot(cfg);
+    await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: makeCfg(home, storePath, {
-        ...options.cfg,
-        ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-      }),
+      cfg,
       deps,
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),

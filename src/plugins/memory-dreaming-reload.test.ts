@@ -13,11 +13,13 @@ import {
   createPluginModuleLoader,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
+import { tryNativeRequireModule } from "./native-module-require.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
@@ -34,6 +36,21 @@ const { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } = loadHost(
   path.join(repository, "src/plugin-sdk/memory-core-host-status.ts"),
 ) as typeof import("../plugin-sdk/memory-core-host-status.js");
 
+// The SDK reads config through the native host, outside the transformed fixture graph.
+const configRuntime = tryNativeRequireModule(
+  path.join(repository, "src/config/runtime-snapshot.ts"),
+  {
+    aliasMap: preparePluginLoaderAliases({
+      modulePath: memorySource,
+      devSourceRoot: repository,
+      pluginSdkResolution: "src",
+    }).resolveAlias,
+  },
+);
+assert(configRuntime.ok, "Expected the native config runtime fixture");
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  configRuntime.moduleExport as typeof import("../config/runtime-snapshot.js");
+
 it("keeps successor sweeps and diary publication owned after another registration retires", async () => {
   const state = await createOpenClawTestState({ label: "memory-dreaming-reload" });
   const instances: PluginInstance[] = [];
@@ -44,6 +61,7 @@ it("keeps successor sweeps and diary publication owned after another registratio
     agents: { entries: { main: { workspace: state.workspaceDir } } },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config, config);
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
@@ -165,6 +183,6 @@ it("keeps successor sweeps and diary publication owned after another registratio
     await Promise.all(stops.map((stop) => stop()));
     await Promise.all(instances.map((instance) => instance.dispose()));
     vi.useRealTimers();
-    await state.cleanup();
+    await state.cleanup().finally(clearRuntimeConfigSnapshot);
   }
 });

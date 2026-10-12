@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createGatewayCrashLoopRecovery } from "../../cli/gateway-cli/crash-loop-recovery.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -83,11 +84,13 @@ describe("startup recovery admission", () => {
     resetAgentEventsForTest();
     resetGatewayWorkAdmission();
     tmpDir = tempDirs.make("openclaw-recovery-admission-");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
+    clearRuntimeConfigSnapshot();
   });
 
   async function makeMainSessionFixture(

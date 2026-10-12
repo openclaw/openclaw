@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -40,15 +41,16 @@ export async function createCompletionFixture(
     sessionId,
     storePath: path.join(state.stateDir, "agents", "main", "sessions", "sessions.json"),
   };
+  const cfg = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    session: { store: scope.storePath },
+  };
+  setRuntimeConfigSnapshot(cfg);
   const generation = { sessionId, lifecycleRevision: "report-generation" };
   await replaceSessionEntry(scope, { ...generation, updatedAt: 1 });
   await fs.mkdir(state.workspaceDir, { recursive: true });
   const imagePath = path.join(state.workspaceDir, "report.png");
   await fs.writeFile(imagePath, PNG);
-  const cfg = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
-    session: { store: scope.storePath },
-  };
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job: CronStoredJob = {
     ...makeCronJob({ id: "report-job", sessionTarget, sessionKey }),

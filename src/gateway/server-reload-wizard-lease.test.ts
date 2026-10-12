@@ -2,7 +2,10 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -104,6 +107,7 @@ async function createReloadFixture(
     gateway: { reload: {} },
     channels: { whatsapp: { enabled: true, selfChatMode: false } },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(initialConfig);
   setActivePluginRegistry(
     createTestRegistry([
       {

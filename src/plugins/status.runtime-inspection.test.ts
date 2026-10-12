@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -564,6 +568,8 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
   await withOpenClawTestState({ label: "diagnostics-chat" }, async (state) => {
     const { id, event, config, disposed } = createDiagnosticsFixture(state);
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    onTestFinished(clearRuntimeConfigSnapshot);
     const before = process.listenerCount(event);
     for (const name of [id, "all"]) {
       const result = await handlePluginsCommand(

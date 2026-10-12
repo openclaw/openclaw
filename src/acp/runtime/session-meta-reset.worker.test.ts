@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionResetCommitContext } from "../../config/sessions/session-accessor.lifecycle-types.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
@@ -64,6 +65,7 @@ const META: SessionAcpMeta = {
 async function fixture(state: OpenClawTestState) {
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = { agentId: "main", sessionKey: "agent:main:acp:reset", env: state.env };
   const source = {
     agentId: "main",

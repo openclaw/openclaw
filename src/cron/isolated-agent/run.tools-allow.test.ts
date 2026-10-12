@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -31,8 +32,10 @@ function makeParams(
   toolsAllow: string[],
   payload: Partial<Extract<CronStoredJob["payload"], { kind: "agentTurn" }>> = {},
   job: Partial<CronStoredJob> = {},
+  cfg: OpenClawConfig = {},
 ) {
   return makeIsolatedAgentParamsFixture({
+    cfg,
     message: "check allowed tools",
     sessionKey: "cron:tools-allow",
     job: {
@@ -177,16 +180,20 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       fetch: { providerSource: "none", diagnostics: [] },
       diagnostics: [],
     });
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(["web_search"]),
-      cfg: {
-        plugins: {
-          entries: {
-            brave: { enabled: true, config: { webSearch: { apiKey: "token-oversized" } } },
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["web_search"],
+        {},
+        {},
+        {
+          plugins: {
+            entries: {
+              brave: { enabled: true, config: { webSearch: { apiKey: "token-oversized" } } },
+            },
           },
         },
-      },
-    });
+      ),
+    );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();
     expect(hasUsableWebSearchProviderMock).toHaveBeenCalledWith(
@@ -203,14 +210,18 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     loadModelCatalogMock.mockResolvedValue([
       { id: "gpt-5.5", name: "GPT-5.5", provider: "gateway", api: "openai-chatgpt-responses" },
     ]);
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(["web_search"]),
-      cfg: {
-        tools: {
-          web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["web_search"],
+        {},
+        {},
+        {
+          tools: {
+            web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
+          },
         },
-      },
-    });
+      ),
+    );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();
   });
