@@ -123,6 +123,7 @@ const parseCiEnvFlag = (value, fallback = false) => {
   }
   return fallback;
 };
+const fullUiPullRequest = ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_FULL);
 
 const pluginContractPlan = await importTargetPlan(
   existsSync("./scripts/lib/plugin-contract-test-plan.mts")
@@ -412,26 +413,29 @@ const runSkillsPython =
 const runControlUiI18n =
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
-  !docsOnly &&
-  !nodeDataOnly &&
-  !releaseFastLane;
+  fullUiPullRequest ||
+  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+    !docsOnly &&
+    !nodeDataOnly &&
+    !releaseFastLane);
 // The UI owner graph also covers protocol and Gateway-served inputs
 // outside ui/. Ordinary UI test leaves retain their cheaper unit owner.
 const selectUiE2eFamily = (family) =>
-  !docsOnly &&
-  !nodeDataOnly &&
-  !releaseFastLane &&
-  (runtimePullRequest &&
-  (!frozenTarget || releaseGate) &&
-  !compatibilityTarget &&
-  changedPaths !== null &&
-  typeof changedNodeTestPlan.hasUiE2eAffectingChange === "function"
-    ? changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths, { family })
-    : runUiTests);
+  fullUiPullRequest ||
+  (!docsOnly &&
+    !nodeDataOnly &&
+    !releaseFastLane &&
+    (runtimePullRequest &&
+    (!frozenTarget || releaseGate) &&
+    !compatibilityTarget &&
+    changedPaths !== null &&
+    typeof changedNodeTestPlan.hasUiE2eAffectingChange === "function"
+      ? changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths, { family })
+      : runUiTests));
 let runControlUiE2e = selectUiE2eFamily("control-ui");
 let runBrowserExtensionE2e = selectUiE2eFamily("browser-extension");
-let runUiRealGateway = !ordinaryPullRequest && selectUiE2eFamily("real-gateway");
+let runUiRealGateway =
+  (fullUiPullRequest || !ordinaryPullRequest) && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
@@ -576,7 +580,10 @@ const uiOwnerScope = {
   realGateway: runUiRealGateway,
 };
 const forceFullUiE2e =
-  !runtimePullRequest || releaseGate || parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
+  fullUiPullRequest ||
+  !runtimePullRequest ||
+  releaseGate ||
+  parseCiEnvFlag(process.env.OPENCLAW_CI_UI_E2E_FULL);
 const uiE2eSelection =
   runControlUiE2e &&
   !compatibilityTarget &&
@@ -595,7 +602,8 @@ let uiTestGroups =
         ...(typeof nodeTestPlan.resolveUiE2ePrTestSelection === "function"
           ? { includeReleaseOnlyE2eTests: forceFullUiE2e }
           : {}),
-        includePrExemptRuntimeTests: selectedTestTargets ? true : includePrExemptRuntimeTests,
+        includePrExemptRuntimeTests:
+          fullUiPullRequest || selectedTestTargets ? true : includePrExemptRuntimeTests,
         changedPaths: changedPaths ?? [],
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
@@ -636,7 +644,8 @@ if (selectedTestTargets) {
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
       (file) =>
         realGatewayTargets.has(file)
-          ? !ordinaryPullRequest && (uiOwnerScope.realGateway || selected.has(file))
+          ? (fullUiPullRequest || !ordinaryPullRequest) &&
+            (uiOwnerScope.realGateway || selected.has(file))
           : uiE2eSelection
             ? selectedControlUiFiles.has(file)
             : uiOwnerScope.mocked || selected.has(file),
@@ -1052,16 +1061,17 @@ const plannedUiRealGatewayShards =
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
-const uiRealGatewayShards = ordinaryPullRequest
-  ? []
-  : selectedTestTargets
-    ? plannedUiRealGatewayShards
-        .map((shard) => ({
-          ...shard,
-          groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
-        }))
-        .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
-    : plannedUiRealGatewayShards;
+const uiRealGatewayShards =
+  ordinaryPullRequest && !fullUiPullRequest
+    ? []
+    : selectedTestTargets
+      ? plannedUiRealGatewayShards
+          .map((shard) => ({
+            ...shard,
+            groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
+          }))
+          .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
+      : plannedUiRealGatewayShards;
 const projectNodeTestGroup = ({
   configs,
   env,

@@ -226,6 +226,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       makeRecoveryInput({
         runParams: {
           ...baseRunParams,
+          trigger: "user",
           sandboxSessionKey: "global",
           sandboxAgentId: "main",
           modelSelectionLocked: true,
@@ -267,6 +268,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         trigger: "overflow",
+        modelCallUrgency: "foreground",
         currentTokenCount: 277_403,
         provider: "openai",
         model: "gpt-5.5",
