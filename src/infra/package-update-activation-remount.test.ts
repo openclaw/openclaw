@@ -5,9 +5,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as durability from "./directory-durability.js";
+import * as journalModule from "./package-update-activation-journal.js";
 import {
   openPackageActivationJournal,
   openPackageActivationSettlementJournal,
+  resolvePackageActivationControl,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
@@ -235,6 +237,73 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helperBytes);
       expect(fs.existsSync(f.journalPath)).toBe(false);
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    },
+  );
+
+  it.each(["before-commit", "before-archive"] as const)(
+    "refuses settlement after executor ownership is reassigned: %s",
+    async (scenario) => {
+      const { root } = fixture.setup();
+      const f = await prepareRemountedPublication(fixture, root);
+      const before = fs.readFileSync(f.journalPath);
+      const reassign = () => {
+        const lease = new DatabaseSync(f.historical.authority.databasePath);
+        try {
+          const { changes } = lease
+            .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+            .run(randomUUID(), f.packageRoot);
+          expect(changes).toBe(1);
+        } finally {
+          lease.close();
+        }
+      };
+      if (scenario === "before-commit") {
+        // Reassign after the full-tree verification, at the launcher sync before the close.
+        const sync = durability.syncDirectory;
+        vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+          const result = await sync(directory);
+          if (directory === path.dirname(f.launcher)) {
+            reassign();
+          }
+          return result;
+        });
+      } else {
+        // Reassign after the durable close, immediately before evidence archival.
+        const open = journalModule.openPackageActivationSettlementJournal;
+        vi.spyOn(journalModule, "openPackageActivationSettlementJournal").mockImplementation(
+          (anchor) => {
+            const journal = open(anchor);
+            return {
+              ...journal,
+              archiveSettled(expected, assertCurrent) {
+                reassign();
+                return journal.archiveSettled(expected, assertCurrent);
+              },
+            };
+          },
+        );
+      }
+      const refusal = await settleRemountedPackageActivation(f.anchor, f.operationId).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      // The executor reports its pending release and keeps the settlement refusal as the cause.
+      expect(refusal).toMatchObject({
+        message: "Update failed and executor release remains pending",
+        cause: { cause: { message: "Update executor ownership is no longer current." } },
+      });
+      if (scenario === "before-commit") {
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+      } else {
+        expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
+          phase: "superseded",
+          intent: { kind: "publication-settled-external-change", settled: true },
+        });
+      }
+      expect(fs.existsSync(resolvePackageActivationControl(f.anchor))).toBe(true);
+      expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}`)).toBe(false);
+      expect(fs.existsSync(path.join(f.anchor, "previous"))).toBe(true);
+      expect(fs.existsSync(f.packageRoot)).toBe(true);
     },
   );
 
