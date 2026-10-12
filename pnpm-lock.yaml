@@ -273,8 +273,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       '@openclaw/proc-safe':
         specifier: 0.2.0
         version: 0.2.0
@@ -642,8 +642,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       acpx:
         specifier: 0.19.4
         version: 0.19.4
@@ -940,8 +940,8 @@ importers:
         specifier: 0.160.0
         version: 0.160.0
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -999,8 +999,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       '@trycua/cua-driver':
         specifier: 0.32.0
         version: 0.32.0
@@ -1212,8 +1212,8 @@ importers:
         specifier: 1.74.0
         version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
@@ -1240,8 +1240,8 @@ importers:
   extensions/file-transfer:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -1482,8 +1482,8 @@ importers:
   extensions/llama-cpp:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1538,8 +1538,8 @@ importers:
         specifier: 18.9.0
         version: 18.9.0
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
@@ -1582,8 +1582,8 @@ importers:
   extensions/memory-core:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1692,8 +1692,8 @@ importers:
   extensions/migrate-claude:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1922,8 +1922,8 @@ importers:
   extensions/openshell:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -1997,8 +1997,8 @@ importers:
         specifier: 0.1.29
         version: 0.1.29
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -2129,8 +2129,8 @@ importers:
   extensions/signal:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.26.0
-        version: 0.26.0
+        specifier: 0.26.2
+        version: 0.26.2
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -4809,8 +4809,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-arm64@0.26.0':
-    resolution: {integrity: sha512-Lyt1rhoDUxCikH7CdkXzYqGdinKGZy3f8MC+D1/VAngXYIGUMSBu6AuR7pTo/vqrdyOI7vHpAW7QEDFobaG2ww==}
+  '@openclaw/fs-safe-darwin-arm64@0.26.2':
+    resolution: {integrity: sha512-PNxP4Q4KM7+MkmxHvuLWYoUgCIq/4/kZ89ujsjQ+ACnzc0hR1Jz4XLyk5qtP4bNvdda8G41eDyh/YOBHtoNbnQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
@@ -4821,20 +4821,20 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-x64@0.26.0':
-    resolution: {integrity: sha512-pX8E6FW9xF1INFXyp8rSv9PQyj7LFNovhgytmZD2/EdFlG2OXu1VZ6UQfcfDOwFARtoy0bwqqgEMkQZEBFH9PA==}
+  '@openclaw/fs-safe-darwin-x64@0.26.2':
+    resolution: {integrity: sha512-/Gls+kKGNPxv1LhYJc6kYq3ldMfj6iKUbK0OOyLJa694epulNM28UGfRmleCekXRU4VP09vuePnSYGCN46epwg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/fs-safe-freebsd-arm64@0.26.0':
-    resolution: {integrity: sha512-UNPfDJhOTArrNuKVG+a15UpKsQSH2m7ZnOl+KbKwGFHSHSrVqF0RUwBueooBbuuc+xzH1Y47HmUvQkM+T39K0Q==}
+  '@openclaw/fs-safe-freebsd-arm64@0.26.2':
+    resolution: {integrity: sha512-JCFvGQwbkI7C5H2CKevwpP4OQch5bMb8MvepdvSZaUzlSJFAnyzRjtpfbIKNgM9tKlHVK2rzgPndAPbxkNZy0Q==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [freebsd]
 
-  '@openclaw/fs-safe-freebsd-x64@0.26.0':
-    resolution: {integrity: sha512-MSrO0yeScP6Gs2GvUTGeSAdTXJSGRtaDkwwM1LIxwc0Ja2lICUmSpAAsArOnvR7asEi+vAJ3KYlJgcHzcW3J4g==}
+  '@openclaw/fs-safe-freebsd-x64@0.26.2':
+    resolution: {integrity: sha512-qeEqbW6h/gx7Lqxd13fTmx6hM+wic4d6UOEmWksjw65a+oT2Z2xX4RQzt/rsGTWCh3hYFZ4os3XP6xAgNg1gqQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
@@ -4846,8 +4846,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.26.0':
-    resolution: {integrity: sha512-P78xFe+KQ9z2Tqb8p7eou22CUNbywO5qyiUS6VlfOxo5Qwpj1O1RNw2xIoPWqxGpBnK+R0OEzTT0NXCu7Nz/8g==}
+  '@openclaw/fs-safe-linux-arm64-gnu@0.26.2':
+    resolution: {integrity: sha512-a6lzIZ6mUUy4ZKm12aU6N5KmsyDmzwY3Yfzsi1HXEkbzyT1XAubu+GjDDB9OxrNZyZhyDVI5tVgsS6ZoE7pEEg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4860,8 +4860,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.26.0':
-    resolution: {integrity: sha512-5ZHnjuW4vWZrSWI+6JDFrjc8QUcQ+1BnAjk+etnMeYhtJhnxau4Q9hJASWjvLsGcNrhHyNR4OmppRYvMxr5iwQ==}
+  '@openclaw/fs-safe-linux-arm64-musl@0.26.2':
+    resolution: {integrity: sha512-su7K6XJrMkIBG5WLTILzSqr5v6+m6bGaxhl3ff6PIkzA8FBBe3KyUDqIWoTn5C+dTrsrnDkMQ7XWBJkhZ40FJA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -4874,8 +4874,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.26.0':
-    resolution: {integrity: sha512-yZC6kP/EnTAFFLuws25nCy4iS4wy1l4bDGvJRFtAcdLBl+M9FOLIWM6p/TcliezYmaezWGb1i+VgxghJ3uB/mg==}
+  '@openclaw/fs-safe-linux-x64-gnu@0.26.2':
+    resolution: {integrity: sha512-WnHrli9//G5fGBGiZ2dFxe3v/RltTyechOkV6qhy1YH3ZGNUjnOCE0qIbI4JWSM9Gdod89b6UJqvA8gUqiKJ4Q==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -4888,15 +4888,15 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-x64-musl@0.26.0':
-    resolution: {integrity: sha512-kxcOv7ANmdpHXD5PdNrRFrbcesZ04x9T4JYNV55eKDbiIgK4Xe2Uo9GmaMcGouDeTrX0Oh+subsOZtUXZnFeFg==}
+  '@openclaw/fs-safe-linux-x64-musl@0.26.2':
+    resolution: {integrity: sha512-UexX3RU24H8hgzY9u5VMHn/seb9rOrRRsOsKOHsxZT6ed5uk7MGacH6JBk0WhPEqe6crt3KWXpIEPBX9lRn2Cw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.26.0':
-    resolution: {integrity: sha512-cKUMfA1rlsimftCZrbxc1UfZ2h9u9ktoPTxY9LQkSOsTlnANVO83XBurY79rv4wq9xl4SgAppOTArP18ET7A6Q==}
+  '@openclaw/fs-safe-win32-arm64-msvc@0.26.2':
+    resolution: {integrity: sha512-ntmm5N5ANN+p1u5bPPVd/bD6KCHwkXdw5c7CsfVVGlcjS5OUMeGBHMy8jd4FlnXXkh+90348SXaKCdDaO+mIXQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
@@ -4907,8 +4907,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.26.0':
-    resolution: {integrity: sha512-kNZIpWO7ydMpVS0rFGrmux89LYakG+i/rKuxUIUeB/zK8S35MMAJKmif4w0Px4WSG/FYlxPogav0MXkvgd0/yw==}
+  '@openclaw/fs-safe-win32-x64-msvc@0.26.2':
+    resolution: {integrity: sha512-S7dNLnYYDwDEmHnu4MFXveQK/M17OddERPKYk1AlYy5qYVsugkBXnO3ZuzT5jT8x2RXCM5LjpVGZbkeT3QTmfg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
@@ -4917,8 +4917,8 @@ packages:
     resolution: {integrity: sha512-sBm68f4QiZrrqlZxbOlqVIutrmOK/KLZBrwyPIhV7xXJmlPFc6ZET8AggcU3hMDM3dDSUYgA8LUupxwTB2DZsg==}
     engines: {node: '>=22'}
 
-  '@openclaw/fs-safe@0.26.0':
-    resolution: {integrity: sha512-tLpVEBUEcFS4YtT43DwM4R8XqPNcJxJzIb23+v8Lyj0vElEHUox2t5+4buv0OiSZ3r3EsVXe5odI3FZDZWcHqg==}
+  '@openclaw/fs-safe@0.26.2':
+    resolution: {integrity: sha512-BubxKwauBAL5kMHZ+ijgYDT1EoStCbt6gqJW7flWPIKU4ikJmLaNcNWh7jUe50AxT4x3FVzNpBxc/WSyZULLVQ==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.8':
@@ -13095,52 +13095,52 @@ snapshots:
   '@openclaw/fs-safe-darwin-arm64@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-darwin-arm64@0.26.0':
+  '@openclaw/fs-safe-darwin-arm64@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-darwin-x64@0.26.0':
+  '@openclaw/fs-safe-darwin-x64@0.26.2':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-arm64@0.26.0':
+  '@openclaw/fs-safe-freebsd-arm64@0.26.2':
     optional: true
 
-  '@openclaw/fs-safe-freebsd-x64@0.26.0':
+  '@openclaw/fs-safe-freebsd-x64@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.26.0':
+  '@openclaw/fs-safe-linux-arm64-gnu@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.26.0':
+  '@openclaw/fs-safe-linux-arm64-musl@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.26.0':
+  '@openclaw/fs-safe-linux-x64-gnu@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-musl@0.26.0':
+  '@openclaw/fs-safe-linux-x64-musl@0.26.2':
     optional: true
 
-  '@openclaw/fs-safe-win32-arm64-msvc@0.26.0':
+  '@openclaw/fs-safe-win32-arm64-msvc@0.26.2':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.21.3':
     optional: true
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.26.0':
+  '@openclaw/fs-safe-win32-x64-msvc@0.26.2':
     optional: true
 
   '@openclaw/fs-safe@0.21.3':
@@ -13154,18 +13154,18 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.21.3
       jszip: 3.10.2
 
-  '@openclaw/fs-safe@0.26.0':
+  '@openclaw/fs-safe@0.26.2':
     optionalDependencies:
-      '@openclaw/fs-safe-darwin-arm64': 0.26.0
-      '@openclaw/fs-safe-darwin-x64': 0.26.0
-      '@openclaw/fs-safe-freebsd-arm64': 0.26.0
-      '@openclaw/fs-safe-freebsd-x64': 0.26.0
-      '@openclaw/fs-safe-linux-arm64-gnu': 0.26.0
-      '@openclaw/fs-safe-linux-arm64-musl': 0.26.0
-      '@openclaw/fs-safe-linux-x64-gnu': 0.26.0
-      '@openclaw/fs-safe-linux-x64-musl': 0.26.0
-      '@openclaw/fs-safe-win32-arm64-msvc': 0.26.0
-      '@openclaw/fs-safe-win32-x64-msvc': 0.26.0
+      '@openclaw/fs-safe-darwin-arm64': 0.26.2
+      '@openclaw/fs-safe-darwin-x64': 0.26.2
+      '@openclaw/fs-safe-freebsd-arm64': 0.26.2
+      '@openclaw/fs-safe-freebsd-x64': 0.26.2
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.26.2
+      '@openclaw/fs-safe-linux-arm64-musl': 0.26.2
+      '@openclaw/fs-safe-linux-x64-gnu': 0.26.2
+      '@openclaw/fs-safe-linux-x64-musl': 0.26.2
+      '@openclaw/fs-safe-win32-arm64-msvc': 0.26.2
+      '@openclaw/fs-safe-win32-x64-msvc': 0.26.2
       jszip: 3.10.2
 
   '@openclaw/libterminal@0.3.8':
