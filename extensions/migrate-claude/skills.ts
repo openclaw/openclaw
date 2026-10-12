@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -135,6 +136,21 @@ function firstParagraph(content: string): string | undefined {
     .find(Boolean);
 }
 
+/**
+ * Reads a Claude command as text, refusing bytes we cannot decode: the importer
+ * writes this content verbatim into a generated SKILL.md, so replacement
+ * decoding would persist U+FFFD over the operator's original command text.
+ */
+async function readClaudeCommandContent(sourcePath: string): Promise<string> {
+  const bytes = await fs.readFile(sourcePath);
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Claude command file is not valid UTF-8: ${sourcePath}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
+    );
+  }
+  return bytes.toString("utf8");
+}
+
 function generatedCommandSkillContent(params: {
   skillName: string;
   sourceLabel: string;
@@ -179,7 +195,7 @@ export async function applyGeneratedSkillItem(
     const content = generatedCommandSkillContent({
       skillName,
       sourceLabel,
-      commandContent: await fs.readFile(item.source, "utf8"),
+      commandContent: await readClaudeCommandContent(item.source),
     });
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })
