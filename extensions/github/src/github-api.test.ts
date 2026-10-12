@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function scopedRequests(
@@ -105,5 +106,76 @@ describe("GitHub API base URL", () => {
     expect(() => api.resolveGitHubApiUrls(origin)).toThrow(
       "gateway.github.apiBaseUrl must be an HTTPS GitHub API base URL",
     );
+  });
+});
+
+describe("GitHub discardResponse hanging-body HTTP transport", () => {
+  it("returns from discardResponse while retained unread cancel stays pending", async () => {
+    const { createServer } = await import("node:http");
+    const api = await import("./github-api.js");
+    const socketClosed = createDeferred<void>();
+    const server = createServer((req, res) => {
+      res.writeHead(429, {
+        "content-type": "application/json",
+        connection: "close",
+        "retry-after": "1",
+      });
+      // Leave the body unread/hanging so await cancel would stall with a retained tee.
+      res.write('{"message":"rate limited"');
+      req.socket?.once("close", () => {
+        socketClosed.resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
+    });
+
+    let retained: Response | undefined;
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP address");
+      }
+      const response = await fetch(`http://127.0.0.1:${address.port}/rate-limit`);
+      // Retain an unread clone so body.cancel() can remain pending (capture-tee case).
+      retained = response.clone();
+      const returned = createDeferred<void>();
+      const discardPromise = api.discardResponse(response).then(() => {
+        returned.resolve();
+      });
+      await returned.promise;
+
+      const cancelPending = retained.body?.cancel() ?? Promise.resolve();
+      let cancelSettled = false;
+      void cancelPending.then(
+        () => {
+          cancelSettled = true;
+        },
+        () => {
+          cancelSettled = true;
+        },
+      );
+      await Promise.resolve();
+      console.log(
+        `[github discardResponse HTTP transport proof] returned=true cancel_pending=${!cancelSettled}`,
+      );
+      expect(cancelSettled).toBe(false);
+
+      await cancelPending.catch(() => undefined);
+      await discardPromise;
+      await socketClosed.promise;
+    } finally {
+      if (retained && !retained.bodyUsed) {
+        void retained.body?.cancel().catch(() => undefined);
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
   });
 });

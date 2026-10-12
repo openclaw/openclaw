@@ -362,7 +362,9 @@ export async function fetchGitHubApi(
 }
 
 export async function discardResponse(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => {});
+  // Do not await cancel: teed/debug streams can leave cancel pending forever
+  // and stall rate-limit / redirect / overflow discard paths (Google Chat fetchOk).
+  void response.body?.cancel().catch(() => undefined);
 }
 
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
