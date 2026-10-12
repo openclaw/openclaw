@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
+import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -408,13 +410,17 @@ async function prepareGatewaySessionStoreReadInWorker(
 export async function loadGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0] & {
     excludeInternalEffects?: boolean;
+    includeStoreChildEntries?: boolean;
   },
 ) {
-  const { excludeInternalEffects, ...lookup } = params;
+  const { excludeInternalEffects, includeStoreChildEntries, ...lookup } = params;
   const target = await resolveGatewaySessionStoreTargetInWorker({
     ...lookup,
     projection: params.projection ?? "full",
   });
+  if (includeStoreChildEntries) {
+    await includeDirectChildEntries(target, params.cfg, params.env);
+  }
   params.assertActive?.();
   if (excludeInternalEffects) {
     omitInternalSessionEffectsEntries(target.store, target.storeKeys);
@@ -426,6 +432,47 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
     entry: match?.entry,
     legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
   };
+}
+
+async function includeDirectChildEntries(
+  target: GatewaySessionStoreTargetWithStore,
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  try {
+    const parentKeys = [...new Set([target.canonicalKey, ...target.storeKeys])];
+    const children = await listSessionChildEntriesReadOnly(
+      {
+        agentId: target.agentId,
+        env,
+        projection: "list",
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      parentKeys,
+    );
+    for (const { sessionKey, entry } of children) {
+      target.store[sessionKey] = entry;
+    }
+    const hints = new Set(
+      listSubagentSessionListRunsForControllers(parentKeys).map((run) => run.childSessionKey),
+    );
+    const hinted = await Promise.all(
+      [...hints]
+        .filter((key) => !target.store[key])
+        .map((key) =>
+          resolveGatewaySessionStoreTargetInWorker({ cfg, env, key, projection: "list" }),
+        ),
+    );
+    for (const child of hinted) {
+      const entry = child.store[child.canonicalKey];
+      if (entry && !parentKeys.includes(child.canonicalKey)) {
+        target.store[child.canonicalKey] = entry;
+      }
+    }
+  } catch {
+    // Child metadata is optional; unavailable stores preserve the selected parent row.
+  }
 }
 
 /** Retain the original lookup domain for a later synchronous admission predicate. */

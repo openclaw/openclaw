@@ -296,6 +296,19 @@ vi.mock("../gateway/server-methods/chat-history-pages.js", () => ({
   readChatHistoryPage: (params: unknown) => readChatHistoryPageMock(params),
 }));
 
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: ({
+    key,
+    cfg: _cfg,
+    ...opts
+  }: {
+    key: string;
+    cfg: unknown;
+    agentId?: string;
+    includeStoreChildEntries?: boolean;
+  }) => Promise.resolve(loadSessionEntryMock(key, opts)),
+}));
+
 vi.mock("../gateway/session-utils.js", () => ({
   getSessionDefaults: () => getSessionDefaultsMock(),
   listAgentsForGateway: () => [],

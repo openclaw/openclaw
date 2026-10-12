@@ -624,7 +624,11 @@ describe("session accessor seam", () => {
       sql.includes('from "session_participants"') ? "participants" : null,
     );
     try {
-      const children = listSessionChildEntriesReadOnly({ agentId: "main", sessionKey, storePath });
+      const children = await listSessionChildEntriesReadOnly({
+        agentId: "main",
+        sessionKey,
+        storePath,
+      });
       expect(children.map((child) => child.sessionKey)).toEqual([
         "agent:main:focused-both-child",
         "agent:main:focused-parent-child",

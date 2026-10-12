@@ -105,7 +105,7 @@ async function listSessionBackfillSources(params: {
   const candidates = corpus
     .map((entry) => sessionIngestionSourceFromCorpus(entry, "backfill"))
     .filter((entry) => entry !== null);
-  const excludedReasons = sessionExclusionReasons(
+  const excludedReasons = await sessionExclusionReasons(
     candidates,
     params.admissionPolicy,
     forgottenSessionIds,

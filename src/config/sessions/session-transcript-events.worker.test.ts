@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript, loadTranscriptEvents } from "./session-accessor.js";
+import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
@@ -35,6 +36,45 @@ const events = [
   },
   { type: "leaf", id: "selected-leaf", parentId: "first-branch" },
 ];
+
+it("appends entry-less raw events off-thread and resolves parents from current writes", async () => {
+  await withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId: "raw-append",
+      sessionKey: "agent:main:raw-append",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    const header = { type: "session", id: scope.sessionId, version: 3 };
+    const first = { type: "custom", id: "first", parentId: null, customType: "raw" };
+    const second = { type: "custom", id: "second", parentId: "first", customType: "raw" };
+    const sibling = { type: "custom", id: "sibling", parentId: "first", customType: "raw" };
+    const hostSql = observeHostDataSql();
+    try {
+      for (const event of [header, first, second, sibling]) {
+        await expect(appendTranscriptEvent(scope, event)).resolves.toBe(true);
+      }
+      await expect(
+        appendTranscriptEvent(
+          scope,
+          { type: "custom", id: "current", parentId: "first", customType: "raw" },
+          { appendIntent: "active-branch" },
+        ),
+      ).resolves.toBe(true);
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        header,
+        first,
+        second,
+        sibling,
+        { type: "custom", id: "current", parentId: "sibling", customType: "raw" },
+      ]);
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+  });
+});
 
 it("reads all ordered raw events and byte bounds without caller SQL, including cold target discovery", async () => {
   await withOpenClawTestState({ label: "transcript-events-worker" }, async (state) => {

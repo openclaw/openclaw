@@ -217,6 +217,21 @@ serveOwnedWorkerTasks(
           pending: result.found && result.value,
         };
       }
+      if (request.kind === "session-transcript-instances") {
+        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        return {
+          kind: request.kind,
+          instances: listSessionTranscriptInstances(
+            {
+              ...request.scope,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            request.options,
+            request.continuation,
+          ),
+        };
+      }
       if (request.kind === "memory-session-targets") {
         const { readMemorySessionTargets } = await import("./session-memory-targets.js");
         return {

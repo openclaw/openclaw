@@ -529,9 +529,13 @@ no durable artifacts for that actor. Private transcripts are not added to the
 durable Memory ingestion corpus.
 
 The synchronous `loadMemorySessionMetadata` and
-`loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
-guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
-and selector readers retain their existing native/offline contracts. Explicitly
+`loadMemorySessionMetadataBatch` helpers are deprecated. Await
+`loadMemorySessionMetadataAsync` and `loadMemorySessionMetadataBatchAsync`
+instead; bundled ingestion resolves each store batch in the existing history
+worker. The synchronous helpers retain their signatures until the next Plugin
+SDK major. Like the other inventory readers, their deprecation is documented
+without a runtime warning. `statSessionEntrySync`, batch transcript stats, and
+synchronous archive and selector readers retain their existing native/offline contracts. Explicitly
 bound actor calls refuse synchronous database access with
 `IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
 `loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.

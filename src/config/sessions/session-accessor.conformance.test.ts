@@ -2230,7 +2230,7 @@ describe("sqlite session normalization", () => {
     ).toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud when imported lineage disagrees with canonical entry JSON", () => {
+  it("fails loud when imported lineage disagrees with canonical entry JSON", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:lineage-mismatch";
     const sessionId = "lineage-mismatch-session";
@@ -2250,14 +2250,14 @@ describe("sqlite session normalization", () => {
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sessionKey);
 
-    expect(() =>
+    await expect(
       listSessionChildEntriesReadOnly({
         agentId: "main",
         env,
         sessionKey: "agent:main:json-parent",
         storePath: paths.sqlitePath,
       }),
-    ).toThrow("openclaw doctor --fix");
+    ).rejects.toThrow("openclaw doctor --fix");
     expect(() =>
       listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
     ).toThrow("openclaw doctor --fix");

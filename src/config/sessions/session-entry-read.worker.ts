@@ -30,6 +30,7 @@ import {
 import {
   prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
+  readSessionChildEntriesInDatabase,
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
@@ -255,6 +256,30 @@ export function readExactSessionEntriesWithLifecycle(
 ): SessionExactEntriesWorkerResult {
   const { readDatabase, snapshot, assertCanonicalRead } =
     createSessionEntryReadScope(capturedDatabase);
+  if (request.selection?.kind === "children") {
+    const { parentSessionKeys } = request.selection;
+    const result = readDatabase(
+      (database) => {
+        assertCanonicalRead(database, request.expectedIdentity);
+        return {
+          kind: "session-exact-entries" as const,
+          entries: readSessionChildEntriesInDatabase(
+            database,
+            parentSessionKeys,
+            request.snapshotFields ?? request.projection,
+          ),
+          lifecycleTimestamps: {},
+        };
+      },
+      { ...request.database, env: request.env },
+    );
+    if (!result.found && result.reason !== "database-missing") {
+      throw new SessionMetadataUnavailableError(result.reason);
+    }
+    return result.found
+      ? result.value
+      : { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} };
+  }
   if (
     !request.selection &&
     (request.projection === undefined ||

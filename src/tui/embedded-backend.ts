@@ -82,6 +82,7 @@ import {
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import {
   getSessionDefaults,
   listAgentsForGateway,
@@ -452,7 +453,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       await prepareOptionalSubagentSessionListReadCache();
     }
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const selected = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
+    const selected = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: opts.sessionKey,
       ...loadOptions,
       includeStoreChildEntries: true,
     });
