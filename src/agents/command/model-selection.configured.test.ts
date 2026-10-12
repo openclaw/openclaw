@@ -586,10 +586,12 @@ describe("command selection with session routing", () => {
       assertCurrent: () => {},
       signal: lifetime.signal,
     });
-    vi.mocked(loadProviderScopedThinkingCatalog).mockImplementation(async () => {
-      lifetime.abort(denied);
-      return [];
-    });
+    vi.mocked(loadProviderScopedThinkingCatalog)
+      .mockClear()
+      .mockImplementation(async () => {
+        lifetime.abort(denied);
+        return [];
+      });
 
     await expect(
       fixture.select({

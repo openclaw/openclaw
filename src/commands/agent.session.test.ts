@@ -1,5 +1,6 @@
 // Agent session command tests cover session resolution, agent scoping, and temp-home session stores.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
@@ -337,7 +338,7 @@ describe("agent session resolution", () => {
       expect(resolution.sessionEntry?.runtimeMs).toBe(900);
 
       const persisted = loadSessionEntry({
-        sessionKey: resolution.sessionKey,
+        sessionKey: expectDefined(resolution.sessionKey, "resolved session key"),
         storePath: resolution.storePath,
       });
       expect(persisted?.sessionId).toBe(sessionId);
