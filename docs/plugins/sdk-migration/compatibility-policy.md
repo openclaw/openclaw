@@ -480,7 +480,7 @@ The synchronous `readAcpSessionEntry` export remains available for the
 `v2026.9.4` contract, but is deprecated. Await `readAcpSessionEntryAsync` to read
 through the existing worker. Bundled callers have migrated. Legacy use emits
 one `DEP_PLUGIN_SDK` warning per plugin and ACP-session family per process;
-removal is gated on the next Plugin SDK major. The asynchronous signatures
+removal will follow in a later stable release after deprecation ships. The asynchronous signatures
 above remain supported without warnings. This changes no schema or stored data.
 
 ### Memory session binding compatibility
@@ -652,8 +652,8 @@ next Plugin SDK major.
 cold-load contract but are deprecated. Use `readRuntimeConfig` for a prepared
 snapshot, or await `captureRuntimeConfigAsyncReader()()` at a cold preparation
 boundary. Legacy use emits one `DEP_SESSION_PERSISTENCE` warning per plugin and
-runtime-config family per process. Removal requires the next Plugin SDK major
-and explicit breaking-release approval. This changes no stored-config format.
+runtime-config family per process. Removal will follow in a later stable release
+after deprecation ships. This changes no stored-config format.
 
 ### Config record migrations
 

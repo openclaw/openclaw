@@ -1349,7 +1349,8 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
-   * with readOnly: true and allowKeychainPrompt: false. Removed at the next Plugin SDK major.
+   * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
+   * release after deprecation ships.
    */
   function loadAuthProfileStoreForSecretsRuntime(
     agentDir?: string,
@@ -1616,7 +1617,7 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
-   * Removed at the next Plugin SDK major.
+   * Retained until removal in a later stable release after deprecation ships.
    */
   function saveAuthProfileStore(
     store: AuthProfileStore,

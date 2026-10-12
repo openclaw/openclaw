@@ -14,6 +14,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -45,6 +46,7 @@ describe("session creation scope", () => {
       prefix: "session-creation-env-explicit-",
       applyEnv: false,
     });
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {

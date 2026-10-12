@@ -4,6 +4,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -18,8 +19,10 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-projection-catchup-");
+afterAll(clearRuntimeConfigSnapshot);
 
 async function prepareDirtyProjection(label: string) {
+  setRuntimeConfigSnapshot({});
   const stateDir = sessionDirs.make();
   const scope = {
     agentId: "main",

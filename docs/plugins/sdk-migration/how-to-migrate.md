@@ -669,7 +669,7 @@ initializer's ownership.
 
 The synchronous upsert, delete, and initializer `link` contracts shipped in
 `v2026.9.8` retain their arguments, immediate results, and completion timing until
-the next Plugin SDK major and explicit breaking-release approval. Calling any of
+removal in a later stable release after deprecation ships. Calling any of
 these methods emits one `DEP_SESSION_PERSISTENCE` warning per plugin and process
 for the upstream-link capability family; unscoped consumers share one SDK-level
 warning. This migration changes no schema, stored data, retention, or update
@@ -1527,7 +1527,7 @@ The SDK's `getRuntimeConfig(options?)` on `runtime-config-snapshot` and
 behavior for released plugins. It is deprecated and warns once per plugin and
 runtime-config family per process. Migrate hot reads to
 `readRuntimeConfig` and cold preparation to `captureRuntimeConfigAsyncReader`.
-Removal requires the next Plugin SDK major; no stored-config migration is needed.
+Removal will follow in a later stable release after deprecation ships; no stored-config migration is needed.
 
 ## Await strict transcript message preparation
 
@@ -1590,7 +1590,7 @@ any other existing read options. The core helper
 `loadAuthProfileStoreForSecretsRuntimeAsync` is not a public SDK export.
 
 `resolveAuthStorePathForDisplay` remains a deprecated SDK compatibility export
-through the current Plugin SDK major. Its async replacement,
+until removal in a later stable release after deprecation ships. Its async replacement,
 `resolveAuthStorePathForDisplayAsync`, is core-internal. New plugins should
 present credential or provider metadata through public APIs such as
 `resolveProviderAuthProfileMetadataAsync` from `provider-auth-runtime`.
@@ -1659,7 +1659,7 @@ to build the registry synchronously without opening their store. Await
 `unregisterProviderAsync(name)` when removing a provider from a disk-backed
 registry. Captured session forks keep their immediate in-memory behavior.
 The synchronous disk-backed methods remain deprecated and warn on native reads
-through the current Plugin SDK major.
+until removal in a later stable release after deprecation ships.
 
 Image, music, video, speech, realtime voice, and realtime transcription provider
 plugins should implement

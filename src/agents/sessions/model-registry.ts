@@ -233,7 +233,8 @@ export class ModelRegistry {
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
-      // Legacy SDK callers retain synchronous disk freshness until the next major.
+      // Legacy SDK callers retain synchronous disk freshness until removal in a later stable
+      // release after deprecation ships.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
     }

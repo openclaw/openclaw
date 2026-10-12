@@ -5,6 +5,7 @@ import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { listSessionPendingInputs } from "./session-accessor.pending-inputs.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -17,6 +18,7 @@ it.each(["before", "after"] as const)(
   "checks input staging lifecycle changes %s writer admission",
   async (timing) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = createSessionCompoundWorkerFixture();
       const input = expectDefined(
         await acquireSessionInputActor(
@@ -89,6 +91,7 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
   "persists concurrent initial inputs exactly once with participant writes queued around %s admission",
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const outcomes = await Promise.allSettled(
         Array.from({ length: 8 }, async (_, index) => {
@@ -191,6 +194,7 @@ it.each(["lifecycle", "authority"] as const)(
   "refuses run adoption when %s changes during version rebasing",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = createSessionCompoundWorkerFixture();
       let current = true;
       const assertCurrent = () => {

@@ -542,7 +542,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     deprecated: "2026-10-11",
     warningStarts: "2026-10-11",
     replacement:
-      "Await readAcpSessionEntryAsync. Bundled consumers use the existing worker-backed reader; the released synchronous reader keeps its result contract until the next Plugin SDK major.",
+      "Await readAcpSessionEntryAsync. Bundled consumers use the existing worker-backed reader; the released synchronous reader keeps its result contract until removal in a later stable release after deprecation ships.",
     docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
     surfaces: ["openclaw/plugin-sdk/acp-runtime.readAcpSessionEntry"],
     diagnostics: [

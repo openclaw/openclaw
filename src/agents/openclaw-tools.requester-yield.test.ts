@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -26,6 +26,10 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 async function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,

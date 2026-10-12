@@ -444,7 +444,7 @@ export type NativeSessionBindingStateStoreV2<TRecord extends NativeSessionBindin
 > & {
   /**
    * @deprecated Worker-backed stores publish lease facts directly. Retained for external adapters
-   * until the next Plugin SDK major.
+   * until removal in a later stable release after deprecation ships.
    */
   assertLeaseCurrent?(key: string, token: string): void;
   withCurrent: NativeSessionBindingStateStore<TRecord>["withCurrent"];

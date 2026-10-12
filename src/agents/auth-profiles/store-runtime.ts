@@ -20,14 +20,15 @@ export const {
 
 /**
  * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
- * with readOnly: true and allowKeychainPrompt: false. Removed at the next Plugin SDK major.
+ * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
+ * release after deprecation ships.
  */
 export const loadAuthProfileStoreForSecretsRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForSecretsRuntime;
 
 /**
  * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
- * Removed at the next Plugin SDK major.
+ * Retained until removal in a later stable release after deprecation ships.
  */
 export const saveAuthProfileStore = nativePluginBindings.authStore.saveAuthProfileStore;
 
