@@ -206,12 +206,14 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,
-        toolSearchPrompt: toolSearchControlsEnabled
-          ? {
-              config: toolSearchRuntimeConfig,
-              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
-            }
-          : undefined,
+        catalogPrompt:
+          toolSearchControlsEnabled || codeModeControlsEnabled
+            ? {
+                config: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
+                agentId: params.agentId,
+                contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+              }
+            : undefined,
       }),
     };
   };

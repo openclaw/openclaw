@@ -37,7 +37,10 @@ function createStartupState(label: string) {
   });
 }
 
-it("retains projection startup when an early session request disconnects", async ({ signal }) => {
+it("retains projection startup when an early probe-prefixed UI request disconnects", async ({
+  signal,
+}) => {
+  const basePath = "/health";
   const port = await getFreePort();
   const token = "startup-projection-synthetic-token";
   const state = await createStartupState("startup-projection-http");
@@ -51,13 +54,13 @@ it("retains projection startup when an early session request disconnects", async
   const requests = new AbortController();
   const earlyRequest = new AbortController();
   const requestSignal = AbortSignal.any([signal, requests.signal]);
-  const entryPath = `${buildControlUiSessionEntryUrl("/chat/main/topic", "")}&probe=1`;
+  const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
   let startup: Promise<GatewayServer> | undefined;
   let earlyEntryRequest: Promise<Response> | undefined;
   let entryRequest: Promise<Response> | undefined;
   try {
     await state.writeConfig({
-      gateway: { auth: { mode: "token", token }, controlUi: { enabled: true }, port },
+      gateway: { auth: { mode: "token", token }, controlUi: { enabled: true, basePath }, port },
       agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
       plugins: { enabled: false },
       discovery: { mdns: { mode: "off" } },
@@ -132,14 +135,17 @@ it("retains projection startup when an early session request disconnects", async
       ),
       signal,
     );
-    for (const [path, expectedStatus] of [
-      ["/healthz", 200],
-      ["/startupz", 503],
-      ["/readyz", 503],
+    for (const [path, expectedStatus, expectedBody] of [
+      ["/health", 200, { ok: true, status: "live" }],
+      ["/healthz", 200, { ok: true, status: "live" }],
+      ["/startup", 503, { ok: false, status: "starting" }],
+      ["/startupz", 503, { ok: false, status: "starting" }],
+      ["/ready", 503, { ready: false }],
+      ["/readyz", 503, { ready: false }],
     ] as const) {
-      const response = await read(path);
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: requestSignal });
       expect(response.status, path).toBe(expectedStatus);
-      await response.arrayBuffer();
+      expect(await response.json(), path).toMatchObject(expectedBody);
     }
     expect(entryResponse.writableEnded).toBe(false);
     earlyRequest.abort();
@@ -159,6 +165,11 @@ it("retains projection startup when an early session request disconnects", async
     expect((await entryRequest).status).toBe(204);
     const server = await startup;
     await server.startupSettled;
+    const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
+      signal: requestSignal,
+    });
+    expect(unauthorized.status).toBe(401);
+    await unauthorized.arrayBuffer();
   } finally {
     releaseProjection.resolve();
     releaseListening.resolve();

@@ -189,6 +189,7 @@ it.each(["ok", "error"] as const)(
   async (outcome) => {
     const { options, clock, warnings } = fixture();
     const release = createDeferred();
+    const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
     const value = { result: "synthetic-private-result" };
     const order: string[] = [];
@@ -209,8 +210,10 @@ it.each(["ok", "error"] as const)(
       (error: unknown) => ({ error }),
     );
     clock.now = 100;
-    const next = runOpenClawAgentWriteAdmission(options, () => {
+    const next = runOpenClawAgentWriteAdmission(options, async () => {
       order.push("follower");
+      // The holder's diagnostic continuation may run after the follower starts.
+      await releaseFollower.promise;
       clock.now += 25;
       return value;
     });
@@ -222,6 +225,7 @@ it.each(["ok", "error"] as const)(
       expect("error" in observed ? observed.error : observed.result).toBe(
         outcome === "error" ? failure : value,
       );
+      releaseFollower.resolve();
       expect(await next).toBe(value);
       expect(order).toEqual(["holder", "follower"]);
       expect(warnings).toEqual([
@@ -245,6 +249,7 @@ it.each(["ok", "error"] as const)(
       expect(JSON.stringify(warnings)).not.toContain(options.path);
     } finally {
       release.resolve();
+      releaseFollower.resolve();
       await Promise.allSettled([first, next]);
     }
   },

@@ -144,16 +144,13 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
               },
             },
             {
-              type: "message",
+              type: "custom_message",
               id: "updated-runtime",
               parentId: "switched-model",
-              message: {
-                role: "custom",
-                customType: "openclaw.system-update",
-                content: "Updated runtime",
-                display: false,
-                details: { kind: "runtime-context", turnScoped: true },
-              },
+              customType: "openclaw.system-update",
+              content: "Updated runtime",
+              display: false,
+              details: { kind: "runtime-context", turnScoped: true },
             },
           ];
           for (const event of metadata) {
@@ -255,13 +252,14 @@ it("reuses durable summaries across model and runtime metadata while refreshing 
           ]);
           const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
           expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
-          expect(summary?.snapshot.totalMessages).toBe(5);
+          expect(summary?.snapshot.totalMessages).toBe(4);
           expect(summary?.notes).toEqual([
             "user: Original question",
             "assistant: Original answer",
             "user: Next question",
             "assistant: Next answer",
           ]);
+          expect(summary?.snapshot.activeLeafEntryId).toBe("next-answer");
           expect(summary?.page.events).toContainEqual({
             event: expect.objectContaining({ id: "next-question", message: captured }),
           });

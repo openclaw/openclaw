@@ -150,6 +150,10 @@ function assertSynchronousResult(value: unknown, phase: string, beforeReject?: (
 }
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
+  const timing = request.timing;
+  if (timing) {
+    timing.received = performance.now();
+  }
   let reply: SqliteWorkerReply;
   let executed = pendingResult !== undefined;
   let retire = false;
@@ -262,11 +266,19 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 await admitted;
               }
             }
-            const execute = () =>
-              runInActorContext(request.actor, () => ({
+            const execute = () => {
+              if (timing) {
+                timing.executeStarted = performance.now();
+              }
+              const result = runInActorContext(request.actor, () => ({
                 // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
                 result: backend.execute(typedCommand),
               })).result;
+              if (timing) {
+                timing.executeFinished = performance.now();
+              }
+              return result;
+            };
             const fence = runInActorContext(request.actor, () =>
               backend[SQLITE_WORKER_SOURCE_FENCE]?.(typedCommand),
             );
@@ -449,6 +461,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       await executeCommand(deserialize(request.input));
     }
     const serialized = serialize(value);
+    if (timing) {
+      timing.serialized = performance.now();
+    }
     if (serialized.byteLength > SQLITE_WORKER_MAX_RESULT_BYTES) {
       if (!completeResult) {
         throw new Error("SQLite worker frame exceeds the transport byte limit");
@@ -526,6 +541,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete && nativeCleanupFailure) {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;
+  }
+  if (timing) {
+    timing.replied = performance.now();
+    reply.timing = timing;
   }
   if (reply.ok) {
     if (complete && !reply.cleanupFailure && !nativeRuntimeAdmissionSent) {

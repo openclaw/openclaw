@@ -22,7 +22,6 @@ import { isCurrentPlacementTurnClaim, sameWorkerSessionTurnClaim } from "./place
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { isWorkerEnvironmentAttachedTo, matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
-import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
@@ -46,6 +45,7 @@ import {
 } from "./worker-turn-admission.js";
 import {
   failHandedOffTurn,
+  prepareWorkerTurnFailure,
   WorkerTurnExecutionError,
   WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
@@ -634,9 +634,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   requireActivePlacement(reconciled);
                 }
               }
-              const pendingWorkspaceResult = await findPendingWorkerWorkspaceResult(
+              const pendingWorkspaceResult = await prepareWorkerTurnFailure(
                 options.placements,
-                turnClaim,
+                { ...identity, ...turnClaim },
+                handedOff && !remoteExec ? options.persistAbandonedPartial : undefined,
               );
               if (pendingWorkspaceResult) {
                 if (turnClaim.owner.kind === "local") {
@@ -691,16 +692,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   placement,
                   turnClaim,
                   error,
-                  ...(terminalOwner && terminalAtMs !== undefined
-                    ? {
-                        terminal: {
+                  terminal:
+                    terminalOwner && terminalAtMs !== undefined
+                      ? {
                           observedAtMs: terminalAtMs,
                           registerRecovery: (recover) => {
                             terminalOwner.recoverTerminal = recover;
                           },
-                        },
-                      }
-                    : {}),
+                        }
+                      : undefined,
                 });
               } else {
                 await releaseClaimIfOwned(options.placements, turnClaim);
