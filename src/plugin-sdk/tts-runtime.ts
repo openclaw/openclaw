@@ -31,6 +31,7 @@ export {
   resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
   setLastTtsAttempt,
   setSummarizationEnabled,

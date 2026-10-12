@@ -243,6 +243,10 @@ config postimage. A missing policy row stays with the connection's read revision
 until the schema owner's seed or canonical writer makes the policy available.
 Uncertain rollback can discard a data fact and require one repair read before reuse.
 
+Concurrent Windows handoff initializers share the existing writer admission lock
+until private file publication finishes, preserving the single-link file check
+without quarantining another initializer's in-progress publication.
+
 The Mentions Inbox retains its committed head through the same physical owner.
 An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation
 reads the head and retained sources in one atomic query before resuming its FIFO;

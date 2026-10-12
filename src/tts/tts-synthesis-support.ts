@@ -37,7 +37,7 @@ import {
   normalizeConfiguredSpeechProviderId,
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
@@ -206,7 +206,7 @@ export async function acquireTtsRequest(
     channelId: params.channelId,
     accountId: params.accountId,
   });
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  const prefsPath = params.prefsPath ?? (await resolveTtsPrefsPathAsync(config));
   if (params.text.length > config.maxTextLength) {
     return {
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,

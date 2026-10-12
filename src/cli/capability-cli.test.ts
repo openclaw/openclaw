@@ -411,7 +411,7 @@ vi.mock("../tts/tts.js", () => ({
   listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: mocks.resolveTtsConfig,
-  resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
+  resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
   setTtsPersona: mocks.setTtsPersona,
   setTtsProvider: mocks.setTtsProvider,
