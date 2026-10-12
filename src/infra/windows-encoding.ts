@@ -21,6 +21,7 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   1256: "windows-1256",
   1257: "windows-1257",
   1258: "windows-1258",
+  866: "cp866",
 };
 const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
 
