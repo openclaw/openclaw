@@ -225,20 +225,25 @@ export function readCurrentConfigForResolution(
   }
   const io = createCurrentConfigReader(params);
   let config: OpenClawConfig | undefined;
+  let loadFailure: unknown;
   try {
     const loaded = io.loadConfig({ skipSuspiciousRecovery: true });
     if (fs.existsSync(io.configPath)) {
       config = loaded;
     }
-  } catch {
-    // Directory inspection preserves access even when the config cannot be loaded.
+  } catch (error) {
+    // Directory inspection preserves access even when the config cannot be loaded,
+    // but the degradation must not erase why the file was rejected.
+    loadFailure = error;
   }
   const issues = config
     ? []
     : [
         {
           path: io.configPath,
-          message: "Config unavailable; using environment and default agent directory settings.",
+          message: loadFailure
+            ? `Config unavailable; using environment and default agent directory settings. (${formatErrorMessage(loadFailure)})`
+            : "Config unavailable; using environment and default agent directory settings.",
         },
       ];
   logConfigWarningsOnce({
