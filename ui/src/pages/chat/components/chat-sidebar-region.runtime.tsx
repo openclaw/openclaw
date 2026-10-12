@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
@@ -45,7 +46,6 @@ function activePanelTab(root: ParentNode | null | undefined) {
 
 function Region(props: RegionProps, host: RegionElement) {
   let previousGeometry = "";
-  let geometryFrame: number | null = null;
   let focusFrame: number | null = null;
   let focusedSurface: Element | null = null;
   let focusBeforeSideLock: HTMLElement | null = null;
@@ -227,16 +227,10 @@ function Region(props: RegionProps, host: RegionElement) {
   }
 
   function scheduleGeometryCommit() {
-    if (geometryFrame !== null) {
-      return;
-    }
-    // Nested panels commit after this host. Measure their final geometry once,
-    // rather than forcing layout in the middle of each parent/child update.
-    geometryFrame = requestAnimationFrame(() => {
-      geometryFrame = null;
+    scheduleLayout(host, () => {
       const shell = host.parentElement;
       if (!host.isConnected || !shell) {
-        return;
+        return undefined;
       }
       const panel = shell.querySelector<HTMLElement>(
         ".sidebar-region__right-runtime > .side-panel",
@@ -249,15 +243,17 @@ function Region(props: RegionProps, host: RegionElement) {
       // The manual panel render is the commit boundary for its transcript.
       // Track content, not region roles: swapping can keep the same main/side
       // widths while changing the transcript width and its row measurements.
-      panel?.dispatchEvent(
-        new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
-          bubbles: true,
-          detail: {
-            widthChanged: geometry !== previousGeometry,
-          },
-        }),
-      );
-      previousGeometry = geometry;
+      return () => {
+        panel?.dispatchEvent(
+          new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+            bubbles: true,
+            detail: {
+              widthChanged: geometry !== previousGeometry,
+            },
+          }),
+        );
+        previousGeometry = geometry;
+      };
     });
   }
 
@@ -414,9 +410,7 @@ function Region(props: RegionProps, host: RegionElement) {
     dispose?.();
     listeners.abort();
     focusedSurface = null;
-    if (geometryFrame !== null) {
-      cancelAnimationFrame(geometryFrame);
-    }
+    cancelLayout(host);
     if (focusFrame !== null) {
       cancelAnimationFrame(focusFrame);
     }
