@@ -2051,6 +2051,16 @@ export const en: TranslationMap & {
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    onboardingName: {
+      title: "What should we call you?",
+      description:
+        "This name appears on your Gateway profile. You can change it later in Settings → Profile.",
+      label: "Your name",
+      save: "Save name",
+      skip: "Maybe later",
+      loadFailed: "Could not check your profile name.",
+      saveFailed: "Could not save your profile name. Try again.",
+    },
     panel: {
       title: "OpenClaw",
       toggle: "Toggle Ask OpenClaw",

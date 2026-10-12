@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   validateUsersLinkEmailResult,
   validateUsersSelfResult,
+  validateUsersSetDisplayNameParams,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
   validateUsersSetRoleResult,
@@ -523,12 +524,10 @@ describe("users gateway methods", () => {
       };
     });
     const refreshConnectedUserProfile = vi.fn();
-    const pending = runUsersHandler(
-      "users.setDisplayName",
-      { profileId: profile.id, displayName: "First name" },
-      adminClient,
-      { refreshConnectedUserProfile },
-    );
+    const params = { profileId: profile.id, displayName: "First name", onlyIfUnset: true };
+    const pending = runUsersHandler("users.setDisplayName", params, adminClient, {
+      refreshConnectedUserProfile,
+    });
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "profile write was not awaited");
       expect(refreshConnectedUserProfile).not.toHaveBeenCalled();
@@ -544,6 +543,13 @@ describe("users gateway methods", () => {
     const respond = await pending;
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profile: firstProfile });
     expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(validateUsersSetDisplayNameParams(params)).toBe(true);
+    expect(setCanonicalUserProfileDisplayName).toHaveBeenCalledWith(
+      profile.id,
+      "First name",
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
+      true,
+    );
     expect(refreshConnectedUserProfile).toHaveBeenCalledExactlyOnceWith({
       id: profile.id,
       displayName: "Later name",

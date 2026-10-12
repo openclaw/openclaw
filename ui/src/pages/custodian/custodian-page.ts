@@ -1,12 +1,19 @@
 import { consume } from "@lit/context";
-import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
+import type {
+  SystemChangeEntry,
+  SystemChangesListResult,
+  UserProfile,
+  UsersSetDisplayNameResult,
+} from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -17,6 +24,15 @@ import type { CustodianRouteData } from "./route.ts";
 import "./custodian-surface.ts";
 
 const SYSTEM_CHANGE_PAGE_SIZE = 50;
+
+type OnboardingIdentityOwner = {
+  client: GatewayBrowserClient;
+  connectionRevision: number;
+  gatewayUrl: string;
+  recoveryScope: string | null;
+  selfUserId: string | null;
+  selfUserProfileId: string | null;
+};
 
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -32,11 +48,20 @@ export class CustodianPage extends OpenClawLightDomElement {
   @state() private historyNextCursor: string | null = null;
   @state() private historyLoad: "idle" | "initial" | "more" = "idle";
   @state() private historyError: string | null = null;
+  @state() private onboardingNameProfile: UserProfile | null = null;
+  @state() private onboardingNameDraft = "";
+  @state() private onboardingNameLoading = false;
+  @state() private onboardingNameBusy = false;
+  @state() private onboardingNameError: string | null = null;
 
   private historyLoaded = false;
   private historyClient: GatewayBrowserClient | null = null;
   private historyRequestEpoch = 0;
   private channelsSource: ApplicationContext["channels"] | null = null;
+  private onboardingOwner: OnboardingIdentityOwner | null = null;
+  private onboardingNameRequestEpoch = 0;
+  private onboardingNameSkipped = false;
+  private stopGatewaySubscription: (() => void) | null = null;
 
   constructor() {
     super();
@@ -68,6 +93,25 @@ export class CustodianPage extends OpenClawLightDomElement {
       );
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.stopGatewaySubscription ??= this.context.gateway.subscribe(() => this.requestUpdate());
+  }
+
+  override disconnectedCallback(): void {
+    this.stopGatewaySubscription?.();
+    this.stopGatewaySubscription = null;
+    this.onboardingNameRequestEpoch += 1;
+    this.onboardingOwner = null;
+    this.onboardingNameProfile = null;
+    this.onboardingNameDraft = "";
+    this.onboardingNameLoading = false;
+    this.onboardingNameBusy = false;
+    this.onboardingNameError = null;
+    this.onboardingNameSkipped = false;
+    super.disconnectedCallback();
+  }
+
   protected override async getUpdateComplete(): Promise<boolean> {
     const complete = await super.getUpdateComplete();
     const surface = this.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
@@ -80,6 +124,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   override willUpdate(): void {
     this.synchronizeHistoryClient();
     this.ensureOnboardingChannelStatus();
+    this.synchronizeOnboardingIdentity();
   }
 
   private ensureOnboardingChannelStatus(): void {
@@ -110,6 +155,256 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.historyOpen = false;
       this.resetHistory();
     }
+  }
+
+  private currentOnboardingOwner(): OnboardingIdentityOwner | null {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    const client = snapshot.phase === "connected" ? snapshot.client : null;
+    if (!this.onboarding || !client || !hasOperatorWriteAccess(snapshot.hello?.auth ?? null)) {
+      return null;
+    }
+    return {
+      client,
+      connectionRevision: gateway.connectionRevision,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      recoveryScope: client.recoveryScope ?? null,
+      selfUserId: snapshot.selfUser?.id ?? null,
+      selfUserProfileId: snapshot.selfUser?.identity?.id ?? null,
+    };
+  }
+
+  private sameOnboardingOwner(
+    left: OnboardingIdentityOwner | null,
+    right: OnboardingIdentityOwner | null,
+  ): boolean {
+    return (
+      left === right ||
+      (left !== null &&
+        right !== null &&
+        left.client === right.client &&
+        left.connectionRevision === right.connectionRevision &&
+        left.gatewayUrl === right.gatewayUrl &&
+        left.recoveryScope === right.recoveryScope &&
+        left.selfUserId === right.selfUserId &&
+        left.selfUserProfileId === right.selfUserProfileId)
+    );
+  }
+
+  private isCurrentOnboardingOwner(owner: OnboardingIdentityOwner): boolean {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    return (
+      this.onboarding &&
+      this.onboardingOwner === owner &&
+      snapshot.phase === "connected" &&
+      snapshot.client === owner.client &&
+      gateway.connectionRevision === owner.connectionRevision &&
+      gateway.connection.gatewayUrl === owner.gatewayUrl &&
+      (owner.client.recoveryScope ?? null) === owner.recoveryScope &&
+      (snapshot.selfUser?.id ?? null) === owner.selfUserId &&
+      (snapshot.selfUser?.identity?.id ?? null) === owner.selfUserProfileId &&
+      hasOperatorWriteAccess(snapshot.hello?.auth ?? null)
+    );
+  }
+
+  private synchronizeOnboardingIdentity(): void {
+    const nextOwner = this.currentOnboardingOwner();
+    if (this.sameOnboardingOwner(this.onboardingOwner, nextOwner)) {
+      return;
+    }
+    this.onboardingOwner = nextOwner;
+    this.onboardingNameRequestEpoch += 1;
+    this.onboardingNameProfile = null;
+    this.onboardingNameDraft = "";
+    this.onboardingNameLoading = false;
+    this.onboardingNameBusy = false;
+    this.onboardingNameError = null;
+    if (nextOwner) {
+      void this.loadOnboardingProfile(nextOwner);
+    }
+  }
+
+  private async loadOnboardingProfile(owner: OnboardingIdentityOwner): Promise<void> {
+    if (!this.isCurrentOnboardingOwner(owner) || this.onboardingNameLoading) {
+      return;
+    }
+    const requestEpoch = ++this.onboardingNameRequestEpoch;
+    const isCurrent = () =>
+      this.isCurrentOnboardingOwner(owner) && requestEpoch === this.onboardingNameRequestEpoch;
+    this.onboardingNameLoading = true;
+    this.onboardingNameError = null;
+    try {
+      const profile = await this.context.gateway.loadSelfProfile();
+      if (!isCurrent()) {
+        return;
+      }
+      this.onboardingNameProfile = profile;
+      this.onboardingNameDraft = profile?.displayName ?? "";
+    } catch (error) {
+      if (isCurrent()) {
+        this.onboardingNameError = formatUiError(error, t("custodian.onboardingName.loadFailed"));
+      }
+    } finally {
+      if (isCurrent()) {
+        this.onboardingNameLoading = false;
+      }
+    }
+  }
+
+  private async saveOnboardingName(): Promise<void> {
+    const owner = this.onboardingOwner;
+    const profile = this.onboardingNameProfile;
+    const name = this.onboardingNameDraft.trim();
+    if (
+      !owner ||
+      !profile ||
+      !name ||
+      this.onboardingNameBusy ||
+      !this.isCurrentOnboardingOwner(owner)
+    ) {
+      return;
+    }
+    const selfUserAtSaveStart = this.context.gateway.snapshot.selfUser;
+    const requestEpoch = this.onboardingNameRequestEpoch;
+    const isCurrentRequest = () =>
+      this.isCurrentOnboardingOwner(owner) && this.onboardingNameRequestEpoch === requestEpoch;
+    const isCurrent = () => isCurrentRequest() && this.onboardingNameProfile === profile;
+    this.onboardingNameBusy = true;
+    this.onboardingNameError = null;
+    try {
+      const result = await owner.client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
+        profileId: profile.id,
+        displayName: name,
+        onlyIfUnset: true,
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      const currentSelfUser = this.context.gateway.snapshot.selfUser;
+      const hasNewerDisplayName =
+        currentSelfUser?.id === profile.id && currentSelfUser.name !== selfUserAtSaveStart?.name;
+      const savedProfile = hasNewerDisplayName
+        ? { ...result.profile, displayName: currentSelfUser.name ?? null }
+        : result.profile;
+      this.onboardingNameProfile = savedProfile;
+      this.onboardingNameDraft = savedProfile.displayName ?? "";
+      if (!hasNewerDisplayName) {
+        this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.onboardingNameError = formatUiError(error, t("custodian.onboardingName.saveFailed"));
+      }
+    } finally {
+      if (isCurrentRequest()) {
+        this.onboardingNameBusy = false;
+      }
+    }
+  }
+
+  private shouldRenderOnboardingNamePrompt(): boolean {
+    const owner = this.onboardingOwner;
+    if (!owner || !this.isCurrentOnboardingOwner(owner) || this.onboardingNameSkipped) {
+      return false;
+    }
+    const profile = this.onboardingNameProfile;
+    return profile ? !profile.displayName?.trim() : this.onboardingNameError !== null;
+  }
+
+  private renderOnboardingNamePrompt() {
+    const owner = this.onboardingOwner;
+    if (!owner || !this.shouldRenderOnboardingNamePrompt()) {
+      return nothing;
+    }
+    const profile = this.onboardingNameProfile;
+    if (!profile) {
+      const error = this.onboardingNameError;
+      if (!error) {
+        return nothing;
+      }
+      return html`<section class="custodian__name-prompt custodian__column">
+        <p class="custodian__error" role="alert">
+          <span>${error}</span>
+          <button
+            class="btn btn--sm"
+            type="button"
+            ?disabled=${this.onboardingNameLoading}
+            @click=${() => void this.loadOnboardingProfile(owner)}
+          >
+            ${this.onboardingNameLoading ? t("common.loading") : t("common.retry")}
+          </button>
+        </p>
+      </section>`;
+    }
+    if (profile.displayName?.trim()) {
+      return nothing;
+    }
+    return html`<section
+      class="custodian__name-prompt custodian__column"
+      aria-labelledby="custodian-name-title"
+    >
+      <div>
+        <h2 id="custodian-name-title">${t("custodian.onboardingName.title")}</h2>
+        <p id="custodian-name-description">${t("custodian.onboardingName.description")}</p>
+      </div>
+      <form
+        class="custodian__name-form"
+        aria-busy=${this.onboardingNameBusy ? "true" : "false"}
+        @submit=${(event: SubmitEvent) => {
+          event.preventDefault();
+          void this.saveOnboardingName();
+        }}
+      >
+        <label for="custodian-onboarding-display-name"
+          >${t("custodian.onboardingName.label")}</label
+        >
+        <input
+          id="custodian-onboarding-display-name"
+          class="settings-input"
+          type="text"
+          maxlength="256"
+          autocomplete="nickname"
+          aria-describedby="custodian-name-description${this.onboardingNameError ? " custodian-name-error" : ""}"
+          .value=${this.onboardingNameDraft}
+          ?disabled=${this.onboardingNameBusy}
+          @input=${(event: Event) => {
+            const input = event.currentTarget;
+            if (input instanceof HTMLInputElement) {
+              this.onboardingNameDraft = input.value;
+              this.onboardingNameError = null;
+            }
+          }}
+        />
+        ${
+          this.onboardingNameError
+            ? html`<p id="custodian-name-error" class="custodian__name-error" role="alert">
+                ${this.onboardingNameError}
+              </p>`
+            : nothing
+        }
+        <div class="custodian__name-actions">
+          <button
+            class="btn btn--ghost"
+            type="button"
+            ?disabled=${this.onboardingNameBusy}
+            @click=${() => {
+              this.onboardingNameSkipped = true;
+              this.requestUpdate();
+            }}
+          >
+            ${t("custodian.onboardingName.skip")}
+          </button>
+          <button
+            class="btn"
+            type="submit"
+            ?disabled=${this.onboardingNameBusy || !this.onboardingNameDraft.trim()}
+          >
+            ${this.onboardingNameBusy ? t("common.saving") : t("custodian.onboardingName.save")}
+          </button>
+        </div>
+      </form>
+    </section>`;
   }
 
   private resetHistory(): void {
@@ -196,7 +491,7 @@ export class CustodianPage extends OpenClawLightDomElement {
       <section
         class="custodian custodian--page ${
           this.store.setupRequired ? "custodian--setup-required" : ""
-        }"
+        } ${this.shouldRenderOnboardingNamePrompt() ? "custodian--onboarding" : ""}"
       >
         <header
           class="custodian__header custodian__column ${
@@ -250,6 +545,8 @@ export class CustodianPage extends OpenClawLightDomElement {
             }
           </div>
         </header>
+
+        ${this.renderOnboardingNamePrompt()}
 
         <openclaw-custodian-surface
           class="custodian__column"

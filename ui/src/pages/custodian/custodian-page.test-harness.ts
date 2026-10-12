@@ -68,6 +68,7 @@ export function createContext(
   };
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
+  let connectionRevision = 1;
   const connection = {
     gatewayUrl: "ws://gateway.test/control",
     token: "",
@@ -78,7 +79,12 @@ export function createContext(
     get snapshot() {
       return snapshot;
     },
+    get connectionRevision() {
+      return connectionRevision;
+    },
     connection,
+    loadSelfProfile: vi.fn(async () => null),
+    updateSelfUser: vi.fn(),
     subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -165,6 +171,9 @@ export function createContext(
       }
     },
     setGatewaySnapshot: (patch) => {
+      if (Object.hasOwn(patch, "client") && patch.client !== snapshot.client) {
+        connectionRevision += 1;
+      }
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
         listener(snapshot);

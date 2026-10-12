@@ -512,12 +512,16 @@ export function setDisplayName(
   profileId: string,
   name: string | null,
   options: UserProfileMutationOptions = {},
+  onlyIfUnset = false,
 ): UserProfileListItem {
   const now = Date.now();
   ensureUserProfilesSchema(options);
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileMetadataById(db, profileId);
+      if (onlyIfUnset && profile.display_name?.trim()) {
+        return selectUserProfileListItemById(db, profile.id);
+      }
       options.mutation?.before(db, profile.id);
       executeSqliteQuerySync(
         db,

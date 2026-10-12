@@ -14,6 +14,10 @@ openclaw-custodian-page {
   padding: 18px clamp(16px, 4vw, 36px) 22px;
 }
 
+.custodian--page.custodian--onboarding {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .custodian__column {
   width: min(100%, var(--chat-thread-max-width, 48rem));
   min-width: 0;
@@ -120,6 +124,62 @@ openclaw-custodian-page {
   justify-content: flex-end;
   padding-bottom: 8px;
   border-bottom: 0;
+}
+
+.custodian__name-prompt {
+  display: grid;
+  gap: 12px;
+  width: min(100%, var(--chat-thread-max-width, 48rem));
+  margin: 0 auto 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.custodian__name-prompt h2,
+.custodian__name-prompt p {
+  margin: 0;
+}
+
+.custodian__name-prompt h2 {
+  color: var(--text-strong);
+  font-size: 16px;
+}
+
+.custodian__name-prompt > div > p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.custodian__name-form {
+  display: grid;
+  gap: 8px;
+}
+
+.custodian__name-form label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.custodian__name-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.custodian__name-actions .btn {
+  min-height: 44px;
+}
+
+.custodian__name-error {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .custodian__identity {

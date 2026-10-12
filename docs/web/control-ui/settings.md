@@ -72,7 +72,7 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
-Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
+Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. During first-run setup, the onboarding page can optionally set a name when the profile is still unnamed; **Maybe later** skips this prompt for the current visit. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
 Profile photos load through authenticated Gateway routes in the online roster, person cards, and chat. Paired browsers use their approved read scopes. When the Mac app connects through an SSH tunnel to a trusted-proxy Gateway, image requests can use the connection's saved password if its paired credential is rejected. Credentials stay in request headers; profiles without an available image show initials.
 
