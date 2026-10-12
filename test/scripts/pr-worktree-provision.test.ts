@@ -247,9 +247,8 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(`${edit}\n`);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
     expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
@@ -285,9 +284,8 @@ printf '${edit}\\n' > src/subject.ts
     expect(readFileSync(join(f.worktree, "hook-evidence.txt"), "utf8")).toBe(
       "retained hook evidence\n",
     );
-    expect(
-      f.git(f.canonical, "rev-parse", "--verify", "refs/openclaw/pr-operation-locks/42"),
-    ).toMatch(/^[0-9a-f]{40}$/);
+    // The failed hook run drained, so the supervisor released the lock; the checkout keeps the evidence.
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
   });
 
   it("does not repair a caller seed moved by a checkout hook", () => {

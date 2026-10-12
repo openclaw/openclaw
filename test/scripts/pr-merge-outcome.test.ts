@@ -77,20 +77,21 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(readFileSync(capture, "utf8")).toBe(output);
     expect(run.output).toContain("Legacy .local/merge-output.log: present");
     expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
-    expect(run.output).not.toContain("lock-recover, then rerun merge-run");
+    expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
     expect(() => f.record()).toThrow();
   });
 
-  it("does not repeat applied 502 + OPEN after main advance and exact lock recovery", () => {
+  it("does not repeat applied 502 + OPEN after main advance and lock release", () => {
     const f = fixture();
     f.save({ ...f.state(), mode: "applied-open" });
     const first = f.run();
     expect(first.status, first.output).toBe(1);
     expect(f.state().pr.state).toBe("OPEN");
     f.advance();
-    expect(f.recover()).toBe(true);
+    // The drained failure released the process lock; the outcome record still blocks a repeat.
+    expect(f.recover()).toBe(false);
     const second = f.run();
-    expect(f.state().mutations, "one mutation across exact lock recovery").toBe(1);
+    expect(f.state().mutations, "one mutation across lock release").toBe(1);
     expect(second.status, second.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(second.output).toContain("prior dispatch unresolved");

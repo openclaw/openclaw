@@ -34,7 +34,7 @@ function cancelledAutoReplacement(
     const cancelled = initial.cancel(originalOid);
     expect(cancelled.status, cancelled.output).toBe(cancellation === "confirmed" ? 0 : 1);
     if (cancellation === "uncertain") {
-      expect(initial.recover()).toBe(true);
+      expect(initial.recover()).toBe(false);
     }
   }
   const retiredOid = initial.git(["rev-parse", outcomeRef]);
@@ -91,7 +91,7 @@ function staleAdminReplacement() {
   expect(readFileSync(join(f.worktree, ".local", adminCapture), "utf8")).toBe(
     uncertainGatewayResponse,
   );
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
 
   const replacement = f.replacePreparedHead();
   writeFileSync(
@@ -265,7 +265,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const attemptCapture = `merge-output.${recoveredRecord.attempt}.log`;
     const attemptBytes = readFileSync(join(f.worktree, ".local", attemptCapture), "utf8");
     expect(() => f.git(["cat-file", "-e", `${recoveredOid}:${attemptCapture}`])).toThrow();
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     f.save({ ...f.state(), cancellation: "success" });
     const cancelled = f.cancel(recoveredOid);
