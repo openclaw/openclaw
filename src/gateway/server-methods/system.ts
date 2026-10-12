@@ -248,7 +248,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     respond(true, await collectSystemInfo(context), undefined);
   },
   "system-event": async (options) => {
-    const { params, respond, context } = options;
+    const { params, respond, context, client } = options;
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
@@ -344,7 +344,9 @@ export const systemHandlers: GatewayRequestHandlers = {
       : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId: params.deviceId,
+      // Beacons that omit deviceId (e.g. the macOS app) still come from a paired
+      // device; key them by it so they do not show up as "connected without pairing".
+      deviceId: params.deviceId ?? normalizeOptionalString(client?.connect?.device?.id),
       instanceId: params.instanceId,
       host: params.host,
       ip: params.ip,

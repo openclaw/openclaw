@@ -249,4 +249,26 @@ describe("system-event routing", () => {
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.lastInputSeconds).toBeUndefined();
   });
+
+  it("keys presence beacons by the connected device when deviceId is omitted", async () => {
+    const instanceId = `presence-device-${randomUUID()}`;
+    const deviceId = `device-${randomUUID()}`;
+    const handler = expectDefined(
+      systemHandlers["system-event"],
+      'systemHandlers["system-event"] test invariant',
+    );
+
+    await handler({
+      params: { text: "Node: Operator Mac", instanceId, host: "Operator Mac", mode: "ui" },
+      respond: vi.fn(),
+      client: { connect: { device: { id: deviceId } } },
+      context: {
+        publishPresence: vi.fn(),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
+      },
+    } as unknown as GatewayRequestHandlerOptions);
+
+    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
+    expect(entry?.deviceId).toBe(deviceId);
+  });
 });
