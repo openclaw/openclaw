@@ -1,33 +1,47 @@
-#[cfg(not(target_os = "windows"))]
 use crate::cli::openclaw_home;
 use crate::cli::{OpenClawCli, SpawnCommand};
 use serde::Deserialize;
-#[cfg(not(target_os = "windows"))]
 use serde::Serialize;
-#[cfg(not(target_os = "windows"))]
 use std::collections::VecDeque;
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "windows", test))]
+use std::io::Write;
 use std::io::{BufRead, BufReader};
-#[cfg(not(target_os = "windows"))]
 use std::process::{Command, Stdio};
-#[cfg(not(target_os = "windows"))]
 use std::sync::mpsc;
-#[cfg(not(target_os = "windows"))]
 use std::thread;
 #[cfg(not(target_os = "windows"))]
 use tauri::path::BaseDirectory;
 use tauri::AppHandle;
-#[cfg(not(target_os = "windows"))]
 use tauri::{Emitter, Manager};
 
-#[cfg(not(target_os = "windows"))]
 const INSTALL_EVENT: &str = "install-progress";
-#[cfg(not(target_os = "windows"))]
 const ERROR_TAIL_LINES: usize = 24;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(target_os = "windows", test))]
+fn prepare_package_root(prefix: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let root = prefix.join("tools/openclaw");
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    // Without its own manifest, Bun can install into an ancestor's unrelated project.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(root.join("package.json"))
+    {
+        Ok(mut file) => file
+            .write_all(b"{\"name\":\"openclaw-desktop-runtime\",\"private\":true}\n")
+            .map_err(|error| error.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "Could not initialize the private CLI package: {error}"
+            ))
+        }
+    }
+    Ok(root)
+}
+
 pub(crate) fn managed_launcher_absent(prefix: &std::path::Path) -> Result<bool, String> {
-    match std::fs::symlink_metadata(prefix.join("bin/openclaw")) {
+    match std::fs::symlink_metadata(crate::cli::managed_launcher(prefix)) {
         Ok(_) => Ok(false),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(error) => Err(format!(
@@ -45,7 +59,6 @@ pub enum InstallChannel {
 }
 
 impl InstallChannel {
-    #[cfg(not(target_os = "windows"))]
     fn version(self) -> &'static str {
         match self {
             Self::Stable => "latest",
@@ -55,17 +68,11 @@ impl InstallChannel {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InstallProgress<'a> {
     stream: &'a str,
     line: &'a str,
-}
-
-#[cfg(target_os = "windows")]
-pub fn install(_app: &AppHandle, _channel: InstallChannel, _fresh: bool) -> Result<(), String> {
-    Err("CLI installation is unavailable in this Windows test build.".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -78,7 +85,17 @@ fn configure_installer_environment(command: &mut Command) {
     command.env_remove("LD_LIBRARY_PATH");
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "windows")]
+fn configure_installer_environment(command: &mut Command) -> Result<(), String> {
+    // Published package checks compare Bun's temporary Node shim paths. Windows
+    // 8.3 TEMP aliases make the same shim look like a different, persistent Node.
+    let temporary = std::fs::canonicalize(std::env::temp_dir())
+        .map_err(|error| format!("Installer temporary directory is unavailable: {error}"))?;
+    let temporary = crate::runtime_action::windows_process_path(&temporary)?;
+    command.env("TEMP", &temporary).env("TMP", &temporary);
+    Ok(())
+}
+
 pub fn install(app: &AppHandle, channel: InstallChannel, fresh: bool) -> Result<(), String> {
     let prefix = openclaw_home().map_err(|error| error.to_string())?;
     let app_version = app.package_info().version.to_string();
@@ -94,17 +111,6 @@ pub fn install(app: &AppHandle, channel: InstallChannel, fresh: bool) -> Result<
     install_at(app, channel, prefix, version, fresh, None)
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn browser_runtime(
-    _app: &AppHandle,
-    _allow_install: bool,
-    _is_current: &dyn Fn() -> bool,
-    _spawn: &SpawnCommand<'_>,
-) -> Result<OpenClawCli, String> {
-    Err("Browser runtime installation is unavailable in this Windows test build.".into())
-}
-
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn browser_runtime(
     app: &AppHandle,
     allow_install: bool,
@@ -179,37 +185,60 @@ pub(crate) fn browser_runtime(
     Ok(cli)
 }
 
-#[cfg(not(target_os = "windows"))]
 fn install_at(
     app: &AppHandle,
     channel: InstallChannel,
     prefix: std::path::PathBuf,
     version: &str,
-    runtime_only: bool,
+    #[cfg_attr(target_os = "windows", allow(unused_variables))] runtime_only: bool,
     spawn: Option<&SpawnCommand<'_>>,
 ) -> Result<(), String> {
-    let script = app
-        .path()
-        .resolve("install-cli.sh", BaseDirectory::Resource)
-        .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
-    let mut command = Command::new("bash");
-    configure_installer_environment(&mut command);
-    command
-        .arg(script)
-        .args(["--json", "--no-onboard", "--prefix"])
-        .arg(&prefix)
-        .args(["--version", version]);
-    if runtime_only {
-        command.arg("--runtime-only");
-        if !matches!(channel, InstallChannel::Dev) {
-            command.arg("--npm");
-        }
-    }
-    if matches!(channel, InstallChannel::Dev) {
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let script = app
+            .path()
+            .resolve("install-cli.sh", BaseDirectory::Resource)
+            .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
+        let mut command = Command::new("bash");
+        configure_installer_environment(&mut command);
         command
-            .args(["--install-method", "git", "--git-dir"])
-            .arg(prefix.join("dev/openclaw"));
-    }
+            .arg(script)
+            .args(["--json", "--no-onboard", "--prefix"])
+            .arg(&prefix)
+            .args(["--version", version]);
+        if runtime_only {
+            command.arg("--runtime-only");
+            if !matches!(channel, InstallChannel::Dev) {
+                command.arg("--npm");
+            }
+        }
+        if matches!(channel, InstallChannel::Dev) {
+            command
+                .args(["--install-method", "git", "--git-dir"])
+                .arg(prefix.join("dev/openclaw"));
+        }
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let (mut command, runtime, entry) = {
+        if matches!(channel, InstallChannel::Dev) {
+            return Err("For Windows development builds, build the CLI from source and select it with OPENCLAW_DESKTOP_CLI. Use Stable or Beta for app-managed installation.".into());
+        }
+        let runtime = crate::bundled_runtime::seed(app)?;
+        let package_root = prepare_package_root(&prefix)?;
+        let mut command = Command::new(&runtime.bun);
+        configure_installer_environment(&mut command)?;
+        // This private root has no dev dependencies; Bun rejects --production with --trust.
+        command
+            .args(["add", "--exact", "--trust"])
+            .arg(format!("openclaw@{version}"))
+            .current_dir(&package_root)
+            .env("OPENCLAW_PACKAGE_BUN_LAUNCHER", &runtime.bun);
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+        let entry = package_root.join("node_modules/openclaw/openclaw.mjs");
+        (command, runtime, entry)
+    };
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -263,6 +292,13 @@ fn install_at(
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
     if status.success() {
+        #[cfg(target_os = "windows")]
+        crate::runtime_action::install_launcher(
+            &prefix,
+            &runtime,
+            &entry,
+            crate::runtime_action::Purpose::Gateway,
+        )?;
         return Ok(());
     }
 
@@ -274,7 +310,6 @@ fn install_at(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
 fn stream_lines<R>(
     stream: &'static str,
     reader: R,
@@ -292,11 +327,35 @@ where
     })
 }
 
-#[cfg(all(test, not(target_os = "windows")))]
+#[cfg(test)]
 mod tests {
+    use super::prepare_package_root;
+    #[cfg(not(target_os = "windows"))]
     use super::{configure_installer_environment, managed_launcher_absent};
+    #[cfg(not(target_os = "windows"))]
     use std::process::Command;
 
+    #[test]
+    fn private_package_root_prevents_ancestor_selection_and_preserves_retry_metadata() {
+        let root = std::env::temp_dir().join(format!("openclaw-package-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let ancestor = b"{\"name\":\"unrelated-project\",\"private\":true}\n";
+        std::fs::write(root.join("package.json"), ancestor).unwrap();
+        let prefix = root.join("state");
+        let package = prepare_package_root(&prefix).unwrap();
+        let manifest = package.join("package.json");
+        let created: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+        assert_eq!(created["private"], true);
+        let installed = b"{\"private\":true,\"dependencies\":{\"openclaw\":\"2026.9.9\"}}\n";
+        std::fs::write(&manifest, installed).unwrap();
+        assert_eq!(prepare_package_root(&prefix).unwrap(), package);
+        assert_eq!(std::fs::read(&manifest).unwrap(), installed);
+        assert_eq!(std::fs::read(root.join("package.json")).unwrap(), ancestor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn existing_state_is_not_a_cli_install_but_a_dangling_launcher_is() {
         let prefix =
@@ -310,7 +369,7 @@ mod tests {
         assert!(managed_launcher_absent(&prefix).unwrap());
         std::os::unix::fs::symlink(
             prefix.join("missing-external-cli"),
-            prefix.join("bin/openclaw"),
+            crate::cli::managed_launcher(&prefix),
         )
         .unwrap();
         assert!(!managed_launcher_absent(&prefix).unwrap());
@@ -318,6 +377,7 @@ mod tests {
         std::fs::remove_dir_all(prefix).unwrap();
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn installer_child_does_not_inherit_the_appimage_library_path() {
         let mut command = Command::new("sh");

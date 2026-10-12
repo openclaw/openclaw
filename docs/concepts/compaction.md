@@ -60,6 +60,17 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
+request boundaries, including between completed tool rounds. It starts when the
+known or projected request occupancy reaches the smaller of the reserve-based
+prompt budget and 90% of the context window (rounded down). For a 500,000-token
+window with a 20,000-token reserve, that means 450,000 tokens, not 480,000.
+The complete outgoing request must still fit the model window: a single large
+pending message or tool result can consume the remaining headroom before a safe
+boundary, in which case OpenClaw keeps the existing client-side fallback rather
+than dropping pending content. Other providers, manual `/compact`, and
+overflow recovery keep their existing thresholds and behavior.
+
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 For OpenAI-compatible Chat Completions, an automatically context-capped response that ends with `length` also enters this recovery. OpenClaw withholds the incomplete candidate and its tool calls until the finish reason is known. This buffering is bounded; an oversized response resumes ordinary streaming and retains its normal `length` result. Explicit output limits retain their normal behavior.

@@ -9,7 +9,7 @@ import { isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
 import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
-import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
+import { redactSensitiveLines, resolveLogTailRedactOptions } from "./redact.js";
 
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
@@ -78,7 +78,7 @@ export async function readConfiguredLogTail(
   const requestedCursor = params?.cursor;
   const requestedLimit = params?.limit ?? DEFAULT_LIMIT;
   const requestedMaxBytes = params?.maxBytes ?? DEFAULT_MAX_BYTES;
-  const redaction = resolveRedactOptions();
+  const redaction = resolveLogTailRedactOptions();
   if (stat && !stat.isFile()) {
     throw new Error(`Log path is not a regular file: ${file}`);
   }

@@ -239,8 +239,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 
   if (stream === "assistant") {
     const text = readStringValue(data.text);
-    if (text?.trimStart()) {
-      extra.text = compactPreview(text);
+    if (text !== undefined) {
+      extra.textChars = text.length;
     }
     const mediaCount = resolveSendableOutboundReplyParts({
       mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
@@ -262,8 +262,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
       extra.call = shortId(toolCallId);
     }
     const meta = readStringValue(data.meta);
-    if (meta?.trim()) {
-      extra.meta = meta;
+    if (meta !== undefined) {
+      extra.metaChars = meta.length;
     }
     if (typeof data.isError === "boolean") {
       extra.err = data.isError;

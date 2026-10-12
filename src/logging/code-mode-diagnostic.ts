@@ -1,5 +1,4 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import { redactToolPayloadText } from "./redact.js";
 import type { SubsystemLogger } from "./subsystem.js";
 
 const MAX_NAMES = 24;
@@ -32,7 +31,5 @@ export function logCodeModeDiagnostic(
       return [key, typeof value === "string" ? value.slice(0, MAX_NAME_LENGTH) : value];
     }),
   );
-  log.info(
-    redactToolPayloadText(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`),
-  );
+  log.info(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`);
 }

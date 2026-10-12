@@ -133,6 +133,58 @@ async function list(options: Parameters<typeof modelsListCommand>[0]) {
 }
 
 describe("models list published transport", () => {
+  it.each(["ready", "unavailable"] as const)(
+    "reports configured ids missing from a %s listing without changing availability",
+    async (status) => {
+      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+      const owner = createOwner({
+        modelCatalog: markPreparedModelCatalogFull({
+          ...createOwner().modelCatalog,
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              unlistedConfiguredModelIds: ["Reader", "Absent"],
+            },
+          ],
+        }),
+      });
+      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) =>
+        read(owner),
+      );
+      await list({ json: true });
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              ...(status === "ready" ? { unlistedConfiguredModelIds: ["Reader", "Absent"] } : {}),
+            },
+          ],
+          models: [
+            expect.objectContaining({
+              key: "catalog-provider/Reader",
+              available: true,
+              tags: ["default", "alias:work"],
+            }),
+          ],
+        }),
+        2,
+      );
+      const warnings = runtime.error.mock.calls
+        .map(([message]) => message)
+        .filter((message) => String(message).includes("last successful server catalog"));
+      expect(warnings).toEqual(
+        status === "ready"
+          ? ["Reader", "Absent"].map((id) =>
+              expect.stringContaining(`Configured model "catalog-provider/${id}" is not present`),
+            )
+          : [],
+      );
+    },
+  );
+
   it("refreshes the selected Gateway's inventory without resolving local provider secrets", async () => {
     vi.mocked(configLoader.loadModelsConfigWithSource).mockRejectedValue(
       new Error("Local provider secret unavailable"),

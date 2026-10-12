@@ -3,19 +3,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
   ModelsListParams,
-  ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { callGateway, isImplicitLocalGatewayTarget } from "../../gateway/call.js";
-import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
@@ -65,25 +62,12 @@ export async function modelsListCommand(
     includeDetails: true,
     ...(opts.refresh ? { refresh: true } : {}),
   };
-  const localTarget = await isImplicitLocalGatewayTarget({ config: cfg });
-  const explicitPort = Boolean(process.env.OPENCLAW_GATEWAY_PORT?.trim());
-  const gatewayOwner =
-    localTarget && !explicitPort
-      ? await readActiveGatewayLockIdentity({ requireInspection: true })
-      : undefined;
-  let result: ModelsListResult;
-  if (!localTarget || explicitPort || gatewayOwner) {
-    // Once selected, this Gateway owns both success and failure. Never replace a failed
-    // connection or unsupported capability with a different local inventory.
-    result = await callGateway<ModelsListResult>({
-      config: cfg,
-      method: "models.list",
-      ...(opts.refresh ? { timeoutMs: MODEL_CATALOG_REFRESH_TIMEOUT_MS } : {}),
-      requiredCapabilities: [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG],
-      ...(gatewayOwner ? { localPortOverride: gatewayOwner.port } : {}),
-      params,
-    });
-  } else {
+  let result = await readSelectedGatewayModelCatalog(
+    cfg,
+    params,
+    opts.refresh ? MODEL_CATALOG_REFRESH_TIMEOUT_MS : undefined,
+  );
+  if (!result) {
     runtime.error(
       opts.refresh
         ? "Gateway is not running. Refreshing the local model catalog."
@@ -152,6 +136,9 @@ export async function modelsListCommand(
           },
         })
       : await readLocal();
+  }
+  for (const warning of getModelCatalogWarnings(result)) {
+    runtime.error(`${warning.message} ${warning.fixHint}`);
   }
   if (result.refreshFailed) {
     runtime.error(
