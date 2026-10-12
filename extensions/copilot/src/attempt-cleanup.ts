@@ -1,6 +1,6 @@
 import {
   awaitAgentEndSideEffects,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { raceWithTimeout, withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { toCopilotError } from "./attempt-config.js";
@@ -43,7 +43,7 @@ export async function finalizeCopilotAttempt(
   if (!params.messageChannel && !params.messageProvider) {
     await awaitAgentEndSideEffects(hookParams);
   } else {
-    runAgentEndSideEffects(hookParams);
+    await runAgentEndSideEffectsAsync(hookParams);
   }
   return result;
 }

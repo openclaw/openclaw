@@ -5,6 +5,10 @@ import {
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
   prepareTranscriptMessageAppend,
   prepareTranscriptMessageAppendForWorker,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
@@ -12,6 +16,7 @@ import { SqliteTranscriptMutationConflictError } from "../../config/sessions/ses
 import { transcriptEventContextEligibility } from "../../config/sessions/session-transcript-projection-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -19,6 +24,7 @@ import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -240,17 +246,35 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
               message: canonicalEntry.message,
               config: options?.config,
             }),
-            {
-              scope: this.persistenceTarget,
-              envelope: {
-                type: "message",
-                id: canonicalEntry.id,
-                parentId: canonicalEntry.parentId,
-                timestamp: canonicalEntry.timestamp,
-              },
-            },
           )
         : undefined;
+    if (
+      preparedMessage &&
+      canonicalEntry.type === "message" &&
+      (canonicalEntry.message.role === "assistant" ||
+        canonicalEntry.message.role === "toolResult") &&
+      this.persistenceTarget
+    ) {
+      // The deprecated synchronous API prepares compression before taking its writer lock.
+      const envelope = {
+        type: "message" as const,
+        id: canonicalEntry.id,
+        parentId: canonicalEntry.parentId,
+        timestamp: canonicalEntry.timestamp,
+      };
+      const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${preparedMessage.messageJson}}`;
+      const physical = withOpenClawAgentDatabaseReadOnly(
+        ({ db }) =>
+          prepareTranscriptPayloadForReuse(db, eventJson, {
+            ...envelope,
+            message: preparedMessage.persistedMessage,
+          }),
+        toDatabaseOptions(resolveSqliteTranscriptScope(this.persistenceTarget)),
+      );
+      if (physical.found) {
+        preparedMessage.physicalPayload = physical.value;
+      }
+    }
     let persistenceResult;
     try {
       persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
@@ -490,7 +514,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
-    options?: { includeOmittedCustomMessages?: boolean },
+    options?: {
+      /** @deprecated Await openAsync and traverse the complete view without this option. */
+      includeOmittedCustomMessages?: boolean;
+    },
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;

@@ -10,8 +10,8 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import {
-  rewriteAssistantTranscriptMessageForRun,
-  rewriteTranscriptMessageAtAnchor,
+  rewriteNativeAssistantTranscriptMessageForRun,
+  rewriteNativeTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
@@ -30,7 +30,7 @@ import {
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-/** Bundled pure preparation; opaque public callbacks retain their transaction-local adapter. */
+/** Prepare callback output outside SQLite; the existing worker owns selection and commit. */
 async function rewritePreparedTranscriptMessage<T>(params: {
   scope: ResolvedTranscriptScope;
   target: SessionMessageRewriteSelection["target"];
@@ -147,7 +147,7 @@ export async function rewritePreparedTranscriptMessageAtAnchor<T>(
       !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(scope)))
   ) {
     // Process-held incognito and native maintenance retain their current transaction owner.
-    return rewriteTranscriptMessageAtAnchor(anchor, (message) => {
+    return rewriteNativeTranscriptMessageAtAnchor(anchor, (message) => {
       options.assertCurrent?.();
       options.assertNativeCurrent?.();
       if (options.active) {
@@ -184,7 +184,7 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
     (!captureIncognitoSessionOperation(params.scope) &&
       !supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)))
   ) {
-    return rewriteAssistantTranscriptMessageForRun(
+    return rewriteNativeAssistantTranscriptMessageForRun(
       params,
       params.readSource ? resolved : undefined,
     );

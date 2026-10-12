@@ -2,9 +2,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadExactSessionEntry,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   resolveSessionEntrySelection,
   type TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
@@ -13,7 +11,6 @@ import {
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
-import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
@@ -75,15 +72,6 @@ async function completePersistedInternalSourceReply(params: {
   if (!messageId || !message) {
     throw new Error("Internal source reply transcript identity is unavailable");
   }
-  const assertCurrentReplay = (entryId: string) => {
-    assertCurrent();
-    if (
-      !sessionMatchesExpectedTranscriptTurn(loadExactSessionEntry(scope), expected) ||
-      !readActiveTranscriptEntryAnchor({ ...scope, entryId })
-    ) {
-      throw new Error("Internal source reply no longer owns the active transcript");
-    }
-  };
   // Replay also refreshes history when an earlier owned drain suppressed publication.
   // Preserve the original bytes and run provenance; never restage a retry.
   const options: Parameters<typeof persistSessionTranscriptTurn>[1] = {
@@ -106,7 +94,7 @@ async function completePersistedInternalSourceReply(params: {
     updateMode: "file-only",
     publishWhen: "always",
     onMessageCommitted: (result, acceptCompletion) => {
-      assertCurrentReplay(result.messageId);
+      assertCurrent();
       attachSourceReplyMedia(result, acceptCompletion);
     },
   };

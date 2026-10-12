@@ -1,8 +1,5 @@
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import {
-  getSqliteReadScopeRevision,
-  readSqliteNativeMutationRevision,
-} from "../../infra/sqlite-schema-facts.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
@@ -233,10 +230,7 @@ export function readTranscriptMessageAppendMetadataInTransaction(params: Transcr
   const row = readActiveTranscriptEntryFacts(params, undefined, true);
   const anchor = createTranscriptEntryAnchor({ ...params, row });
   const postimage: TranscriptAppendPostimage | undefined =
-    revision &&
-    getSqliteReadScopeRevision(params.database.db) === revision &&
-    anchor &&
-    typeof row?.latestSeq === "number"
+    revision && anchor && typeof row?.latestSeq === "number"
       ? {
           revision,
           anchor,
@@ -250,13 +244,7 @@ export function readTranscriptMessageAppendMetadataInTransaction(params: Transcr
   return retainTranscriptAppendPostimage(
     {
       anchor,
-      visibleTailEntryId:
-        anchor &&
-        row?.seq === row?.latestSeq &&
-        revision !== undefined &&
-        readSqliteNativeMutationRevision(params.database.db) === revision.mutationRevision
-          ? params.entryId
-          : undefined,
+      visibleTailEntryId: anchor && row?.seq === row?.latestSeq ? params.entryId : undefined,
     },
     postimage,
   );

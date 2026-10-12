@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveSandboxContext as defaultResolveSandboxContext,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { OnAssistantDeltaPayload } from "./event-bridge.js";
@@ -47,7 +47,7 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     ? { ...terminal, failure: { source: "prompt", error } }
     : { kind: "failed", source: "prompt", error };
 }
-export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> & {
   hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"];
   auth?: {

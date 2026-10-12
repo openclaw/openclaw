@@ -452,6 +452,7 @@ function openAgentDatabaseBackend(
     "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
     "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
     "session.entries.replace": loadAgentReplacementOperations,
+    "session.entries.replaceWithNativeBindings": loadAgentReplacementOperations,
     "session.restart.recover": loadAgentRestartRecoveryOperations,
     "session.entry.acp": loadAgentAcpOperations,
     "session.providerReview.compare": loadAgentProviderReviewOperations,
@@ -614,7 +615,8 @@ function openAgentDatabaseBackend(
           : command.type === "session.messageCut.commit"
             ? command.input.nativeBindings
             : command.type === "session.agentPurge.commit" ||
-                command.type === "session.maintenance.finalize"
+                command.type === "session.maintenance.finalize" ||
+                command.type === "session.entries.replaceWithNativeBindings"
               ? command.input.nativeBindings
               : undefined;
       if (nativeBindings) {

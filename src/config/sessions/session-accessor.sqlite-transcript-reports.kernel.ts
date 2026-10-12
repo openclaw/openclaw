@@ -41,22 +41,20 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
-  function rows() {
-    return iterateSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select((eb) => [
-          "seq",
-          "event_json",
-          eb
-            .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
-            .as("report_json"),
-        ])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    );
-  }
+  const rows = iterateSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        "seq",
+        "event_json",
+        eb
+          .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
+          .as("report_json"),
+      ])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  );
   function compressedFacts(reportJson: string | null): SessionTranscriptReportFacts {
     const facts =
       reportJson === null ? undefined : decodeSessionTranscriptReportFacts(JSON.parse(reportJson));
@@ -66,34 +64,30 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
     return facts;
   }
   let hasRows = false;
-  const header = findSessionTranscriptHeader(
+  let header: ReturnType<typeof findSessionTranscriptHeader>;
+  const navigation = new TranscriptReportNavigation(
     (function* () {
-      for (const row of rows()) {
+      for (const row of rows) {
         hasRows = true;
-        if (row.event_json !== null) {
-          yield JSON.parse(row.event_json) as unknown;
-        } else {
-          compressedFacts(row.report_json);
+        if (row.event_json === null) {
+          yield { seq: row.seq, facts: compressedFacts(row.report_json) };
+          continue;
         }
+        const event: unknown = JSON.parse(row.event_json);
+        if (!header) {
+          header = findSessionTranscriptHeader([event]);
+          if (header) {
+            assertCurrentSessionTranscriptHeader(header);
+          }
+        }
+        yield { seq: row.seq, facts: projectSessionTranscriptReportFacts(event) };
       }
     })(),
   );
   if (hasRows) {
     assertCurrentSessionTranscriptHeader(header);
   }
-  return new TranscriptReportNavigation(
-    (function* () {
-      for (const row of rows()) {
-        yield {
-          seq: row.seq,
-          facts:
-            row.event_json === null
-              ? compressedFacts(row.report_json)
-              : projectSessionTranscriptReportFacts(JSON.parse(row.event_json)),
-        };
-      }
-    })(),
-  ).facts();
+  return navigation.facts();
 }
 
 function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq: number) {

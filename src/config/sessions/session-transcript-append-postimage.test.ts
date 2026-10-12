@@ -11,6 +11,7 @@ import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   readCommittedTranscriptMessageSequence,
+  rememberCommittedTranscriptMessageSequences,
   rememberCommittedTranscriptMessageSequencesInTransaction,
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -193,6 +194,48 @@ it.each([false, true])(
           reads.restore();
         }
       }, f.scope);
+    });
+  },
+);
+
+it.each([false, true])(
+  "publishes only ready final turn cursors through the history worker: branch changed %s",
+  async (replaceBranch) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = createSessionCompoundWorkerFixture();
+      const resolved = resolveSqliteTranscriptScope(f.scope);
+      const { first: firstMessage, second: secondMessage } = runOpenClawAgentWriteTransaction(
+        (database) => {
+          const first = appendTranscriptMessageInTransaction(database, resolved, {
+            eventId: "first",
+            message: { role: "assistant", content: "first branch" },
+          });
+          const second = appendTranscriptMessageInTransaction(database, resolved, {
+            eventId: "second",
+            ...(replaceBranch ? { parentId: null } : {}),
+            message: { role: "assistant", content: "final branch" },
+          });
+          if (!first || !second) {
+            throw new Error("Missing committed messages");
+          }
+          return { first: first.result, second: second.result };
+        },
+        f.scope,
+      );
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        await rememberCommittedTranscriptMessageSequences(f.scope, [firstMessage, secondMessage]);
+        expect(readCommittedTranscriptMessageSequence(firstMessage)).toBe(
+          replaceBranch ? undefined : 1,
+        );
+        // An explicit branch change invalidates the projection until its owner rebuilds it.
+        expect(readCommittedTranscriptMessageSequence(secondMessage)).toBe(
+          replaceBranch ? undefined : 2,
+        );
+        expect(reads.queries).toEqual([]);
+      } finally {
+        reads.restore();
+      }
     });
   },
 );
