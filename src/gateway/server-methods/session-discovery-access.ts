@@ -7,19 +7,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
-import {
-  getSessionRowProjection,
-  requireSessionRowProjection,
-} from "../session-row-projection-access.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
-import {
-  isSameSessionSharingTarget,
-  prepareSessionSharingRead,
-} from "../session-sharing-target-read.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { prepareCurrentSessionSharing } from "./sessions-sharing-authority.js";
+import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
+import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Keep discovery bound to current sharing facts and the session's selected skill revisions. */
@@ -34,47 +25,21 @@ export async function withSessionDiscoveryAccess(
     params.respond(true, await discover(), undefined);
     return;
   }
-  const { client, context, respond } = params;
-  const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
-  if (!requestedAgent.ok) {
-    respond(false, undefined, requestedAgent.error);
-    return;
-  }
-  const projection = requireSessionRowProjection(context);
-  const targetRef = { sessionKey: params.sessionKey, agentId: requestedAgent.agentId };
-  const actorId = gatewayClientSessionCreator(client)?.id;
-  const runAuthority = client?.internal?.operatorRunAuthority;
-  const assertCaller = () => {
-    params.signal?.throwIfAborted();
-    if (
-      params.hasCurrentClientAuthority?.() === false ||
-      client?.invalidated ||
-      client?.connectionSignal?.aborted ||
-      gatewayClientSessionCreator(client)?.id !== actorId ||
-      getSessionRowProjection(context) !== projection ||
-      client?.internal?.operatorRunAuthority !== runAuthority
-    ) {
-      throw new Error("Session discovery authority changed.");
-    }
-  };
-  let facts: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+  const { respond } = params;
   try {
-    assertCaller();
-    const query = { key: targetRef.sessionKey, agentId: targetRef.agentId };
-    facts = await prepareSessionSharingRead({ cfg, ...targetRef, projection });
-    const sourcePath = facts.readCurrent(context.getRuntimeConfig()).sourcePath;
+    using access = await prepareSessionSharingAccess(
+      { ...params, sessionKey: params.sessionKey },
+      () => {
+        throw new Error("Session discovery authority changed.");
+      },
+    );
+    if (!access) {
+      return;
+    }
+    const { query, projection } = access;
+    const sourcePath = access.readCurrent().sourcePath;
     const readCurrent = (selected?: SessionSharingTarget) => {
-      assertCaller();
-      const { currentCfg, sharing } = prepareCurrentSessionSharing({
-        client,
-        context,
-        projection,
-        actorId,
-        runAuthority,
-        isMember: (_target, identityId) => membership.has(identityId),
-      });
-      const { target, membership } = facts!.readCurrent(currentCfg);
+      const { target, sharing } = access.readCurrent();
       if (selected && !isSameSessionSharingTarget(target, selected)) {
         throw new SessionMutationAuthorizationChangedError(params.changedError);
       }
@@ -129,7 +94,5 @@ export async function withSessionDiscoveryAccess(
         ? error.error
         : errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
     );
-  } finally {
-    facts?.release();
   }
 }

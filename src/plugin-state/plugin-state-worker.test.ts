@@ -31,13 +31,13 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
   registerPluginStateSequencedJournalEntry,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -45,6 +45,62 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("compares cross-namespace lease conditions in the same worker transaction as the write", async () => {
+    await withOpenClawTestState({ label: "plugin-state-conditional-lease" }, async (state) => {
+      const options = { namespace: "journal", maxEntries: 10, env: state.env };
+      let active = true;
+      const authority = {
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("owner closed");
+          }
+        },
+      };
+      const entries = createPluginStateKeyedStoreV2<string>("lease-test", options, authority);
+      const heads = createPluginStateKeyedStoreV2<string>(
+        "lease-test",
+        { ...options, namespace: "head" },
+        authority,
+      );
+      await entries.register("previous", "unlinked");
+      await heads.register("writer", "first-owner");
+      const previous = await entries.observe("previous");
+      const lease = await heads.observe("writer");
+      const conditions = [{ namespace: "head", key: "writer", comparison: lease.comparison }];
+
+      // The released synchronous writer can replace a lease after async preparation.
+      const legacy = createPluginStateSyncKeyedStore<string>("lease-test", {
+        ...options,
+        namespace: "head",
+      });
+      legacy.register("writer", "replacement-owner");
+      expect(
+        await entries.compareAndApply(
+          "previous",
+          previous.comparison,
+          { operation: "update", action: "set", value: "linked" },
+          { conditions },
+        ),
+      ).toEqual({ status: "conflict", current: previous });
+      expect(await entries.lookup("previous")).toBe("unlinked");
+
+      const replacement = await heads.observe("writer");
+      expect(
+        await entries.compareAndApply(
+          "previous",
+          previous.comparison,
+          { operation: "update", action: "set", value: "linked" },
+          {
+            conditions: [{ namespace: "head", key: "writer", comparison: replacement.comparison }],
+          },
+        ),
+      ).toEqual({ status: "applied" });
+      active = false;
+      await expect(entries.delete("previous")).rejects.toThrow("owner closed");
+      expect(legacy.lookup("writer")).toBe("replacement-owner");
+    });
+  });
+
   it("keeps a session-bound comparison from claiming state after its session changes", async () => {
     await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
       const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
@@ -209,13 +265,18 @@ describe("worker plugin state", () => {
     },
   );
 
-  it("opens cold state and sweeps reopened state without host data SQL", async () => {
-    await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
+  it("opens cold state and cleans expired rows on reopened writes without host data SQL", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-expiry" }, async (state) => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const store = createPluginStateKeyedStore("fixture-plugin", {
+        namespace: "expiry",
+        maxEntries: 10,
+        env: state.env,
+      });
       const observation = observeHostDataSql();
       try {
         expect(existsSync(databasePath)).toBe(false);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        await store.register("permanent", true);
         expect(existsSync(databasePath)).toBe(true);
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
@@ -225,14 +286,14 @@ describe("worker plugin state", () => {
         seedPluginStateEntriesForTests([
           {
             pluginId: "fixture-plugin",
-            namespace: "sweep",
+            namespace: "expiry",
             key: "expired",
             value: { expired: true },
             expiresAt: now - 1,
           },
           {
             pluginId: "fixture-plugin",
-            namespace: "sweep",
+            namespace: "expiry",
             key: "live",
             value: { live: true },
             expiresAt: now + 86_400_000,
@@ -242,8 +303,9 @@ describe("worker plugin state", () => {
         for (const method of observation.calls) {
           method.mockClear();
         }
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(1);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        await store.register("permanent", true);
+        expect(await store.lookup("expired")).toBeUndefined();
+        expect(await store.lookup("live")).toEqual({ live: true });
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
         }
@@ -251,7 +313,7 @@ describe("worker plugin state", () => {
         observation.restore();
       }
       const persisted = createPluginStateSyncKeyedStore("fixture-plugin", {
-        namespace: "sweep",
+        namespace: "expiry",
         maxEntries: 10,
         env: state.env,
       });
@@ -306,7 +368,7 @@ describe("worker plugin state", () => {
           });
         const execute = () =>
           operation === "observe"
-            ? store.observe("workspace")
+            ? store.observe("uncached-workspace")
             : store.compareAndApply("workspace", observation.comparison, {
                 operation: "delete",
                 action: "delete",
@@ -344,7 +406,7 @@ describe("worker plugin state", () => {
         const nextOwner = holdForeignWriter(captured);
         nextOwner.close();
         if (operation === "observe") {
-          await expect(execute()).resolves.toMatchObject({ value: "owner" });
+          await expect(execute()).resolves.toMatchObject({ value: undefined });
         } else {
           await expect(execute()).resolves.toEqual({ status: "applied" });
         }

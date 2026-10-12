@@ -1,7 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
-import { sessionRosterScope } from "../lib/sessions/session-roster-cache.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import {
@@ -45,17 +43,11 @@ export function clearWarmBootState(gatewayScope: string, owner: BootRecordOwner)
   // await: a reload during storage cleanup must fail closed.
   clearBootRecords(gatewayScope, owner);
   const recoveryScope = owner.recoveryScope;
-  const rosterCleared = clearCachedBootState(sessionRosterScope(gatewayScope, recoveryScope));
-  // Legacy admission identifies its gateway-keyed roster, not an account-qualified
-  // transcript. Never guess an account when retiring that unscoped cache.
   if (!recoveryScope) {
-    return rosterCleared;
+    return Promise.resolve();
   }
   // Invalidate visible history and its cursor before pane subscribers resume startup.
-  const snapshotsCleared = clearStoredChatSnapshots(
-    `scope:${JSON.stringify([gatewayScope, recoveryScope])}\u0000`,
-  );
-  return Promise.all([rosterCleared, snapshotsCleared]).then(() => undefined);
+  return clearStoredChatSnapshots(`scope:${JSON.stringify([gatewayScope, recoveryScope])}\u0000`);
 }
 
 export function subscribeWarmBootConnection(

@@ -248,7 +248,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
       ].toSorted(),
     );
-    const initial = bootstrap.prepareGatewayPluginLoad({
+    const initial = await bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       pluginLookUpTable: loadPluginLookUpTable({
         config: initialConfig,
@@ -936,9 +936,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(await probe("installed-probe")).toEqual(configured);
         expect(runtime.pluginRuntime.registry).toBe(previousRegistry);
         expect(previousInstance.disposing).toBe(false);
-        expect(() => retainRuntimePluginWork([previousRegistry])).toThrow(
-          "replacement is in progress",
-        );
         finishSecondRun();
         await expect(replacing).resolves.toMatchObject({
           runtime: { pluginIds: ["installed-probe"] },

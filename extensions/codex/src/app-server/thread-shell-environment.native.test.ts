@@ -260,14 +260,18 @@ describe.skipIf(process.platform === "win32")("native Codex tool PATH", () => {
           if (threadId) {
             const resumed = await client.request(
               "thread/resume",
-              buildThreadResumeParams(params, { ...options, threadId }),
+              await buildThreadResumeParams(params, { ...options, threadId }),
               { timeoutMs: 20_000 },
             );
             expect(resumed.thread.id).toBe(threadId);
           } else {
             const started = await client.request(
               "thread/start",
-              buildThreadStartParams(params, { ...options, cwd: native.cwd, dynamicTools: [] }),
+              await buildThreadStartParams(params, {
+                ...options,
+                cwd: native.cwd,
+                dynamicTools: [],
+              }),
               { timeoutMs: 20_000 },
             );
             threadId = started.thread.id;

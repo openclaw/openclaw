@@ -185,10 +185,10 @@ export function registerCompactionSafeguardTests({
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
-      ["intentional quality rejection", undefined, "cancel"],
+      ["intentional quality rejection", undefined, "degrade"],
       ["explicit model timeout", "request timed out", "cancel"],
-      // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
-      ["corrective 408", "408", "cancel"],
+      // A corrective failure reuses the successful earlier summary on the same model.
+      ["corrective 408", "408", "degrade"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -262,7 +262,7 @@ export function registerCompactionSafeguardTests({
                   {
                     type: "text",
                     text:
-                      outcome === "cancel" || corrective
+                      outcome === "cancel" || outcome === "degrade" || corrective
                         ? "Missing required sections."
                         : fallbackSummary,
                   },
@@ -333,7 +333,16 @@ export function registerCompactionSafeguardTests({
           fallback ? [primary, backup] : [primary],
         );
         expect(config).toEqual(configBefore);
-        if (outcome !== "cancel") {
+        if (outcome === "degrade") {
+          expect(result).toMatchObject({ ok: true, compacted: true });
+          expect(
+            sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+          ).toMatchObject({
+            summary: expect.stringContaining("Missing required sections."),
+            details: { qualityDegraded: true },
+          });
+          expect(sessionManager.buildSessionContext().messages).not.toEqual(originalMessages);
+        } else if (outcome !== "cancel") {
           if (outcome === "thinking") {
             expect([...new Set(requestedThinking)]).toEqual(["off", "minimal"]);
           }

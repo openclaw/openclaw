@@ -17,11 +17,12 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const tempDirs: string[] = [];
@@ -211,6 +212,10 @@ describe("session creation snapshot", () => {
       expect(context.existingEntry).toEqual(expected);
       expect(context.targetEntry).toEqual(expected);
       expect(context.labelInUse).toBe(true);
+      // Offline repair revokes the physical proof before another reader admits these rows.
+      runSqliteImmediateTransactionSync(db, () =>
+        markCanonicalSessionValidationPending(database, [scope.sessionKey]),
+      );
       await expect(
         createSessionEntryWithTranscript(scope, () => ({ ok: false, error: "unreachable" })),
       ).rejects.toThrow("openclaw doctor --fix");

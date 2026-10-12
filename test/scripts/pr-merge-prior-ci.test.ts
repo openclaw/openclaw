@@ -260,6 +260,7 @@ describePosix("explicit prior-CI admin landing", () => {
   it.each([
     ["success", ""],
     ["pending", ""],
+    ["automation-dispatch", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
     ["missing-status", "current combined CI/security status is required"],
@@ -280,7 +281,7 @@ describePosix("explicit prior-CI admin landing", () => {
     const f = preExistingCandidate();
     const state = f.state();
     const accepted = fault === "success" || fault === "pending";
-    if (accepted) {
+    if (fault === "success" || fault === "pending") {
       state.priorCi.security.combinedState = fault;
     } else {
       state.priorCi.security.fault = fault!;

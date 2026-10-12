@@ -80,9 +80,12 @@ afterEach(() => {
 describe("context cache lifecycle", () => {
   it("rehydrates configured entries after module reload without rereading config", async () => {
     state.config = config("openrouter", model("openrouter/claude-sonnet", 321_000));
-    expect(context.lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
-      321_000,
-    );
+    expect(
+      context.resolveContextTokensForModel({
+        model: "openrouter/claude-sonnet",
+        allowAsyncLoad: false,
+      }),
+    ).toBe(321_000);
     expect(state.loadConfig).toHaveBeenCalledTimes(1);
 
     vi.resetModules();
@@ -91,7 +94,10 @@ describe("context cache lifecycle", () => {
     });
     const reloaded = await import("./context.js");
     expect(
-      reloaded.lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false }),
+      reloaded.resolveContextTokensForModel({
+        model: "openrouter/claude-sonnet",
+        allowAsyncLoad: false,
+      }),
     ).toBe(321_000);
     expect(state.loadConfig).not.toHaveBeenCalled();
   });
@@ -102,28 +108,40 @@ describe("context cache lifecycle", () => {
     state.loadConfig.mockImplementationOnce(() => {
       throw new Error("transient");
     });
-    expect(context.lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+    expect(
+      context.resolveContextTokensForModel({ model: "openrouter/claude-sonnet" }),
+    ).toBeUndefined();
     expect(state.loadConfig).toHaveBeenCalledTimes(1);
-    expect(context.lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+    expect(
+      context.resolveContextTokensForModel({ model: "openrouter/claude-sonnet" }),
+    ).toBeUndefined();
     expect(state.loadConfig).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(context.lookupContextTokens("openrouter/claude-sonnet")).toBe(654_321);
+    expect(context.resolveContextTokensForModel({ model: "openrouter/claude-sonnet" })).toBe(
+      654_321,
+    );
     expect(state.loadConfig).toHaveBeenCalledTimes(2);
     await context.ensureContextWindowCacheLoaded();
   });
 
   it("replaces configured token overrides before refreshing discovery", async () => {
     state.config = config("openrouter", model("claude-sonnet", 321_000, 111_000));
-    expect(context.lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(111_000);
+    expect(
+      context.resolveContextTokensForModel({ model: "claude-sonnet", allowAsyncLoad: false }),
+    ).toBe(111_000);
     state.catalog.entries = [
       { provider: "openrouter", id: "claude-sonnet", contextWindow: 654_321 },
     ];
     const pending = context.refreshContextWindowCache(
       config("openrouter", model("claude-sonnet", 222_000)),
     );
-    expect(context.lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
+    expect(
+      context.resolveContextTokensForModel({ model: "claude-sonnet", allowAsyncLoad: false }),
+    ).toBe(222_000);
     await pending;
-    expect(context.lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
+    expect(
+      context.resolveContextTokensForModel({ model: "claude-sonnet", allowAsyncLoad: false }),
+    ).toBe(222_000);
   });
 
   it("loads exact read-only metadata rather than the Gateway-published owner", async () => {
@@ -139,7 +157,10 @@ describe("context cache lifecycle", () => {
     expect(state.loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
     expect(state.publishedOwner).not.toHaveBeenCalled();
     expect(
-      context.lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
+      context.resolveContextTokensForModel({
+        model: "anthropic/claude-opus-4.7-20260219",
+        allowAsyncLoad: false,
+      }),
     ).toBe(1_000_000);
   });
 
@@ -156,11 +177,19 @@ describe("context cache lifecycle", () => {
       allowGatewaySubagentBinding: true,
     });
     expect(state.loadOwner).not.toHaveBeenCalled();
-    const options = { allowAsyncLoad: false, skipRuntimeConfigLoad: true };
-    expect(context.lookupContextTokens("current-model", options)).toBe(222_000);
-    expect(context.lookupContextTokens("discovered-model", options)).toBe(64_000);
-    expect(context.lookupContextTokens("static-model", options)).toBe(1_048_576);
-    expect(context.lookupContextTokens("stale-model", options)).toBeUndefined();
+    const options = { allowAsyncLoad: false, cfg: {} };
+    expect(context.resolveContextTokensForModel({ model: "current-model", ...options })).toBe(
+      222_000,
+    );
+    expect(context.resolveContextTokensForModel({ model: "discovered-model", ...options })).toBe(
+      64_000,
+    );
+    expect(context.resolveContextTokensForModel({ model: "static-model", ...options })).toBe(
+      1_048_576,
+    );
+    expect(
+      context.resolveContextTokensForModel({ model: "stale-model", ...options }),
+    ).toBeUndefined();
   });
 
   it("retires failed prewarm so exact request-time loading can recover", async () => {
@@ -172,7 +201,9 @@ describe("context cache lifecycle", () => {
     expect(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig).toBeUndefined();
     await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: state.config, readOnly: true });
-    expect(context.lookupContextTokens("recovered-model", { allowAsyncLoad: false })).toBe(96_000);
+    expect(
+      context.resolveContextTokensForModel({ model: "recovered-model", allowAsyncLoad: false }),
+    ).toBe(96_000);
   });
 
   it("retires stale discovery when exact catalog loading fails", async () => {
@@ -181,9 +212,7 @@ describe("context cache lifecycle", () => {
     await context.ensureContextWindowCacheLoaded(
       config("synthetic", model("current-model", 96_000)),
     );
-    expect(
-      context.lookupContextTokens("stale-model", { skipRuntimeConfigLoad: true }),
-    ).toBeUndefined();
+    expect(context.resolveContextTokensForModel({ model: "stale-model", cfg: {} })).toBeUndefined();
   });
 
   it("retires an unpublished prewarm marker when shutdown cancels during import", async () => {
@@ -198,13 +227,29 @@ describe("context cache lifecycle", () => {
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
-  it("releases status waits on timeout while warmup is pending", async () => {
-    vi.useFakeTimers();
-    state.loadOwner.mockImplementationOnce(() => new Promise<never>(() => {}));
-    void context.ensureContextWindowCacheLoaded(config("anthropic", model("claude", 200_000)));
-    const waiting = context.waitForContextWindowCacheLoad({ timeoutMs: 5 });
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(waiting).resolves.toBe("timeout");
+  it("does not publish prewarm cancelled during cooperative projection", async () => {
+    let cancelled = false;
+    state.catalog.entries = Array.from({ length: 600 }, (_, index) => ({
+      id: `cancelled-${index}`,
+      contextWindow: 64_000,
+    }));
+    state.publishedOwner.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        cancelled = true;
+      });
+      return { config: state.config, modelCatalog: state.catalog };
+    });
+
+    await context.prewarmContextWindowCacheAfterReady({
+      config: state.config,
+      isCancelled: () => cancelled,
+    });
+
+    expect(cancelled).toBe(true);
+    expect(
+      context.resolveContextTokensForModel({ model: "cancelled-599", cfg: {} }),
+    ).toBeUndefined();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
   });
 });
 
@@ -226,7 +271,7 @@ describe("provider-owned context lookup", () => {
         model: "gemini-3.1-pro-preview",
       }),
     ).toBe(1_048_576);
-    expect(context.lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
+    expect(context.resolveContextTokensForModel({ model: "gemini-3.1-pro-preview" })).toBe(128_000);
   });
 
   it("falls back to a bare configured row", () => {

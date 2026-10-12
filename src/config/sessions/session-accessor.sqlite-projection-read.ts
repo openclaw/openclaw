@@ -9,14 +9,20 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
@@ -27,6 +33,7 @@ type ActiveTranscriptDatabase = Pick<
   | "session_transcript_cold_archives"
   | "transcript_rewrite_watermarks"
   | "session_transcript_index_state"
+  | "session_windows"
   | "transcript_event_identities"
   | "transcript_events"
 >;
@@ -36,6 +43,7 @@ type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "pa
 export type CurrentTranscriptProjection = {
   database: TranscriptReadDatabase;
   generation: string | undefined;
+  version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
   latestIndexedReset?: { active_position: number; event_type: "reset"; seq: number } | null;
   unindexedHistoryControls?: {
@@ -284,6 +292,7 @@ function buildProjectionSnapshotQuery(
   return db
     .selectFrom(target)
     .leftJoin("session_transcript_index_state as state", "state.session_id", "target.session_id")
+    .leftJoin("session_windows as window", "window.session_id", "target.session_id")
     .leftJoin(
       "transcript_rewrite_watermarks as watermark",
       "watermark.session_id",
@@ -309,6 +318,7 @@ function buildProjectionSnapshotQuery(
     )
     .select([
       "watermark.generation",
+      "window.transcript_updated_at",
       "state.active_event_count",
       "state.active_message_count",
       "state.indexed_seq",
@@ -377,10 +387,48 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 );
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const { active, coldArchive, identities, navigation, projection } = actor.transcript;
+    let latestIndexedReset: CurrentTranscriptProjection["latestIndexedReset"] = null;
+    let hasUnindexedPrefix = true;
+    for (const identity of identities.values()) {
+      hasUnindexedPrefix &&= identity.seq !== navigation[0]?.seq;
+      const row = active.get(identity.seq);
+      if (
+        identity.event_type === "reset" &&
+        row &&
+        (!latestIndexedReset || identity.seq > latestIndexedReset.seq)
+      ) {
+        latestIndexedReset = {
+          active_position: row.active_position,
+          event_type: "reset",
+          seq: identity.seq,
+        };
+      }
+    }
+    return {
+      cold: Boolean(coldArchive),
+      generation: actor.hot.transcript.version.generation ?? undefined,
+      updatedAt: actor.hot.transcript.version.updatedAt,
+      hasUnclassified: projection?.hasUnclassifiedEvents ?? false,
+      latestIndexedReset,
+      hasUnindexedPrefix,
+      latestSeq: navigation.at(-1)?.seq ?? null,
+      state: projection && {
+        activeEventCount: projection.activeEventCount,
+        activeMessageCount: projection.activeMessageCount,
+        indexedSeq: projection.indexedSeq,
+        leafEventId: projection.leafEventId,
+        needsRebuild: projection.needsRebuild,
+      },
+    };
+  }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
     generation: row.generation ?? undefined,
+    updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
     latestIndexedReset:
       typeof row.reset_seq === "number" && typeof row.reset_active_position === "number"
@@ -427,6 +475,18 @@ export function readCurrentProjectionSnapshot<T>(
     if (snapshot.cold) {
       throw new SessionTranscriptColdError(resolved.sessionId);
     }
+    const version = {
+      generation: snapshot.generation ?? null,
+      rawSeq: snapshot.latestSeq,
+      updatedAt: snapshot.updatedAt,
+    };
+    retainTranscriptContextFacts(
+      database,
+      resolved.sessionId,
+      version,
+      getSqliteReadScopeRevision(database.db),
+      false,
+    );
     const empty = snapshot.latestSeq === null;
     const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
     if (
@@ -441,6 +501,7 @@ export function readCurrentProjectionSnapshot<T>(
       value: read({
         database,
         generation: snapshot.generation,
+        version,
         hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
         latestIndexedReset: empty ? null : snapshot.latestIndexedReset,
         resolved,

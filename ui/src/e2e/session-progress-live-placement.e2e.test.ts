@@ -136,18 +136,10 @@ suite.define(() => {
           }),
         })
         .first();
-      const settingSwitch = settingRow.locator("wa-switch");
-      await expect
-        .poll(() =>
-          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-        )
-        .toBe(false);
+      const settingSwitch = settingRow.getByRole("switch");
+      await expect.poll(() => settingSwitch.isChecked()).toBe(false);
       await settingRow.click();
-      await expect
-        .poll(() =>
-          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-        )
-        .toBe(true);
+      await expect.poll(() => settingSwitch.isChecked()).toBe(true);
       await captureLifecycleState("01-setting-enabled.png", settingRow);
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

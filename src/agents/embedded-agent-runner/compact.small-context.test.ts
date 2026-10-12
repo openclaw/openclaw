@@ -172,12 +172,14 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
     },
   };
 
-  // Manual compaction is the control: the exact original history is compactable.
+  // Focused manual compaction is the client control: the exact original history is compactable.
   const manual = await compact({
     ...args,
     trigger: "manual",
+    customInstructions: "Preserve the code word.",
   });
   expect(manual, manual.reason).toMatchObject({ ok: true, compacted: true });
+  expect(compactEndpoint).not.toHaveBeenCalled();
   expect(summaryStream).toHaveBeenCalled();
   manager = SessionManager.fromEntries([manager.getHeader(), ...original], prepared.workspaceDir);
   vi.mocked(guardSessionManager).mockReturnValue(manager);

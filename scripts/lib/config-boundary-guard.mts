@@ -163,10 +163,12 @@ const DEPRECATED_RUNTIME_API_GUARDS = [
   },
 ];
 
+// Brace bodies must not cross statements: named imports stop at `}`; destructuring
+// allows one nested `{...}` level for defaults such as `x = () => {}`.
 const staticImportPattern =
-  /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
+  /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/config-runtime["']/g;
 const dynamicImportPattern =
-  /\b(?:const|let|var)\s+\{[\s\S]*?\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
+  /\b(?:const|let|var)\s+\{(?:[^{}]|\{[^{}]*\})*\}\s*=\s*(?:await\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)/g;
 const typeQueryPattern =
   /\b(?:typeof\s+)?import\(["']openclaw\/plugin-sdk\/config-runtime["']\)\.[A-Za-z_$][\w$]*/g;
 
@@ -277,7 +279,7 @@ export function collectDeprecatedInternalConfigApiViolations({
   scan(nonCompatFiles, [
     {
       pattern:
-        /\b(?:import|export)\s+(?:type\s+)?\{[\s\S]*?\b(?:loadConfig|writeConfigFile)\b[\s\S]*?\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["']/,
+        /(?<=\b(?:import|export)\s+(?:type\s+)?\{[^}]*)\b(?:loadConfig|writeConfigFile)\b(?=[^}]*\}\s+from\s+["']openclaw\/plugin-sdk\/(?:config-runtime|memory-core-host-runtime-core)["'])/,
       replacement:
         "use getRuntimeConfig(), runtime.config.current(), or mutation helpers with afterWrite",
     },
@@ -293,11 +295,11 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bwriteConfigFile\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       {
         pattern:
-          /\bconst\s+\{[\s\S]*?\bwriteConfigFile\b[\s\S]*?\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\)/,
+          /(?<=\bconst\s+\{(?:[^{}]|\{[^{}]*\})*)\bwriteConfigFile\b(?=(?:[^{}]|\{[^{}]*\})*\}\s*=\s*await\s+import\(["'][^"']*(?:config\/config|config\/io)\.js["']\))/,
       },
       { pattern: /\.\s*writeConfigFile\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({
@@ -314,7 +316,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["'])/,
         replacement: "use the local domain config mutation helper instead of direct config writes",
       },
     ],
@@ -339,7 +341,7 @@ export function collectDeprecatedInternalConfigApiViolations({
     [
       {
         pattern:
-          /\bimport\s+\{[\s\S]*?\bloadConfig\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["']/,
+          /(?<=\bimport\s+\{[^}]*)\bloadConfig\b(?=[^}]*\}\s+from\s+["'][^"']*(?:config\/config|config\/io)\.js["'])/,
       },
       { pattern: /(?<!\.)\bloadConfig\s*\(/, findLines: findNonCommentLineNumbers },
     ].map(({ pattern, findLines }) => ({

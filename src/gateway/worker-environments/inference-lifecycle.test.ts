@@ -16,8 +16,8 @@ import {
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "../server-methods/chat.abort.test-helpers.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import {
   accept,
   CANCEL,
@@ -444,6 +444,43 @@ describe("worker inference manager", () => {
     expect(drain.hasWork()).toBe(false);
     drain.release();
     await instance.stop();
+  });
+
+  it("leaves accepted inference running when drain authority is revoked before start", async () => {
+    const provider = createDeferred<WorkerInferenceTerminalOutcome>();
+    const entered = createDeferred<AbortSignal>();
+    const instance = makeManager(async ({ signal }) => {
+      entered.resolve(signal);
+      return await provider.promise;
+    });
+    const sink = createSink();
+    await accept(instance, { sink: sink.sink });
+    const signal = await entered.promise;
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("deletion superseded");
+      }
+    };
+    assertCurrent();
+    const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+    const drained = Promise.allSettled([drain.drained]);
+    try {
+      current = false;
+      drain.start(assertCurrent);
+      expect(signal.aborted).toBe(false);
+      expect(sink.frames).toEqual([]);
+      provider.resolve(DONE);
+      expect(await sink.terminal).toMatchObject({ payload: { outcome: DONE } });
+      expect(await drained).toEqual([
+        { status: "rejected", reason: new Error("deletion superseded") },
+      ]);
+    } finally {
+      provider.resolve(DONE);
+      await drained;
+      drain.release();
+      await instance.stop();
+    }
   });
 
   it("does not let a stale drain release unlock a newer accepted drain", async () => {

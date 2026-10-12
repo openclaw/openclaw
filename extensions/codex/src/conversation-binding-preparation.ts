@@ -68,7 +68,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientByInstanceId,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
   type CodexAppServerLeasedRequestOptions,
@@ -271,20 +271,20 @@ type CodexThreadBindingRuntime = Awaited<ReturnType<typeof resolveThreadBindingR
 
 async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
   const agentLookup = buildCodexConversationAgentLookup(params);
-  const modelProvider = resolveThreadRequestModelProvider({
+  const modelProvider = await resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
   const modelSelection = params.model?.trim()
-    ? resolveCodexAppServerRequestModelSelection({
+    ? await resolveCodexAppServerRequestModelSelection({
         model: params.model,
         modelProvider,
         authProfileId: params.authProfileId,
         ...agentLookup,
       })
     : undefined;
-  const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+  const reviewerModelProvider = await resolveModelBackedReviewerPolicyProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
     ...agentLookup,
@@ -396,7 +396,7 @@ async function writeThreadBindingFromResponse(
           ...(resolved.incognito ? { conversationIncognito: true } : {}),
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
-          modelProvider: normalizeCodexAppServerBindingModelProvider({
+          modelProvider: await normalizeCodexAppServerBindingModelProvider({
             authProfileId: params.authProfileId,
             modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
             ...resolved.agentLookup,
@@ -422,14 +422,14 @@ async function writeThreadBindingFromResponse(
 }
 
 async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
-  const current = params.bindingStore.read(params.identity);
+  const current = await params.bindingStore.readAsync(params.identity);
   assertCodexBindingMayBeReplaced(current, "binding a conversation-bound Codex thread");
   const resolved = await resolveThreadBindingRuntime(params);
   const clientLease: CodexAppServerClientLease = {
     client: await getLeasedSharedCodexAppServerClient(resolved.clientOptions),
   };
   try {
-    await withLeasedCodexAppServerClientStartSelectionRetry({
+    await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: resolved.clientOptions,
       run: async (client, connectionRequestOptions) => {
@@ -523,10 +523,10 @@ export async function prepareCodexConversationBinding(
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const snapshot = params.bindingStore.read(identity);
+  const snapshot = await params.bindingStore.readAsync(identity);
   const run = () =>
     params.bindingStore.withLease(identity, async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (current?.threadId !== snapshot?.threadId || current?.clientId !== snapshot?.clientId) {
         throw new Error("Codex conversation binding changed before preparation.");
       }
@@ -545,7 +545,9 @@ export async function prepareCodexConversationBinding(
             config: params.config,
           })
         : undefined;
-      const sourceBinding = sourceIdentity ? params.bindingStore.read(sourceIdentity) : undefined;
+      const sourceBinding = sourceIdentity
+        ? await params.bindingStore.readAsync(sourceIdentity)
+        : undefined;
       assertCodexBindingMayBeReplaced(current, "initializing a conversation-bound Codex thread");
       assertCodexBindingMayBeReplaced(
         sourceBinding,
@@ -582,14 +584,14 @@ export async function prepareCodexConversationBinding(
         options.forceNew ? undefined : threadId,
       );
       assertSourceCurrent();
-      const stored = params.bindingStore.read(identity);
+      const stored = await params.bindingStore.readAsync(identity);
       if (!stored) {
         throw new Error("Codex conversation binding disappeared while initializing its thread.");
       }
       if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
         await params.bindingStore.withLease(sourceIdentity, async () => {
           assertSourceCurrent();
-          const source = params.bindingStore.read(sourceIdentity);
+          const source = await params.bindingStore.readAsync(sourceIdentity);
           if (source && source.threadId === params.data.source?.threadId) {
             const sourceSessionKey =
               sourceIdentity.sessionKey ??
@@ -716,15 +718,15 @@ async function projectConversationSourceHistory(
   }
 }
 
-export function resolveModelBackedReviewerPolicyProvider(params: {
+export async function resolveModelBackedReviewerPolicyProvider(params: {
   authProfileId?: string;
   modelProvider?: string;
   agentDir?: string;
   config?: CodexAppServerAuthProfileLookup["config"];
-}): string | undefined {
+}): Promise<string | undefined> {
   const modelProvider = params.modelProvider?.trim();
   if (modelProvider && modelProvider.toLowerCase() !== "codex") {
     return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
   }
-  return isCodexAppServerNativeAuthProfile(params) ? "openai" : undefined;
+  return (await isCodexAppServerNativeAuthProfile(params)) ? "openai" : undefined;
 }

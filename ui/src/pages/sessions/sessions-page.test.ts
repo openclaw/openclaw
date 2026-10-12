@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
-import { ContextProvider } from "@lit/context";
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -20,6 +17,7 @@ import type {
   SessionGroupMutationResult,
 } from "../../lib/sessions/session-capability.ts";
 import { registerSessionPluginAction } from "../../test-helpers/control-ui-plugin-action.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -30,6 +28,7 @@ import {
   createContext,
   createGateway,
   createManagedSessions,
+  createPage,
   createRenderedPage,
   createSessions,
   type TestSessionsPage,
@@ -48,16 +47,8 @@ const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): Gatewa
   updatedAt: 1,
   ...extra,
 });
-async function createPage(context: ApplicationContext): Promise<TestSessionsPage> {
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = context;
-  page.render = () => nothing;
-  document.body.append(page);
-  await page.updateComplete;
-  return page;
-}
 async function mountMutation(sessions = createSessions()) {
-  const connection = createGateway({} as GatewayBrowserClient);
+  const connection = createGateway();
   const context = createContext(connection.gateway, sessions);
   return { page: await createPage(context), connection, context, sessions };
 }
@@ -115,6 +106,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("pins from the page menu without changing shared pin metadata", async () => {
+    const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
+    const sessions = createSessions();
+    const connection = createGateway();
+    const context = createContext(connection.gateway, sessions);
+    const page = await createRenderedPage(context, sessionsResult([row], 1));
+    const menu = await openRowMenu(page, row);
+    const entry = menu.querySelector('[value="toggle-pin"]');
+    expect(entry).not.toBeNull();
+    expect(entry?.hasAttribute("disabled")).toBe(false);
+    menu.querySelector("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "toggle-pin" } },
+      }),
+    );
+    expect(context.navigation.snapshot.sidebarEntries).toContain("session:" + row.key);
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(row.pinned).toBe(true);
+  });
   it.each([false, true])(
     "reports owner assignment failure only in its current page (retired: %s)",
     async (retired) => {
@@ -145,7 +155,6 @@ describe("sessions page lifecycle", () => {
       const context = createContext(mutableGateway.gateway, sessions);
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await vi.waitFor(() => expect(page.loading).toBe(false));
-      new ContextProvider(page, { context: applicationContext }).setValue(context);
       page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
       await page.updateComplete;
       const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
@@ -261,7 +270,7 @@ describe("sessions page lifecycle", () => {
   it("patches color from the rendered session menu", async () => {
     const target = sessionRow("color");
     const sessions = createSessions();
-    const context = createContext(createGateway({} as GatewayBrowserClient).gateway, sessions);
+    const context = createContext(createGateway().gateway, sessions);
     const page = await createRenderedPage(context, sessionsResult([target], 1));
     const menu = await openRowMenu(page, target);
     const item = menu.querySelector<HTMLButtonElement>(
@@ -279,10 +288,7 @@ describe("sessions page lifecycle", () => {
 
   it("hides pinning for a lineage child", async () => {
     const target = sessionRow("dashboard:child", { parentSessionKey: "agent:main:parent" });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      createSessions(),
-    );
+    const context = createContext(createGateway().gateway, createSessions());
     const page = await createRenderedPage(context, sessionsResult([target], 1));
     expect((await openRowMenu(page, target)).querySelector('[value="toggle-pin"]')).toBeNull();
   });
@@ -303,7 +309,6 @@ describe("sessions page lifecycle", () => {
     const target = sessionRow("personal", { hiddenFromInvolvingMe: true });
     const context = createContext(connection.gateway, managed.sessions);
     const page = await createRenderedPage(context, sessionsResult([target], 1));
-    new ContextProvider(page, { context: applicationContext }).setValue(context);
     const menu = await openRowMenu(page, target);
     const item = menu.querySelector('[value="toggle-involving-me"]')!;
     expect(item.textContent).toContain("Show in Involving me");
@@ -568,7 +573,7 @@ describe("sessions page new group", () => {
       groupsPut: vi.fn(groupsPut),
       patch: vi.fn(async () => ({ ok: true as const, key, path: "", entry: { sessionId } })),
     });
-    const connection = createGateway({} as GatewayBrowserClient);
+    const connection = createGateway();
     connection.emit({
       hello: gatewayHelloForMethods(
         ["sessions.groups.put", "sessions.patch"],
@@ -616,7 +621,7 @@ describe("sessions page new group", () => {
     const { connection, page, sessions, messages } = await mount(groupsPut);
     const created = page.requestNewCategory(key);
     await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
-    connection.emit({ client: {} as GatewayBrowserClient });
+    connection.emit({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
@@ -698,10 +703,7 @@ describe("sessions page plugin actions", () => {
     const row = sessionRow("review", { label: "Ready" });
     const managed = createManagedSessions();
     managed.sessions.state.result = sessionsResult([{ ...row, label: "Primary roster" }], 1);
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      managed.sessions,
-    );
+    const context = createContext(createGateway().gateway, managed.sessions);
     const run = vi.fn<ControlUiAction["run"]>();
     const { entry } = registerSessionPluginAction(context, {
       id: "review",
@@ -727,6 +729,16 @@ describe("sessions page plugin actions", () => {
     const openMenu = () => openRowMenu(page, row);
     return { page, row, run, publish, openMenu, actionSelector: `[value="plugin:${entry.key}"]` };
   }
+
+  it("keeps the open menu mounted while a refreshed row updates its actions", async () => {
+    const { page, row, publish, openMenu } = await createPluginSessionMenuPage();
+    const menu = await openMenu();
+    publish([{ ...row, label: "Latest" }]);
+    await page.updateComplete;
+    await menu.updateComplete;
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.pluginActions[0]?.label).toBe("Review Latest");
+  });
 
   it("uses current scoped session state when invoking plugin menu actions", async () => {
     const { page, row, run, publish, openMenu, actionSelector } =
@@ -772,7 +784,7 @@ describe("sessions page plugin actions", () => {
 
   it("revokes plugin navigation after detaching", async () => {
     const pending = createDeferred();
-    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    const mutableGateway = createGateway();
     const context = createContext(mutableGateway.gateway, createSessions());
     const run = vi.fn(
       async ({ host, sessionKey, session }: Parameters<ControlUiAction["run"]>[0]) => {

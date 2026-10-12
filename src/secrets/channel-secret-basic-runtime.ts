@@ -142,16 +142,13 @@ export function createSimpleChannelSecretContract(params: {
       ? params.mode.collectionFields
       : [...new Set([...params.accountFields, ...params.channelFields])];
 
-  const collectRuntimeConfigAssignments = (collectorParams: {
-    config: { channels?: Record<string, unknown> };
-    defaults?: SecretDefaults;
-    context: ResolverContext;
-  }): void => {
-    if (params.mode === "channel-only") {
-      const channel = getChannelRecord(collectorParams.config, params.channelKey);
-      if (!channel) {
-        return;
-      }
+  const collectRuntimeConfigAssignments = (collectorParams: ChannelSecretCollectorParams): void => {
+    const channelOnly = params.mode === "channel-only";
+    const channel = getChannelRecord(collectorParams.config, params.channelKey);
+    if (!channel) {
+      return;
+    }
+    if (channelOnly) {
       for (const field of collectionFields) {
         collectSecretInputAssignment({
           value: channel[field],
@@ -177,11 +174,7 @@ export function createSimpleChannelSecretContract(params: {
       return;
     }
 
-    const resolved = getChannelSurface(collectorParams.config, params.channelKey);
-    if (!resolved) {
-      return;
-    }
-    const { channel, surface } = resolved;
+    const surface = resolveChannelAccountSurface(channel);
     for (const field of collectionFields) {
       const topInactiveReason =
         params.mode === "channel-surface"

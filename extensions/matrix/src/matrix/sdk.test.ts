@@ -998,22 +998,15 @@ describe("MatrixClient request hardening", () => {
       content: {},
     }));
     matrixJsClient.decryptEventIfNeeded = vi.fn(async (event: FakeMatrixEvent) => {
-      event.emit(
-        "decrypted",
-        new FakeMatrixEvent({
-          roomId: "!room:example.org",
-          eventId: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Lunch?" },
-              answers: [{ id: "a1", "m.text": "Pizza" }],
-            },
+      event.markDecrypted({
+        type: "m.poll.start",
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            answers: [{ id: "a1", "m.text": "Pizza" }],
           },
-        }),
-      );
+        },
+      });
     });
 
     const event = await client.getEvent("!room:example.org", "$poll");
@@ -1432,7 +1425,7 @@ describe("MatrixClient request hardening", () => {
     { ...READ_CALLERS[0], syncState: SyncState.Error },
     { ...READ_CALLERS[1], syncState: SyncState.Reconnecting },
   ])(
-    "does not replace a poisoned $syncState generation until late transient work really releases ($caller caller)",
+    "does not replace a retiring $syncState client until transient work releases ($caller caller)",
     async ({ syncState, caller, assertReadAuthority }) => {
       captureReadAuthorityMock.mockReturnValue(assertReadAuthority);
       vi.useFakeTimers();
@@ -1467,6 +1460,7 @@ describe("MatrixClient request hardening", () => {
         await import("./client/shared.js");
       const { withResolvedRuntimeMatrixClient } = await import("./client-bootstrap.js");
       let replacementLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+      let replacementAcquisition: ReturnType<typeof acquireSharedMatrixClient> | undefined;
 
       createSharedMatrixClientMock.mockReset();
       createSharedMatrixClientMock
@@ -1529,24 +1523,23 @@ describe("MatrixClient request hardening", () => {
         await vi.advanceTimersByTimeAsync(5_000);
         await expect(monitorOutcome).resolves.toMatchObject({
           ok: false,
-          error: { message: "Matrix transient leases did not drain within 5000ms" },
+          error: { message: "Matrix client retirement did not settle within 5000ms" },
         });
-        await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toThrow(
-          "Matrix transient leases did not drain within 5000ms",
-        );
+        replacementAcquisition = acquireSharedMatrixClient({ auth, startClient: false });
+        await vi.advanceTimersByTimeAsync(0);
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
 
         gate.resolve("late-result");
         await expect(operationOutcome).resolves.toEqual({ ok: true, value: "late-result" });
-        replacementLease = await acquireSharedMatrixClient({ auth, startClient: false });
+        replacementLease = await replacementAcquisition;
         expect(replacementLease.client).toBe(replacementClient);
-        expect(replacementLease.client).not.toBe(firstClient);
         expect(createSharedMatrixClientMock).toHaveBeenCalledTimes(2);
       } finally {
         syncInternals.connectionReturnedResolvers = undefined;
         keepalive.resolve(false);
         gate.resolve("cleanup");
         await operationOutcome?.catch(() => undefined);
+        replacementLease ??= await replacementAcquisition?.catch(() => undefined);
         if (replacementLease) {
           clearMatrixSyncApiForNeverStartedClient();
         }

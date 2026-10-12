@@ -14,10 +14,7 @@ import {
 import { getSqlitePinnedReadSnapshot } from "../infra/sqlite-pinned-read-snapshot.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
-import {
-  isSqliteSchemaAdmissionCold,
-  runSqliteReadOperationSync,
-} from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
@@ -77,6 +74,7 @@ type RetainedReader = {
   connection: OpenClawStateReadConnection;
   identity: DatabasePathIdentity;
   retiring: boolean;
+  borrowed: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
   directAdmission?: {
     existingSchema: boolean;
@@ -185,6 +183,7 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
       retained.connection.database.db.isTransaction ||
       getSqlitePinnedReadSnapshot(retained.connection.database.db)
     ) {
+      retained.borrowed = false;
       throw new Error("Direct shared-state reader cannot admit a transaction or snapshot");
     }
     try {
@@ -219,7 +218,6 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
           }
         });
       }
-      assertSource();
       scheduleReaderRetirement(retained);
       return retained;
     } catch (error) {
@@ -232,6 +230,9 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
         );
       }
       throw error;
+    } finally {
+      // Preparation retains the connection without keeping an active borrow.
+      retained.borrowed = false;
     }
   });
   const assertCurrent = () => {
@@ -249,12 +250,13 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
     read(operation) {
       return inContext(() => {
         assertCurrent();
+        const wasBorrowed = reader.borrowed;
+        reader.borrowed = true;
         try {
           const value = operation(reader.connection.database);
           if (isPromiseLike(value)) {
             throw new SqliteCoordinatorError("Direct shared-state read must remain synchronous");
           }
-          assertCurrent();
           scheduleReaderRetirement(reader);
           return value;
         } catch (error) {
@@ -270,6 +272,8 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
             }
           }
           throw error;
+        } finally {
+          reader.borrowed = wasBorrowed;
         }
       });
     },
@@ -338,23 +342,29 @@ function borrowStateReadConnection(
     retireReader(reader);
     reader = undefined;
   }
+  if (reader?.borrowed) {
+    // A nested reader must not close its caller's retained connection.
+    return openStateReadConnectionResult(pathname, pathname, identity.key);
+  }
   if (!reader) {
     const opening = openStateReadConnectionResult(pathname, pathname, identity.key);
     if (opening.status === "unavailable") {
       return opening;
     }
-    reader = { connection: opening.value, identity, retiring: false };
+    reader = { connection: opening.value, identity, retiring: false, borrowed: false };
     retainedReaders.set(identity.key, reader);
     unregisterExitClose ??= registerSqliteCacheExitClose(closeRetainedOpenClawStateReadConnections);
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
+  retained.borrowed = true;
   clearTimeout(retained.idleTimer);
   return {
     status: "available",
     value: {
       database: { db: retained.connection.database.db, path: pathname },
       close(keep) {
+        retained.borrowed = false;
         if (
           keep &&
           retained.connection.database.db.isOpen &&
@@ -445,21 +455,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: runSqliteReadOperationSync(opened.database.db, () => {
-          const coldAdmission = !existingSchema && isSqliteSchemaAdmissionCold(opened.database.db);
           admitStateReadSchemaFacts(opened.database.db, pathname);
-          if (coldAdmission) {
-            // A peer can upgrade after catalog capture releases its SQLite snapshot.
-            return runSqliteReadOperationSync(opened.database.db, () => {
-              assertStateReadSchemaForPolicy(
-                opened.database.db,
-                pathname,
-                existingSchema,
-                undefined,
-                readContentVersionRow,
-              );
-              return operation(opened.database);
-            });
-          }
           assertStateReadSchemaForPolicy(
             opened.database.db,
             pathname,
@@ -491,12 +487,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
     errors.push(error);
   }
   try {
+    // Conservative runtimes can retain native handles after logical close. The
+    // snapshot owner warns and keeps its cleanup custody until process exit.
+    const allowDeferredSnapshotCleanup =
+      typeof source !== "string" &&
+      errors.length === 0 &&
+      result?.status === "available" &&
+      !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&
           !corruptedReaders.has(opened.database.db),
-      )
+      ) &&
+      !allowDeferredSnapshotCleanup
     ) {
       throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
     }

@@ -24,9 +24,7 @@ enum GatewayLaunchAgentManager {
     /// migration lease. Keep the app from killing healthy migration work before it can finish.
     static let startupMigrationTolerance: TimeInterval = 120
     /// A launchd PID started at login has no install evidence, and a cold start after reboot can
-    /// outlast the first-run budget (a real reboot measured about 139s on Apple silicon). The app
-    /// re-proves that the same PID owns the port at every deadline, so this wider budget only
-    /// delays repair of a PID that is still alive and still holding the port.
+    /// outlast the first-run budget (a real reboot measured about 139s on Apple silicon).
     static let reusedLaunchdColdStartTolerance: TimeInterval = 300
 
     private static var disableLaunchAgentMarkerURL: URL {

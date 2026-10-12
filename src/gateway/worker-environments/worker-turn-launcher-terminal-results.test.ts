@@ -171,7 +171,6 @@ describe("worker turn launcher terminal results", () => {
         resolveProvider: () => undefined,
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
-        executeInference: vi.fn(),
         inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
@@ -631,7 +630,7 @@ describe("worker turn launcher terminal results", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it("lends durable reconcile Move retry admission to production result recovery while interrupting its admitted turn", async () => {
+  it("recovers a durable Move result while interrupting its admitted turn", async () => {
     await seedActivePlacement();
     await gitInit(root);
     const source = placements.get(SESSION_ID);
@@ -790,11 +789,6 @@ describe("worker turn launcher terminal results", () => {
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
-      failTransfer.resolve();
-      await targetedAdmission.promise;
-      expect(admission.isActive()).toBe(true);
-      expect(recoveryEntered).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
       startBarrier.resolve();
       await Promise.race([
         interrupted.promise,
@@ -803,7 +797,8 @@ describe("worker turn launcher terminal results", () => {
         }),
       ]);
       expect(turnAbort.signal.aborted).toBe(true);
-      // Independent admission settles after targeted recovery could enter this session.
+      failTransfer.resolve();
+      await targetedAdmission.promise;
       await dispatch.forceDestroyEnvironment("unrelated");
       expect(recoveryEntered).toHaveBeenCalledOnce();
       expect(recoveryEntered).toHaveBeenCalledWith("results-only");

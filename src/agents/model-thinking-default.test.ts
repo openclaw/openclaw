@@ -85,6 +85,51 @@ describe("resolveThinkingDefault", () => {
     },
   );
 
+  it.each([
+    { model: "Kimi-K3", thinking: undefined, agentDefault: undefined, expected: "off" },
+    { model: "Kimi-K3", thinking: "max", agentDefault: undefined, expected: "max" },
+    { model: "Kimi-K3", thinking: "low", agentDefault: "medium", expected: "medium" },
+    { model: "k3", thinking: undefined, agentDefault: undefined, expected: "high" },
+    { model: "k3-256k", thinking: undefined, agentDefault: undefined, expected: "high" },
+  ] as const)(
+    "preserves fresh and serialized Kimi defaults (model=$model, thinking=$thinking, agent=$agentDefault)",
+    ({ model, thinking, agentDefault, expected }) => {
+      const resolveThinkingProfile =
+        resolveDirectBundledProviderPolicySurface("kimi-coding")?.resolveThinkingProfile;
+      if (!resolveThinkingProfile) {
+        throw new Error("Missing thinking policy for kimi");
+      }
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: `kimi/${model}` },
+            models: { [`kimi/${model}`]: { params: { thinking } } },
+          },
+          entries: { alpha: { thinkingDefault: agentDefault } },
+        },
+      };
+      for (const [state, cfg] of [
+        ["fresh", config],
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
+        ["serialized existing", JSON.parse(JSON.stringify(config))],
+      ] as const) {
+        expect(
+          resolveThinkingDefault({
+            cfg,
+            agentId: "alpha",
+            provider: "kimi",
+            model,
+            catalog: [{ provider: "kimi", id: model, name: model, reasoning: true }],
+            providerPolicySource: {
+              providers: [{ provider: { id: "kimi", resolveThinkingProfile } }],
+            },
+          }),
+          state,
+        ).toBe(expected);
+      }
+    },
+  );
+
   it("honors configured provider models that disable reasoning", () => {
     const cfg: OpenClawConfig = {
       models: {

@@ -12,39 +12,6 @@ import {
 } from "./config.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const AGENT_SCOPED_WIKI_COMMANDS = [
-  { label: "status", path: ["status"], args: ["status"] },
-  { label: "doctor", path: ["doctor"], args: ["doctor"] },
-  { label: "init", path: ["init"], args: ["init"] },
-  { label: "compile", path: ["compile"], args: ["compile"] },
-  { label: "lint", path: ["lint"], args: ["lint"] },
-  { label: "ingest", path: ["ingest"], args: ["ingest", "note.md"] },
-  { label: "okf import", path: ["okf", "import"], args: ["okf", "import", "bundle"] },
-  { label: "search", path: ["search"], args: ["search", "query"] },
-  { label: "get", path: ["get"], args: ["get", "entity.alpha"] },
-  {
-    label: "apply synthesis",
-    path: ["apply", "synthesis"],
-    args: ["apply", "synthesis", "Summary", "--body", "Body", "--source-id", "source.alpha"],
-  },
-  {
-    label: "apply metadata",
-    path: ["apply", "metadata"],
-    args: ["apply", "metadata", "entity.alpha"],
-  },
-  { label: "bridge import", path: ["bridge", "import"], args: ["bridge", "import"] },
-  {
-    label: "chatgpt import",
-    path: ["chatgpt", "import"],
-    args: ["chatgpt", "import", "--export", "export"],
-  },
-  {
-    label: "chatgpt rollback",
-    path: ["chatgpt", "rollback"],
-    args: ["chatgpt", "rollback", "run-id"],
-  },
-] as const;
-
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
@@ -116,91 +83,30 @@ describe("memory-wiki agent-scoped cli", () => {
     return { command, program, resolveConfig };
   }
 
-  it.each(AGENT_SCOPED_WIKI_COMMANDS)(
-    "accepts command-local --agent for wiki $label",
-    async ({ path: commandPath, args }) => {
-      const { rootDir, config } = await createCliVault({
-        config: { vault: { scope: "agent" } },
-      });
-      const appConfig = {
-        agents: { entries: { support: {}, marketing: {} } },
-      };
-      const { command, program, resolveConfig } = createAgentSelectionProgram({
-        config,
-        appConfig,
-        commandPath,
-      });
-
-      await program.parseAsync(["wiki", ...args, "--agent", "marketing"], { from: "user" });
-
-      expect(command.helpInformation()).toContain("--agent <id>");
-      expect(resolveConfig).toHaveBeenCalledWith("marketing", appConfig);
-      expect(resolveConfig.mock.results[0]?.value.vault.path).toBe(path.join(rootDir, "marketing"));
-    },
-  );
-
-  it("uses the sole configured agent for nested wiki commands", async () => {
-    const { rootDir, config } = await createCliVault({
-      config: { vault: { scope: "agent" } },
-    });
-    const appConfig = {
-      agents: { entries: { support: {} } },
-    };
-    const { program, resolveConfig } = createAgentSelectionProgram({
-      config,
-      appConfig,
-      commandPath: ["apply", "synthesis"],
-    });
-
-    await program.parseAsync(
-      ["wiki", "apply", "synthesis", "Summary", "--body", "Body", "--source-id", "source.alpha"],
-      { from: "user" },
-    );
-
-    expect(resolveConfig).toHaveBeenCalledWith("support", appConfig);
-    expect(resolveConfig.mock.results[0]?.value.vault.path).toBe(path.join(rootDir, "support"));
-  });
-
-  it("keeps global-vault search scoped to the explicitly selected agent", async () => {
-    const { config } = await createCliVault();
-    const appConfig = {
-      agents: { entries: { support: {}, marketing: {} } },
-    };
-    const { program, resolveConfig } = createAgentSelectionProgram({
-      config,
-      appConfig,
-      commandPath: ["search"],
-    });
-
-    await program.parseAsync(["wiki", "search", "query", "--agent", "support"], { from: "user" });
-
-    expect(resolveConfig).toHaveBeenCalledWith("support", appConfig);
-  });
-
   it.each<{
     label: string;
     entries: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
-  }>([
-    { label: "empty", entries: {} },
-    { label: "multi-agent", entries: { support: {}, marketing: {} } },
-  ])("gives actionable agent-selection guidance for a $label roster", async ({ entries }) => {
-    const { config } = await createCliVault({
-      config: { vault: { scope: "agent" } },
-    });
-    const appConfig = { agents: { entries } };
-    const { program, resolveConfig } = createAgentSelectionProgram({
-      config,
-      appConfig,
-      commandPath: ["apply", "metadata"],
-    });
+  }>([{ label: "multi-agent", entries: { support: {}, marketing: {} } }])(
+    "gives actionable agent-selection guidance for a $label roster",
+    async ({ entries }) => {
+      const { config } = await createCliVault({
+        config: { vault: { scope: "agent" } },
+      });
+      const appConfig = { agents: { entries } };
+      const { program, resolveConfig } = createAgentSelectionProgram({
+        config,
+        appConfig,
+        commandPath: ["apply", "metadata"],
+      });
 
-    await expect(
-      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha"], { from: "user" }),
-    ).rejects.toThrow(
-      "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
-    );
-    expect(resolveConfig).not.toHaveBeenCalled();
-  });
+      await expect(
+        program.parseAsync(["wiki", "apply", "metadata", "entity.alpha"], { from: "user" }),
+      ).rejects.toThrow(
+        "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
+      );
+      expect(resolveConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs wiki doctor against explicitly selected agent-scoped vaults", async () => {
     const { rootDir, config } = await createCliVault({

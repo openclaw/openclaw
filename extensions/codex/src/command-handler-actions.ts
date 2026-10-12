@@ -451,6 +451,7 @@ export async function setConversationPreference(
     config: ctx.config,
     storePath: authority.storePath,
     assertCurrent: parsed ? authority.assertHostMutationCurrent : authority.assertHostCurrent,
+    sourceAuthority: parsed ? authority.assertHostMutationCurrent : undefined,
     session: {
       agentId: target.agentId,
       sessionId: ctx.sessionId,

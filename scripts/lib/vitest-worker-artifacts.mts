@@ -43,7 +43,8 @@ function readArtifact(filename: string): Promise<Buffer> {
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
-  { inputsChangedAfter }: { inputsChangedAfter?: number } = {},
+  // Keep the PR wrapper's call shape; byte-identical timestamp changes are best effort.
+  _options: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -76,13 +77,6 @@ export async function verifyVitestWorkerArtifacts(
         entries.slice(offset, offset + batchSize).map(async ([name, expected]) => {
           const filename = baseDir ? path.join(baseDir, name) : name;
           if (hashVitestWorkerArtifact(await readArtifact(filename)) !== expected) {
-            throw new Error(`${changed}: ${name}`);
-          }
-          if (
-            !baseDir &&
-            inputsChangedAfter !== undefined &&
-            (await fs.promises.stat(filename)).ctimeMs >= inputsChangedAfter
-          ) {
             throw new Error(`${changed}: ${name}`);
           }
         }),

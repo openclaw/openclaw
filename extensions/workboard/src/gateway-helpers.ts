@@ -129,7 +129,7 @@ export function createWorkboardDispatchHandler(params: {
   store: WorkboardStore;
 }) {
   return async (
-    { params: requestParams, client, context }: GatewayMethodContext,
+    { params: requestParams, client, context, sessionMutationCommitGuard }: GatewayMethodContext,
     options: { supportsMaxStarts: boolean; directCard?: boolean },
   ) => {
     const cardId = options.directCard ? readId(requestParams) : undefined;
@@ -155,6 +155,7 @@ export function createWorkboardDispatchHandler(params: {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
         materializeWorktree: true,
+        assertOwnerCurrent: sessionMutationCommitGuard,
         resolveAgentWorkspace: (agentId) =>
           resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
         resolveAgentWorkspaceRuntime: (

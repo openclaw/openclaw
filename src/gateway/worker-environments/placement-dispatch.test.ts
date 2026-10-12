@@ -45,7 +45,7 @@ describe("worker placement dispatch", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("recovers a failed provider destroy and allows a normal local reclaim", async () => {
+  it("recovers a failed provider destroy and returns the completed reclaim", async () => {
     const harness = createTestHarness({
       destroyFailureCount: 1,
       destroyFailureState: "destroying",
@@ -65,14 +65,14 @@ describe("worker placement dispatch", () => {
       state: "destroyed",
     });
     expect(harness.placements.current()).toMatchObject({
-      state: "failed",
+      state: "reclaimed",
       turnClaim: null,
     });
     expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
 
-    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
   });
 

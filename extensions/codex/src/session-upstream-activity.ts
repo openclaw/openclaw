@@ -200,7 +200,7 @@ export function createChecker(params: {
     if (!sessionId) {
       return probe.threadId;
     }
-    const binding = params.bindingStore.read(
+    const binding = await params.bindingStore.readAsync(
       sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
     );
     return binding?.connectionScope === "supervision" &&

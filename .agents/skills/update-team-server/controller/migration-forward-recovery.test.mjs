@@ -774,12 +774,15 @@ for (const fault of ["mixed stores", "version marker", "metadata marker", "physi
   });
 }
 
-test("agent 19-to-20 retains the full Doctor original proposal gate", localSqlite, t => {
-  const f = coldFixture(t); modelAgentCommit(f);
-  const db = new DatabaseSync(f.shared); db.exec("DELETE FROM skill_workshop_proposals"); db.close();
-  const original = readFileSync(f.journal), result = verifyCold(f);
-  assert.notEqual(result.status, 0); assert.match(result.stderr, /lost an original Workshop proposal/);
-  assert.deepEqual(readFileSync(f.journal), original); assert.equal(existsSync(f.permit), false);
+test("agent 24-to-25 accepts native Doctor retirement of Workshop proposal tables", localSqlite, t => {
+  const f = coldFixture(t, 24), original = f.load().record.agentMigration.artifacts;
+  for (const store of f.agents) modelAgentCommit(f, true, store);
+  // Doctor owns draft export and table retirement; model its committed database result.
+  const db = new DatabaseSync(f.shared); db.exec("DROP TABLE skill_workshop_proposals"); db.close();
+  f.succeeds(verifyCold(f));
+  for (const kind of ["inventory", "witness", "backups"])
+    assert.deepEqual(f.load().record.agentMigration.artifacts[kind], original[kind]);
+  assert.equal(existsSync(f.permit), false);
 });
 
 for (const archive of ["retained", "missing", "corrupt"]) test(`agent 19-to-20 checks original witness against ${archive} retired-session archive`, localSqlite, t => {

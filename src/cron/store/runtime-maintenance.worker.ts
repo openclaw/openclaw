@@ -10,24 +10,25 @@ import {
   reconcileCronRunHistoryInDatabase,
 } from "./run-history.kernel.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
-import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
+import {
+  isCronRunReceiptOwnerStale,
+  listActiveCronRunReceiptJobIdsInDatabase,
+} from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
 
 export function maintainCronRunHistoryInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.maintainHistory"]["input"],
-): { nonce: string } {
+): CronRuntimeWorkerOperations["cron.maintainHistory"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const schema = prepareCronRunReceiptWriteSchema(db);
@@ -48,27 +49,27 @@ export function maintainCronRunHistoryInWorker(
       const receipts = schema.cronRunReceipts
         ? readActiveCronRunReceiptsInDatabase(db, undefined, jobIds)
         : [];
-      const preparation = prepareCronRuntimeMutation("cron.maintainHistory", input.nonce, {
-        jobIds,
-        receipts,
-      });
-      const reconciled = reconcileCronRunHistoryInDatabase(
-        db,
-        records,
-        preparation.nowMs,
-        new Set(preparation.protectedJobIds),
-      );
+      const { nowMs, protectedJobIds, locallyOwnedReceiptIds } = input.snapshot;
+      const protectedJobs = new Set([
+        ...protectedJobIds,
+        ...receipts
+          // Host-only liveness is captured before dispatch; new ownership may race this snapshot.
+          .filter((receipt) =>
+            receipt.ownerPid === process.pid
+              ? locallyOwnedReceiptIds.includes(receipt.receiptId)
+              : !isCronRunReceiptOwnerStale(receipt, nowMs),
+          )
+          .map((receipt) => receipt.jobId),
+      ]);
+      const reconciled = reconcileCronRunHistoryInDatabase(db, records, nowMs, protectedJobs);
       // Newly lost rows retain their first lost observation until the next sweep, as before.
       const pruned = pruneCronRunHistoryInDatabase(
         db,
-        preparation.nowMs,
+        nowMs,
         schema,
         records.filter((row) => !reconciled.has(row.id)),
       );
-      return retainCronRuntimeMutationOutcome("cron.maintainHistory", db, input.nonce, {
-        reconciled: reconciled.size,
-        pruned,
-      });
+      return { outcome: { reconciled: reconciled.size, pruned } };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },
@@ -78,23 +79,21 @@ export function maintainCronRunHistoryInWorker(
 export function scheduleUnownedCronJobsInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.scheduleUnowned"]["input"],
-): { nonce: string } {
+): CronRuntimeWorkerOperations["cron.scheduleUnowned"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const rows = loadCronRows(db, input.storeKey);
       const decoded = loadedCronStoreFromRows(rows).store.jobs;
       const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, input.storeKey);
       const jobsById = new Map(decoded.map((job) => [job.id, job]));
-      const preparation = prepareCronRuntimeMutation("cron.scheduleUnowned", input.nonce, {
-        jobIds: decoded.map((job) => job.id),
-      });
+      const policy = input.snapshot;
       const reservations = new Map(
-        preparation.ownership.flatMap((owner) =>
+        policy.ownership.flatMap((owner) =>
           owner.reservation ? [[owner.jobId, owner.reservation] as const] : [],
         ),
       );
       const active = new Set(
-        preparation.ownership.filter((owner) => owner.active).map((owner) => owner.jobId),
+        policy.ownership.filter((owner) => owner.active).map((owner) => owner.jobId),
       );
       const outcome: CronRuntimeMutationContracts["cron.scheduleUnowned"]["outcome"] = {
         changed: false,
@@ -104,13 +103,17 @@ export function scheduleUnownedCronJobsInWorker(
       };
       const state: CronJobPolicyContext = {
         deps: {
-          nowMs: () => preparation.nowMs,
+          nowMs: () => policy.nowMs,
           log: createCronMutationLogger(outcome.logs),
         },
       };
       for (const row of rows) {
         const job = jobsById.get(row.job_id);
-        if (!job || activeJobIds.has(row.job_id)) {
+        if (
+          !job ||
+          activeJobIds.has(row.job_id) ||
+          (input.options?.preserveExpiredPacedNextRunJobId === row.job_id && !job.enabled)
+        ) {
           continue;
         }
         const previousEnabled = job.enabled ?? true;
@@ -120,7 +123,7 @@ export function scheduleUnownedCronJobsInWorker(
             job,
             {
               ...input.options,
-              nowMs: preparation.nowMs,
+              nowMs: policy.nowMs,
               deferredNotifications: outcome.notifications,
             },
             { reservations, isJobActive: (jobId) => active.has(jobId) },
@@ -131,7 +134,7 @@ export function scheduleUnownedCronJobsInWorker(
           outcome.changed = true;
         }
       }
-      return retainCronRuntimeMutationOutcome("cron.scheduleUnowned", db, input.nonce, outcome);
+      return { outcome };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.schedule-unowned" },
@@ -141,7 +144,7 @@ export function scheduleUnownedCronJobsInWorker(
 export function recordCronFailureAlertOutcomeInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.recordFailureAlertOutcome"]["input"],
-): { nonce: string } {
+): CronRuntimeWorkerOperations["cron.recordFailureAlertOutcome"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const row = loadCronRows(db, input.storeKey, new Set([input.jobId]))[0];
@@ -162,16 +165,13 @@ export function recordCronFailureAlertOutcomeInWorker(
         job.state.lastFailureAlertAtMs === input.alertAtMs &&
         job.state.lastFailureNotificationId === input.notificationId &&
         job.state.lastFailureNotificationDeliveryStatus === "unknown";
-      prepareCronRuntimeMutation("cron.recordFailureAlertOutcome", input.nonce, { ownsCycle });
       if (job && row && ownsCycle) {
         job.state.lastFailureNotificationDelivered = input.outcome.delivered;
         job.state.lastFailureNotificationDeliveryStatus = input.outcome.status;
         job.state.lastFailureNotificationDeliveryError = input.outcome.error;
         updateCronRuntimeRow(db, input.storeKey, job);
       }
-      return retainCronRuntimeMutationOutcome("cron.recordFailureAlertOutcome", db, input.nonce, {
-        job: ownsCycle ? job : undefined,
-      });
+      return { outcome: { job: ownsCycle ? job : undefined } };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.failure-alert-outcome" },

@@ -9,7 +9,6 @@ import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { shouldResumeParentSubagent } from "../../gateway/session-subagent-resume.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   logSessionOwnershipLookupFailure,
@@ -69,6 +68,10 @@ import {
 } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import {
+  createSessionsSendSessionReaders,
+  withSessionsSendRequesterSource,
+} from "./sessions-send-session-source.js";
+import {
   callSessionsSendGateway,
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
@@ -86,7 +89,7 @@ import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   const withRequesterAuthority = bindRequesterYieldCronAuthority(opts?.requesterTurnRunId);
-  return {
+  const tool: AnyAgentTool = {
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
@@ -129,13 +132,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       } catch (err) {
         return sendFailure("forbidden", formatErrorMessage(err));
       }
-      const readSession = (key: string, agentId: string) =>
-        resolveGatewaySessionStoreTargetInWorker({
-          cfg,
-          key,
-          agentId,
-          projection: "full",
-        });
+      const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
@@ -365,7 +362,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       });
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
-      const requesterSession = await readSession(effectiveRequesterKey, requesterAgentId);
+      const requesterSession = await readRequester(effectiveRequesterKey, requesterAgentId);
+      if (!requesterSession) {
+        return sendFailure("forbidden", "The requesting session is no longer available.");
+      }
       const requesterSessionKey = opts?.agentSessionKey ? requesterSession.canonicalKey : undefined;
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
       if (opts?.agentSessionId && requesterSessionEntry?.sessionId !== opts.agentSessionId) {
@@ -709,4 +709,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       });
     }),
   };
+  const execute = tool.execute;
+  tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
+  return tool;
 }

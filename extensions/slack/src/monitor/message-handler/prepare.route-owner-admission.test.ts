@@ -146,7 +146,7 @@ it.each([
   };
   registerSessionBindingAdapter(adapter);
 
-  const prepared = resolveSlackRoutingContext({
+  const prepared = await resolveSlackRoutingContext({
     ctx: { cfg, teamId: "T1", threadInheritParent: false, threadHistoryScope: "thread" },
     account: createSlackTestAccount({ replyToMode: "all" }),
     message: {

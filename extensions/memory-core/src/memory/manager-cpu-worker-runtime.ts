@@ -108,8 +108,6 @@ export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["ki
     {
       "origin-rows": "origin rows",
       "session-tombstones": "tombstone rows",
-      "origin-exists": "origin existence",
-      "origin-index-keys": "indexed origin keys",
     }[request.kind],
   );
 }
@@ -122,6 +120,34 @@ export async function prewarmMemorySearchWorker(): Promise<void> {
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   const result = await runRetrieval({ ...target, kind: "index-state" }, { signal }, "index state");
   return result.state;
+}
+
+export async function runMemoryDatabaseFacts(databasePath: string, agentId: string) {
+  const result = await runRetrieval(
+    { databasePath, agentId, kind: "index-facts" },
+    {},
+    "index facts",
+  );
+  return result.facts;
+}
+
+export async function runMemoryVectorLoad(
+  target: { agentId?: string; path?: string } | undefined,
+  extensionPath?: string,
+) {
+  if (!target?.agentId || !target.path) {
+    throw new Error("Memory vector inspection requires its captured database target");
+  }
+  const result = await runRetrieval(
+    { agentId: target.agentId, databasePath: target.path, kind: "vector-load", extensionPath },
+    {},
+    "vector capability",
+  );
+  const loaded = result.result;
+  if (!loaded.ok || !loaded.extensionPath) {
+    throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+  }
+  return { extensionPath: loaded.extensionPath, retiredLegacy: false };
 }
 
 export async function runMemoryRecallMetadata(

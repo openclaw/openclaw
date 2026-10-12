@@ -621,7 +621,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   padding-inline: var(--space-2);
 }
 
-.settings-tab-icon__option {
+.settings-tab-icon__option,
+.settings-permission-control .settings-status > span {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -723,10 +724,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-.settings-row--toggle:has(wa-switch[disabled]) {
-  cursor: not-allowed;
-}
-
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -787,11 +784,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   cursor: var(--cursor-action);
 }
 
-wa-switch.settings-toggle {
-  flex: none;
-}
-
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
 }
@@ -813,6 +807,12 @@ wa-switch.settings-toggle {
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-input,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .lit-content > .settings-secret,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
+  > .settings-phone-presentation,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
 }
@@ -838,7 +838,8 @@ wa-switch.settings-toggle {
   overflow-wrap: anywhere;
 }
 
-.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+.settings-row--stacked .settings-row__control > .settings-phone-presentation,
+.settings-row--stacked .settings-row__control > .lit-content > .settings-phone-presentation {
   flex: 1 1 auto;
   width: 100%;
 }
@@ -847,6 +848,10 @@ wa-switch.settings-toggle {
    text width turns −/+ stepper rows into a stretched bar. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
+  > input[type="number"].settings-input,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
   > input[type="number"].settings-input {
   width: 110px;
 }
@@ -855,13 +860,18 @@ wa-switch.settings-toggle {
    quiet-hours window into two bars. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
+  > input[type="time"].settings-input,
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > .lit-content
   > input[type="time"].settings-input {
   width: auto;
 }
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
-.settings-row--stacked .settings-row__control > .settings-secret {
+.settings-row--stacked .settings-row__control > .settings-secret,
+.settings-row--stacked .settings-row__control > .lit-content > .settings-secret {
   flex: 1 1 auto;
 }
 
@@ -937,12 +947,6 @@ textarea.settings-input {
 .settings-permission-control .settings-status {
   white-space: normal;
   overflow-wrap: anywhere;
-}
-
-.settings-permission-control .settings-status > span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
 }
 
 .settings-permission-check {
@@ -1137,7 +1141,7 @@ textarea.settings-input {
 .shell--embed-settings {
   --settings-control-height: 44px;
 
-  :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+  :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn) {
     min-width: 44px;
     min-height: 44px;
   }
@@ -1164,7 +1168,7 @@ textarea.settings-input {
   :is(.shell--settings, openclaw-skills-page, openclaw-cron-page) {
     --settings-control-height: 44px;
 
-    :is(button, .btn, summary, wa-switch, .settings-segmented__btn) {
+    :is(button, .btn, summary, .settings-toggle, .settings-segmented__btn) {
       min-width: 44px;
       min-height: 44px;
     }

@@ -1,14 +1,14 @@
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
   asNonArrayRecord,
-  isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  collectPolicyConfiguredAgents,
+  collectPolicyAgentContexts,
   ocPathSegment,
   resolvePolicyValue,
+  type PolicyAgentContext,
 } from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
 
@@ -17,37 +17,10 @@ type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicyToolPostureEvidence[] {
-  const globalTools = asNonArrayRecord(cfg.tools);
-  const agents = asNonArrayRecord(cfg.agents);
-  const defaults = asNonArrayRecord(agents.defaults);
-  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicyToolPostureEvidence[] = [];
-  pushToolPostureEvidence(entries, {
-    id: "tools",
-    scope: "global",
-    tools: globalTools,
-    inheritedTools: {},
-    sandbox: defaultSandbox,
-    inheritedSandbox: {},
-    sourceBase: "oc://openclaw.config/tools",
-  });
-
-  collectPolicyConfiguredAgents(agents).forEach((configured) => {
-    const agent = configured.value;
-    if (!isRecord(agent)) {
-      return;
-    }
-    pushToolPostureEvidence(entries, {
-      id: configured.agentId,
-      scope: "agent",
-      agentId: configured.agentId,
-      tools: asNonArrayRecord(agent.tools),
-      inheritedTools: globalTools,
-      sandbox: asNonArrayRecord(agent.sandbox),
-      inheritedSandbox: defaultSandbox,
-      sourceBase: `${configured.sourceBase}/tools`,
-    });
-  });
+  for (const context of collectPolicyAgentContexts(cfg, "global")) {
+    pushToolPostureEvidence(entries, context);
+  }
 
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
@@ -190,7 +163,7 @@ function pushToolElevatedPosture(
     entries.push({
       id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
       kind: "elevatedAllowFrom",
-      source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      source: `${inherited ? "oc://openclaw.config/tools" : params.toolsSourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       entries: localEntries.length > 0 ? localEntries : inheritedEntries,
@@ -199,37 +172,25 @@ function pushToolElevatedPosture(
   }
 }
 
-type ToolPostureParams = {
-  readonly id: string;
-  readonly scope: "global" | "agent";
-  readonly agentId?: string;
-  readonly tools: Record<string, unknown>;
-  readonly inheritedTools: Record<string, unknown>;
-  readonly sandbox: Record<string, unknown>;
-  readonly inheritedSandbox: Record<string, unknown>;
-  readonly sourceBase: string;
-};
+type ToolPostureParams = PolicyAgentContext<"global">;
 
 function pushToolPostureValue(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
-  entry: {
+  entry: Omit<PolicyToolPostureEvidence, "id" | "source" | "scope" | "agentId"> & {
     readonly suffix: string;
     readonly sourceSuffix?: string;
-    readonly kind: PolicyToolPostureEvidence["kind"];
-    readonly value: boolean | string | undefined;
-    readonly explicit: boolean;
     readonly inherited: boolean;
   },
 ): void {
+  const { suffix, sourceSuffix = suffix, inherited, value, ...evidence } = entry;
   entries.push({
-    id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
-    kind: entry.kind,
-    source: `${entry.inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
+    id: `${params.id}-${suffix.replaceAll("/", "-")}`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.toolsSourceBase}/${sourceSuffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
-    ...(entry.value === undefined ? {} : { value: entry.value }),
-    explicit: entry.explicit,
+    ...(value === undefined ? {} : { value }),
+    ...evidence,
   });
 }
 
@@ -260,12 +221,10 @@ function pushToolPostureList(
   const localConfigured = replace ? Array.isArray(localValue) : localEntries.length > 0;
   const inheritedConfigured = replace ? Array.isArray(inheritedValue) : inheritedEntries.length > 0;
   const inherited = !localConfigured && inheritedConfigured;
-  entries.push({
-    id: `${params.id}-${key}`,
+  pushToolPostureValue(entries, params, {
+    suffix: key,
     kind: key,
-    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${key}`,
-    scope: params.scope,
-    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    inherited,
     entries: replace
       ? inherited
         ? inheritedEntries

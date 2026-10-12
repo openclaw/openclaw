@@ -5,7 +5,6 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
-import type { Result } from "@openclaw/normalization-core/result";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -443,15 +442,16 @@ export async function prepareWorkspaceBuildGroup(
       });
       const configuredGeneratedCatalogPluginIds = [
         ...new Set(
-          (facts.input.config.models?.mode === "replace" ? [] : facts.providerIds).flatMap(
-            (provider) => {
-              const pluginId = resolvePluginModelCatalogOwnerPluginId({
-                providerId: provider,
-                pluginMetadataSnapshot,
-              });
-              return pluginId ? [pluginId] : [];
-            },
-          ),
+          (facts.input.config.models?.mode === "replace"
+            ? []
+            : [...facts.providerIds, ...Object.keys(facts.credentials).map(normalizeProviderId)]
+          ).flatMap((provider) => {
+            const pluginId = resolvePluginModelCatalogOwnerPluginId({
+              providerId: provider,
+              pluginMetadataSnapshot,
+            });
+            return pluginId ? [pluginId] : [];
+          }),
         ),
       ].toSorted((left, right) => left.localeCompare(right));
       agentFacts.push({
@@ -512,34 +512,28 @@ export async function prepareWorkspaceBuildGroup(
       throw new Error("Prepared media capability provider source is retired");
     }
     const claim = mediaCapabilityProviderSource.resources.retain();
-    let outcome: Result<Awaited<ReturnType<typeof prepare>>, unknown>;
+    let prepared: Awaited<ReturnType<typeof prepare>>;
     try {
-      outcome = { ok: true, value: await run() };
+      prepared = await run();
     } catch (error) {
-      outcome = { ok: false, error };
+      let failure = error;
+      try {
+        await claim.release();
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [error, cleanupError],
+          "Prepared construction and registration cleanup failed",
+          { cause: error },
+        );
+      }
+      throw failure;
     }
-    try {
-      // The caller still owns the original inspection; construction owns its actual awaited work.
-      await claim.release();
-    } catch (cleanupError) {
-      outcome = {
-        ok: false,
-        error: outcome.ok
-          ? cleanupError
-          : new AggregateError(
-              [outcome.error, cleanupError],
-              "Prepared construction and registration cleanup failed",
-              { cause: outcome.error },
-            ),
-      };
-    }
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
+    // The caller still owns the original inspection; construction owns its actual awaited work.
+    await claim.release();
     if (!isSourceCurrent()) {
       throw new Error("Prepared media capability provider source is retired");
     }
-    return outcome.value;
+    return prepared;
   } catch (error) {
     const cleanup = preparedGeneration ? [discardPreparedPluginGeneration(preparedGeneration)] : [];
     const results = await Promise.allSettled(cleanup);

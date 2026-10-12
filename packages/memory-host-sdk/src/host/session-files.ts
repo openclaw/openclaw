@@ -11,6 +11,7 @@ import {
   getSecretRedactionRegistryRevision,
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
+import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -22,7 +23,6 @@ import {
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
-  isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isIncognitoOpenClawAgentSqlitePath,
@@ -594,7 +594,6 @@ export async function buildSessionEntryFromSnapshot(
   snapshot: SessionEntrySnapshot,
   assertCurrent: () => void,
 ): Promise<SessionFileEntry | null> {
-  assertCurrent();
   const { onTranscriptMessage, ...options } = opts;
   const result = await buildSessionEntryFromSource(
     absPath,
@@ -605,7 +604,6 @@ export async function buildSessionEntryFromSnapshot(
             onTranscriptMessage(message, observedAt) {
               assertCurrent();
               onTranscriptMessage(message, observedAt);
-              assertCurrent();
             },
           }
         : {}),

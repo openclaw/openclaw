@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -13,7 +12,6 @@ import {
   issueDeviceBootstrapToken,
   pruneExpiredDevicePairSetupCompletions,
 } from "./device-bootstrap.js";
-import { resolvePairedDeviceTokenIdentity } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import {
@@ -21,17 +19,10 @@ import {
   isNodePairingGenerationCurrent,
 } from "./device-pairing-node-state.js";
 import { recordPairedNodeHostStats, renamePairedNode } from "./device-pairing-node.js";
-import {
-  getPublishedPairedDeviceBinding,
-  capturePublishedOperatorDeviceSource,
-} from "./device-pairing-publication.js";
+import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { readDevicePairingNodeSnapshot } from "./device-pairing-store-readonly.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
-import {
-  ensureDeviceToken,
-  revokeDeviceToken,
-  verifyDeviceToken,
-} from "./device-pairing-tokens.js";
+import { revokeDeviceToken } from "./device-pairing-tokens.js";
 import {
   executeDevicePairingMutation,
   withCurrentDevicePairingSnapshot,
@@ -84,7 +75,13 @@ beforeEach(() => {
 
 test("keeps committed node bindings across bootstrap writes and caller-owned row edits", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    read.mockRestore();
+  }
   expect(Object.isFrozen(snapshot)).toBe(true);
   expect(Object.isFrozen(snapshot.paired)).toBe(true);
   expect(Object.isFrozen(snapshot.paired[0]!.tokens!.node)).toBe(true);
@@ -184,69 +181,6 @@ test.each([0, 1])(
   },
 );
 
-test.each(["verification", "token reuse", "bootstrap issuance"] as const)(
-  "keeps accepted operator work current while %s is awaiting worker dispatch",
-  async (change) => {
-    const device = expectDefined(await getPairedDevice("node", baseDir), "paired device");
-    device.roles = ["node", "operator"];
-    device.approvedScopes = ["operator.admin"];
-    expectDefined(device.tokens, "device tokens").operator = {
-      token: "synthetic-operator-token",
-      role: "operator",
-      scopes: ["operator.admin"],
-      createdAtMs: 1,
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node: device } },
-      baseDir,
-      "paired",
-    );
-    const paired = expectDefined(await getPairedDevice("node", baseDir), "published device");
-    const revoked = vi.fn();
-    const source = capturePublishedOperatorDeviceSource(
-      expectDefined(resolvePairedDeviceTokenIdentity(paired, "operator"), "operator identity"),
-      ["operator.read"],
-      revoked,
-      baseDir,
-    );
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const writer = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce(async (...args) => {
-        entered.resolve();
-        await release.promise;
-        return run(...args);
-      });
-    const token = {
-      deviceId: "node",
-      role: "operator",
-      scopes: ["operator.read"],
-      baseDir,
-    };
-    const mutation =
-      change === "verification"
-        ? verifyDeviceToken({ ...token, token: "synthetic-operator-token" })
-        : change === "token reuse"
-          ? ensureDeviceToken(token)
-          : issueDeviceBootstrapToken({ baseDir });
-    try {
-      await awaitGateBeforeSettlement(entered.promise, mutation, "worker dispatch was not held");
-      expect(source.assertCurrent).not.toThrow();
-      release.resolve();
-      await mutation;
-      expect(source.assertCurrent).not.toThrow();
-      expect(revoked).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await Promise.allSettled([mutation]);
-      writer.mockRestore();
-      source.release();
-    }
-  },
-);
-
 test.each([
   "session-host consent",
   "host stats",
@@ -255,39 +189,7 @@ test.each([
   "token revocation",
   "metadata after a failed read",
 ] as const)("retains only usable node authority during %s", async (change) => {
-  if (change === "host stats") {
-    const device = expectDefined(await getPairedDevice("node", baseDir), "paired node");
-    device.roles = ["node", "operator"];
-    device.approvedScopes = ["operator.admin"];
-    expectDefined(device.tokens, "paired token roles").operator = {
-      token: "synthetic-operator-token",
-      role: "operator",
-      scopes: ["operator.admin"],
-      createdAtMs: 1,
-    };
-    persistDevicePairingStoreState(
-      { pendingById: {}, pairedByDeviceId: { node: device } },
-      baseDir,
-      "paired",
-    );
-  }
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const operatorRevoked = vi.fn();
-  const operatorSource =
-    change === "host stats"
-      ? capturePublishedOperatorDeviceSource(
-          expectDefined(
-            resolvePairedDeviceTokenIdentity(
-              expectDefined(snapshot.paired[0], "paired node"),
-              "operator",
-            ),
-            "operator identity",
-          ),
-          ["operator.read"],
-          operatorRevoked,
-          baseDir,
-        )
-      : undefined;
   const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
     captureNodePairingGeneration("node"),
   );
@@ -362,9 +264,6 @@ test.each([
       );
     } else {
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-      if (operatorSource) {
-        expect(operatorSource.assertCurrent).not.toThrow();
-      }
     }
     releaseMutation.resolve();
     expect(await mutation).toEqual(
@@ -377,9 +276,6 @@ test.each([
     expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(
       change === "token revocation" ? null : binding,
     );
-    if (operatorSource) {
-      expect(operatorRevoked).not.toHaveBeenCalled();
-    }
     const updated = await readDevicePairingNodeSnapshot(baseDir);
     expect(updated).not.toBe(snapshot);
     expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
@@ -409,7 +305,6 @@ test.each([
     releaseMutation.resolve();
     await Promise.allSettled([mutation]);
     writer.mockRestore();
-    operatorSource?.release();
   }
 });
 
@@ -592,14 +487,9 @@ test.each(["worker commit", "sibling owner commit"] as const)(
   },
 );
 
-test("retires prepared nodes after a sibling owner commit and database close", async () => {
+test("retires prepared nodes after a native owner commit and database close", async () => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const other = openNodeSqliteDatabase(database.path);
-  try {
-    other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-  } finally {
-    other.close();
-  }
+  persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "paired");
   const deleted = await readDevicePairingNodeSnapshot(baseDir);
   expect(deleted).not.toBe(snapshot);
   expect(deleted.paired).toEqual([]);

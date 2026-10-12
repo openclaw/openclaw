@@ -1,11 +1,16 @@
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { publishSqliteDatabaseAdmission } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
+import { readCanonicalSessionMainKey } from "./session-canonical-key.js";
 
 const key = "agent:main:probe";
 
@@ -151,7 +156,63 @@ export type SessionProbeOperations = {
     input: { label?: string } | undefined;
     output: ReturnType<typeof measureSessionSchemaProbes>;
   };
+  mainKey: {
+    input: { yieldAfterRead: true } | undefined;
+    output: { mainKey: string; statements: number };
+  };
+  mainKeyLookupTraffic: {
+    input: { path: string };
+    output: { mainKeys: string[]; lookupMessages: number; workerPublishRefused: boolean };
+  };
 };
+
+function measureMainKeyLookupTraffic(path: string) {
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId: "main", path });
+  if (!opened.found) {
+    throw new Error("Main-key traffic database is missing");
+  }
+  const fact = {
+    name: "session-probe-unrelated",
+    read: (value: unknown) => (typeof value === "number" ? value : undefined),
+  };
+  const mainKeys: string[] = [];
+  let lookupMessages = 0;
+  let observingLookup = false;
+  let workerPublishRefused = false;
+  // oxlint-disable-next-line typescript/unbound-method -- Retain the raw method for restoration; Reflect.apply supplies the live receiver.
+  const original = MessagePort.prototype.postMessage;
+  MessagePort.prototype.postMessage = function (...args) {
+    const message: unknown = args[0];
+    if (observingLookup && isRecord(message) && message.kind === "sqlite-database-admissions") {
+      lookupMessages += 1;
+    }
+    Reflect.apply(original, this, args);
+  };
+  try {
+    readCanonicalSessionMainKey(opened.database);
+    for (let index = 0; index < 3; index += 1) {
+      publishSqliteDatabaseAdmission(opened.database.db, fact, index);
+      observingLookup = true;
+      mainKeys.push(readCanonicalSessionMainKey(opened.database));
+      observingLookup = false;
+    }
+    try {
+      publishSqliteDatabaseAdmission(opened.database.db, { ...fact, writer: "host" }, 4);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "SQLite host-owned admission facts require the host publisher"
+      ) {
+        throw error;
+      }
+      workerPublishRefused = true;
+    }
+    return { mainKeys, lookupMessages, workerPublishRefused };
+  } finally {
+    MessagePort.prototype.postMessage = original;
+    opened.database.close();
+  }
+}
 
 export function createSqliteWorkerBackend(
   _input: unknown,
@@ -162,7 +223,33 @@ export function createSqliteWorkerBackend(
     throw new Error("Session probe database is missing");
   }
   return {
-    execute: (command) => measureSessionSchemaProbes(opened.database, command.input?.label),
+    execute(command) {
+      if (command.type === "read") {
+        return measureSessionSchemaProbes(opened.database, command.input?.label);
+      }
+      if (command.type === "mainKeyLookupTraffic") {
+        return measureMainKeyLookupTraffic(command.input.path);
+      }
+      const prototype = requireNodeSqlite().StatementSync.prototype;
+      // oxlint-disable-next-line typescript/unbound-method -- Retain the raw method for restoration; Reflect.apply supplies the live receiver.
+      const original = prototype.get;
+      let statements = 0;
+      prototype.get = function (...args) {
+        const row = Reflect.apply(original, this, args);
+        if (this.sourceSQL.includes('from "session_key_contract"')) {
+          statements += 1;
+          if (command.input?.yieldAfterRead) {
+            requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: "main-key-read" });
+          }
+        }
+        return row;
+      };
+      try {
+        return { mainKey: readCanonicalSessionMainKey(opened.database), statements };
+      } finally {
+        prototype.get = original;
+      }
+    },
     close: opened.database.close,
   };
 }

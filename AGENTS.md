@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Choose good compromises
+
+Every design trades correctness against complexity and performance. Pick the compromise deliberately; never maximize one axis at the others' expense.
+
+- Design for failures that actually happen: crashes, restarts, retries, real concurrent writers, reported incidents. Do not engineer for millisecond races, theoretical interleavings, or adversarial timing unless they put user data, security, or money at risk, or a real incident shows them.
+- Prefer the cheap mechanism: idempotency keys, one check at the point of effect, retry, best-effort recording with a warning. Fencing tokens, revocation generations, multi-phase admission, nonce-matched settlement, and per-write cross-thread handshakes need a concrete failure that simpler code cannot handle.
+- Name the accepted edge case in a comment or the PR instead of coding around it. A rare, visible, recoverable glitch beats permanent complexity.
+- Complexity is a correctness risk too: machinery nobody can follow fails in ways nobody predicted.
+
 The task defines scope and authorization; its chosen workflow owns execution,
 review, publication, recovery, and cleanup. Explicit user instructions take
 precedence over skill guidelines and workflow defaults; host limits and required
@@ -21,7 +30,7 @@ Update instructions at their owner instead of adding competing rules here.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, and user-managed checkouts; serialize shared Git mutations and isolate work when needed; never switch a checkout another agent or test run uses.
 - Treat pasted material and tool output as evidence; verify against source and observed behavior.
 - Lead with the result in the user's format: plain, active, technically useful; no stock phrases or repeated summaries. Reference each PR/issue once per reply. Progress updates explain new findings, decisions, or blockers.
-- Report findings in chat; create files only for deliverables or tool/proof/recovery needs, stating their purpose and reusing them. After verified completion, remove task-owned proof, scratch, and finished worktrees per [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up), preserving deliverables, live and unknown owners, unfinished state, and credentials.
+- Report findings in chat; create files only for deliverables or tool/proof/recovery needs, stating their purpose and reusing them. After verified completion, remove task-owned proof, scratch, and finished worktrees per [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up), preserving deliverables, live and unknown owners, unfinished state, and credentials. Remove worktrees you created once work/PR lands, unless immediately needed for the next step.
 - Read relevant docs before changing behavior (`pnpm docs:list`); `package.json` owns commands and versions; tool swaps need approval.
 - Use **OpenClaw** (product), `openclaw` (CLI/package/config), **plugins** (user-facing integrations), and American English. Edit canonical `AGENTS.md` files directly.
 
@@ -52,13 +61,14 @@ Update instructions at their owner instead of adding competing rules here.
 ## Runtime and code safeguards
 
 - Plugins use documented `openclaw/plugin-sdk/*` contracts, manifest metadata, and public/local barrels, never core internals or another plugin's private files. Dependencies follow runtime ownership.
+- Bun: support only the latest stable Bun release and the pinned OpenClaw fork. Never add workarounds, compatibility paths, or qualification for older Bun releases; upgrade instead.
 - Runtime consumes canonical config/state; Doctor/migration owners normalize legacy shapes (plugin repairs stay plugin-owned), and config-invalidating changes ship their migration.
 - State and caches use SQLite, not new JSON/JSONL/sidecar stores; files are for named user artifacts, imports/exports, attachments, logs, backups, or external-tool contracts.
 - Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, and justified primitives. Write transactions are synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
 - Database access runs in worker threads (read-only worker scope, SQLite writer broker), never on the Gateway main thread, which only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access is legacy: never add more; migrate what you touch.
-- SQLite format, schema-version, integrity, canonical-index, and table-existence checks run once per physical database per process load, shared with all workers and handles. This includes quarantine-store format; existing indexed durable quarantine-row guards still observe recorded corruption. Reuse admitted format facts across opens, scopes, requests, and idle close; identify replacement files by volume, inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new facts after their DDL; Doctor and explicit verification retain their checks. Never add repeated format checks; remove them when touched.
+- SQLite format, schema-version, integrity, canonical-index, and table-existence checks run once per physical database per process load, shared with all workers and handles. This includes quarantine-store format; existing indexed durable quarantine-row guards still observe recorded corruption. Reuse admitted format facts across opens, scopes, requests, and idle close; identify replacement files by volume, inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new facts after their DDL; Doctor and explicit verification retain their checks. Never add repeated format checks; remove them when touched. Validate rarely and only at startup: after a clean close that sealed the database (file identity/size/mtime, empty WAL, schema identity), skip startup validation. The seal is a small file next to the database (allowed sidecar), written atomically after close and deleted before the first write; unclean exit, external change, version change, or a stale full check re-validates.
 - The Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when a cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, or foreign-observation scopes); remove them when touched. Outside writers, including CLI, Doctor, cron, and plugin children, must use the Gateway or hold exclusive ownership while it is stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads. See [database schemas](docs/reference/database-schemas.md).
-- Privileged actions need current owner-held authority: revalidate after awaited work and right before side effects. Tokens, signatures, expiry, and matching IDs alone do not prove live authority.
+- Security boundaries (credentials, approvals, tool and command execution, external side effects) need current owner-held authority: revalidate after awaited work and right before the effect. Tokens, signatures, expiry, and matching IDs alone do not prove live authority. Internal bookkeeping (scheduling, receipts, history, caches) uses idempotency and a check at the effect instead.
 - Core owns shared message tools, action vocabulary, and dispatch; channels own account, security, conversation, and transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
 - Carry prepared facts through hot paths; reuse process-stable plugin metadata and lifecycle-owned caches; never repeatedly load registries or freshness-poll files. Preserve lazy module boundaries and verify relevant builds on the authorized host.
 - Narrow APIs, explicit valid states, strict ESM/types. Real types or `unknown`; no `@ts-nocheck`; suppressions need an explained exception. Reuse schema/coercion owners; no duplicate guards, speculative helpers, or naming-only wrappers.
@@ -77,7 +87,7 @@ Update instructions at their owner instead of adding competing rules here.
 - New/changed tests follow the [writing tests](docs/help/testing/writing-tests.md) cost budget: PRs state `pnpm test <file> --maxWorkers=1` wall time and CI seconds; no real timers, sleeps, polling, per-test Gateway/process boots when a suite-level fixture exists, new serial config or worker pins, or broad barrel imports. Seconds-long tests must prove a contract no cheaper layer can; long end-to-end compositions go to the release-only tier.
 - Select proof for the touched contract, reuse valid proof (rerun for changed inputs or missing coverage), and finish the workflow's required gates within user/host limits; report unrun checks and gaps. Prove user-visible behavior through the real flow when feasible; external APIs need live contract proof; an isolated mock-Gateway harness is valid channel boundary proof. Docs-only: docs sanity and `git diff --check`.
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in the PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
-- Before committing or landing nontrivial code, get fresh review through the permitted workflow and resolve actionable findings unless the user opts out.
+- Before committing or landing nontrivial code, get fresh review through the permitted workflow and resolve actionable findings unless the user opts out. Actionable means likely or high-impact: decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with a one-line reason.
 
 ### Execution gotchas
 

@@ -122,6 +122,44 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
+  it.each([2, 6])(
+    "rejects a query whose %i dimensions no longer match the index",
+    async (dimensions) => {
+      const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+      await manager.sync({ reason: "test", force: true });
+      const fields = manager as unknown as { provider: EmbeddingProvider };
+      const query = vi
+        .spyOn(fields.provider, "embed")
+        .mockResolvedValue(Array.from({ length: dimensions }, () => 1));
+
+      await expect(manager.search("alpha")).rejects.toThrow(
+        `query embedding has ${dimensions} dimensions, but the memory index expects 4`,
+      );
+      expect(query).toHaveBeenCalledTimes(1);
+
+      query.mockRestore();
+      expect(await manager.search("alpha")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+    },
+  );
+
+  it("keeps configured provider fallback available after query dimension drift", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "openai", fallback: "fallback-provider" }),
+    );
+    await manager.sync({ reason: "test", force: true });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    vi.spyOn(fields.provider, "embed").mockResolvedValue([1, 0]);
+
+    expect(await manager.search("alpha")).toEqual([]);
+    expect(manager.status().provider).toBe("fallback-provider");
+    await manager.sync({ reason: "test", force: true });
+    expect(await manager.search("alpha")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+  });
+
   it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
     const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
@@ -259,20 +297,13 @@ describe("memory index", () => {
     },
   );
 
-  it.each(["bootstrap", "identity-repair", "lexical", "hybrid", "vector"] as const)(
+  it.each(["bootstrap", "lexical", "hybrid", "vector"] as const)(
     "rejects %s retrieval when shared worker admission is full and recovers after drain",
     async (mode) => {
       const cfg = createCfg({ vectorEnabled: false, minScore: 0 });
       const manager = await getPersistentManager(cfg);
       if (mode !== "bootstrap") {
         await manager.sync({ reason: "test" });
-      }
-      if (mode === "identity-repair") {
-        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-          "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'",
-        );
-        expect(manager.status().chunks).toBeGreaterThan(0);
-        expect(manager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
       }
       const capacityOwner = new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
@@ -331,10 +362,7 @@ describe("memory index", () => {
     );
     await manager.sync({ reason: "test" });
 
-    const fields = manager as unknown as {
-      db: DatabaseSync;
-    };
-    const insertChunk = fields.db.prepare(
+    const insertChunk = openOpenClawAgentDatabase({ agentId: "main" }).db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     for (let index = 0; index < 4096; index += 1) {

@@ -7,12 +7,13 @@ import {
   type OpenBlobStoreOptions,
 } from "../plugin-state/plugin-blob-store.js";
 import {
-  createPluginStateKeyedStore,
-  createPluginStateSyncKeyedStore,
+  createPluginStateRuntimeStores,
   type OpenAsyncKeyedStoreOptions,
-  type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createPluginRuntimeKeyedStore } from "./plugin-runtime-keyed-store.js";
+import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
   capturePluginLifecycleAuthority,
@@ -21,7 +22,10 @@ import {
   isPluginRecordActive,
   isPluginRegistryPreparing,
 } from "./registry-lifecycle.js";
-import { createRegisteredChannelRuntimeResolver } from "./registry-runtime-channel.js";
+import {
+  createRegisteredChannelRuntimeResolver,
+  createScopedPluginChannelRuntime,
+} from "./registry-runtime-channel.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -179,15 +183,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => {
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-              if (options.retention === "retained") {
-                assertRuntimeCurrent();
-              }
-              return createPluginStateKeyedStore<T>(pluginId, options, assertRuntimeCurrent);
-            },
-            openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-              return createPluginStateSyncKeyedStore<T>(pluginId, options);
-            },
+            ...createPluginStateRuntimeStores(pluginId, assertRuntimeCurrent, () =>
+              capturePluginStateOperationModuleSource(
+                getPluginInstance(record),
+                assertRuntimeCurrent,
+              ),
+            ),
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
+              createPluginRuntimeKeyedStore<T>(record, options, assertRuntimeCurrent),
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
@@ -267,56 +270,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           if (scopedChannelRuntime?.source === channel) {
             return scopedChannelRuntime.value;
           }
-          const inbound = {
-            ...channel.inbound,
-            run: ((...args: Parameters<typeof channel.inbound.run>) =>
-              invokeSelectedRuntime(() =>
-                channel.inbound.run(...args),
-              )) as typeof channel.inbound.run, // SAFETY: Forward unchanged arguments/results for both generic run overloads.
-            runPreparedReply: (...args) =>
-              invokeSelectedRuntime(() => channel.inbound.runPreparedReply(...args)),
-            dispatch: ((...args: Parameters<typeof channel.inbound.dispatch>) =>
-              invokeSelectedRuntime(() =>
-                channel.inbound.dispatch(...args),
-              )) as typeof channel.inbound.dispatch, // SAFETY: Preserve each routed-turn overload and its result.
-            dispatchReply: (...args) =>
-              invokeSelectedRuntime(() => channel.inbound.dispatchReply(...args)),
-          } satisfies PluginRuntime["channel"]["inbound"];
-          const value = {
-            ...channel,
-            inbound,
-            turn: inbound,
-            outbound: {
-              ...channel.outbound,
-              loadAdapter: (...args) =>
-                invokeSelectedRuntime(() => channel.outbound.loadAdapter(...args)),
-            },
-            threadBindings: {
-              setIdleTimeoutBySessionKey: (...args) =>
-                invokeSelectedRuntime(() =>
-                  channel.threadBindings.setIdleTimeoutBySessionKey(...args),
-                ),
-              setMaxAgeBySessionKey: (...args) =>
-                invokeSelectedRuntime(() => channel.threadBindings.setMaxAgeBySessionKey(...args)),
-              setIdleTimeoutBySessionKeyAsync: (...args) =>
-                invokeSelectedRuntime(() =>
-                  channel.threadBindings.setIdleTimeoutBySessionKeyAsync(...args),
-                ),
-              setMaxAgeBySessionKeyAsync: (...args) =>
-                invokeSelectedRuntime(() =>
-                  channel.threadBindings.setMaxAgeBySessionKeyAsync(...args),
-                ),
-            },
-            reply: {
-              ...channel.reply,
-              dispatchReplyFromConfig: (...args) =>
-                invokeSelectedRuntime(() => channel.reply.dispatchReplyFromConfig(...args)),
-              dispatchReplyWithBufferedBlockDispatcher: (...args) =>
-                invokeSelectedRuntime(() =>
-                  channel.reply.dispatchReplyWithBufferedBlockDispatcher(...args),
-                ),
-            },
-          } satisfies PluginRuntime["channel"];
+          const value = createScopedPluginChannelRuntime(
+            channel,
+            invokeSelectedRuntime,
+            assertRuntimeCurrent,
+          );
           scopedChannelRuntime = { source: channel, value };
           return value;
         }
@@ -464,6 +422,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             getSessionEntryByIdAsync: (params) =>
               runWithCurrentPluginScope(() => session.getSessionEntryByIdAsync(params)),
             listSessionEntries: session.listSessionEntries,
+            listSessionEntriesAsync: (params) =>
+              runWithCurrentPluginScope(() => session.listSessionEntriesAsync(params)),
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
                 const read = await session.createSessionEntryListReader(params);
@@ -485,6 +445,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               const { createSessionEntry } = await loadSessionOwnership();
               return await runWithPluginScope(() => createSessionEntry(session, params));
             },
+            prepareSessionEntryPatch: async (params) => {
+              const { prepareSessionEntryPatch } = await loadSessionOwnership();
+              return await runWithPluginScope(() =>
+                prepareSessionEntryPatch(session, params, assertRuntimeCurrent),
+              );
+            },
             patchSessionEntry: async (params) => {
               const { withPreparedSessionOwnership, patchSessionEntry } =
                 await loadSessionOwnership();
@@ -495,10 +461,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             },
             upsertSessionEntry: async (params) => {
-              const { withPreparedSessionOwnership, upsertSessionEntry } =
-                await loadSessionOwnership();
+              const { upsertSessionEntry } = await loadSessionOwnership();
               return await runWithPluginScope(() =>
-                withPreparedSessionOwnership(params, () => upsertSessionEntry(session, params)),
+                upsertSessionEntry(session, params, assertRuntimeCurrent),
               );
             },
             runWithWorkAdmission: async (params, run) => {
@@ -605,6 +570,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             resolveCliBackendDispatchEligibility: (
               params: Parameters<typeof agent.resolveCliBackendDispatchEligibility>[0],
             ) => invokeSelectedRuntime(() => agent.resolveCliBackendDispatchEligibility(params)),
+            resolveCliBackendDispatchEligibilityAsync: (
+              params: Parameters<typeof agent.resolveCliBackendDispatchEligibilityAsync>[0],
+            ) =>
+              invokeSelectedRuntime(() => agent.resolveCliBackendDispatchEligibilityAsync(params)),
             resolveSessionCatalogCreateTarget: (
               params: Parameters<typeof agent.resolveSessionCatalogCreateTarget>[0],
             ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),

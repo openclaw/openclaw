@@ -80,10 +80,7 @@ suite.define(() => {
             .first();
         const showRow = row("Show task progress cards");
         const collapseRow = row("Collapse task progress by default on desktop");
-        const enabled = () =>
-          showRow
-            .locator("wa-switch")
-            .evaluate((element) => Boolean((element as { checked?: boolean }).checked));
+        const enabled = () => showRow.getByRole("switch").isChecked();
         await expect.poll(enabled).toBe(true);
         await expect.poll(() => showRow.textContent()).not.toContain("Using default:");
         await settingsPage
@@ -94,13 +91,7 @@ suite.define(() => {
         await collapseRow.click();
         await showRow.click();
         await expect.poll(enabled).toBe(false);
-        await expect
-          .poll(() =>
-            collapseRow
-              .locator("wa-switch")
-              .evaluate((element) => Boolean((element as { disabled?: boolean }).disabled)),
-          )
-          .toBe(true);
+        await expect.poll(() => collapseRow.getByRole("switch").isDisabled()).toBe(true);
         await expect.poll(() => card.count()).toBe(0);
         await captureUiProof(suite, settingsPage, "progress-preference", "03-setting-disabled.png");
         await captureUiProof(suite, page, "progress-preference", "04-cards-hidden.png");

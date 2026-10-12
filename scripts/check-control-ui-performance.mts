@@ -56,9 +56,11 @@ const controlUiPerformanceBudgets = {
   // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
-  startupCssRequests: 1,
-  // Personal backgrounds: operator-approved 1,407 B cap adjustment; tolerances stay unchanged.
-  startupJsGzipBytes: 374_285,
+  // Solid transition (Peter, 2026-10-11): Lit and Solid styles coexist at boot; restore 1 after the Lit sweep.
+  startupCssRequests: 2,
+  // Solid transition allowance (Peter, 2026-10-11): Lit and Solid runtimes coexist until the Lit sweep.
+  // Restore to the pre-transition 374_285 cap (or lower) once Lit is removed; the Solid shell saves about 18 KB.
+  startupJsGzipBytes: 450_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

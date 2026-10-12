@@ -411,9 +411,7 @@ describe("chat sidebar region", () => {
       `[data-panel-slot="${slot}"] openclaw-panel-empty-state`,
     );
     await (unavailable as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
-    expect(unavailable?.shadowRoot?.textContent).toContain(
-      "The plugin that owns this tab is not active",
-    );
+    expect(unavailable?.textContent).toContain("The plugin that owns this tab is not active");
     expect(region.panelDefinitions.find((definition) => definition.slot === slot)?.available).toBe(
       false,
     );

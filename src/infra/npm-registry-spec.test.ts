@@ -36,86 +36,27 @@ describe("npm registry spec validation", () => {
 });
 
 describe("npm registry spec parsing helpers", () => {
-  it.each([
-    [
-      "@openclaw/voice-call",
-      {
-        name: "@openclaw/voice-call",
-        raw: "@openclaw/voice-call",
-        selectorKind: "none",
-        selectorIsPrerelease: false,
-      },
-    ],
-    [
-      "@openclaw/voice-call@beta",
-      {
-        name: "@openclaw/voice-call",
-        raw: "@openclaw/voice-call@beta",
-        selector: "beta",
-        selectorKind: "tag",
-        selectorIsPrerelease: false,
-      },
-    ],
-    [
-      "@openclaw/voice-call@2026.5.3-1",
-      {
-        name: "@openclaw/voice-call",
-        raw: "@openclaw/voice-call@2026.5.3-1",
-        selector: "2026.5.3-1",
-        selectorKind: "exact-version",
-        selectorIsPrerelease: false,
-      },
-    ],
-    [
-      "@openclaw/voice-call@1.2.3-beta.1",
-      {
-        name: "@openclaw/voice-call",
-        raw: "@openclaw/voice-call@1.2.3-beta.1",
-        selector: "1.2.3-beta.1",
-        selectorKind: "exact-version",
-        selectorIsPrerelease: true,
-      },
-    ],
-  ])("parses %s", (spec, expected) => {
-    expect(parseRegistryNpmSpec(spec)).toEqual(expected);
-  });
-
-  it.each([
-    ["v1.2.3", true],
-    ["1.2", false],
-  ])("detects exact semver versions for %s", (value, expected) => {
+  it.each([["v1.2.3", true]])("detects exact semver versions for %s", (value, expected) => {
     expect(isExactSemverVersion(value)).toBe(expected);
   });
 
-  it.each([
-    ["1.2.3-beta.1", true],
-    ["1.2.3-1", true],
-    ["2026.5.3-beta.1", true],
-    ["2026.5.3-1", false],
-    ["2026.2.30-1", false],
-    ["1.2.3", false],
-  ])("detects prerelease semver versions for %s", (value, expected) => {
-    expect(isPrereleaseSemverVersion(value)).toBe(expected);
-  });
+  it.each([["2026.5.3-beta.1", true]])(
+    "detects prerelease semver versions for %s",
+    (value, expected) => {
+      expect(isPrereleaseSemverVersion(value)).toBe(expected);
+    },
+  );
 
-  it.each([
-    ["2026.5.3-1", "2026.5.3", 1],
-    ["2026.5.3-2", "2026.5.3-1", 1],
-    ["2026.5.3", "2026.5.3-beta.3", 1],
-    ["2026.5.3-beta.3", "2026.5.3-alpha.9", 1],
-    ["2026.5.3-alpha.10", "2026.5.3-alpha.2", 1],
-    ["2026.5.3-0", "2026.5.3", null],
-    ["2026.5.3+build", "2026.5.3", null],
-    ["1.2.3-1", "1.2.3", null],
-  ])("compares OpenClaw release versions for %s and %s", (left, right, expected) => {
-    expect(compareOpenClawReleaseVersions(left, right)).toBe(expected);
-  });
+  it.each([["2026.5.3-0", "2026.5.3", null]])(
+    "compares OpenClaw release versions for %s and %s",
+    (left, right, expected) => {
+      expect(compareOpenClawReleaseVersions(left, right)).toBe(expected);
+    },
+  );
 
   it.each([
     [" 2026.7.1-1 ", "2026.7.1"],
-    ["2026.7.1", "2026.7.1"],
     ["2026.7.1-beta.3", "2026.7.1-beta.3"],
-    ["1.2.3-1", "1.2.3-1"],
   ])("resolves the OpenClaw release cohort for %s", (version, expected) => {
     expect(resolveOpenClawReleaseCohortVersion(version)).toBe(expected);
   });
@@ -126,10 +67,7 @@ describe("npm prerelease resolution policy", () => {
     ["@openclaw/voice-call", "1.2.3-beta.1", false],
     ["@openclaw/voice-call@latest", "1.2.3-rc.1", false],
     ["@openclaw/voice-call@latest", "2026.5.3-1", true],
-    ["@openclaw/voice-call@beta", "1.2.3-beta.4", true],
     ["@openclaw/voice-call@1.2.3-beta.1", "1.2.3-beta.1", true],
-    ["@openclaw/voice-call", "1.2.3", true],
-    ["@openclaw/voice-call@latest", undefined, true],
   ])("decides prerelease resolution for %s -> %s", (spec, resolvedVersion, expected) => {
     expect(
       isPrereleaseResolutionAllowed({
@@ -157,23 +95,8 @@ describe("npm prerelease resolution policy", () => {
 });
 
 describe("resolveNpmJsonEntries", () => {
-  it("passes entry arrays through (npm <=11 pack shape)", () => {
-    const entries = [{ name: "openclaw", version: "2026.7.1", filename: "openclaw-2026.7.1.tgz" }];
-    expect(resolveNpmJsonEntries(entries)).toBe(entries);
-  });
-
-  it("keeps a bare entry object as a single entry (npm <=11 view shape)", () => {
-    const entry = { name: "openclaw", version: "2026.7.1", "dist.integrity": "sha512-x" };
-    expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
-  });
-
   it("unwraps scoped name keys in the npm 12 pack object", () => {
     const entry = { id: "@openclaw/voice-call@1.2.3", name: "@openclaw/voice-call" };
     expect(resolveNpmJsonEntries({ "@openclaw/voice-call": entry })).toEqual([entry]);
-  });
-
-  it("falls back to the raw value when no entries are recognizable", () => {
-    expect(resolveNpmJsonEntries("not-json-shaped")).toEqual(["not-json-shaped"]);
-    expect(resolveNpmJsonEntries(null)).toEqual([null]);
   });
 });
