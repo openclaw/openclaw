@@ -256,10 +256,9 @@ export function createUpdateStatusRefresher(params: {
           // the caller opens confirmation.
           await progress;
           return isCurrent() && (await refresh("completion"));
-        } else {
-          params.onError(null, "completion");
-          params.onStatus(response);
         }
+        params.onError(null, "completion");
+        params.onStatus(response);
         return true;
       }
       return false;
