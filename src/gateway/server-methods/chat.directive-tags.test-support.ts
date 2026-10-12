@@ -9,9 +9,11 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { inheritLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
+  appendTranscriptMessage,
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
   type SessionAccessScope,
+  type SessionTranscriptReadScope,
 } from "../../config/sessions/session-accessor.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -331,6 +333,50 @@ export async function seedChatDirectiveFileTranscript(
   await replaceSessionEntry(scope, {
     sessionId,
     updatedAt: Date.now(),
+  });
+}
+
+export async function appendSourceReplyMirrorEntry(
+  scope: SessionTranscriptReadScope,
+  params: {
+    content?: Array<Record<string, unknown>>;
+    idempotencyKey?: string;
+    openclawDelivery?: Record<string, unknown>;
+    text: string;
+    provider?: string;
+    model?: string;
+    now?: number;
+  },
+) {
+  const now = params.now ?? 0;
+  return await appendTranscriptMessage(scope, {
+    idempotencyLookup: "scan",
+    now,
+    message: {
+      role: "assistant",
+      content: params.content ?? [{ type: "text", text: params.text }],
+      api: "openai-responses",
+      provider: params.provider ?? "openclaw",
+      model: params.model ?? "delivery-mirror",
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+      ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: now,
+    },
   });
 }
 

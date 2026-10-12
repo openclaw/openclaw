@@ -64,7 +64,7 @@ import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteAssistantTranscriptMessageByIdempotencyKey,
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
+  rewriteAssistantTranscriptMessageByIdAndMedia,
 } from "./chat-transcript-persistence.js";
 import {
   buildTtsSupplementTranscriptMarker,
@@ -289,10 +289,12 @@ export function createChatSendReplyDispatch(params: {
     if (ownedIdempotencyKey) {
       return `owned:${ownedIdempotencyKey}`;
     }
-    if (metadata?.assistantMessageIndex !== undefined) {
-      return `index:${metadata.assistantMessageIndex}`;
+    const contentIndex = metadata?.assistantMessageIndex;
+    if (metadata?.assistantTranscriptSource) {
+      const sourceKey = `source:${metadata.assistantTranscriptSource.occurrenceId}`;
+      return contentIndex === undefined ? sourceKey : `${sourceKey}:index:${contentIndex}`;
     }
-    return "unkeyed";
+    return contentIndex === undefined ? "unkeyed" : `index:${contentIndex}`;
   };
   const appendWebchatAgentMediaTranscriptIfNeeded = async (input: ReplyDispatchOperation) => {
     const payload = readChatSendReplyPayload(input);
@@ -388,6 +390,7 @@ export function createChatSendReplyDispatch(params: {
       agentId,
     });
     const assistantMessageIndex = payloadMetadata?.assistantMessageIndex;
+    const assistantSource = payloadMetadata?.assistantTranscriptSource;
     let rewritten: { messageId: string } | null = null;
     if (ownedTranscriptIdempotencyKey && transcriptScope) {
       // Receipt identity is not authority after asynchronous media preparation.
@@ -412,15 +415,15 @@ export function createChatSendReplyDispatch(params: {
         );
         return;
       }
-    } else if (assistantMessageIndex !== undefined && transcriptScope) {
-      // Embedded runtimes identify their owned turn by message index, not a persisted key.
-      // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
+    } else if (assistantSource?.messageId && transcriptScope) {
+      // This physical append's receipt settles after streaming callbacks. Stream
+      // indices count content items and restart on retries; they cannot select a row.
       if (assistantTranscriptRewriteState?.sessionId !== sessionId) {
         return;
       }
-      const indexedRewrite = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+      const sourceRewrite = await rewriteAssistantTranscriptMessageByIdAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
-        assistantMessageIndex,
+        messageId: assistantSource.messageId,
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
@@ -428,9 +431,9 @@ export function createChatSendReplyDispatch(params: {
           .length,
         scope: transcriptScope,
       });
-      if (indexedRewrite) {
-        assistantTranscriptRewriteState.generation = indexedRewrite.generation;
-        rewritten = indexedRewrite;
+      if (sourceRewrite) {
+        assistantTranscriptRewriteState.generation = sourceRewrite.generation;
+        rewritten = sourceRewrite;
       }
     }
     if (rewritten && transcriptScope) {
@@ -456,20 +459,13 @@ export function createChatSendReplyDispatch(params: {
       transcriptPayload.text,
       mediaFailures,
     )?.trim();
-    if (
-      assistantMessageIndex === undefined &&
-      mediaNormalizationFailed &&
-      hasOnlyFailureDisplay &&
-      runtimeOwnedText
-    ) {
+    if (!assistantSource && mediaNormalizationFailed && hasOnlyFailureDisplay && runtimeOwnedText) {
       // Agent message_end owns the text row. Without its identity, appending a failure card
       // would duplicate that row; the live broadcast still carries the visible failure.
       return;
     }
     const isRuntimeMediaSupplement =
-      assistantMessageIndex !== undefined &&
-      assistantMessageIndex >= 1 &&
-      !mediaNormalizationFailed &&
+      (assistantSource !== undefined || assistantMessageIndex !== undefined) &&
       !ttsSupplementMarker &&
       !payload.isError &&
       !isReplyPayloadStatusNotice(payload) &&
@@ -488,12 +484,11 @@ export function createChatSendReplyDispatch(params: {
       sessionId,
       storePath: latestStorePath,
       agentId,
-      // Runtime message identity is the dedupe boundary; distinct rows must not collapse
-      // onto the single unkeyed media fallback used by tool/audio-only payloads.
-      idempotencyKey:
-        assistantMessageIndex !== undefined && assistantMessageIndex >= 1
-          ? `${clientRunId}:assistant-media:${assistantMessageIndex}`
-          : `${clientRunId}:assistant-media`,
+      // Even a hook-suppressed append retains its own occurrence. Never invent
+      // row identity from a stream index, or repeat provider text in a supplement.
+      idempotencyKey: assistantSource
+        ? `${clientRunId}:assistant-media:${assistantSource.occurrenceId}${assistantMessageIndex === undefined ? "" : `:index:${assistantMessageIndex}`}`
+        : `${clientRunId}:assistant-media${assistantMessageIndex === undefined ? "" : `:${assistantMessageIndex}`}`,
       ttsSupplement: ttsSupplementMarker,
       config: cfg,
       onMessageCommitted: retainCommittedChatReplyMedia,
@@ -571,12 +566,79 @@ export function createChatSendReplyDispatch(params: {
   };
   const finalizeAgentMediaTranscript = async () => {
     const latestPayloadByKey = new Map<string, ReplyDispatchOperation>();
+    const latestPayloadByOccurrence = new Map<string, ReplyDispatchOperation>();
     for (const { input } of deliveredReplies) {
       const payload = readChatSendReplyPayload(input);
       if (!needsAgentMediaTranscriptFinalization(payload)) {
         continue;
       }
-      latestPayloadByKey.set(agentMediaTranscriptKey(payload), input);
+      const key = agentMediaTranscriptKey(payload);
+      // Replacements retain first-seen materialization order. Aggregate selection
+      // separately follows actual delivery, even when it reuses an earlier index.
+      latestPayloadByKey.set(key, input);
+      const source = getReplyPayloadMetadata(payload)?.assistantTranscriptSource;
+      if (source && key.startsWith("source:")) {
+        latestPayloadByOccurrence.set(source.occurrenceId, input);
+      }
+    }
+    const byOccurrence = new Map<string, ReplyDispatchOperation[]>();
+    for (const [key, input] of latestPayloadByKey) {
+      const source = getReplyPayloadMetadata(
+        readChatSendReplyPayload(input),
+      )?.assistantTranscriptSource;
+      if (!source || !key.startsWith("source:")) {
+        continue;
+      }
+      const group = byOccurrence.get(source.occurrenceId) ?? [];
+      group.push(input);
+      byOccurrence.set(source.occurrenceId, group);
+    }
+    const payloadMediaUrls = (payload: ReplyPayload) =>
+      uniqueStrings([
+        ...(payload.mediaUrls ?? []),
+        ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+      ]);
+    const failureKeys = (payload: ReplyPayload) =>
+      (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map((failure) =>
+        JSON.stringify([failure.code, failure.kind, failure.label, failure.mimeType ?? null]),
+      );
+    for (const [occurrenceId, group] of byOccurrence) {
+      const latest = latestPayloadByOccurrence.get(occurrenceId);
+      if (!latest || group.length < 2) {
+        continue;
+      }
+      const latestPayload = readChatSendReplyPayload(latest);
+      if (getReplyPayloadMetadata(latestPayload)?.assistantTranscriptAggregate !== true) {
+        continue;
+      }
+      const coveredUrls = new Set(payloadMediaUrls(latestPayload));
+      const coveredFailures = failureKeys(latestPayload);
+      const preceding = group.filter((input) => input !== latest);
+      const requiredFailures = preceding.flatMap((input) =>
+        failureKeys(readChatSendReplyPayload(input)),
+      );
+      const coversFailures = requiredFailures.every((failure) => {
+        const index = coveredFailures.indexOf(failure);
+        if (index < 0) {
+          return false;
+        }
+        coveredFailures.splice(index, 1);
+        return true;
+      });
+      // A committed receipt does not prove message_end's aggregate was delivered.
+      // Coalesce only producer-owned aggregates with actual coverage; partial/error
+      // unwind keeps each content index, including identical URLs or failure cards.
+      if (
+        !coversFailures ||
+        !preceding.every((input) =>
+          payloadMediaUrls(readChatSendReplyPayload(input)).every((url) => coveredUrls.has(url)),
+        )
+      ) {
+        continue;
+      }
+      for (const input of preceding) {
+        latestPayloadByKey.delete(agentMediaTranscriptKey(readChatSendReplyPayload(input)));
+      }
     }
     for (const input of latestPayloadByKey.values()) {
       try {

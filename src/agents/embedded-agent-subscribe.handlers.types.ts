@@ -37,6 +37,7 @@ import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { ReplyDeliveryState } from "./reply-completion.js";
 import type { AgentMessage } from "./runtime/index.js";
+import type { AssistantTranscriptSource } from "./sessions/assistant-transcript-source.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
@@ -96,7 +97,11 @@ export type StreamBlockState = {
 };
 
 /** A response-ending answer and the message index its reply payload belongs to. */
-export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
+export type CompletedAssistantAnswer = {
+  assistant: AssistantMessage;
+  messageIndex: number;
+  assistantTranscriptSource?: AssistantTranscriptSource;
+};
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
@@ -106,6 +111,7 @@ export type EmbeddedAgentSubscribeState = {
     messageEnd: number;
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
+    assistantTranscriptSource?: AssistantTranscriptSource;
     keptAnswer?: CompletedAssistantAnswer;
   }>;
   /** Latest response-ending answer to the current input. */
@@ -192,6 +198,8 @@ export type EmbeddedAgentSubscribeState = {
   assistantMessageIndex: number;
   /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
   assistantMessageStartIndex: number;
+  assistantTranscriptSource?: AssistantTranscriptSource;
+  lastAssistantTranscriptSource?: AssistantTranscriptSource;
   lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;

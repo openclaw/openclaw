@@ -239,25 +239,23 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
   );
 }
 
-function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+function findAssistantTranscriptMessageByIdAndMediaInEvents(
   events: readonly TranscriptEvent[],
   params: {
-    assistantMessageIndex: number;
+    messageId: string;
     mediaUrls: readonly string[];
     rejectedMediaCount: number;
   },
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
-  if (
-    (expectedMedia.size === 0 && params.rejectedMediaCount === 0) ||
-    !Number.isSafeInteger(params.assistantMessageIndex) ||
-    params.assistantMessageIndex < 1
-  ) {
+  if ((expectedMedia.size === 0 && params.rejectedMediaCount === 0) || !params.messageId.trim()) {
     return null;
   }
-  const target = events.filter((event) => transcriptEventMessage(event)?.role === "assistant")[
-    params.assistantMessageIndex - 1
-  ];
+  const target = events.find(
+    (event) =>
+      transcriptEventId(event) === params.messageId &&
+      transcriptEventMessage(event)?.role === "assistant",
+  );
   const found = transcriptMessageTarget(target);
   const text = found ? extractAssistantPhaseText(found.message) : undefined;
   if (!found || !text) {
@@ -503,9 +501,9 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
   });
 }
 
-export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(params: {
+export async function rewriteAssistantTranscriptMessageByIdAndMedia(params: {
   afterSeq: number;
-  assistantMessageIndex: number;
+  messageId: string;
   content: AssistantDisplayContentBlock[];
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
@@ -529,17 +527,21 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
       // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
       // Exact-row rewrites preserve that sequence while rotating the generation returned to callers.
       const events = await transcript.readEvents();
-      const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(events, params);
+      const target = findAssistantTranscriptMessageByIdAndMediaInEvents(events, params);
       if (!target) {
         return null;
       }
-      const rewrittenMessage = buildAssistantDisplayRewrite({
-        message: target.message,
-        displayContent: params.content,
-        managedMediaUrls: params.mediaUrls,
-        // Indexed replies can contain earlier chunks; exact final/mirror replacements cannot.
-        retainOriginalText: true,
-      });
+      const rewrittenMessage = {
+        ...buildAssistantDisplayRewrite({
+          message: target.message,
+          // The committed source owns visible text too. A streamed tail or a
+          // superseded media-only payload must not duplicate it in the display.
+          displayContent: params.content.filter((block) => block.type !== "text"),
+          managedMediaUrls: params.mediaUrls,
+          retainOriginalText: true,
+        }),
+        content: target.message.content,
+      };
       await transcript.replaceEvents(
         events.map((event) =>
           transcriptEventId(event) === target.messageId

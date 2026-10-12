@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
@@ -299,6 +300,7 @@ export abstract class AgentSessionBase {
   // Track last assistant message for auto-compaction check
   protected lastAssistantMessage: AssistantMessage | undefined = undefined;
   private lastAssistantEntryId: string | undefined;
+  private assistantTranscriptSource: { occurrenceId: string; messageId?: string } | undefined;
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
@@ -329,8 +331,20 @@ export abstract class AgentSessionBase {
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
+      this.assistantTranscriptSource = undefined;
       this.turnIndex = 0;
     }
+
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      this.assistantTranscriptSource = { occurrenceId: randomUUID() };
+    }
+    const assistantTranscriptSource =
+      (event.type === "message_start" ||
+        event.type === "message_update" ||
+        event.type === "message_end") &&
+      event.message.role === "assistant"
+        ? this.assistantTranscriptSource
+        : undefined;
 
     // Retire the exact queued display entry before publishing message_start.
     if (event.type === "message_start" && event.message.role === "user") {
@@ -359,7 +373,14 @@ export abstract class AgentSessionBase {
         ...(this.lastAssistantEntryId ? { assistantEntryId: this.lastAssistantEntryId } : {}),
       });
     } else if (!publishAfterPersistence) {
-      this.emit(event);
+      this.emit(
+        assistantTranscriptSource
+          ? Object.defineProperty(event, "assistantTranscriptSource", {
+              value: assistantTranscriptSource,
+              configurable: true,
+            })
+          : event,
+      );
     }
     // Persist the same prepared bytes after synchronous listener changes.
     messageChanged = prepareToolResult() || messageChanged;
@@ -404,6 +425,11 @@ export abstract class AgentSessionBase {
           });
           if (event.message.role === "assistant") {
             this.lastAssistantEntryId = entryId;
+            // Streaming callbacks retain this exact receipt without waiting for the append.
+            // A later start gets a new receipt, even when retries reuse stream indices or text.
+            if (assistantTranscriptSource) {
+              assistantTranscriptSource.messageId = entryId;
+            }
           }
         } catch (error) {
           if (event.message.role === "user") {

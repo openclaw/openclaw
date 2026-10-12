@@ -37,10 +37,10 @@ import {
   extractThinkingFromTaggedText,
   promoteThinkingTagsToBlocks,
 } from "./embedded-agent-utils.js";
-import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import type { AgentSessionEvent } from "./sessions/agent-session-types.js";
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage },
+  evt: Extract<AgentSessionEvent, { type: "message_start" }>,
 ) {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
@@ -51,6 +51,7 @@ export function handleMessageStart(
   ctx.state.lastReasoningSent = undefined;
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  ctx.state.assistantTranscriptSource = evt.assistantTranscriptSource;
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
   // Use assistant message_start as the earliest "writing" signal for typing.
   emitAssistantMessageStart(ctx);
@@ -58,7 +59,7 @@ export function handleMessageStart(
 
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage },
+  evt: Extract<AgentSessionEvent, { type: "message_end" }>,
 ): void | Promise<void> {
   const msg = evt.message;
   if (msg.role === "user" && ctx.state.lastAssistant) {
@@ -67,6 +68,7 @@ export function handleMessageEnd(
       messageEnd: ctx.state.assistantMessageIndex,
       finalMessageStart: ctx.state.assistantMessageStartIndex,
       lastAssistant: ctx.state.lastAssistant,
+      assistantTranscriptSource: ctx.state.lastAssistantTranscriptSource,
       keptAnswer: ctx.state.keptAnswer,
     });
     ctx.state.inputAnswer = undefined;
@@ -78,6 +80,8 @@ export function handleMessageEnd(
     ctx.state.currentSourceMessagingToolSentTextsNormalized.length = 0;
     ctx.state.lastToolTurnOnlySourceProgress = undefined;
     ctx.state.lastAssistant = undefined;
+    ctx.state.assistantTranscriptSource = undefined;
+    ctx.state.lastAssistantTranscriptSource = undefined;
     return;
   }
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
@@ -88,6 +92,7 @@ export function handleMessageEnd(
   // the completed model round trips consumers see as `assistantTurns`.
   ctx.state.assistantTurnCount += 1;
   const assistantMessage = msg;
+  ctx.state.lastAssistantTranscriptSource = evt.assistantTranscriptSource;
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -317,6 +322,7 @@ export function handleMessageEnd(
     ctx.state.inputAnswer = {
       assistant: applyAssistantDeliveryDirectives(structuredClone(assistantMessage)),
       messageIndex: ctx.state.lastAssistantTextMessageIndex,
+      assistantTranscriptSource: evt.assistantTranscriptSource,
     };
   }
 

@@ -105,6 +105,7 @@ function createResultFixture(params?: {
       activeCount: 0,
     }),
     getLastAssistantTextMessageIndex: () => undefined,
+    getLastAssistantTranscriptSource: () => undefined,
     getKeptAnswer: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
