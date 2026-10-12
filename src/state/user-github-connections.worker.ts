@@ -10,6 +10,7 @@ import {
   listUserGitHubConnectionsInDatabase,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
+  resolvePersonalGitHubOwnerInDatabase,
   writeUserGitHubConnectionInDatabase,
 } from "./user-github-connections.kernel.js";
 import type {
@@ -152,20 +153,14 @@ function mutate<T>(
 export const userGitHubConnectionOperations = {
   "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
     readUserGitHubConnectionInDatabase(open().db, owner),
+  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
+    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
   "userGitHubConnections.list": (_input: undefined, { open }) =>
     listUserGitHubConnectionsInDatabase(open().db),
   "userGitHubConnections.mutate": (
     input: { owner: string; mutation: UserGitHubConnectionMutation },
     context,
   ) => {
-    // A matching request is still reread under the write transaction.
-    if (
-      input.mutation.kind === "cancel" &&
-      readUserGitHubConnectionInDatabase(context.open().db, input.owner)?.pending?.requestId !==
-        input.mutation.requestId
-    ) {
-      return undefined;
-    }
     return mutate(context, (db, capture) => {
       const { owner, mutation } = input;
       if (mutation.kind === "disconnect") {

@@ -12,10 +12,7 @@ import type {
   SandboxBrowserRegistryEntry,
   SandboxRegistryEntry,
 } from "../agents/sandbox/registry.types.js";
-import type {
-  SubagentRunReadRecord,
-  SubagentRunsDurableBasis,
-} from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type {
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
@@ -111,6 +108,10 @@ import type {
   PluginBlobReadCommand,
   PluginBlobReadReply,
 } from "../plugin-state/plugin-blob-worker-contract.js";
+import type {
+  PluginMetadataStateKey,
+  PluginMetadataStateRow,
+} from "../plugins/installed-plugin-index-row.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type {
@@ -217,7 +218,10 @@ export type OpenClawStateReadCommand =
         | {
             kind: "descendants";
             sessionKeys: readonly string[];
-            liveTopology: SubagentRunsDurableBasis["liveTopology"];
+            liveTopology: readonly Pick<
+              SubagentRunRecord,
+              "childSessionKey" | "requesterSessionKey"
+            >[];
           };
     }
   | CronRunRecoveryReadCommand
@@ -228,6 +232,7 @@ export type OpenClawStateReadCommand =
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
+  | { type: "plugins.metadata.read"; input: { stateKeys: readonly PluginMetadataStateKey[] } }
   | SqliteWorkerCommand<SkillLibraryReadOnlyOperations>
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
@@ -385,6 +390,7 @@ export type OpenClawStateReadResult =
       blob: string | null;
     }
   | { type: "subagents.forChildSession"; runs: SubagentRunRecord[] }
+  | { type: "plugins.metadata.read"; rows: PluginMetadataStateRow[] }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;
@@ -452,7 +458,7 @@ export type OpenClawStateReadResult =
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
       versions?: Map<string, string | null>;
-      descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
+      descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {
       type: "subagents.runs";

@@ -277,12 +277,28 @@ category. Goal mutations and upstream-link initialization check their source onc
 inside the transaction; live host admission remains separate. Workshop append
 reuses the database owner's admitted table and index facts.
 
-These changes do not retire released synchronous SDK or unbound native incognito
-owners. Config health and plugin metadata cold reads, pairing allowlist reads,
-skill-library selection, ambient watches, upstream links, and session
-collaboration kernels retain their existing synchronous adapters. Their remaining
-main-thread inventory is explicit until the owning SDK or incognito cutover;
-renaming a shared kernel would not move those calls. Schema, stored formats,
+Durable Board writes with ordinary request callbacks use the existing worker.
+Cross-store source authority and native incognito retain their explicit native
+adapter. Board reads inside a transaction reuse its snapshot without a nested
+savepoint. Ambient-watch preparation uses the existing read worker; its unused
+synchronous reader is removed.
+
+Plugin metadata reads, including retained artifact snapshots, use the shared read
+worker. Opening a database no longer reloads Claw provenance: explicit config
+preparation publishes those facts. Setup credential activation and compensation
+use the auth worker, changing only the selected credential so neighboring profile
+and usage updates survive rollback. Plugin-state consume deletes and returns its
+live row in one statement, with decoding inside the transaction.
+
+Subagent descendant selection runs in the registry worker. Deletion consumes the
+prepared selection and checks current in-process liveness without repeating a
+whole-registry digest or recapturing file identity. Unsupported raw external
+writes during deletion are not observed; ordinary registry writers publish their
+changes through the owner.
+
+Released synchronous SDK and unbound native incognito owners remain explicit
+inventory debt, including config health, pairing allowlists, skill-library
+selection, upstream links, and native session reset. Schema, stored formats,
 retention, and update behavior are unchanged.
 
 Config set, patch, and unset commands require exclusive offline ownership. Stop
@@ -616,9 +632,13 @@ even if the old connection is restored. Profile-retirement notifications carry
 only the affected profile IDs. OAuth and refresh semantics and the existing stored
 representation remain unchanged.
 
-Cancellation without a matching pending request returns after a read in the same
-worker FIFO, without a write transaction or publication. Matching requests are
-still reread inside the mutation transaction. GitHub role checks prepare only the
+Cancellation checks the pending request once inside its mutation transaction;
+a stale request cannot cancel its successor. Personal credential and publication
+guards prepare their connection through the shared-state worker, then consume
+SQL-free authority revoked by the connection owner's write receipts. Restoring
+the same connection does not revive an earlier guard. Publication status RPCs
+use `personalStatusAsync`; the synchronous SDK method remains deprecated.
+GitHub role checks prepare only the
 canonical profile ID, role, and verified GitHub login through the existing profile
 authority fence. The Gateway reuses its retained profile catalog without another
 worker request. Standalone authority preparation without a retained catalog uses
@@ -4217,8 +4237,8 @@ Per-session observations still fence those publications, and remote-exec placeme
 remain inventory-fenced even when their turn claim has a local owner.
 Prepared custody lasts through settlement. Native SDK, process-held incognito,
 and offline maintenance keep their existing synchronous transaction view. Entry
-replacement also carries the prepared subagent basis into the existing worker
-validation before mutation and after the final host grant. Schemas,
+replacement uses the registry worker's prepared descendant selection and the
+live in-process descendant guard without a second durable digest scan. Schemas,
 retention, durability, and update behavior are unchanged.
 
 Placement turn claims and releases execute through the shared-state writer,

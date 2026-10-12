@@ -9,9 +9,35 @@ import {
   classifyHiddenGitHubStoreName,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
+import type { HiddenGitHubStorePrefix } from "./secret-store-hidden-github.js";
+import {
+  writeHiddenGitHubSecretInDatabase,
+  readHiddenGitHubSecretInDatabase,
+  listHiddenGitHubSecretsInDatabase,
+  deleteHiddenGitHubSecretInDatabase,
+} from "./secret-store-hidden-github.kernel.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 
 export const githubSetupOperations = {
+  "githubSecrets.read": (
+    { name, now }: { name: string; now: number },
+    { open }: WorkerWriteOperationContext,
+  ) => readHiddenGitHubSecretInDatabase(open().db, name, now),
+  "githubSecrets.list": (
+    { prefix, now }: { prefix: HiddenGitHubStorePrefix; now: number },
+    { open }: WorkerWriteOperationContext,
+  ) => listHiddenGitHubSecretsInDatabase(open().db, prefix, now),
+  "githubSecrets.write": (
+    input: { name: string; value: string; updatedBy?: string | null; now: number },
+    { write }: WorkerWriteOperationContext,
+  ) =>
+    write(({ db }) => writeHiddenGitHubSecretInDatabase(db, input), {
+      operationLabel: "secrets.store.write",
+    }),
+  "githubSecrets.delete": ({ name }: { name: string }, { write }: WorkerWriteOperationContext) =>
+    write(({ db }) => deleteHiddenGitHubSecretInDatabase(db, name), {
+      operationLabel: "secrets.store.delete-hidden-github",
+    }),
   "githubSetup.consume": (
     { name, now }: { name: string; now: number },
     context: WorkerWriteOperationContext,

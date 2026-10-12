@@ -15,11 +15,13 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { finalizeCaptureStore } from "./store-lifecycle.js";
 import {
   DEBUG_PROXY_CAPTURE_DIR_MODE,
@@ -189,6 +191,11 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
     legacyBlobDir?: string,
   ) {
+    warnPluginSdkDeprecation({
+      family: "proxy-capture-store",
+      method: "DebugProxyCaptureStore",
+      replacement: "await acquireDebugProxyCaptureStoreAsync()",
+    });
     if (typeof optionsOrDbPath === "string") {
       if (!legacyBlobDir) {
         throw new TypeError("legacy debug proxy capture store requires a blob directory");
@@ -298,7 +305,7 @@ function resolveDebugProxyCaptureStoreKey(
 ): string {
   return typeof optionsOrDbPath === "string"
     ? `legacy:${optionsOrDbPath}:${legacyBlobDir ?? ""}`
-    : `shared:${openOpenClawStateDatabase({ env: optionsOrDbPath.env }).path}`;
+    : `shared:${resolveOpenClawStateSqlitePath(optionsOrDbPath.env ?? process.env)}`;
 }
 
 function getDebugProxyCaptureStoreImpl(

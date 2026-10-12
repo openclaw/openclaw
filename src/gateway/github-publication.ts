@@ -623,10 +623,22 @@ export function createGitHubPublicationCoordinator(params: {
       return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
     },
     preparePersonalStatus: repository.preparePersonalStatus,
+    /** @deprecated Use personalStatusAsync; removed in the next Plugin SDK major. */
     personalStatus(...args: Parameters<typeof repository.personalStatus>) {
+      warnPluginSdkDeprecation({
+        family: "github-publication",
+        method: "personalStatus",
+        replacement: "personalStatusAsync",
+      });
       return repository.hasRequest(args[2])
         ? repository.personalStatus(...args)!
         : personal.personalStatus(args[0], args[1], args[2]);
+    },
+    async personalStatusAsync(...args: Parameters<typeof repository.personalStatusAsync>) {
+      return (
+        (await repository.personalStatusAsync(...args)) ??
+        (await personal.personalStatusAsync(args[0], args[1], args[2]))
+      );
     },
     async personalPending(...args: Parameters<typeof personal.personalPending>) {
       return (await repository.personalPending(...args)) ?? personal.personalPending(...args);

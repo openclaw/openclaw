@@ -79,52 +79,52 @@ export function ensureBoardSchema(database: BoardDatabaseHandle): void {
 }
 
 function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): StoredBoard {
-  // Write callers already hold an IMMEDIATE transaction; the shared helper nests
-  // this consistent read as a savepoint instead of issuing a second BEGIN.
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const queries = getBoardReadQueries(database.db);
-      const tabRows = queries.tabs(sessionKey).rows;
-      const selectedWidgetRows = queries.widgets(sessionKey).rows;
-      const parsedWidgetRows = selectedWidgetRows.map((row) => ({
-        row,
-        manifest: parseManifest(row.manifest),
-      }));
-      // Rows without the canonical authority snapshot predate this unreleased contract.
-      // Keep them out of runtime state so they can never mint an interactive lease.
-      const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
-        if (row.content_kind !== "mcp-app") {
-          return true;
-        }
-        return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
-      });
-      const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
-      for (const { row, manifest } of admittedWidgetRows) {
-        const metadata = rowToHtmlViewMetadata(row, manifest);
-        if (metadata) {
-          htmlViewMetadata.set(row.name, metadata);
-        }
+  const read = (): StoredBoard => {
+    const queries = getBoardReadQueries(database.db);
+    const tabRows = queries.tabs(sessionKey).rows;
+    const selectedWidgetRows = queries.widgets(sessionKey).rows;
+    const parsedWidgetRows = selectedWidgetRows.map((row) => ({
+      row,
+      manifest: parseManifest(row.manifest),
+    }));
+    // Rows without the canonical authority snapshot predate this unreleased contract.
+    // Keep them out of runtime state so they can never mint an interactive lease.
+    const admittedWidgetRows = parsedWidgetRows.filter(({ row, manifest }) => {
+      if (row.content_kind !== "mcp-app") {
+        return true;
       }
-      const layout = normalizeBoardLayout({
-        tabs: tabRows.map(rowToTab),
-        widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
+      return manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId !== undefined;
+    });
+    const htmlViewMetadata = new Map<string, BoardWidgetHtmlViewMetadata>();
+    for (const { row, manifest } of admittedWidgetRows) {
+      const metadata = rowToHtmlViewMetadata(row, manifest);
+      if (metadata) {
+        htmlViewMetadata.set(row.name, metadata);
+      }
+    }
+    const layout = normalizeBoardLayout({
+      tabs: tabRows.map(rowToTab),
+      widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
+    });
+    return {
+      snapshot: {
+        sessionKey,
+        // Board existence is row-defined; deleting the last empty tab removes
+        // the board, so a later read starts again at the empty revision.
+        revision: tabRows.reduce((revision, row) => Math.max(revision, row.revision), 0),
+        ...layout,
+      },
+      tabRows,
+      widgetRows: admittedWidgetRows.map(({ row }) => row),
+      htmlViewMetadata,
+    };
+  };
+  return database.db.isTransaction
+    ? read()
+    : runSqliteDeferredTransactionSync(database.db, read, {
+        databaseLabel: database.path,
+        operationLabel: "board.read",
       });
-      return {
-        snapshot: {
-          sessionKey,
-          // Board existence is row-defined; deleting the last empty tab removes
-          // the board, so a later read starts again at the empty revision.
-          revision: tabRows.reduce((revision, row) => Math.max(revision, row.revision), 0),
-          ...layout,
-        },
-        tabRows,
-        widgetRows: admittedWidgetRows.map(({ row }) => row),
-        htmlViewMetadata,
-      };
-    },
-    { databaseLabel: database.path, operationLabel: "board.read" },
-  );
 }
 
 function upsertTabs(

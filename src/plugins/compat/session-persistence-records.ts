@@ -42,7 +42,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     deprecated: "2026-10-09",
     warningStarts: "2026-10-09",
     replacement:
-      "Use requestForSessionV2 and requestForClaimV2 with the host-provided GitHubPublicationRequesterV2, and requestPersonalForSessionV2 and confirmPersonalV2 with PersonalGitHubSessionActionV2. Await deferClaimPreparationAsync, deferOrphanedRequestsAsync, listUnreportedResultsAsync, and markReportedAsync. On githubOAuthService.personal, await cancelAuthorizationAsync and disconnectAsync. Legacy callbacks retain their native ordering and synchronous mutations commit before return; these forms will be removed in the next Plugin SDK major.",
+      "Use requestForSessionV2 and requestForClaimV2 with the host-provided GitHubPublicationRequesterV2, and requestPersonalForSessionV2 and confirmPersonalV2 with PersonalGitHubSessionActionV2. Await deferClaimPreparationAsync, deferOrphanedRequestsAsync, listUnreportedResultsAsync, and markReportedAsync. Await githubPublicationService.personalStatusAsync. On githubOAuthService, await cancelAuthorizationAsync and retireProfileAsync; on its personal service, await cancelAuthorizationAsync and disconnectAsync. Legacy callbacks retain their native ordering and synchronous mutations commit before return; these forms will be removed in the next Plugin SDK major.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-github-publication-operations",
     surfaces: [
       "GatewayRequestHandlerOptions.context.githubPublicationService.requestForSession",
@@ -53,6 +53,9 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "GatewayRequestHandlerOptions.context.githubPublicationService.deferOrphanedRequests",
       "GatewayRequestHandlerOptions.context.githubPublicationService.listUnreportedResults",
       "GatewayRequestHandlerOptions.context.githubPublicationService.markReported",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.personalStatus",
+      "GatewayRequestHandlerOptions.context.githubOAuthService.cancelAuthorization",
+      "GatewayRequestHandlerOptions.context.githubOAuthService.retireProfile",
       "GatewayRequestHandlerOptions.context.githubOAuthService.personal.cancelAuthorization",
       "GatewayRequestHandlerOptions.context.githubOAuthService.personal.disconnect",
       "GitHubPublicationRequester",

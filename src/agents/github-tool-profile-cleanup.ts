@@ -132,7 +132,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
   );
   // Initial setup can be durable before its config CAS is known. Pending
   // refresh metadata also owns the selected stable profile until recovery.
-  for (const { record } of listGitHubOAuthRecords()) {
+  for (const { record } of await listGitHubOAuthRecords()) {
     if (!record) {
       continue;
     }

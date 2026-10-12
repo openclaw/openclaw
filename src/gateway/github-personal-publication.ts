@@ -18,9 +18,13 @@ import {
   getSessionRepositoryWorkspaceStore,
   type PreparedRepositoryWorkspace,
 } from "../state/session-repository-workspaces.js";
-import { readUserGitHubConnection } from "../state/user-github-connections.js";
+import { prepareUserGitHubConnection } from "../state/user-github-connections.js";
 import { requestCurrentPersonalGitHubRefresh } from "./github-oauth-lifecycle.js";
-import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
+import {
+  personalGitHubStatus,
+  personalGitHubStatusAsync,
+  type PersonalGitHubAction,
+} from "./github-personal-oauth.js";
 import {
   claimPersonalGitHubPublication,
   insertPersonalGitHubPublication,
@@ -73,6 +77,22 @@ export type PreparedRepositoryPublicationStatus = {
   repository: PreparedRepositoryWorkspace;
 };
 
+type PersonalPublicationReceipt =
+  | { kind: "worktree"; row: PersonalGitHubPublicationRow }
+  | {
+      kind: "repository";
+      row: RepositoryGitHubPublicationStatusRow;
+      prepared: PreparedRepositoryPublicationStatus | undefined;
+    };
+
+function isPendingPersonalPublication(receipt: PersonalPublicationReceipt, executing: boolean) {
+  const { row } = receipt;
+  return receipt.kind === "repository"
+    ? !terminalRepositoryGitHubPublication(row) && !executing
+    : row.status === "needs_confirmation" ||
+        ((row.status === "requested" || row.status === "publishing") && !executing);
+}
+
 export async function preparePersonalRepositoryPublicationStatus(requestId: string) {
   const row = await readRepositoryGitHubPublicationAsync(requestId);
   return row && row.owner_profile_id !== null && !terminalRepositoryGitHubPublication(row)
@@ -86,23 +106,15 @@ export async function preparePersonalRepositoryPublicationStatus(requestId: stri
 
 /** Source owners supply liveness; personal status never grants execution authority. */
 export function presentPersonalGitHubPublicationStatus(
-  receipt:
-    | { kind: "worktree"; row: PersonalGitHubPublicationRow }
-    | {
-        kind: "repository";
-        row: RepositoryGitHubPublicationStatusRow;
-        prepared: PreparedRepositoryPublicationStatus | undefined;
-      },
+  receipt: PersonalPublicationReceipt,
   action: PersonalGitHubAction,
   session: SessionIdentity & { archivedAt?: number | null },
   executing: boolean,
+  preparedConnection?: ReturnType<typeof personalGitHubStatus> | null,
+  preparedLifecycle?: ReturnType<typeof readGitHubPublicationSessionLifecycle> | null,
 ): SessionGitHubStatusResult {
   const { row } = receipt;
-  const pending =
-    receipt.kind === "repository"
-      ? !terminalRepositoryGitHubPublication(row) && !executing
-      : row.status === "needs_confirmation" ||
-        ((row.status === "requested" || row.status === "publishing") && !executing);
+  const pending = isPendingPersonalPublication(receipt, executing);
   let repositoryOwner: ReturnType<typeof resolveReceiptOwner>;
   if (receipt.kind === "repository") {
     action.assertCurrent();
@@ -125,13 +137,20 @@ export function presentPersonalGitHubPublicationStatus(
       repositoryOwner = resolveReceiptOwner(receipt.row, prepared.repository);
     }
   }
-  const connection = pending ? personalGitHubStatus(action) : null;
+  const connection =
+    preparedConnection === undefined
+      ? pending
+        ? personalGitHubStatus(action)
+        : null
+      : preparedConnection;
   const lifecycle =
     pending && receipt.kind === "worktree"
-      ? readGitHubPublicationSessionLifecycle({
-          publicationKind: "personal",
-          requestId: row.request_id,
-        })
+      ? preparedLifecycle === undefined
+        ? readGitHubPublicationSessionLifecycle({
+            publicationKind: "personal",
+            requestId: row.request_id,
+          })
+        : preparedLifecycle
       : undefined;
   const sessionChanged =
     row.session_id !== session.sessionId ||
@@ -200,6 +219,33 @@ export function presentPersonalGitHubPublicationStatus(
   };
 }
 
+export async function presentPersonalGitHubPublicationStatusAsync(
+  receipt: PersonalPublicationReceipt,
+  action: PersonalGitHubAction,
+  session: SessionIdentity & { archivedAt?: number | null },
+  executing: boolean,
+): Promise<SessionGitHubStatusResult> {
+  const pending = isPendingPersonalPublication(receipt, executing);
+  const [connection, lifecycle] = await Promise.all([
+    pending ? personalGitHubStatusAsync(action) : null,
+    pending && receipt.kind === "worktree"
+      ? readGitHubPublicationSessionLifecycleInWorker({
+          publicationKind: "personal",
+          requestId: receipt.row.request_id,
+        })
+      : null,
+  ]);
+  action.assertCurrent();
+  return presentPersonalGitHubPublicationStatus(
+    receipt,
+    action,
+    session,
+    executing,
+    connection,
+    lifecycle ?? null,
+  );
+}
+
 export function assertPersonalGitHubPublicationReplay(
   existing: {
     connection_generation: string | null;
@@ -222,14 +268,16 @@ export function assertPersonalGitHubPublicationReplay(
   }
 }
 
-export function bindPersonalGitHubPublicationSelection(
+export async function bindPersonalGitHubPublicationSelection(
   action: PersonalGitHubSessionAction,
   selected: Selection,
   preparation?: GitHubPublicationPreparation,
 ) {
+  let prepared = await prepareUserGitHubConnection(action.owner);
   const assertCurrent = () => {
     action.assertCurrent();
-    const record = readUserGitHubConnection(action.owner);
+    prepared.assertCurrent();
+    const record = prepared.connection;
     if (
       record?.generation !== selected.generation ||
       record.selection.kind !== "connected" ||
@@ -249,11 +297,15 @@ export function bindPersonalGitHubPublicationSelection(
     profileId: initial.profileId,
     accountId: initial.accountId,
     assertCurrent,
+    async refresh() {
+      prepared = await prepareUserGitHubConnection(action.owner);
+      assertCurrent();
+    },
   };
 }
 
 export async function preparePersonalGitHubPublicationSelection(
-  bound: ReturnType<typeof bindPersonalGitHubPublicationSelection>,
+  bound: Awaited<ReturnType<typeof bindPersonalGitHubPublicationSelection>>,
   assertWorkspace: () => void,
 ) {
   const assertCurrent = () => {
@@ -264,11 +316,12 @@ export async function preparePersonalGitHubPublicationSelection(
   try {
     await requestCurrentPersonalGitHubRefresh(bound.owner);
   } catch {
-    assertCurrent();
+    assertWorkspace();
     throw new Error(
       "My GitHub credentials are unavailable; reconnect My GitHub before publishing.",
     );
   }
+  await bound.refresh();
   assertCurrent();
   return await preparePersonalGitHubPublicationIdentity({
     profileId: bound.profileId,
@@ -303,6 +356,19 @@ export function createPersonalGitHubPublicationCoordinator(
     session: SessionIdentity & { archivedAt?: number | null },
   ) =>
     presentPersonalGitHubPublicationStatus(
+      { kind: "worktree", row },
+      action,
+      session,
+      row.gateway_instance_id === instanceId &&
+        row.execution_id !== null &&
+        active.get(row.request_id) === row.execution_id,
+    );
+  const statusAsync = async (
+    row: PersonalGitHubPublicationRow,
+    action: PersonalGitHubAction,
+    session: SessionIdentity & { archivedAt?: number | null },
+  ) =>
+    presentPersonalGitHubPublicationStatusAsync(
       { kind: "worktree", row },
       action,
       session,
@@ -354,7 +420,7 @@ export function createPersonalGitHubPublicationCoordinator(
       generation: row.connection_generation,
       account: { accountId: row.identity_account_id, login: row.identity_login },
     };
-    const bound = bindPersonalGitHubPublicationSelection(action, selected);
+    const bound = await bindPersonalGitHubPublicationSelection(action, selected);
     const assertCurrent = () => {
       bound.assertCurrent();
       workspace.assertCurrent();
@@ -467,9 +533,9 @@ export function createPersonalGitHubPublicationCoordinator(
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
         action.assertCurrent();
-        return status(existing, action, action).result;
+        return (await statusAsync(existing, action, action)).result;
       }
-      const bound = bindPersonalGitHubPublicationSelection(action, selected, {
+      const bound = await bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () =>
           Boolean(
@@ -570,16 +636,28 @@ export function createPersonalGitHubPublicationCoordinator(
       }
       return status(row, action, session);
     },
-    personalPending(
+    async personalStatusAsync(
+      action: PersonalGitHubAction,
+      session: SessionIdentity & { archivedAt?: number | null },
+      requestId: string,
+    ) {
+      action.assertCurrent();
+      const row = await readPersonalGitHubPublicationAsync(action.owner, { requestId });
+      if (!row || row.session_key !== session.sessionKey || row.agent_id !== session.agentId) {
+        throw new Error("My GitHub publication was not found for this profile and session.");
+      }
+      return await statusAsync(row, action, session);
+    },
+    async personalPending(
       action: PersonalGitHubAction,
       session: SessionIdentity & { archivedAt?: number | null },
     ) {
       action.assertCurrent();
-      const row = readPersonalGitHubPublication(action.owner, {
+      const row = await readPersonalGitHubPublicationAsync(action.owner, {
         sessionKey: session.sessionKey,
         agentId: session.agentId,
       });
-      return row ? status(row, action, session) : null;
+      return row ? await statusAsync(row, action, session) : null;
     },
     /** @deprecated Use confirmPersonalV2; removed in the next Plugin SDK major. */
     async confirmPersonal(
@@ -621,7 +699,7 @@ export function createPersonalGitHubPublicationCoordinator(
       if (active.has(row.request_id)) {
         throw new Error("My GitHub publication is still running; wait for its result.");
       }
-      bindPersonalGitHubPublicationSelection(action, input);
+      await bindPersonalGitHubPublicationSelection(action, input);
       return await withWorkspace(
         action,
         async (workspace) => await execute(action, row, workspace),

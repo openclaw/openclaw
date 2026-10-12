@@ -43,7 +43,10 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-import { mutateUserGitHubConnection } from "./user-github-connections.js";
+import {
+  mutateUserGitHubConnection,
+  prepareUserGitHubConnection,
+} from "./user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "./user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
@@ -324,6 +327,29 @@ it("inserts a repository request through its retained session source", async () 
   }
 });
 
+it("does not cancel a newer personal GitHub authorization", async () => {
+  const owner = ensureProfileForEmail("publication-cancel@example.test").id;
+  const first = "09208f47-f654-4120-a878-bbed310e02d1";
+  const second = "bf6714e1-ce2d-44c8-beb3-4b895b2c48d7";
+  const createdAtMs = Date.now();
+  for (const requestId of [first, second]) {
+    await mutateUserGitHubConnection(
+      owner,
+      {
+        kind: "start",
+        requestId,
+        createdAtMs,
+        expiresAtMs: createdAtMs + 900000,
+      },
+      () => {},
+    );
+  }
+  expect(
+    await mutateUserGitHubConnection(owner, { kind: "cancel", requestId: first }, () => {}),
+  ).toBeUndefined();
+  expect((await prepareUserGitHubConnection(owner)).connection?.pending?.requestId).toBe(second);
+});
+
 it("revokes personal source authority at commit before reply delivery without reviving restored state", async ({
   signal,
 }) => {
@@ -332,6 +358,7 @@ it("revokes personal source authority at commit before reply delivery without re
   if (!original) {
     throw new Error("Connection fixture missing");
   }
+  const connection = await prepareUserGitHubConnection(owner);
   const { row, source } = await sourceFixture("source-connection-revocation", () => {}, owner);
   try {
     expect(() =>
@@ -341,6 +368,7 @@ it("revokes personal source authority at commit before reply delivery without re
       }),
     ).toThrow("rollback connection");
     expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+    expect(connection.assertCurrent).not.toThrow();
     const receipt = holdNextReceipt();
     const reply = holdNextReply("userGitHubConnections.mutate");
     const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
@@ -356,6 +384,7 @@ it("revokes personal source authority at commit before reply delivery without re
       // Receipt and reply use separate ports; deliver the real commit facts before asserting.
       receipt.release();
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
+      expect(connection.assertCurrent).toThrow("My GitHub connection changed");
     } finally {
       receipt.release();
       reply.release();
@@ -366,6 +395,8 @@ it("revokes personal source authority at commit before reply delivery without re
       () => original,
       () => {},
     );
+    expect(connection.assertCurrent).toThrow("My GitHub connection changed");
+    expect((await prepareUserGitHubConnection(owner)).connection).toEqual(original);
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );

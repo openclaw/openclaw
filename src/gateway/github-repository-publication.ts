@@ -19,6 +19,7 @@ import {
   bindPersonalGitHubPublicationSelection,
   preparePersonalRepositoryPublicationStatus as preparePersonalStatus,
   presentPersonalGitHubPublicationStatus,
+  presentPersonalGitHubPublicationStatusAsync,
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionAction,
   type PersonalGitHubSessionActionV2,
@@ -109,6 +110,20 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     prepared: PreparedRepositoryPublicationStatus | undefined,
   ) =>
     presentPersonalGitHubPublicationStatus(
+      { kind: "repository", row, prepared },
+      action,
+      session,
+      row.execution_id !== null &&
+        row.gateway_instance_id === instanceId &&
+        active.get(row.request_id) === row.execution_id,
+    );
+  const personalStatusAsync = async (
+    row: RepositoryGitHubPublicationStatusRow,
+    action: PersonalGitHubAction,
+    session: SessionIdentity,
+    prepared: PreparedRepositoryPublicationStatus | undefined,
+  ) =>
+    presentPersonalGitHubPublicationStatusAsync(
       { kind: "repository", row, prepared },
       action,
       session,
@@ -421,9 +436,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         if (!row) {
           throw new Error("GitHub publication request no longer exists.");
         }
-        return personalStatus(row, action, action, prepared).result;
+        return (await personalStatusAsync(row, action, action, prepared)).result;
       }
-      const bound = bindPersonalGitHubPublicationSelection(action, selected, {
+      const bound = await bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () =>
           Boolean(
@@ -534,6 +549,15 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       const row = readRepositoryGitHubPublication(requestId);
       return row ? personalStatus(row, action, session, prepared) : undefined;
     },
+    async personalStatusAsync(
+      action: PersonalGitHubAction,
+      session: SessionIdentity,
+      requestId: string,
+      prepared: PreparedRepositoryPublicationStatus | undefined,
+    ) {
+      const row = await readRepositoryGitHubPublicationAsync(requestId);
+      return row ? await personalStatusAsync(row, action, session, prepared) : undefined;
+    },
     async personalPending(action: PersonalGitHubAction, session: SessionIdentity) {
       action.assertCurrent();
       const row = await readPendingRepositoryGitHubPublication({
@@ -551,7 +575,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (!current) {
         throw new Error("GitHub publication request no longer exists.");
       }
-      return personalStatus(current, action, session, prepared);
+      return await personalStatusAsync(current, action, session, prepared);
     },
     async confirmPersonal(
       input: SessionGitHubConfirmParams,
@@ -587,7 +611,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (!row.checkpoint_ref) {
         throw new Error("GitHub publication has no accepted checkpoint.");
       }
-      bindPersonalGitHubPublicationSelection(action, input);
+      await bindPersonalGitHubPublicationSelection(action, input);
       return await placements.withRepositoryWorkspaceReservation(
         action,
         async (assertReservation) =>

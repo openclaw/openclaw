@@ -31,7 +31,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
@@ -363,7 +362,6 @@ export async function runReclamationWorkerPort(
                     // The parent admitted this operation through its FIFO. Recheck
                     // actual session ownership here, without a second host round trip.
                     if (request.type === "reclaim") {
-                      assertSessionSubagentRunsCurrent(request.plan, options.env);
                     }
                   };
                   const reclaimed =

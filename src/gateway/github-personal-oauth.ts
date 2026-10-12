@@ -29,9 +29,10 @@ import {
   listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection as mutateConnection,
   observeUserGitHubProfileRetirement,
+  prepareUserGitHubConnection,
+  resolvePersonalGitHubOwnerAsync,
   readUserGitHubConnection,
   readUserGitHubConnectionAsync,
-  resolvePersonalGitHubOwner,
   updateUserGitHubRefreshAsync as updateRefresh,
   type UserGitHubConnection,
   type UserGitHubConnected,
@@ -66,23 +67,43 @@ function projectPending(pending: UserGitHubDevice): UsersGitHubAuthorizeStartRes
   };
 }
 
+const statusAuthorities = new WeakMap<PersonalGitHubStatus, () => void>();
+
 export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitHubStatus {
   action.assertCurrent();
-  let record: UserGitHubConnection | undefined;
   try {
-    record = readUserGitHubConnection(action.owner);
+    return projectPersonalGitHubStatus(readUserGitHubConnection(action.owner));
   } catch {
     action.assertCurrent();
-    return {
-      state: "unavailable",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "failed",
-      pending: null,
-    };
+    return unavailablePersonalGitHubStatus();
   }
-  return projectPersonalGitHubStatus(record);
+}
+
+function unavailablePersonalGitHubStatus(): PersonalGitHubStatus {
+  return {
+    state: "unavailable",
+    generation: null,
+    account: null,
+    accessExpiresAtMs: null,
+    refreshState: "failed",
+    pending: null,
+  };
+}
+
+export async function personalGitHubStatusAsync(
+  action: PersonalGitHubAction,
+): Promise<PersonalGitHubStatus> {
+  action.assertCurrent();
+  try {
+    const prepared = await prepareUserGitHubConnection(action.owner);
+    action.assertCurrent();
+    const status = projectPersonalGitHubStatus(prepared.connection);
+    statusAuthorities.set(status, prepared.assertCurrent);
+    return status;
+  } catch {
+    action.assertCurrent();
+    return unavailablePersonalGitHubStatus();
+  }
 }
 
 function projectPersonalGitHubStatus(
@@ -112,28 +133,18 @@ function revalidatePersonalGitHubStatus(
   action: PersonalGitHubAction,
   prepared: PersonalGitHubStatus,
 ): PersonalGitHubStatus {
-  const current = personalGitHubStatus(action);
-  if (
-    current.generation !== prepared.generation ||
-    current.account?.accountId !== prepared.account?.accountId ||
-    current.account?.login.toLowerCase() !== prepared.account?.login.toLowerCase()
-  ) {
-    throw new Error("My GitHub connection changed; reload its status.");
-  }
-  // Revalidating selection does not refresh the prepared account facts.
-  if (prepared.stale) {
-    current.stale = true;
-  }
-  return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
+  action.assertCurrent();
+  statusAuthorities.get(prepared)?.();
+  return prepared;
 }
 
 async function resolvePersonalGitHubStatus(
   action: PersonalGitHubAction,
 ): Promise<PersonalGitHubStatus> {
   action.assertCurrent();
-  let record: UserGitHubConnection | undefined;
+  let prepared: Awaited<ReturnType<typeof prepareUserGitHubConnection>>;
   try {
-    record = await readUserGitHubConnectionAsync(action.owner);
+    prepared = await prepareUserGitHubConnection(action.owner);
   } catch {
     action.assertCurrent();
     return {
@@ -146,7 +157,9 @@ async function resolvePersonalGitHubStatus(
     };
   }
   action.assertCurrent();
+  const record = prepared.connection;
   const status = projectPersonalGitHubStatus(record);
+  statusAuthorities.set(status, prepared.assertCurrent);
   if (status.state !== "connected") {
     return status;
   }
@@ -165,12 +178,19 @@ async function resolvePersonalGitHubStatus(
       assertCurrent,
       forDisplay: true,
     });
-    return {
+    const result = {
       ...revalidatePersonalGitHubStatus(action, status),
       ...(identity.stale ? { stale: true } : {}),
     };
+    statusAuthorities.set(result, prepared.assertCurrent);
+    return result;
   } catch {
-    return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
+    const result = {
+      ...revalidatePersonalGitHubStatus(action, status),
+      state: "unavailable" as const,
+    };
+    statusAuthorities.set(result, prepared.assertCurrent);
+    return result;
   }
 }
 
@@ -285,21 +305,19 @@ export function createPersonalGitHubOAuthLifecycle() {
     if (!candidate) {
       throw new Error("My GitHub authorization has no candidate.");
     }
-    const assertCurrent = () => {
-      guard(action);
-      const record = requirePending(
-        readUserGitHubConnection(action.owner),
-        generation,
-        pending.requestId,
-      );
-      if (
-        record.pending.kind !== "device" ||
-        record.pending.candidate?.profileId !== candidate.profileId
-      ) {
-        throw new Error("My GitHub authorization changed.");
-      }
-    };
     try {
+      const prepared = await prepareUserGitHubConnection(action.owner);
+      const assertCurrent = () => {
+        guard(action);
+        prepared.assertCurrent();
+        const record = requirePending(prepared.connection, generation, pending.requestId);
+        if (
+          record.pending.kind !== "device" ||
+          record.pending.candidate?.profileId !== candidate.profileId
+        ) {
+          throw new Error("My GitHub authorization changed.");
+        }
+      };
       await withProfileLease(candidate.profileId, async (assertOwned) => {
         const assertInstall = () => {
           assertOwned();
@@ -333,7 +351,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         });
       });
       guard(action);
-      return { status: "success", personal: personalGitHubStatus(action) };
+      return { status: "success", personal: await personalGitHubStatusAsync(action) };
     } catch {
       guard(action);
       return { status: "failed", reason: "setup_failed" };
@@ -421,10 +439,15 @@ export function createPersonalGitHubOAuthLifecycle() {
     operationId: string,
     assertOwned: () => void,
   ): Promise<void> => {
+    const canonical = await resolvePersonalGitHubOwnerAsync(owner);
+    if (!canonical) {
+      throw new Error("My GitHub refresh ownership changed.");
+    }
+    const prepared = await prepareUserGitHubConnection(canonical);
     const readExact = () => {
       assertOwned();
-      const canonical = resolvePersonalGitHubOwner(owner);
-      const selection = canonical ? readUserGitHubConnection(canonical)?.selection : undefined;
+      prepared.assertCurrent();
+      const selection = prepared.connection?.selection;
       if (
         selection?.kind !== "connected" ||
         selection.profileId !== id ||

@@ -69,8 +69,7 @@ export function readSubagentRunsInWorker(
     return {
       type: command.type,
       runs: descendants.runs,
-      descendantBasis: {
-        digest: descendants.digest,
+      descendants: {
         sessionKeys: descendants.sessionKeys,
         runIds: descendants.runIds,
       },

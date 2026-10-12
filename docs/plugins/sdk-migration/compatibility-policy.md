@@ -150,11 +150,13 @@ TypeScript marks those adapters deprecated. They retain their result shapes and
 completion timing until the next Plugin SDK major and an explicitly approved
 breaking release. No schema, retained data, or update migration changes.
 
-GitHub publication's opaque requester and synchronous lifecycle methods, plus
-personal OAuth `cancelAuthorization` and `disconnect`, share the
+GitHub publication's opaque requester, `personalStatus`, and synchronous lifecycle methods, plus
+managed OAuth `cancelAuthorization` and `retireProfile`, and personal OAuth
+`cancelAuthorization` and `disconnect`, share the
 `github-publication` runtime warning budget. The personal OAuth methods retain
 their synchronous results until the same removal gate; migrate to
-`cancelAuthorizationAsync` and `disconnectAsync`. Follow the
+`cancelAuthorizationAsync` and `disconnectAsync`. Publication status readers use
+`await personalStatusAsync(...)` with the same arguments. Follow the
 [V2 request and lifecycle migration](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
 for required host capabilities and callback ordering. This does not change the
 warning policy of the placement reader family.

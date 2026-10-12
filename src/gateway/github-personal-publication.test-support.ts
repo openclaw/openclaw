@@ -14,7 +14,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createPersonalGitHubOAuthLifecycle,
-  personalGitHubStatus,
+  personalGitHubStatusAsync as personalGitHubStatus,
 } from "./github-personal-oauth.js";
 import type {
   PersonalGitHubSessionAction,

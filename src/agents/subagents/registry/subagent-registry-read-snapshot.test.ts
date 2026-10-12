@@ -1,10 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -12,7 +10,6 @@ import {
   createSubagentRunRecord,
   configureMockSubagentRegistryPersistence,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import {
@@ -25,10 +22,6 @@ import {
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentRunsSnapshotForSessions,
 } from "./subagent-registry-state.js";
-import {
-  loadSubagentRunsForSessionsInDatabase,
-  subagentRunsDurableBasisMatches,
-} from "./subagent-registry.store.sqlite.js";
 
 function retainedRun() {
   return createSubagentRunRecord({
@@ -204,8 +197,6 @@ it("prepares durable grandchildren through live-only parents and refuses changed
       ready: true,
       value: { rawParent: true, grandchild: grandchild.childSessionKey },
     });
-    expect(prepared.basis.digest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(Object.isFrozen(prepared.basis)).toBe(true);
     memory.set("new-child", {
       ...parent,
       runId: "new-child",
@@ -214,47 +205,6 @@ it("prepares durable grandchildren through live-only parents and refuses changed
     const consume = vi.fn();
     expect(prepared.consume(consume)).toEqual({ ready: false });
     expect(consume).not.toHaveBeenCalled();
-  });
-});
-
-it("shares immutable live topology until a registry mutation and still fences relevant changes", async () => {
-  await withPersistedReads(async () => {
-    const entry = retainedRun();
-    subagentRuns.set(entry.runId, entry);
-    const prepare = () =>
-      prepareSubagentRunsSnapshotForSessions(subagentRuns, [entry.requesterSessionKey]);
-    try {
-      const first = await prepare();
-      const second = await prepare();
-      expect(second.basis.liveTopology).toBe(first.basis.liveTopology);
-      expect(Object.isFrozen(first.basis.liveTopology)).toBe(true);
-      expect(Object.isFrozen(first.basis.liveTopology[0])).toBe(true);
-
-      const unrelated = {
-        ...entry,
-        runId: "unrelated",
-        requesterSessionKey: "agent:other:main",
-        childSessionKey: "agent:other:subagent:child",
-      };
-      subagentRuns.set(unrelated.runId, unrelated);
-      expect(first.consume((runs) => [...runs.keys()])).toEqual({
-        ready: true,
-        value: [entry.runId],
-      });
-      const third = await prepare();
-      expect(third.basis.liveTopology).not.toBe(first.basis.liveTopology);
-      expect(first.basis.liveTopology).toEqual([
-        { childSessionKey: entry.childSessionKey, requesterSessionKey: entry.requesterSessionKey },
-      ]);
-
-      subagentRuns.set(entry.runId, { ...entry, childSessionKey: "agent:main:subagent:moved" });
-      expect(first.consume(() => "stale")).toEqual({ ready: false });
-      subagentRuns.delete(entry.runId);
-      expect((await prepare()).consume((runs) => runs.size)).toEqual({ ready: true, value: 0 });
-    } finally {
-      subagentRuns.delete(entry.runId);
-      subagentRuns.delete("unrelated");
-    }
   });
 });
 
@@ -301,68 +251,6 @@ it.each(["update", "delete"] as const)(
       } finally {
         write.mockRestore();
       }
-    });
-  },
-);
-
-it.each(["malformed payload", "duplicate identity", "topology", "unrelated row"] as const)(
-  "compares the durable descendant basis after a physical %s change",
-  async (change) => {
-    await withPersistedReads(async () => {
-      const root = "agent:main:cron:basis";
-      const liveTopology = [{ requesterSessionKey: root, childSessionKey: "agent:main:live" }];
-      const child = { ...retainedRun(), requesterSessionKey: "agent:main:live" };
-      const malformed = {
-        ...retainedRun(),
-        runId: "malformed",
-        childSessionKey: "agent:main:malformed",
-        requesterSessionKey: ["duplicate identity", "unrelated row"].includes(change)
-          ? "agent:main:other"
-          : root,
-      };
-      saveSubagentRegistryToSqlite(
-        new Map([
-          [child.runId, child],
-          [malformed.runId, malformed],
-        ]),
-      );
-      const database = openOpenClawStateDatabase();
-      const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(
-        database.db,
-      );
-      const physicalId = change === "duplicate identity" ? ` ${child.runId} ` : malformed.runId;
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("subagent_runs")
-          .set({ run_id: physicalId, payload_json: "{}" })
-          .where("run_id", "=", malformed.runId),
-      );
-      const before = loadSubagentRunsForSessionsInDatabase(database, [root], liveTopology);
-      expect([...before.runs.keys()]).toEqual([child.runId]);
-      const basis = {
-        databasePath: database.path,
-        databaseIdentity: "comparison-owned-by-caller",
-        sessionKeys: [root],
-        liveTopology,
-        digest: before.digest,
-      };
-      expect(subagentRunsDurableBasisMatches(database, basis)).toBe(true);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("subagent_runs")
-          .set(
-            change === "topology"
-              ? { requester_session_key: "agent:main:moved" }
-              : { payload_json: '{"unreadable":true}' },
-          )
-          .where("run_id", "=", physicalId),
-      );
-      expect([
-        ...loadSubagentRunsForSessionsInDatabase(database, [root], liveTopology).runs.keys(),
-      ]).toEqual([child.runId]);
-      expect(subagentRunsDurableBasisMatches(database, basis)).toBe(change === "unrelated row");
     });
   },
 );
