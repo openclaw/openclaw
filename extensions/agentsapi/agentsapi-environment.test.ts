@@ -96,7 +96,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: { warn: vi.fn() },
   formatErrorMessage: (error: unknown) => String(error),
   resolveAgentDir: () => "/fixture/agent",
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   runAgentHarnessLlmOutputHook: vi.fn(),
   sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),

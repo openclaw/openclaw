@@ -63,7 +63,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     buildEmbeddedForegroundPromptContext: () => ({}),
     runAgentHarnessLlmOutputHook: vi.fn(),
     awaitAgentEndSideEffects: vi.fn(),
-    runAgentEndSideEffects: vi.fn(),
+    runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   };
 });
 
