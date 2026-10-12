@@ -205,7 +205,7 @@ assistant, plan, tool, and other stream events.
 
 ## Render generated image artifacts
 
-Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Assistant-generated images arrive as standard `type: "image"` content blocks.
 Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
 type, dimensions, size, and accessible alt text. Keep that reference in the
 transcript cache; do not persist downloaded bytes or temporary download URLs.

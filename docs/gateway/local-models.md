@@ -292,7 +292,7 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
 - **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first. `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
 - **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution. Fix the server's chat template and parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above. Use that model entry only for sessions where a tool call is expected every turn.
-- **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit prompt-injection blast radius.
+- **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit the damage from prompt injection.
 
 ### Local model lean mode
 

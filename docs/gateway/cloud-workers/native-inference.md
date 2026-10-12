@@ -126,10 +126,10 @@ diagnostics and protocol output.
 Every compatible model under `models.providers` with a usable credential is
 available to worker-local turns on this node. There is no second workspace/model
 allowlist. The supervisor projects the exact admitted workspace into each child,
-and both node and worker check its canonical identity. Model configuration is not
+and both node and worker check its normalized identity. Model configuration is not
 loaded from the workspace, a turn request, Gateway auth profiles, or dotenv files.
 
-The node snapshots its canonical model configuration and resolved auth values at
+The node snapshots its saved model configuration and resolved auth values at
 startup. Rotation requires controlled node/worker replacement through your
 platform lifecycle; it does not mutate a running snapshot. The private startup carrier is removed before
 tools execute to avoid accidental inheritance, not to isolate it from same-user code. Workspace preparation, repository setup, and unrelated proxied
@@ -243,7 +243,7 @@ current worker-inference binding.
 
 **Current limitation:** explicit model/runtime selection still uses Gateway
 model availability and auth checks; worker proxy auth values do not satisfy those
-checks. An explicit `agentRuntime` requires an explicit canonical `model` and an
+checks. An explicit `agentRuntime` requires an explicit normalized `model` and an
 available Gateway runtime choice. The model picker is not a catalog of the node's
 model configuration. Use the configured-default flow above; do not copy worker
 auth values to the Gateway or disable auth checks to make an explicit selection pass.
@@ -255,27 +255,27 @@ authority still apply.
 
 The launch carries a feature-gated inference choice and the existing model
 reference, not model endpoints, headers, or provider credentials. Missing local
-configuration, unavailable models, incompatible workers, and provider errors fail
-closed. The worker and Gateway both reject proxy fallback for local turns.
+configuration, unavailable models, incompatible workers, and provider errors block
+the turn. The worker and Gateway both reject proxy fallback for local turns.
 Omitting `settings.inference`, or setting it to `gateway`, preserves the default.
 
 ## Troubleshooting
 
-Worker-local inference is deliberately fail-closed. A failed turn never falls
+Worker-local inference stops on error. A failed turn never falls
 back to Gateway inference, because that would silently change credential custody
 and placement. Use the first matching diagnostic below, fix its owner, then retry
 or restart the failed worker placement.
 
-| Diagnostic                                         | What to fix                                                                                                                                                                            |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `settings.inference must be "gateway" or "worker"` | Set the selected device profile's `settings.inference` to one of those exact values. Omit it to keep Gateway inference.                                                                |
-| `requires a paired device profile`                 | Set `cloudWorkers.profiles.<id>.settings.device` to the connected node ID and dispatch through that profile, not the ordinary device target.                                           |
-| `cannot use ... for agent ...`                     | Allow the model in that agent's model policy, or choose an allowed configured default.                                                                                                 |
-| `missing from the Gateway model catalog`           | Add non-secret metadata for the same model reference under the Gateway's `models.providers`. Keep `baseUrl`, credentials, and secret headers on the node.                              |
-| `unavailable on paired device ...`                 | Update and restart the node host. Use Linux or macOS, set `nodeHost.workerRuns.isolation` to `"none"`, and ensure the node has at least one compatible model with a usable credential. |
-| `not configured on this node`                      | Add a compatible model and usable credential under the node's `models.providers`, then restart the node host so it snapshots the new configuration.                                    |
-| `model ... is unavailable on this node`            | Configure that exact provider/model reference and credential in the node's `openclaw.json`, then restart the node host.                                                                |
-| `startup data exceeds 2 MiB`                       | Reduce the number or size of configured node models and headers, then restart the node host.                                                                                           |
+| Diagnostic                                         | What to fix                                                                                                                                                                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `settings.inference must be "gateway" or "worker"` | Set the selected device profile's `settings.inference` to one of those exact values. Omit it to keep Gateway inference.                                                                    |
+| `requires a paired device profile`                 | Set `cloudWorkers.profiles.<id>.settings.device` to the connected node ID and dispatch through that profile, not the ordinary device target.                                               |
+| `cannot use ... for agent ...`                     | Allow the model in that agent's model policy, or choose an allowed configured default.                                                                                                     |
+| `missing from the Gateway model catalog`           | Add non-secret metadata for the same model reference under the Gateway's `models.providers`. Keep `baseUrl`, credentials, and secret headers on the node.                                  |
+| `unavailable on paired device ...`                 | Update and restart the node host. Use Linux or macOS, set `nodeHost.workerRuns.isolation` to `"none"`, and check that the node has at least one compatible model with a usable credential. |
+| `not configured on this node`                      | Add a compatible model and usable credential under the node's `models.providers`, then restart the node host so it snapshots the new configuration.                                        |
+| `model ... is unavailable on this node`            | Configure that exact provider/model reference and credential in the node's `openclaw.json`, then restart the node host.                                                                    |
+| `startup data exceeds 2 MiB`                       | Reduce the number or size of configured node models and headers, then restart the node host.                                                                                               |
 
 If the Control UI reports **Runner failed**, open the placement details for the
 diagnostic. Restarting without changing the named configuration will repeat the
@@ -284,7 +284,7 @@ model catalog in full.
 
 ## Upgrade and downgrade
 
-The canonical profile values are `gateway` and `worker`; omission means `gateway`.
+The supported profile values are `gateway` and `worker`; omission means `gateway`.
 Upgrading a released installation does not enable worker inference or add native
 configuration. Already allocated environments retain their original snapshots;
 profile edits do not change an active binding. No database rewrite or
@@ -339,10 +339,10 @@ Before downgrading either service to a build without this feature:
 - Coding tools execute in the worker. Existing grants and permission modes apply.
   Interactive exec approvals and worker LLM-review approval transport remain
   unsupported; approval-required execution is denied, not auto-approved.
-- The node's canonical model configuration owns the real model API, input capabilities, context window,
+- The node's saved model configuration owns the real model API, input capabilities, context window,
   output-token limit, prices, and thinking support. Unsupported thinking and
   conflicting token-budget overrides are rejected. The existing worker replay
-  projection preserves supported provider replay in canonical Gateway transcripts.
+  projection preserves supported provider replay in stored Gateway transcripts.
 - Automatic compaction and retry remain disabled by the existing worker runtime.
   Local inference does not add an alternative compaction path.
 - Azure adapters requiring ambient endpoint configuration and ambient Vertex ADC

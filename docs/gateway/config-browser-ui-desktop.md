@@ -158,7 +158,7 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
   the theme default applies. `prefs.accent` also accepts `"theme"` to explicitly
   select the Control UI theme palette without inheriting `seamColor`; `talk.config`
   omits its hex-only accent in that case.
-- `prefs`: cross-device operator preferences. This is the canonical home so agents can
+- `prefs`: cross-device operator preferences. This is the shared home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An
   explicitly read-only connection keeps edits in that browser without attempting

@@ -53,7 +53,7 @@ selects that contract when `version: 2` is present.
 - `channels.start` (`operator.admin`) starts one channel account runtime without re-authenticating. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, started, outcome }`, with `started` true only when the resulting runtime snapshot reports `running: true`. `outcome` carries the account lifecycle decision: `{ status: "handed-off" }`, `{ status: "retry", reason }`, or `{ status: "skipped", reason }`. The RPC is a manual override of automatic-start suppression; no `manual` parameter is accepted. This is not a provider-connectivity check; see [Per-account recovery](/cli/channels#per-account-recovery-non-destructive) for reasons and recovery guidance.
 - `channels.stop` (`operator.admin`) stops one channel account runtime without clearing auth state. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, stopped }`, with `stopped` true when the resulting runtime snapshot does not report `running: true`. Unlike `channels.logout`, it retains the account's credentials.
 - `channels.logout` logs out a specific channel/account where the channel supports it.
-- `web.login.start` starts a QR/web login flow. Params include optional `{ channel, accountId, force, timeoutMs, verbose }`. When `channel` is present, the Gateway normalizes its canonical id or alias and dispatches only to that installed channel plugin. Omitting `channel` preserves the legacy behavior of selecting the first loaded QR-capable provider. A provider may return an opaque `sessionKey` with its QR response.
+- `web.login.start` starts a QR/web login flow. Params include optional `{ channel, accountId, force, timeoutMs, verbose }`. When `channel` is present, the Gateway normalizes its standard id or alias and dispatches only to that installed channel plugin. Omitting `channel` preserves the legacy behavior of selecting the first loaded QR-capable provider. A provider may return an opaque `sessionKey` with its QR response.
 - `web.login.wait` waits for that flow to complete and starts the channel on success. Params include optional `{ channel, accountId, sessionKey, timeoutMs, currentQrDataUrl }`. Use the same `channel` as `web.login.start` and pass its returned `sessionKey` through unchanged so the provider can correlate the wait request with the QR session. Omitting `channel` retains the same legacy provider fallback as `web.login.start`.
 - `push.test` sends a test APNs push to a registered iOS node.
 - `voicewake.get` returns the stored wake-word triggers.
@@ -157,7 +157,7 @@ An install error can also include `details.persistence: { operation: "install", 
 
 Install, enable, and reload may require capability consent. After reviewing the declared capabilities, pass `acknowledgeCapabilities: { reviewToken }`; the token is checked against a fresh inspection before application. This is separate from install-policy warning approval. See [Plugin management](/plugins/manage-plugins).
 
-Reload preconditions are optional. `installHash` is the lowercase SHA-256 of the canonical saved install record and requires a tracked package. `sourceDigests` maps resolved runtime plugin IDs to lowercase SHA-256 source digests. Tracked targets resolve their entire package; a bundled or configured source without an install record resolves its discovered runtime ID. Ambiguous, missing, or conflicting managed ownership still rejects the request. The Gateway checks target ownership and expected records before and after consent, then validates source expectations against the captured code it loads. Consent can update the saved install record: if that changes a supplied `installHash`, reload fails visibly without publishing runtime. The caller must refresh its expected state before retrying; the Gateway never rewrites the supplied hash. An acknowledgment covers its reviewed declared surface, and a different required surface stops the operation before runtime publication. Reload does not rebuild compiled bundled code or grant file-mutation authority.
+Reload preconditions are optional. `installHash` is the lowercase SHA-256 of the saved install record in its normalized form and requires a tracked package. `sourceDigests` maps resolved runtime plugin IDs to lowercase SHA-256 source digests. Tracked targets resolve their entire package; a bundled or configured source without an install record resolves its discovered runtime ID. Ambiguous, missing, or conflicting managed ownership still rejects the request. The Gateway checks target ownership and expected records before and after consent, then validates source expectations against the captured code it loads. Consent can update the saved install record: if that changes a supplied `installHash`, reload fails visibly without publishing runtime. The caller must refresh its expected state before retrying; the Gateway never rewrites the supplied hash. An acknowledgment covers its reviewed declared surface, and a different required surface stops the operation before runtime publication. Reload does not rebuild compiled bundled code or grant file-mutation authority.
 
 `sourceDigests` requires a captured-source plugin instance and Node's synchronous module hooks. Runtimes without those hooks, including Bun 1.4.2, omit these digests and reject requests that supply them. Ordinary Bun reloads capture fresh source for the replacement while retaining the old instance for admitted consumers; see [runtime instance and source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
@@ -209,7 +209,7 @@ input cursor so the client can retry the same page. Installation-status failure
 returns `UNAVAILABLE` instead of claiming that listings are uninstalled.
 
 Each item has `kind`, `registry`, `id`, `catalog` metadata, and `local` facts.
-Treat `(kind, registry, id)` as its canonical identity. Plugin IDs preserve the
+Treat `(kind, registry, id)` as its unique identity. Plugin IDs preserve the
 existing `ch_...` discovery identity, so `plugins.catalog.get` can open details;
 `catalog.packageName` supplies the existing plugin installation locator. Skill
 IDs equal `installRef`: native `@publisher/slug` or a source-qualified external
@@ -231,7 +231,7 @@ most 200 characters), optional `kinds` (`plugin`, `skill`, or both; default both
 `agentId`, `pageSize` (1–100, default 20), and an optional returned `cursor`.
 The Gateway trims and collapses whitespace, lowercases and deduplicates terms,
 and searches each individual term for each selected kind. It always returns
-only official listings, deduplicated by canonical identity, in deterministic
+only official listings, deduplicated by unique identity, in fixed
 identity order. It never concatenates the terms or interprets application
 inventories. Clients own application detection and keyword generation.
 
@@ -256,7 +256,7 @@ request timeout and retain the original request for retries.
 Native skill catalog browsing and search use ClawHub's existing
 `/api/v1/packages?family=skill` and `/api/v1/packages/search?family=skill`
 contracts. These project the native skill catalog and expose the listing's
-`isOfficial` flag. `/api/v1/skills` currently omits that flag. Canonical skill
+`isOfficial` flag. `/api/v1/skills` currently omits that flag. Existing skill
 search and trending can combine publisher and listing official status; the new
 catalog does not use publisher official status as a substitute. Native trending
 entries therefore read their listing flag from package metadata in bounded
@@ -266,10 +266,10 @@ Mismatched metadata leaves official status unknown. Missing flags never qualify;
 publisher handles, and bundled provenance cannot qualify a listing either.
 
 The package skill catalog currently covers native ClawHub skills. External
-sources can appear in the canonical trending feed with their original
+sources can appear in the existing trending feed with their original
 install-only identities, but currently expose no separate listing-level official
 flag and cannot qualify for official suggestions. Existing `skills.search`
-retains its canonical cross-source search and omitted-query trending behavior;
+retains its existing cross-source search and omitted-query trending behavior;
 its public result contract also declares the existing optional `official` field.
 No cross-kind category taxonomy or global relevance ranking is introduced.
 

@@ -760,7 +760,7 @@ Nested durations overlap their parent phases; do not add them to the parent tota
 Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
 import and registration timings.
 
-Desktop permission narrowing and canonical session checks remain on their required
+Desktop permission narrowing and session identity checks remain on their required
 admission paths. Transcript projection repair, orphan settlement, channel
 maintenance, pairing diagnostics, and restored-subagent activation run after
 readiness. Retired plugin captures join the existing post-ready idle cleanup.
@@ -951,12 +951,12 @@ The object aggregates observations across the pruning pass:
   calls and their requested page counts. Requested pages are not confirmed
   reclaimed pages.
 - `queryMs` covers existing archive-presence, candidate, unpublished-name, and
-  freelist reads. `rowDeletionMs` covers the canonical archive row-deletion
+  freelist reads. `rowDeletionMs` covers the archive row-deletion
   transaction.
 - `fileRemovalMs`, `removedFiles`, `missingFiles`, and `failedRemovals` report
-  existing file-removal outcomes. `removedFiles` counts successful canonical and
-  legacy removals. `missingFiles` counts canonical removal attempts that return
-  `ENOENT`. Other canonical failures and all unsuccessful legacy removals count
+  existing file-removal outcomes. `removedFiles` counts successful current-layout and
+  legacy removals. `missingFiles` counts current-layout removal attempts that return
+  `ENOENT`. Other current-layout failures and all unsuccessful legacy removals count
   under `failedRemovals`; the legacy count includes missing paths, non-files,
   and stat or removal failures.
 - `measurementMs` and `measurements` cover awaited disk-usage measurement attempts,
@@ -1078,7 +1078,7 @@ it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
 
 Transcript redaction does not replace the live arguments used to execute tools.
-Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
+Original assistant tool-call IDs and matching tool-result IDs remain unchanged
 so stored history can correlate with live tool events. This exemption applies
 only to protocol metadata; the same values in arguments, results, or nested
 payloads still pass through redaction.

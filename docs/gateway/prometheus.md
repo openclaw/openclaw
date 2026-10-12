@@ -400,7 +400,7 @@ The allowlists bound cardinality without publishing session IDs, database paths,
 command suffixes, or caller-provided names. The exporter's shared series cap still
 applies.
 
-The `transcripts` request family includes canonical event appends and retention.
+The `transcripts` request family includes stored event appends and retention.
 
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include

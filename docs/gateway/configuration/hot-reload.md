@@ -439,5 +439,5 @@ When you edit a source file that is referenced through `$include`, OpenClaw plan
 the reload from the source-authored layout, not the flattened in-memory view.
 That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
 single top-level section lives in its own included file such as
-`plugins: { $include: "./plugins.json5" }`. Reload planning fails closed if the
+`plugins: { $include: "./plugins.json5" }`. Reload planning stops if the
 source layout is ambiguous.

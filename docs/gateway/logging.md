@@ -102,7 +102,7 @@ any driver waits, scheduling, and ownership revalidation. When admission uses a
 separate integrity Worker, its lifetime is included. This does not isolate
 native-check or CPU time.
 
-When canonical-index validation completes, `canonicalIndexMs` reports the
+When required-index validation completes, `canonicalIndexMs` reports the
 subsequent synchronous inspection and any repair or rechecks, and
 `repairedIndexCount` counts indexes successfully repaired by that operation.
 A healthy initial integrity check can still require an index-definition repair.

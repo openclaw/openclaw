@@ -154,7 +154,7 @@ Without a default, the allowlist must admit generated `hook:` keys.
 A logical hook key is not always the stored session key. Isolated runs use fresh
 automation run sessions even when the hook key is stable. Persistence controls
 conversation reuse, not tool permissions or sandboxing. Requests sharing a
-canonical logical key are serialized through completion, even in isolated mode.
+normalized logical key are serialized through completion, even in isolated mode.
 A fixed `defaultSessionKey` therefore orders those requests but can make a later
 single request hit the admission timeout while an earlier run is still active.
 
@@ -258,7 +258,7 @@ pending items return non-2xx with `ok: false`, an incomplete-batch `error`, admi
 
 Agent fan-out derives replay identity from each rendered action even without an
 explicit idempotency key. Identical retries reconcile pending/admitted items
-within the cache lifetime; keep transforms deterministic for retries. Wake
+within the cache lifetime; keep transform results the same for identical retries. Wake
 actions dispatch immediately and have no replay identity, including mixed
 wake/agent batches. Their response includes `eventOutcome: "queued"` if any wake
 was accepted by its queue, or `"coalesced"` if every wake was coalesced by its queue.

@@ -3,7 +3,7 @@ summary: "Network hub: gateway surfaces, pairing, discovery, and security"
 read_when:
   - You need the network architecture + security overview
   - You are debugging local vs tailnet access or pairing
-  - You want the canonical list of networking docs
+  - You want the main list of networking docs
 title: "Network"
 ---
 

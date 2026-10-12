@@ -426,7 +426,7 @@ read_when:
       include arrays, sibling overrides, files shared by multiple logical paths,
       changes spanning ownership boundaries,
       any nested include beneath a merged owner, and any include whose own file
-      still authors a nested `$include` directive fail closed instead of
+      still authors a nested `$include` directive reject writes instead of
       flattening the config. Numeric object keys are treated as map keys, not
       array positions.
       Include targets and contents are rechecked around persistence; a concurrent

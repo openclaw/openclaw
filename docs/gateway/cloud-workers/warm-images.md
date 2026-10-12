@@ -30,7 +30,7 @@ Project images also retain one verified compressed worker archive in the install
 
 Daytona requires a stopped source for filesystem snapshots. OpenClaw allows Crabbox to stop the scrubbed worker for capture. A successful capture waits for snapshot completion and restores a previously running source before project enrollment continues.
 
-Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system, exact effective machine class, and project identity when present. Project identity comes from the Gateway's namespace and the canonical shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared repository identity includes the canonical URL, GitHub repository ID, current agent binding, selected shared GitHub account/profile or explicitly verified anonymous access, and a separate scope for private contents. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
+Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, effective operating system, exact effective machine class, and project identity when present. Project identity comes from the Gateway's namespace and the resolved shared Git directory. Linked session worktrees from the same repository share it; a new session or commit does not create another project identity. Separate repository clones have separate identities. Prepared repository identity includes the normalized URL, GitHub repository ID, current agent binding, selected shared GitHub account/profile or explicitly verified anonymous access, and a separate scope for private contents. Tokens are never persisted in that identity. Each prepared seed also records its exact commit, so a changed commit can refresh the same project's image.
 
 Before its first provider allocation command, OpenClaw records whether the lease starts cold or from a specific checkpoint, along with its resolved operating system and class. Retries and Gateway restart reuse that exact choice; a lost response cannot switch a cold allocation to a newly available image or select a different checkpoint. The record advances through preparation and enrollment, and a selected checkpoint remains protected from deletion until the provider confirms the lease has stopped. A failed fork reports an error instead of silently changing the recorded allocation. Runtime identity is also frozen for that allocation. Replay rejects a changed or missing identity rather than relabeling an existing worker; stop it before creating a new allocation. An older allocation cannot replace an image published from a different source generation merely because their runtime digests differ.
 
@@ -294,7 +294,7 @@ marker. On rollback, an older OpenClaw ignores the marker and returns to the
 previous behavior (a refused capture stays paused until recovery), which fails safe.
 `profileId` means the configured profile that most recently allocated from the
 image key; it is overwritten on each allocation and does not change image keys
-or reuse policy. `projectRoot` is the canonical Gateway-local repository root used for rebuilding.
+or reuse policy. `projectRoot` is the resolved Gateway-local repository root used for rebuilding.
 Project labels use the normalized origin repository identity
 `host/owner/repo`, or the project root's basename when origin cannot be resolved.
 
@@ -326,7 +326,7 @@ Warm profiles use a version-3 envelope in the existing `warm-images` plugin-stat
 openclaw doctor --fix
 ```
 
-Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, allocation choices, operating-system/runtime identity, capture selectors, and retirement obligations. Historical records do not acquire preparation, reserve-purpose, or successful-demand facts. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the canonical envelope; it does not silently convert old rows.
+Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, allocation choices, operating-system/runtime identity, capture selectors, and retirement obligations. Historical records do not acquire preparation, reserve-purpose, or successful-demand facts. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the current envelope format; it does not silently convert old rows.
 
 Older `warm-leases` rows record an enrolled class but cannot establish whether a lease originally started cold or from a checkpoint. These rows block new warm-image allocations until resolved. Doctor reports their count and exact recovery commands. Resolve each lease through its original Gateway or provider, stop its worker and owning processes, and reconcile provider artifacts before using the reported selector:
 
