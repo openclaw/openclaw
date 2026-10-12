@@ -902,6 +902,38 @@ describe("agent deletion database cleanup authority", () => {
     });
   });
 
+  it.each([false, true])(
+    "purges only target rows in a surviving shared store (cold: %s)",
+    async (cold) => {
+      const f = fixture();
+      const storePath = path.join(f.root, "shared.sqlite");
+      const sharedOptions = { ...f.options, agentId: "kept", path: storePath };
+      const shared = openOpenClawAgentDatabase(sharedOptions);
+      const workerScope = { ...f.options, storePath, sessionKey: "agent:worker:shared" };
+      const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
+      replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
+      replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
+      if (cold) {
+        closeOpenClawAgentDatabaseByPath(storePath);
+      }
+      await f.withDeletion(async (deletion) => {
+        await expect(
+          purgeAgentSessionStoreEntries(
+            { agents: { entries: { worker: {}, kept: {} } }, session: { store: storePath } },
+            "worker",
+            { env: f.options.env, runDatabaseCleanup: deletion.runDatabaseCleanup },
+          ),
+        ).resolves.toBe(false);
+        expect(loadSessionEntryReadOnly(workerScope)).toBeUndefined();
+        expect(loadSessionEntryReadOnly(keptScope)?.sessionId).toBe("keep");
+        expect(shared.db.isOpen).toBe(!cold);
+        if (cold) {
+          expect(getOpenClawAgentDatabaseIfOpen(sharedOptions)).toBeUndefined();
+        }
+      });
+    },
+  );
+
   it.each([true])(
     "retains failed cleanup close ownership (operation also failed: %s)",
     async (failRun) => {

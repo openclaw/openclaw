@@ -608,6 +608,20 @@ describe("asynchronous canonical admission", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
+  it("rejects an existing FK violation before publishing a writable handle", async () => {
+    const { options, writer } = seed();
+    corruptForeignKey(writer);
+    await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
+      /foreign_key_check failed/,
+    );
+    expect(() =>
+      assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
+    ).not.toThrow();
+    expect(
+      writer.prepare("SELECT count(*) AS n FROM cache_entries WHERE scope='synthetic'").get(),
+    ).toEqual({ n: 0 });
+  });
+
   it("rechecks corruption after async handle disposal", async () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);

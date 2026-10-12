@@ -438,39 +438,39 @@ describe("database verifier bounded diagnostics", () => {
     ]);
   });
 
-  it.each([{ name: "original I/O failure before close failure", errcode: 10, terminal: false }])(
-    "preserves $name and classification",
-    async ({ errcode, terminal }) => {
-      const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
-      if (errcode !== undefined) {
-        vi.spyOn(database, "prepare").mockImplementationOnce(() => {
-          throw Object.assign(new Error("scan failed"), { code: "ERR_SQLITE_ERROR", errcode });
-        });
-      }
-      const close = database.close.bind(database);
-      vi.spyOn(database, "close").mockImplementationOnce(() => {
-        close();
-        throw Object.assign(new Error("close failed"), { code: "EIO", errcode: 10 });
+  it.each([
+    { name: "original I/O failure before close failure", errcode: 10, terminal: false },
+    { name: "original corruption before close failure", errcode: 779, terminal: true },
+  ])("preserves $name and classification", async ({ errcode, terminal }) => {
+    const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
+    if (errcode !== undefined) {
+      vi.spyOn(database, "prepare").mockImplementationOnce(() => {
+        throw Object.assign(new Error("scan failed"), { code: "ERR_SQLITE_ERROR", errcode });
       });
-      try {
-        await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
-          {
-            path: target.path,
-            ok: false,
-            terminal,
-            error:
-              errcode === undefined
-                ? "Error: close failed (code=EIO, errcode=10)"
-                : `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
-          },
-        ]);
-        expect(database.isOpen).toBe(false);
-      } finally {
-        if (database.isOpen) {
-          close();
-        }
+    }
+    const close = database.close.bind(database);
+    vi.spyOn(database, "close").mockImplementationOnce(() => {
+      close();
+      throw Object.assign(new Error("close failed"), { code: "EIO", errcode: 10 });
+    });
+    try {
+      await expect(verifyOpenClawDatabases([target])).resolves.toEqual([
+        {
+          path: target.path,
+          ok: false,
+          terminal,
+          error:
+            errcode === undefined
+              ? "Error: close failed (code=EIO, errcode=10)"
+              : `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
+        },
+      ]);
+      expect(database.isOpen).toBe(false);
+    } finally {
+      if (database.isOpen) {
+        close();
       }
-    },
-  );
+    }
+  });
 });

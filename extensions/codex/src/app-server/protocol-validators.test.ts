@@ -111,11 +111,14 @@ describe("passive native turn items", () => {
     ).toThrow("unexpected native item: userMessage");
   });
 
-  it.each(["commandExecution"])("does not admit %s with managed hooks enabled", (type) => {
-    expect(() =>
-      assertCodexPassiveTurnItems([passiveItem(type)], prompt, "completion", managedHooks),
-    ).toThrow(`unexpected native item: ${type}`);
-  });
+  it.each(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"])(
+    "does not admit %s with managed hooks enabled",
+    (type) => {
+      expect(() =>
+        assertCodexPassiveTurnItems([passiveItem(type)], prompt, "completion", managedHooks),
+      ).toThrow(`unexpected native item: ${type}`);
+    },
+  );
 });
 
 describe("Codex thread response validators", () => {

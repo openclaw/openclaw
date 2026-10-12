@@ -278,6 +278,52 @@ describe("root memory repair", () => {
     await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
   });
 
+  it("does not archive or remove an oversized legacy memory file", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+      ),
+      "Doctor changes",
+    );
+    await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toContain(
+      "# Legacy",
+    );
+  });
+
+  it("does not archive or remove a valid legacy memory file when canonical is oversized", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n".repeat(1_000_000), "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+      ),
+      "Doctor changes",
+    );
+    await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n".repeat(1_000_000),
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toContain(
+      "# Legacy",
+    );
+  });
+
   it("reports a skipped repair when a root memory file cannot be read", async () => {
     const targetFile = path.join(tmpDir, "canonical-target.md");
     await fs.writeFile(targetFile, "# Canonical\n", "utf8");

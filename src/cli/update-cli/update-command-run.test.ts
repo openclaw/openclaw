@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -206,6 +206,31 @@ it.each([{ dryRun: false, reuseRunId: true }])(
     ).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
     expect(snapshot()).toEqual(before);
     expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
+  },
+);
+
+it.each(["displaced", "replacement", "both", "unreadable"] as const)(
+  "blocks admission when publication has no canonical DB (%s)",
+  async (familyState) => {
+    const { root, run, snapshot } = pendingRecovery();
+    vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
+    const file = path.join(root, "state", "openclaw.sqlite");
+    const family = path.join(path.dirname(file), `.openclaw-restore-${randomUUID()}-0`);
+    fs.mkdirSync(family);
+    fs.renameSync(file, path.join(family, "displaced"));
+    if (familyState === "replacement") {
+      fs.renameSync(path.join(family, "displaced"), path.join(family, "replacement"));
+    } else if (familyState === "both") {
+      fs.copyFileSync(path.join(family, "displaced"), path.join(family, "replacement"));
+    } else if (familyState === "unreadable") {
+      fs.writeFileSync(path.join(family, "displaced"), "incomplete database");
+    }
+    const before = snapshot();
+    await expect(admitUpdateCommandRun({ opts: {}, root }).then(() => "admitted")).rejects.toThrow(
+      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    );
+    expect(fs.existsSync(file)).toBe(false);
+    expect(snapshot()).toEqual(before);
   },
 );
 

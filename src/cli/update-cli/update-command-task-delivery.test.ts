@@ -12,6 +12,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { createUnsafeIndexDrift } from "../../state/sqlite-index-drift.test-support.js";
 import { admitUpdateCommandRun, completeUpdateCommandRun } from "./update-command-run.js";
 
 vi.mock("../../daemon/service.js", () => ({
@@ -132,6 +133,54 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   expect(record?.steps.find((step) => step.step === "task-delivery-recovery")?.detail).toContain(
     directories[0],
   );
+});
+
+it.each(["non-cascade", "structural"] as const)(
+  "refuses %s damage without admission or recovery",
+  (damage) => {
+    const f = seededOrphans();
+    if (damage === "non-cascade") {
+      inspect(f.filename, (db) =>
+        db.exec(`PRAGMA foreign_keys = OFF;
+      CREATE TABLE unrelated_parent (id TEXT PRIMARY KEY);
+      CREATE TABLE unrelated_child (id TEXT REFERENCES unrelated_parent(id));
+      INSERT INTO unrelated_child VALUES ('missing');`),
+      );
+    } else {
+      createUnsafeIndexDrift(f.filename);
+    }
+    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+      damage === "non-cascade" ? /foreign_key_check failed/ : /integrity_check failed/,
+    );
+    inspect(f.filename, (db) => {
+      expect(db.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
+        count: 19,
+      });
+      expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+    });
+    expect(
+      fs
+        .readdirSync(path.dirname(f.filename))
+        .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
+    ).toEqual([]);
+  },
+);
+
+it("preserves inbound CASCADE dependents when recovery is refused", () => {
+  const f = seededOrphans();
+  inspect(f.filename, (db) =>
+    db.exec(`CREATE TABLE dependent (
+    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE CASCADE);
+    INSERT INTO dependent VALUES ('missing-task-0');`),
+  );
+  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+    /foreign_key_check failed/,
+  );
+  inspect(f.filename, (db) => {
+    expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
 });
 
 it.each(["foreign-gateway"] as const)(
