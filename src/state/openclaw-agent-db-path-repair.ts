@@ -144,7 +144,7 @@ function assertEmptySentinelDatabase(
     throw new Error("unrecognized agent database metadata; manual recovery required");
   }
   // Shadow tables contain SQLite's own FTS bookkeeping even in an unused database.
-  const tables = database
+  const tables = database // sqlite-allow-raw -- Enumerate historical tables outside the current generated schema.
     .prepare(
       "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type IN ('table', 'virtual') AND name NOT LIKE 'sqlite_%'",
     )
@@ -154,8 +154,8 @@ function assertEmptySentinelDatabase(
       continue;
     }
     const condition = name === "memory_index_state" ? " WHERE id != 1 OR revision != 0" : "";
-    // Schema identifiers are quoted; these are bounded existence checks, not data scans.
     if (
+      // sqlite-allow-raw -- Check quoted historical table identifiers for retained data before removal.
       database.prepare(`SELECT 1 FROM "${name.replaceAll('"', '""')}"${condition} LIMIT 1`).get()
     ) {
       throw new Error(`contains retained data in ${name}; manual recovery required`);

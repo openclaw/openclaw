@@ -2142,9 +2142,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        operations: [
+          "repairOpenClawAgentDatabasePathAliases",
+          "repairOpenClawSentinelAgentDatabasePaths",
+        ],
         evidence:
-          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+          "Only src/commands/doctor-agent-database-paths.ts:32,41 under Doctor repair; sentinel cleanup holds withDoctorSqliteMaintenanceLock. Registered health runner: src/flows/doctor-health-contribution-runners.state.ts:117.",
       },
     ],
   ],
