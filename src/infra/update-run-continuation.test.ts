@@ -207,7 +207,7 @@ describe("Windows update repair continuation", () => {
     "requires readable ancestry through every live driver (updater required=$requiredUpdater)",
     ({ requiredUpdater, expected }) => {
       const currentPid = repairPid + 300 + Number(requiredUpdater);
-      const previousPid = updaterPid + 300;
+      const previousPid = updaterPid + 500;
       readProcessAncestry.mockImplementation((_pid, options) => ({
         chain: [
           identity(process.pid, currentPid, doctorStart),
