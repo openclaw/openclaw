@@ -1,5 +1,7 @@
 import { Agent, Server, request } from "node:http";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as mutableFileBinding from "../../infra/system-run-approval-binding.js";
 import {
   initializeGlobalHookRunner,
@@ -13,6 +15,7 @@ import * as relayBridge from "./native-hook-relay-bridge.js";
 import * as clientStore from "./native-hook-relay-client-store.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
 import { setNativeHookRelayPreToolUseApproval } from "./native-hook-relay-permissions.js";
+import { buildNativeHookRelayCommandPlan } from "./native-hook-relay-plan.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import * as store from "./native-hook-relay-store.js";
 import {
@@ -793,6 +796,83 @@ it("does not restore an old locator when renewal finishes after unregister", asy
 });
 
 describe("native hook execution admission", () => {
+  it.each(["bound tool", "native tool"] as const)(
+    "settles workspace attribution before a %s effect and fences closure during the wait",
+    async (path) => {
+      for (const outcome of ["settled", "closed", "failed"] as const) {
+        const entered = createDeferredCore();
+        const baseline = createDeferredCore();
+        const host = await createAdmittedHostCapabilityTestFixture({
+          runId: `attribution-${path}-${outcome}`,
+          awaitSessionDiffBaseline: async () => {
+            entered.resolve();
+            await baseline.promise;
+          },
+        });
+        const execute = vi.fn(async () => ({ content: [], details: {} }));
+        try {
+          const [tool] = host.hostCapabilities.bindToolSurface([
+            {
+              name: "write",
+              label: "Write",
+              description: "Write a file",
+              parameters: Type.Object({}),
+              execute,
+            },
+          ]);
+          const pending =
+            path === "bound tool"
+              ? tool!.execute("write-1", {})
+              : host.hostCapabilities.runBeforeToolCall({ toolName: "write", params: {} });
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Tool proceeded before workspace attribution",
+          );
+          expect(execute).not.toHaveBeenCalled();
+          if (outcome === "closed") {
+            host.closeHost();
+          }
+          if (outcome === "failed") {
+            baseline.reject(new Error("Workspace attribution unavailable"));
+          } else {
+            baseline.resolve();
+          }
+          if (outcome === "closed" || (outcome === "failed" && path === "bound tool")) {
+            if (outcome === "closed" && path === "bound tool") {
+              await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+            } else {
+              await expect(pending).rejects.toThrow(/no longer active|before_tool_call/);
+            }
+            expect(execute).not.toHaveBeenCalled();
+          } else if (outcome === "failed") {
+            await expect(pending).resolves.toMatchObject({ blocked: true, kind: "failure" });
+          } else {
+            await pending;
+            expect(execute).toHaveBeenCalledTimes(path === "bound tool" ? 1 : 0);
+          }
+        } finally {
+          baseline.resolve();
+          host.closeHost();
+          host.closeAdmission();
+        }
+      }
+    },
+  );
+
+  it("plans all native pre-tool callbacks for host preparation without plugin policies", () => {
+    const plan = buildNativeHookRelayCommandPlan({
+      provider: "codex",
+      relayId: "attribution-plan",
+      generation: "generation-1",
+      preToolUseLoopDetection: false,
+      requirePreToolUse: true,
+      command: { executable: "/synthetic/openclaw.mjs" },
+    });
+    expect(plan.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(plan.toolMatcherForEvent("pre_tool_use")).toBeUndefined();
+  });
+
   it("waits for async native admission and preserves a preparation rejection", async () => {
     const entered = createDeferredCore();
     const prepared = createDeferredCore();
@@ -839,6 +919,7 @@ describe("native hook execution admission", () => {
     { registration: "owned", work: "none", matcher: ["exec"] },
     { registration: "public", work: "none", matcher: undefined },
     { registration: "owned", work: "loop detection", matcher: undefined },
+    { registration: "owned", work: "tool preparation", matcher: undefined },
   ] as const)(
     "selects native execution custody for $registration registration with $work",
     async ({ registration, work, matcher }) => {
@@ -851,6 +932,7 @@ describe("native hook execution admission", () => {
         ...(work === "loop detection"
           ? { config: { tools: { loopDetection: { enabled: true } } } }
           : {}),
+        ...(work === "tool preparation" ? { requirePreToolUse: true } : {}),
         executionAdmission: { toolNames: [work === "none" ? "exec_command" : "exec"], admit },
       };
       const relay =

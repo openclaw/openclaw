@@ -31,7 +31,6 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -103,7 +102,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -121,6 +120,17 @@ export async function getReplyFromConfig(
   ctx: MsgContext,
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withReplySessionDiffBaseline((baseline) =>
+    resolveReplyFromConfig(ctx, options, configOverride, baseline),
+  );
+}
+
+async function resolveReplyFromConfig(
+  ctx: MsgContext,
+  options: GetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
+  baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
@@ -520,24 +530,9 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
-  if (!useFastTestBootstrap) {
-    try {
-      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        prepareReplySessionDiffBaseline({
-          agentId,
-          workspaceDir,
-          sessionState,
-        }),
-      );
-    } catch (error) {
-      if (isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      logVerbose(
-        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
+  const awaitSessionDiffBaseline = useFastTestBootstrap
+    ? undefined
+    : baseline.start({ agentId, workspaceDir, sessionState }, traceGetReplyPhase);
   const {
     sessionCtx,
     sessionEntry,
@@ -576,9 +571,11 @@ export async function getReplyFromConfig(
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
-  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
-    : optsWithCommandQueueOverride;
+  const optsWithSessionSkillOverrides = {
+    ...optsWithCommandQueueOverride,
+    ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
+    ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
+  };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -816,6 +813,10 @@ export async function getReplyFromConfig(
     }
     const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
     const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    await resolvedOpts?.awaitSessionDiffBaseline?.();
+    assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    resolvedOpts?.operatorAuthority?.assertCurrent();
+    command.assertOwnerCurrent?.();
     await emitResetCommandHooks({
       action,
       agentId,

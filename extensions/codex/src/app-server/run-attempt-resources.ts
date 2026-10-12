@@ -561,7 +561,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
     const requiresModelAdmission =
       nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
-    const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
+    const requiresExecutionAdmission =
+      requiresProcessAdmission ||
+      requiresModelAdmission ||
+      params.hostCapabilities.requiresToolPreparation === true;
     const relayEvents =
       requiresExecutionAdmission && !nativeHookRelayEvents.includes("pre_tool_use")
         ? [...nativeHookRelayEvents, "pre_tool_use" as const]

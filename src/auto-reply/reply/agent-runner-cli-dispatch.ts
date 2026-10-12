@@ -32,6 +32,7 @@ import {
 } from "./agent-event-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   mediaImageLayout?: MediaImageLayout;
 };
 
@@ -454,6 +455,8 @@ async function runCliAgentWithLifecycleInternal(
     }),
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   try {
+    // CLI backends own native tool execution, so attribution must settle before launch.
+    await params.runParams.awaitSessionDiffBaseline?.();
     const rawResult = await runCliAgent({
       ...params.runParams,
       emitCommentaryText: params.runParams.emitCommentaryText ?? Boolean(params.onCommentaryText),

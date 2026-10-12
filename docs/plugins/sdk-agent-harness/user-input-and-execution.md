@@ -126,6 +126,12 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+When `hostCapabilities.requiresToolPreparation` is true, native runtimes must
+await `runBeforeToolCall(...)` before every native tool effect, even when no
+plugin policy is installed. The host may finish first-turn workspace attribution
+while the first model request runs. Bound OpenClaw tools already await this
+preparation; native runtimes must install the equivalent pre-tool callback.
+
 When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
 admission. It rejects ambiguous participant identity; direct the model to
 `sessions_spawn` with the requester's verified `requester_profile.id` as `user`. Bundled native hook admission may return a synchronous

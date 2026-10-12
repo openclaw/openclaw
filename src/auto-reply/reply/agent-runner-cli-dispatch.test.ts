@@ -1,6 +1,7 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
@@ -69,6 +70,30 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("settles workspace attribution before launching a CLI backend", async () => {
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const pending = runCliAgentWithLifecycle({
+      runId: "cli-attribution",
+      runParams: createRunParams("cli-attribution", {
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      }),
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "CLI launched before attribution");
+      expect(cliDispatchState.runCliAgentMock).not.toHaveBeenCalled();
+      baseline.resolve();
+      await pending;
+      expect(cliDispatchState.runCliAgentMock).toHaveBeenCalledOnce();
+    } finally {
+      baseline.resolve();
+    }
+  });
+
   it("bridges completed CLI compaction lifecycles to reply callbacks", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({

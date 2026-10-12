@@ -114,10 +114,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
         params.requireWorkspaceOnly !== true &&
-        ((nativeToolSurfaceEnabled &&
-          params.pluginHarnessToolPolicyRestricted !== true &&
-          (resources.nativeProcessAuthority?.requiresProcessAdmission ||
-            resources.nativeModelAdmission === "required")) ||
+        ((params.hostCapabilities.requiresToolPreparation === true &&
+          params.pluginHarnessToolPolicyRestricted !== true) ||
+          (nativeToolSurfaceEnabled &&
+            params.pluginHarnessToolPolicyRestricted !== true &&
+            (resources.nativeProcessAuthority?.requiresProcessAdmission ||
+              resources.nativeModelAdmission === "required")) ||
           (connection.options.nativeHookRelay?.enabled !== false &&
             params.pluginHarnessToolPolicyRestricted !== true &&
             connection.nativeHookRelayEvents.includes("pre_tool_use") &&

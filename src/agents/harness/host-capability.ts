@@ -99,6 +99,7 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const awaitSessionDiffBaseline = attempt.awaitSessionDiffBaseline;
   // Capture authority by value before any plugin handoff can mutate the attempt.
   const runtimePluginToolGrant = attempt.runtimePluginToolGrant
     ? Object.freeze({
@@ -263,7 +264,18 @@ export function createAgentHarnessHostCapabilities(params: {
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
     : undefined;
+  const prepareToolEffects = (assertCurrent: () => void) =>
+    awaitSessionDiffBaseline
+      ? async () => {
+          assertCurrent();
+          await awaitSessionDiffBaseline();
+          assertCurrent();
+        }
+      : undefined;
   const hookContext = Object.freeze({
+    ...(awaitSessionDiffBaseline
+      ? { awaitSessionDiffBaseline: prepareToolEffects(assertActive) }
+      : {}),
     ...(attempt.agentId ? { agentId: attempt.agentId } : {}),
     ...(config ? { config } : {}),
     ...(attempt.cwd ? { cwd: attempt.cwd } : {}),
@@ -334,7 +346,9 @@ export function createAgentHarnessHostCapabilities(params: {
     const result = await runBeforeToolCallHook({
       ...request,
       approvalMode: hostApprovalMode,
-      ctx: actionHookContext,
+      ctx: awaitSessionDiffBaseline
+        ? { ...actionHookContext, awaitSessionDiffBaseline: prepareToolEffects(assertCurrent) }
+        : actionHookContext,
     });
     assertCurrent();
     return result;
@@ -456,6 +470,7 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(awaitSessionDiffBaseline ? { requiresToolPreparation: true } : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
     },

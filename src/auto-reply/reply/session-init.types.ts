@@ -1,5 +1,6 @@
 import type {
   GroupKeyResolution,
+  InternalSessionEntry,
   SessionEntry,
   SessionScope,
 } from "../../config/sessions/types.js";
@@ -11,7 +12,7 @@ export type SessionInitResult = Required<
   Pick<SessionEntry, "sessionId" | "systemSent" | "abortedLastRun">
 > & {
   sessionCtx: FinalizedTemplateContext;
-  sessionEntry: SessionEntry;
+  sessionEntry: InternalSessionEntry;
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   previousSessionMemory?: SessionMemoryTranscript;

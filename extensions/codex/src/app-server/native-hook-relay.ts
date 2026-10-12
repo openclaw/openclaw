@@ -252,6 +252,7 @@ export function createCodexNativeHookRelay(params: {
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
+    requirePreToolUse: params.hostCapabilities.requiresToolPreparation,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
