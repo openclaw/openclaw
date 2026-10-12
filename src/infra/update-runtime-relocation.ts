@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
@@ -129,21 +130,22 @@ export async function relocateRuntimeLauncher(
   } else {
     // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
     // Resolve them before changing the directory; absolute store/runtime paths stay external.
+    const sourceDir = path.dirname(sourceFile);
+    const destinationDir = path.dirname(destinationFile);
+    // pnpm 12 resolves the bin directory physically, including for not-yet-published groups.
+    const shellBase = original.includes("$basedir_abs")
+      ? await canonicalPathFromExistingAncestor(destinationDir)
+      : destinationDir;
     content = original.replace(launcherRelativePath, (match, prefix: string, relative: string) => {
       if (/[$%]/u.test(relative)) {
         return match;
       }
-      const sourceTarget = path.resolve(
-        path.dirname(sourceFile),
-        relative.replaceAll("\\", path.sep),
-      );
-      const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-        ? path.resolve(
-            path.dirname(destinationFile),
-            path.relative(path.dirname(sourceFile), sourceTarget),
-          )
+      const destinationBase = prefix.startsWith("$basedir") ? shellBase : destinationDir;
+      const sourceTarget = path.resolve(sourceDir, relative.replaceAll("\\", path.sep));
+      const target = isPathInside(sourceDir, sourceTarget)
+        ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
         : relocateRuntimePath(sourceTarget, prepared);
-      const replacement = path.relative(path.dirname(destinationFile), target);
+      const replacement = path.relative(destinationBase, target);
       return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
     });
     for (const relocation of prepared.rules) {
