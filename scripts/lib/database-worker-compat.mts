@@ -315,5 +315,5 @@ export function inspectDatabaseWorkerCompatibility(
       operations.set(operation.file, selected);
     }
   }
-  return { operations, violations: [...new Set(violations)].sort() };
+  return { operations, violations: [...new Set(violations)].toSorted() };
 }
