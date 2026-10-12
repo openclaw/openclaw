@@ -608,23 +608,35 @@ describe("matrix doctor contract state migrations", () => {
       }),
     ).resolves.toEqual({ imported: 1, total: 1 });
 
-    const store = createPluginStateKeyedStoreForTests<PersistentDedupeEntry>("matrix", {
+    const storeOptions = {
       namespace: resolveMatrixInboundDedupeStateNamespace(),
       maxEntries: 20_000,
       defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
       env,
-    });
+    };
+    const store = createPluginStateKeyedStoreForTests<PersistentDedupeEntry>(
+      "matrix",
+      storeOptions,
+    );
     const importedEntry = (await store.entries()).find((entry) => entry.key === storedEntry.key);
     expect(importedEntry).toMatchObject({
       createdAt: markerTs,
       expiresAt: now + remainingTtlMs,
       value: storedEntry.value,
     });
-    nowSpy.mockReturnValue(now + remainingTtlMs - 1);
-    await expect(store.lookup(storedEntry.key)).resolves.toEqual(storedEntry.value);
-    nowSpy.mockReturnValue(now + remainingTtlMs);
-    await expect(store.lookup(storedEntry.key)).resolves.toBeUndefined();
     nowSpy.mockRestore();
+    await expect(store.lookup(storedEntry.key)).resolves.toEqual(storedEntry.value);
+
+    // Publish the expired fixture through its import owner, not a raw live-state write.
+    const expiryClock = vi.spyOn(Date, "now").mockReturnValue(0);
+    try {
+      importPluginStateEntriesForDoctorForTests("matrix", storeOptions, [
+        { key: storedEntry.key, value: storedEntry.value, createdAt: markerTs, ttlMs: 1 },
+      ]);
+    } finally {
+      expiryClock.mockRestore();
+    }
+    await expect(store.lookup(storedEntry.key)).resolves.toBeUndefined();
   });
 
   it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
