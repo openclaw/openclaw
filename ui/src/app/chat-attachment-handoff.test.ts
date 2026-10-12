@@ -10,7 +10,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "../pages/chat/attachment-payload-store.ts";
-import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import {
@@ -22,9 +22,15 @@ const reviewUi = vi.hoisted(() => ({
   review: vi.fn<() => Promise<boolean>>(),
   toast: vi.fn<(options: { onAction?: () => void }) => boolean>(() => true),
 }));
-vi.mock("../pages/chat/components/private-composer-recovery-dialog.ts", () => ({
-  reviewPrivateComposerDraft: reviewUi.review,
-}));
+vi.mock(
+  "../pages/chat/components/private-composer-recovery-dialog.tsx",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../pages/chat/components/private-composer-recovery-dialog.tsx")
+    >()),
+    reviewPrivateComposerDraft: reviewUi.review,
+  }),
+);
 vi.mock("../lib/toast.ts", () => ({ showToast: reviewUi.toast }));
 
 const registeredIds = new Set<string>();

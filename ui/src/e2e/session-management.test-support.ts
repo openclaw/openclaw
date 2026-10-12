@@ -119,6 +119,7 @@ export async function waitForPatch(
 
 /** Dispatches before a successful action can remove its own control from the DOM. */
 export async function activateSelfRemovingControl(control: Locator): Promise<void> {
+  await control.click({ trial: true });
   await control.evaluate((element) => {
     const target = element as HTMLElement & { disabled?: boolean };
     const style = getComputedStyle(target);

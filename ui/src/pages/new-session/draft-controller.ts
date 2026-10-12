@@ -6,7 +6,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";

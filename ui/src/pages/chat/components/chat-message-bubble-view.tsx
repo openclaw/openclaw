@@ -18,7 +18,6 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
@@ -43,6 +42,7 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
+  renderPluginToolResult,
   renderToolApprovalReviews,
   renderToolCard,
   renderToolIcon,
@@ -53,7 +53,6 @@ import {
   renderRawOutputToggle,
   renderToolOutcome,
 } from "./chat-tool-content.ts";
-import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
@@ -566,18 +565,15 @@ function ToolMessage(props: ContentProps) {
     },
   });
   return (
-    <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
-      {(card) => (
-        <openclaw-plugin-view
-          prop:surface="tool-result"
-          prop:props={toolResultSurfaceProps(card(), {
-            ...props.state().toolRenderOptions,
-            expanded: props.state().toolMessageExpanded,
-          })}
-          prop:defaultView={fallback}
-          prop:presented={props.options.presented ?? true}
-        />
+    <LitContent
+      value={renderPluginToolResult(
+        props.state().singleToolCard,
+        {
+          ...props.state().toolRenderOptions,
+          expanded: props.state().toolMessageExpanded,
+        },
+        fallback,
       )}
-    </Show>
+    />
   );
 }

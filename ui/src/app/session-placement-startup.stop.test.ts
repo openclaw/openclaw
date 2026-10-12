@@ -9,7 +9,7 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../lib/toast.ts";
-import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";

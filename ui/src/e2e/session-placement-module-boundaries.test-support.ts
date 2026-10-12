@@ -2,6 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
+import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -73,7 +75,10 @@ export function defineSessionPlacementModuleBoundaryTests(
       const initialSession = {
         ...initialSessions.sessions[0],
         key: sessionKey,
+        kind: "direct",
+        contextTokens: undefined,
         sessionId: "session-cloud-e2e",
+        updatedAt: Date.now(),
         placement: {
           state: "requested",
           generation: 1,
@@ -81,7 +86,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           updatedAtMs: 1,
           stateChangedAtMs: 1,
         },
-      };
+      } satisfies GatewaySessionRow;
       const gateway = await installMockGateway(page, {
         sessions: [initialSession],
         defaultAgentId: "cloud",
@@ -417,6 +422,8 @@ export function defineSessionPlacementModuleBoundaryTests(
         }
         await page.keyboard.press("Escape");
 
+        // Placement events must render while the initial descriptor is still pending.
+        await gateway.deferNext("sessions.describe", { key: sessionKey });
         await startButton.click();
 
         const create = await gateway.waitForRequest("sessions.create");
@@ -464,33 +471,47 @@ export function defineSessionPlacementModuleBoundaryTests(
         await expect
           .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
           .toBe(false);
+        await pollLocatorText(startupStatus).toContain("Provisioning environment…");
         const publishPlacement = async (
-          state: "requested" | "provisioning" | "syncing" | "starting",
+          state: "provisioning" | "syncing" | "starting",
           generation: number,
           label: string,
           includeNeutral = false,
         ) => {
-          const placement = {
-            state,
+          const timing = {
             generation,
             createdAtMs: 1,
             updatedAtMs: generation,
             stateChangedAtMs: generation,
           };
+          const worker = { environmentId: "worker-1", workerBundleHash: "a".repeat(64) };
+          const placement =
+            state === "provisioning"
+              ? { state, ...timing }
+              : state === "syncing"
+                ? { state, ...timing, ...worker }
+                : {
+                    state,
+                    ...timing,
+                    ...worker,
+                    workspaceBaseManifestRef: "manifest-1",
+                    remoteWorkspaceDir: "/workspace",
+                  };
+          const now = await page.evaluate(() => Date.now());
+          const session = {
+            ...initialSession,
+            label: "Cloud session",
+            status: "running",
+            updatedAt: now,
+            snapshotAt: now,
+            placement,
+          } satisfies GatewaySessionRow;
           await gateway.setSessionsListResponse({
             count: includeNeutral ? 2 : 1,
             path: "",
             defaults: SESSION_LIST_DEFAULTS,
             sessions: [
-              {
-                key: sessionKey,
-                kind: "direct",
-                label: "Cloud session",
-                sessionId: "session-cloud-e2e",
-                status: "running",
-                updatedAt: Date.now(),
-                placement,
-              },
+              session,
               ...(includeNeutral
                 ? [
                     {
@@ -505,34 +526,42 @@ export function defineSessionPlacementModuleBoundaryTests(
             ],
             ts: Date.now(),
           });
-          await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey,
+            agentId: "cloud",
+            reason: "dispatch",
+            ts: now,
+            ancestorSessions: [],
+            ...buildGatewaySessionSnapshot({
+              sessionRow: session,
+              agentId: "cloud",
+              includeSession: true,
+            }),
+            placement,
+            placementMove: null,
+          });
           await pollLocatorText(startupStatus).toContain(label);
         };
 
-        const parentDescriptions = async () =>
-          (await gateway.getRequests("sessions.describe")).filter(
-            (request) => asNullableRecord(request.params)?.key === sessionKey,
-          );
-        let expectedParentReads = 1;
-        expect(await parentDescriptions()).toHaveLength(expectedParentReads);
-        for (const [state, generation, label] of [
-          ["requested", 1, "Provisioning environment…"],
+        const transitions = [
           ["provisioning", 2, "Provisioning environment…"],
           ["syncing", 3, "Preparing workspace…"],
           ["starting", 4, "Starting…"],
-        ] as const) {
+        ] as const;
+        for (const [state, generation, label] of transitions) {
           await publishPlacement(state, generation, label, state === "starting");
-          await page.clock.runFor(250);
-          expectedParentReads += 1;
-          expect(await parentDescriptions()).toHaveLength(expectedParentReads);
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         }
-        // Parent lookups follow placement transitions; child reads coalesce independently.
+        await gateway.resolveDeferred("sessions.describe", undefined, {
+          match: { key: sessionKey },
+        });
+        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
+        // Child hydration stays bounded independently of placement snapshot delivery.
         const childReads = (await gateway.getRequests("sessions.list")).filter(
           (request) => asNullableRecord(request.params)?.spawnedBy === sessionKey,
         );
         expect(childReads.length).toBeGreaterThan(0);
-        expect(childReads.length).toBeLessThanOrEqual(expectedParentReads);
+        expect(childReads.length).toBeLessThanOrEqual(transitions.length + 1);
         await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
         await expect.poll(() => page.url()).toContain("neutral-e2e");
         await page.evaluate((pathname) => {

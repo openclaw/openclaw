@@ -20,7 +20,8 @@ const recovery = vi.hoisted(() => ({
   review: vi.fn<() => Promise<boolean>>(),
   toast: vi.fn<(options: { onAction?: () => void; message: string }) => boolean>(() => true),
 }));
-vi.mock("./components/private-composer-recovery-dialog.ts", () => ({
+vi.mock("./components/private-composer-recovery-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./components/private-composer-recovery-dialog.tsx")>()),
   reviewPrivateComposerDraft: recovery.review,
 }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: recovery.toast }));
