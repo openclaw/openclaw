@@ -5309,10 +5309,11 @@ synchronous contract and may have their own storage dependencies.
 Gateway role policy, theme requests, preference notifications, and session
 pull-request subscriptions use the profile catalog retained by the session
 projection. Startup prepares that catalog before request dispatch and scheduled
-cron work. Committed profile changes update the same owner; role policy has no
-separate assignment cache. Theme writes and PR disclosure still check current
-identity at their effect boundary. Accepted operator work retains its independent
-profile authority after the originating transport completes.
+cron work. Committed profile changes update the same owner, including removal of
+deleted rows; role policy has no separate assignment cache. Theme writes and PR
+disclosure still check current identity at their effect boundary. Accepted
+operator work retains its independent profile authority after the originating
+transport completes.
 
 This does not make every shared profile query worker-only. Synchronous SDK
 catalog projectors (`createSessionCatalogSourceActorProjector` and
