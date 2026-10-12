@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   inferToolMetaFromArgs,
-  sanitizeToolArgs,
   sanitizeToolResult,
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -49,7 +48,6 @@ export function agentsApiNativeTool(
   } else {
     return undefined;
   }
-  args = asOptionalRecord(sanitizeToolArgs(args)) ?? {};
   const meta = inferToolMetaFromArgs(name, args, {
     detailMode: params.toolProgressDetail === "raw" ? "raw" : "explain",
   });

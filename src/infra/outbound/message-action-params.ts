@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
+import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { resolveChannelMessageToolMediaSourceParamKeysAsync } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +21,10 @@ import {
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -191,6 +196,36 @@ export function collectActionMediaSourceHints(
       (source) => source.value,
     ),
   );
+}
+
+/** Local references need the checkout; remote and already-managed media keep their own lifetimes. */
+export async function waitForLocalMessageMedia(params: {
+  sources: readonly string[];
+  workspaceReadiness?: AgentWorkspaceReadiness;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const readiness = params.workspaceReadiness;
+  if (
+    !readiness ||
+    !params.sources.some((source) => {
+      const reference = classifyMediaReferenceSource(normalizeMediaReferenceSource(source.trim()));
+      return (
+        !reference.hasUnsupportedScheme &&
+        !reference.isHttpUrl &&
+        !reference.isDataUrl &&
+        !reference.isMediaStoreUrl
+      );
+    })
+  ) {
+    return;
+  }
+  params.assertCurrent?.();
+  readiness.assertCurrent();
+  await readiness.waitUntilReady();
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
+  readiness.assertCurrent();
 }
 
 function resolveAttachmentMaxBytes(params: {

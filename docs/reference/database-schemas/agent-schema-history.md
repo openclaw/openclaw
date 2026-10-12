@@ -145,8 +145,9 @@ The entry writer retains policy, lifecycle, and publication ownership. It writes
 only changed snapshot values, in the same transaction as the hot entry. Snapshot
 table triggers advance the node's `snapshot_revision`, including raw SQL changes;
 prepared mutations compare that revision before reusing their original snapshot.
-Rollback restores both data and revision. Existing cache revisions and foreign
-commit checks remain authoritative. Cached hot facts are immutable; internal
+Rollback restores both data and revision. Committed writer receipts invalidate
+cached hot facts across handles and workers; runtime readers do not probe foreign
+commits. Cached hot facts are immutable; internal
 borrowers share them while public mutable readers receive detached values.
 
 The existing startup/Doctor schema owner extracts the three fields in bounded

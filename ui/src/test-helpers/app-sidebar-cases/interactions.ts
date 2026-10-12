@@ -17,6 +17,7 @@ import {
   mountSidebar,
   successfulSessionPatch,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   click,
@@ -212,7 +213,8 @@ describe("AppSidebar catalog session rows", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    vi.advanceTimersToNextFrame();
+    await settleLitElement(sidebar);
     return { sidebar, request };
   }
 

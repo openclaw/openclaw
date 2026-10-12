@@ -212,6 +212,17 @@ export function getOwnedSessionTranscriptActor(
   return actor;
 }
 
+/** Borrow committed transcript facts through the active run's existing authority. */
+export function readOwnedSessionTranscriptState(scope: SessionTranscriptWriteTarget) {
+  const binding = findOwnedSessionTranscriptActor(scope);
+  if (!binding) {
+    return undefined;
+  }
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
+  const state = binding.actor.snapshot({ assertCurrent, authorize: assertCurrent });
+  return state?.entry?.sessionId === scope.sessionId ? state : undefined;
+}
+
 /** Borrow committed entry facts only while the caller holds the transcript writer FIFO. */
 export function readOwnedSessionTranscriptEntry(
   scope: SessionTranscriptWriteTarget,

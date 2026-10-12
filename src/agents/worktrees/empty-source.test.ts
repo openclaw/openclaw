@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import * as commandExec from "../../process/exec.js";
 import {
@@ -28,6 +32,7 @@ describe("empty managed workspaces", () => {
       vi.unstubAllEnvs();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     }),
   );
@@ -46,6 +51,7 @@ describe("empty managed workspaces", () => {
     vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     now = 1_700_000_000_000;
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({
       env,
       now: () => now,

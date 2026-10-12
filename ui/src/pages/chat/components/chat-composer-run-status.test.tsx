@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import { ComposerRunStatusContent } from "./chat-composer-run-status.tsx";
+import { ComposerRunStatus } from "./chat-composer-run-status.tsx";
 
 it.each([
   { runningCount: 0, label: "Waiting on subagents", canView: true },
@@ -12,11 +12,7 @@ it.each([
   const onOpenSubagents = vi.fn();
   const waitingSubagents: ChatSubagentWait = { startedAt: null, ...counts };
   const view = mountSolid(() => (
-    <ComposerRunStatusContent
-      waitingSubagents={waitingSubagents}
-      working={false}
-      onOpenSubagents={onOpenSubagents}
-    />
+    <ComposerRunStatus waitingSubagents={waitingSubagents} onOpenSubagents={onOpenSubagents} />
   ));
   expect(view.container.textContent).toContain(label);
   expect(view.container.querySelector("openclaw-elapsed-time")).toBeNull();

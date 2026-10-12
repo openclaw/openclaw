@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
-import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  assertSessionEntryCreationPublication,
+  readPreparedSessionEntryPublicationSource,
+} from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";

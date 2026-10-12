@@ -9,6 +9,10 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -34,7 +38,7 @@ import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.te
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
 import {
@@ -135,7 +139,7 @@ function configureDelegatedBrowserProvider(
 }
 
 async function invokeCreate(options: GatewayRequestHandlerOptions) {
-  const admission = resolveSessionMutationAuthorization({
+  const admission = await resolveSessionMutationAuthorizationAsync({
     method: "talk.client.create",
     requestParams: options.params,
     context: options.context,
@@ -145,7 +149,11 @@ async function invokeCreate(options: GatewayRequestHandlerOptions) {
     options.respond(false, undefined, admission.error);
     return;
   }
-  await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+  try {
+    await createTalkClient({ ...options, sessionMutationAuthorization: admission.authorization });
+  } finally {
+    admission.authorization?.release?.();
+  }
 }
 
 async function invokeTranscript(params: Record<string, unknown>) {
@@ -217,6 +225,7 @@ describe("talk.client.transcript", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcript-")),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     await replaceSessionEntry(
       { agentId: "main", sessionKey },
       { sessionId, updatedAt: Date.now() },
@@ -239,6 +248,7 @@ describe("talk.client.transcript", () => {
     clientVoiceSessionTesting.reset();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: tempDir });
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
     expect(remainingRootWork).toBe(0);

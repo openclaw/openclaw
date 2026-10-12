@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
@@ -41,6 +45,10 @@ function createRuntime(config: OpenClawConfig) {
     modelToolsEnabled: true,
   });
 }
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each([
@@ -245,12 +253,18 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           runtime.runtimeToolAllowlist,
         );
         const surface = runtime.compactTools(allowedTools);
-        const callableNames = surface.promptToolPolicy.apply().callableToolNames;
+        const projection = surface.promptToolPolicy.apply();
+        const callableNames = projection.callableToolNames;
         expect(callableNames).toContain("web_search");
         expect(callableNames).not.toContain("web_fetch");
         expect(callableNames).not.toContain("memory_search");
         expect(runtime.codeModeControlsEnabled).toBe(mode === "code");
         expect(runtime.toolSearchControlsEnabled).toBe(mode === "search");
+        if (mode === "code") {
+          expect(projection.toolSchemaDirectoryPrompt).toContain("- web_search ");
+          expect(projection.toolSchemaDirectoryPrompt).not.toContain("- web_fetch ");
+          expect(projection.toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
+        }
       } finally {
         runtime.cleanup();
       }
@@ -321,6 +335,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each(["quarantine", "prompt-policy"] as const)(
     "narrows collector capabilities after harness %s",
     async (restriction) => {
+      const runtime = createRuntime({ tools: { toolSearch: false } });
+      setRuntimeConfigSnapshot(expectDefined(runtime.config, "collector runtime config"));
       const spawn = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
       const reader = createAgentsWaitTool({ agentSessionKey: "agent:main:main" });
       finalizeAgentToolAvailability([spawn, reader]);
@@ -328,7 +344,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       if (restriction === "quarantine") {
         reader.parameters = { type: "array", items: { type: "string" } };
       }
-      const runtime = createRuntime({ tools: { toolSearch: false } });
       try {
         const compacted = runtime.compactTools([spawn, reader]);
         const surface = compacted.promptToolPolicy.apply({ toolsAllow: ["sessions_spawn"] });

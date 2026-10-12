@@ -32,7 +32,10 @@ export type MemoryDatabaseFacts = {
 };
 
 /** One bounded snapshot; retained text and embeddings never cross this boundary. */
-export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
+export function readMemoryDatabaseFacts(
+  db: DatabaseSync,
+  hasVectorTable = tableExists(db, MEMORY_INDEX_VECTOR_TABLE),
+): MemoryDatabaseFacts {
   const query = getNodeSqliteKysely<{
     memory_index_meta: { key: string; value: string };
     memory_index_state: { id: number; revision: number };
@@ -79,7 +82,6 @@ export function readMemoryDatabaseFacts(db: DatabaseSync): MemoryDatabaseFacts {
     throw new Error("Memory index revision is missing or invalid");
   }
   const metadata = parseMemoryIndexMetadata(row.serialized);
-  const hasVectorTable = tableExists(db, MEMORY_INDEX_VECTOR_TABLE);
   return {
     ...metadata,
     revision: row.revision,

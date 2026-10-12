@@ -936,6 +936,13 @@ the underlying database error.
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
 
+If an agent database cannot be repaired by `doctor --fix`, stop the Gateway, back up
+the database and its SQLite sidecars, and run
+`openclaw doctor --session-sqlite recover --session-sqlite-agent <id>` against the
+same state/config. Recovery repairs supported index corruption or preserves the
+damaged file set with a `.corrupt-<timestamp>` suffix. Restore a verified backup if
+you need the previous sessions. See [SQLite maintenance](/cli/doctor/sqlite-maintenance).
+
 Media migration uses the schema admission integrity check first. Healthy agent
 databases do not repeat that full-file scan inside an immediate repair transaction.
 A proven integrity failure still invokes Doctor's preserving index repair before
@@ -975,3 +982,16 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Example: state schema 21 to 20
+
+Schema 21 derives meeting-transcript selectors and bounded delivery-retention
+columns from canonical JSON. A schema-20 writer can change that JSON without
+updating the derived columns, so package-only downgrade is unsafe and older
+builds refuse the migrated database.
+
+Stop writers and restore the verified pre-migration backup together with its
+matching build. Keep the migrated database separately until recovery is verified;
+restoring the backup loses captures and delivery-state changes recorded after
+that backup and does not undo messages already sent. Never lower schema markers,
+drop the new columns, or copy individual tables between the two databases.

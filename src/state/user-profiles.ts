@@ -3,10 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   ensureProfileForEmailInDatabase,
   normalizeProfileEmail as normalizeEmail,
@@ -25,7 +22,6 @@ import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
   selectUserProfileEmailAlias,
-  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -33,11 +29,7 @@ import {
   ensureGatewayOwnerProfileRow,
   readGatewayOwnerProfileForEnsure,
 } from "./user-profiles-owner.js";
-import {
-  ensureUserProfileRoleSchema,
-  ensureUserProfilesSchema,
-  UserProfileNotFoundError,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
 import {
   classifyTailscaleLogin,
   type TailscaleProfileIdentity,
@@ -45,11 +37,7 @@ import {
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH, type UserProfile } from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
-export {
-  getUserProfileDisplay,
-  readUserProfileAliases,
-  hasMultipleSessionSharingIdentities,
-} from "./user-profile-list.js";
+export { getUserProfileDisplay, hasMultipleSessionSharingIdentities } from "./user-profile-list.js";
 export { listProfiles } from "./user-profile-reads.js";
 
 export { adoptTailscaleProfileAvatar } from "./user-profiles-avatar.js";
@@ -59,26 +47,6 @@ export { UserProfileNotFoundError };
 export function normalizeInitialDisplayName(name: string | null | undefined): string | null {
   const normalized = name?.trim();
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
-}
-
-/** Resolves a durable profile reference to its current one-hop merge head. */
-export function resolveUserProfileId(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): string | undefined {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  return selectResolvedUserProfileMetadataById(db, profileId)?.id;
-}
-
-/** Reads the role assigned to an existing profile's current merge head. */
-export function getUserProfileRole(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): string | null {
-  ensureUserProfileRoleSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  return requireResolvedUserProfileMetadataById(db, profileId).role ?? null;
 }
 
 function ensureProfileForEmailWithInitialName(

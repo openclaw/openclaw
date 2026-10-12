@@ -531,6 +531,25 @@ for the phase to settle, then merges model rows and provider outcomes in provide
 label order. Hooks retain their individual discovery deadlines; completion order
 does not change catalog precedence.
 
+## Provider stream decorators
+
+`wrapStreamFn` receives optional request context for provider-owned behavior:
+
+- `modelParams` contains only per-model params, with the current agent's model
+  params taking precedence over default model params. Global and agent-wide
+  params are excluded; `extraParams` still contains the merged request params.
+- `modelCallUrgency` is the host's `foreground`, `normal`, or `background`
+  classification. Translate it into provider-native scheduling hints only when
+  the selected endpoint supports them and the operator has enabled the behavior.
+
+A wrapper that only decorates requests can return its callable with
+`preservesGenericCompatibility: true`, for example
+`Object.assign(decoratedStream, { preservesGenericCompatibility: true })`.
+This keeps shared request shaping and output normalization active, including
+MiMo reasoning replay and final-answer handling. Without the flag, a replacement
+stream keeps the existing behavior of taking ownership of those compatibility
+policies. Returning the original stream or no wrapper also preserves them.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel

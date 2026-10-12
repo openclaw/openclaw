@@ -97,7 +97,7 @@ test("commits foreground replacement while cold reclamation holds native integri
   integrity.release = release;
   integrity.entered = () => entered.resolve();
   const spawned = observeReclamationWorkers();
-  const work = runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+  const work = runSqliteSessionReclamation({ plan: fixture.plans[0]! });
   let settled = false;
   void work.then(
     () => {
@@ -184,7 +184,6 @@ test.each(["caller refusal", "source retirement"] as const)(
     });
     const run = () =>
       runSqliteSessionReclamation({
-        forceInProcess: false,
         plan: fixture.plans[0]!,
         assertCommitAllowed: () => {
           if (!allowed) {

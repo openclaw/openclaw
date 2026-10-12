@@ -1,8 +1,8 @@
-import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
 } from "../../gateway/session-artifact-read.js";
+import type { SessionTranscriptUsageSnapshot } from "../../gateway/session-transcript-derived-readers.js";
 import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
@@ -10,6 +10,7 @@ import type {
   ReadSessionMessagesResult,
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
+  SessionTranscriptPageOptions,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read.types.js";
 import type {
@@ -22,6 +23,7 @@ import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -106,7 +108,6 @@ export type ChatHistoryPageParams = {
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
-  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -184,6 +185,17 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "recent-usage";
+      params: { target: SessionTranscriptReadScope; maxBytes: number };
+    }
+  | {
+      kind: "history-event-page";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptPageOptions;
+      };
+    }
   | {
       kind: "recent-text";
       params: {
@@ -282,6 +294,8 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
+  | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "recent-text"; result: SessionRecentConversationText[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }

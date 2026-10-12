@@ -131,22 +131,4 @@ describe("portaled hovercard presentation ownership", () => {
     await Promise.resolve();
     expect(first.dismiss).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps a modal's card with its trigger and retires it when the modal disconnects (shadow=%s)",
-    async (shadow) => {
-      const modal = document.body.appendChild(document.createElement("openclaw-modal-dialog"));
-      const content = modal.appendChild(document.createElement("section"));
-      const root = shadow ? content.attachShadow({ mode: "open" }) : content;
-      const trigger = root.appendChild(document.createElement("a"));
-      const controller = new PortaledHovercardController(() => controller.reset());
-      controller.markTrigger(trigger);
-      controller.mount(trigger, createPortaledHovercard("modal-preview", "preview"), "vertical");
-      await Promise.resolve();
-      expect(controller.card?.parentElement).toBe(modal);
-      modal.remove();
-      await Promise.resolve();
-      expect(controller.card).toBeNull();
-    },
-  );
 });

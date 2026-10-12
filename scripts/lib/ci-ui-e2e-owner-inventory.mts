@@ -469,6 +469,14 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-composer-redesign.e2e.test.ts", ["chat"]),
   pageWatch(
+    "ui/src/e2e/chat-composer-undo-redo.e2e.test.ts",
+    ["chat"],
+    [
+      "ui/src/pages/chat/components/chat-composer.tsx",
+      "ui/src/pages/chat/components/chat-composer-frame.ts",
+    ],
+  ),
+  pageWatch(
     "ui/src/e2e/chat-context-attachment.e2e.test.ts",
     ["chat"],
     ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session.runtime.ts"],
@@ -830,7 +838,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/components/panel-empty-state.ts",
+      "ui/src/components/solid/panel-empty-state.tsx",
       "ui/src/components/panel-loading-skeleton.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
@@ -2146,6 +2154,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["usage"],
     ["ui/src/pages/usage/types.ts"],
   ),
+  pageWatch("ui/src/e2e/usage-overview.e2e.test.ts", ["usage"], ["ui/src/lib/sessions/usage.ts"]),
   pageWatch(
     "ui/src/e2e/usage-query-recovery.e2e.test.ts",
     ["usage"],

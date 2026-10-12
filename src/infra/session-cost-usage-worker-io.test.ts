@@ -12,18 +12,30 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
 } from "../config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  decodeUsageCostPartition,
+  USAGE_COST_PARTITION_SCOPE,
+} from "./session-cost-usage-partitions.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
@@ -66,11 +78,13 @@ async function withUsageWorkerPreload(
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
   await withEnvAsync({ OPENCLAW_STATE_DIR: root, ...sqliteWorkerPreloadEnv(preload) }, async () => {
+    setRuntimeConfigSnapshot({});
     try {
       await operation();
     } finally {
       await closeOpenClawAgentDatabasesAsync();
       await closeStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
     }
   });
 }
@@ -103,6 +117,15 @@ if (!isMainThread) {
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = Reflect.apply(prepare, this, [sql]);
+    if (/^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql)) {
+      for (const method of ["all", "get", "iterate"]) {
+        const original = statement[method];
+        statement[method] = function(...args) {
+          record({ kind: "transcript-stats" });
+          return Reflect.apply(original, this, args);
+        };
+      }
+    }
     if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
@@ -151,6 +174,7 @@ if (!isMainThread) {
         .map(
           (line) =>
             JSON.parse(line) as
+              | { kind: "transcript-stats" }
               | { kind: "cache" }
               | { kind: "cache-row"; key: string; valueBytes: number }
               | { kind: "transcript"; method: string; start: number },
@@ -159,6 +183,33 @@ if (!isMainThread) {
 }
 
 describe("session cost usage worker I/O", () => {
+  it("returns uncached SQLite sessions as pending without reading transcript statistics", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "not-yet-projected",
+        storePath: database.path,
+      });
+      const probe = await observeUsageWorkerReads(state.stateDir, []);
+      await probe.run(async () => {
+        expect(
+          await loadSessionCostSummariesFromCache({
+            agentId: "main",
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          }),
+        ).toMatchObject({
+          summaries: [null],
+          cacheStatus: { status: "stale", cachedFiles: 0, pendingFiles: 1, staleFiles: 1 },
+        });
+        expect((await probe.read()).filter((entry) => entry.kind === "transcript-stats")).toEqual(
+          [],
+        );
+      });
+    });
+  });
+
   it.each(["zstd", "plain"] as const)(
     "inventories %s archives without reading payloads and materializes only for a summary",
     async (encoding) => {
@@ -404,7 +455,8 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-      ).toEqual([initialEntry.checkpoint.parsedOffset]);
+        // Refresh advances the checkpoint; exact legacy detail then replays canonical records.
+      ).toEqual([initialEntry.checkpoint.parsedOffset, 0]);
 
       const completeSize = (await fs.stat(sessionFile)).size;
       await fs.appendFile(sessionFile, '\n{"type":"message","timestamp":"2026-02-05', "utf-8");
@@ -436,7 +488,7 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-      ).toEqual([0]);
+      ).toEqual([0, 0]);
       const rebuiltRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
         "expected rebuilt rollup",
@@ -517,7 +569,6 @@ if (!isMainThread) {
           ({ db }) =>
             writeSessionCostUsageRollupInDatabase(db, {
               rollupId: path.join(sessionsDir, "unrequested.jsonl"),
-              previousValueJson: null,
               valueJson: unrelatedValue,
               blob: null,
               updatedAt: selectedRow.updatedAt,
@@ -528,12 +579,25 @@ if (!isMainThread) {
       ).toBe(true);
 
       await probe.clear();
+      await refreshCostUsageCacheForAgent({
+        agentId: "main",
+        sessionFiles: [sessions[0]!.sessionFile],
+      });
+      expect(
+        (await probe.read()).flatMap((entry) => (entry.kind === "cache-row" ? [entry.key] : [])),
+      ).toEqual([sessions[0]!.sessionFile]);
+      expect(
+        readSessionCostUsageRollupRows("main").some((row) => row.key.endsWith("unrequested.jsonl")),
+      ).toBe(true);
+
+      await probe.clear();
       const result = await loadSessionCostSummariesFromCache({
         sessions,
         agentId: "main",
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
         dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+        projection: "overview",
         requestRefresh: false,
       });
 
@@ -557,5 +621,121 @@ if (!isMainThread) {
           .toSorted(),
       ).toEqual(sessions.map((session) => session.sessionFile).toSorted());
     });
+  });
+});
+
+it("keeps model addition order when integer timestamp totals hide fractional model costs", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
+    const agentId = "usage-model-rounding";
+    const sessionFile = state.path("usage-model-rounding.jsonl");
+    const records = [
+      { timestamp: "2026-09-18T00:00:00Z", costs: [0.1, 0.9] },
+      { timestamp: "2026-09-18T00:15:00Z", costs: [0.2, 0.8] },
+      { timestamp: "2026-09-18T00:16:00Z", costs: [0.3, 0.7] },
+    ].flatMap(({ timestamp, costs }) =>
+      costs.map((cost, index) =>
+        JSON.stringify({
+          type: "message",
+          timestamp,
+          message: {
+            role: "assistant",
+            provider: "test",
+            model: `model-${index}`,
+            usage: { input: 1, output: 0, totalTokens: 1, cost: { total: cost } },
+          },
+        }),
+      ),
+    );
+    await fs.writeFile(sessionFile, records.join("\n") + "\n");
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    const request = {
+      config,
+      agentId,
+      sessions: [{ sessionFile }],
+      requestRefresh: false,
+      startMs: Date.UTC(2026, 8, 18),
+      endMs: Date.UTC(2026, 8, 18, 0, 29, 59, 999),
+      dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+    };
+    const canonical = await loadSessionCostSummariesFromCache(request);
+    const overview = await loadSessionCostSummariesFromCache({
+      ...request,
+      projection: "overview",
+    });
+    expect(overview.cacheStatus.status).toBe("fresh");
+    expect(overview.summaries[0]?.totalCost).toBe(3);
+    expect(overview.summaries[0]?.modelUsage).toEqual(canonical.summaries[0]?.modelUsage);
+    const model = overview.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
+    expect(model?.totals.totalCost).toBe(0.6000000000000001);
+  });
+});
+
+it("replaces every monthly partition after cache damage and filters within and across months", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
+    const agentId = "usage-missing-partition";
+    const sessionFile = state.path("usage-missing-partition.jsonl");
+    const record = (day: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
+        message: {
+          role: "assistant",
+          model: "fixture",
+          provider: "test",
+          usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
+        },
+      }) + "\n";
+    await fs.writeFile(sessionFile, record(18) + record(19) + record(31));
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "DELETE FROM cache_entries WHERE (scope, key) IN (SELECT scope, key FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1)",
+          )
+          .run(USAGE_COST_PARTITION_SCOPE),
+      { agentId },
+    );
+    await fs.appendFile(sessionFile, record(20));
+    await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    const stored = runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare("SELECT key, value_json, blob FROM cache_entries WHERE scope = ? ORDER BY key")
+          .all(USAGE_COST_PARTITION_SCOPE),
+      { agentId },
+    );
+    expect(stored.map((row) => String(row.key).slice(-10))).toEqual(["2026-09-01", "2026-10-01"]);
+    expect(
+      stored.map((row) => {
+        if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
+          throw new Error("Expected partition bytes");
+        }
+        const partition = decodeUsageCostPartition(row.value_json, row.blob);
+        return Object.values(partition!.buckets).reduce(
+          (sum, bucket) => sum + bucket.totals.totalTokens,
+          0,
+        );
+      }),
+    ).toEqual([30, 10]);
+    for (const [startMs, endMs, totalTokens] of [
+      [Date.UTC(2026, 8, 19), Date.UTC(2026, 8, 20) - 1, 10],
+      [Date.UTC(2026, 8, 20), Date.UTC(2026, 9, 2) - 1, 20],
+    ]) {
+      expect(
+        await loadSessionCostSummariesFromCache({
+          config,
+          agentId,
+          sessions: [{ sessionFile }],
+          projection: "overview",
+          requestRefresh: false,
+          startMs,
+          endMs,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens }], cacheStatus: { status: "fresh" } });
+    }
   });
 });

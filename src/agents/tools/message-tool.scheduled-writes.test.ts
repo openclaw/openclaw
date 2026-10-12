@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   mintMessageActionTurnCapability,
@@ -55,6 +56,7 @@ it.each([
         })
       : undefined;
     try {
+      setRuntimeConfigSnapshot(config);
       const tool = await createMessageToolAsync({
         config,
         agentId: identity.agentId,
@@ -79,6 +81,7 @@ it.each([
       }
     } finally {
       revokeMessageActionTurnCapability(capability);
+      clearRuntimeConfigSnapshot();
     }
   },
 );
@@ -118,6 +121,7 @@ it("separates generic sends, source reads, and simulated writes", async () => {
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     const config: OpenClawConfig = { channels: { discord: { token: "fixture-token" } } };
+    setRuntimeConfigSnapshot(config);
     const tool = createMessageTool({
       config,
       agentId: identity.agentId,
@@ -163,6 +167,7 @@ it("separates generic sends, source reads, and simulated writes", async () => {
   } finally {
     revokeMessageActionTurnCapability(capability);
     restoreActivePluginRegistrySnapshot(registry);
+    clearRuntimeConfigSnapshot();
   }
 });
 
@@ -219,6 +224,7 @@ it.each([
     const secretScopes: Array<ReadonlySet<string> | undefined> = [];
     const defaultAccounts: Array<string | undefined> = [];
     const outboundBoundary = new Error("account selection observed at the outbound boundary");
+    setRuntimeConfigSnapshot(config);
     const tool = createMessageTool({
       config,
       agentId: identity.agentId,
@@ -262,5 +268,6 @@ it.each([
   } finally {
     revokeMessageActionTurnCapability(capability);
     restoreActivePluginRegistrySnapshot(registry);
+    clearRuntimeConfigSnapshot();
   }
 });

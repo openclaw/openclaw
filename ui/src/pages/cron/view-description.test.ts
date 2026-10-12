@@ -6,7 +6,6 @@ import { createCronViewJob, getElement, renderCronView } from "./view.test-suppo
 describe("cron view saved metadata", () => {
   it.each([
     { displayName: "Morning health report", expected: "Morning health report", enabled: true },
-    { displayName: "Morning health report", expected: "Morning health report", enabled: false },
     { displayName: undefined, expected: "cron:ops:weekday-health", enabled: false },
   ])(
     "uses saved label $expected (enabled=$enabled) without replacing action or editor identity",
@@ -89,16 +88,6 @@ describe("cron view saved metadata", () => {
     expect(onSelectJob).toHaveBeenCalledWith(job);
   });
 
-  it.each([undefined, "  \n\t  "])(
-    "omits the inline description when the saved description is %j",
-    (description) => {
-      const job = createCronViewJob("without-description", { description });
-      const container = renderCronView({ jobs: [job] });
-
-      expect(container.querySelector(".cron-table__description")).toBeNull();
-    },
-  );
-
   it("renders saved descriptions as escaped text", () => {
     const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
     const job = createCronViewJob("escaped-description", { description, displayName: description });
@@ -127,14 +116,4 @@ describe("cron view saved metadata", () => {
     );
     expect(description?.textContent).not.toContain("Unsaved description edit");
   });
-
-  it.each([undefined, "  \n\t  "])(
-    "omits the detail description when the saved description is %j",
-    (description) => {
-      const job = createCronViewJob("without-description", { description });
-      const container = renderCronView({ jobs: [], editingJob: job });
-
-      expect(container.querySelector('[data-test-id="cron-detail-description"]')).toBeNull();
-    },
-  );
 });

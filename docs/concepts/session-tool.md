@@ -100,9 +100,9 @@ retained inputs were executable. Pending metadata neither authorizes replay nor
 blocks unrelated work. Execution still requires current admission and exact
 input custody.
 
-The returned view is intentionally bounded and redacted:
+The returned view is intentionally bounded:
 
-- credential/token-like text is redacted even when general-purpose log redaction is disabled
+- text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
 - long text blocks are truncated to 4000 characters, with a truncation marker appended
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
@@ -114,7 +114,7 @@ Use the returned **session key** (like `"main"`) with `sessions_history`, `sessi
 
 If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
-Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering, snippet redaction, and output bounds match the history boundary.
+Use [`sessions_search`](/concepts/session-search) for exact full-text recall across visible user and assistant transcript text. Its results include a `sessionKey` for a follow-up `sessions_history` call; visibility filtering and output bounds match the history boundary.
 
 ## Managing session settings and groups
 
@@ -318,7 +318,7 @@ delivery records and does not resume these replies.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no reply delivery remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
-Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
+Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread. Set `tools.sessions.allowThreadTargets: true` to opt in to thread and topic targets; the target runs in that session, and anything it sends with the `message` tool lands in the thread.
 
 Messages and delayed replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 

@@ -16,6 +16,7 @@ export async function finalizeReplyAgentRun(
       entry: context.activeSessionEntry,
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
+      prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {
         context.activeSessionEntry = entry;
         if (context.activeSessionStore && context.sessionKey) {

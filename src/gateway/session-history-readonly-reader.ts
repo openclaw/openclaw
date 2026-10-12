@@ -1,9 +1,15 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
+import {
+  readRecentSessionTranscriptMessageEventsFromProjection,
+  readSessionTranscriptBoundedMessageTailPageFromProjection,
+} from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
-import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import {
+  readSessionTranscriptHistoryEventPageFromProjection,
+  readTranscriptDisplayDeltaFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -28,6 +34,7 @@ import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.hi
 import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import {
   createSessionTranscriptReader,
   selectSessionTranscriptProjection,
@@ -138,6 +145,22 @@ export function createReadonlySessionHistoryReader(
     () => (sourceDatabases ??= resolveSourceDatabases?.()),
   );
   return {
+    readRecentUsage: (maxBytes: number) =>
+      readSnapshot((projection) =>
+        aggregateSessionTranscriptUsage(
+          readRecentSessionTranscriptMessageEventsFromProjection(projection, {
+            maxBytes,
+            maxLines: 1000,
+            maxMessages: 1000,
+          }).events.map(({ event }) => asOptionalRecord(event)?.message),
+        ),
+      ),
+    readHistoryEventPage: (
+      options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1],
+    ) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptHistoryEventPageFromProjection(projection, options),
+      ),
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
         database: projection.database.db,

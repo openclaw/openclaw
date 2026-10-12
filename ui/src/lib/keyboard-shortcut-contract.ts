@@ -1,5 +1,6 @@
 import {
   COMMAND_PALETTE_SHORTCUT,
+  COMMAND_PALETTE_SHORTCUTS,
   isApplePlatform,
   matchesKeyboardShortcut,
   resolveAsciiShortcutKey,
@@ -48,7 +49,8 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
 } as const satisfies Record<string, KeyboardShortcutDefinition>;
 
 type KeyboardShortcutKey =
-  (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"];
+  | (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"]
+  | (typeof COMMAND_PALETTE_SHORTCUTS)[number]["key"];
 export type KeyboardShortcutCombo = KeyboardShortcutDefinition<KeyboardShortcutKey>;
 
 export function formatKeyboardShortcutParts(

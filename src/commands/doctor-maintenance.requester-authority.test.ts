@@ -6,6 +6,7 @@ import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js"
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { repairGatewayMaintenanceStartupFailures } from "../infra/gateway-boot-lifecycle.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
@@ -183,6 +184,14 @@ it.each(["configured-owner", "profile"] as const)(
               }
               assertCurrent();
             }
+            repairGatewayMaintenanceStartupFailures(state.env);
+          });
+          expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
+          expect(admissionWorkerLaunches).toBeLessThanOrEqual(8);
+          // The Doctor flow leaves runChecks before its post-repair cleanup.
+          // Draining those readers requires fresh admission before restoration.
+          await maintenance!.cleanupRetainedRuntimes();
+          await maintenance!.run(async () => {
             if (source === "profile") {
               unlinkUserChannelIdentity(profile.id, identity);
             } else {
@@ -201,8 +210,6 @@ it.each(["configured-owner", "profile"] as const)(
         } finally {
           await maintenance?.release();
         }
-        expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
-        expect(admissionWorkerLaunches).toBeLessThanOrEqual(8);
       }),
     );
   },

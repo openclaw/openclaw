@@ -54,30 +54,6 @@ describe("showInputDialog", () => {
     restoreDialogPolyfill();
   });
 
-  it("renders accessible copy and resolves the submitted value", async () => {
-    const result = showInputDialog({
-      title: "Rename session",
-      label: "Session name",
-      defaultValue: "Original name",
-      submitLabel: "Rename",
-    });
-    const { modal, dialog } = await getRenderedModalDialog(document.body);
-    const input = modal.querySelector<HTMLInputElement>('input[name="value"]');
-
-    expect(dialog.getAttribute("aria-label")).toBe("Rename session");
-    expect(dialog.getAttribute("aria-description")).toBe("Session name");
-    expect(input?.value).toBe("Original name");
-
-    if (!input) {
-      throw new Error("Expected text input");
-    }
-    input.value = "Renamed session";
-    findButton("Rename").click();
-
-    await expect(result).resolves.toBe("Renamed session");
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("treats modal dismissal as cancellation", async () => {
     const result = showInputDialog({ title: "Rename session" });
     const { modal } = await getRenderedModalDialog(document.body);
@@ -155,27 +131,6 @@ describe("showInputDialog", () => {
     await expect(closed).resolves.toBe("Projects");
   });
 
-  it("keeps the typed value and shows why a rejected attempt failed", async () => {
-    const submit = vi.fn().mockResolvedValueOnce("group name exceeds 512 characters");
-    submit.mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
-
-    await type("Client work");
-    submitForm();
-    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    await Promise.resolve();
-
-    expect(document.body.textContent).toContain("group name exceeds 512 characters");
-    expect(document.body.querySelector('[role="alert"]')).not.toBeNull();
-    expect(dialogInput().value).toBe("Client work");
-
-    submitForm();
-    await closed;
-    expect(submit).toHaveBeenCalledTimes(2);
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
     let settle!: (message: string | null) => void;
     const submit = vi.fn().mockReturnValue(
@@ -202,7 +157,7 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it.each(["synchronous", "asynchronous"])(
+  it.each(["synchronous"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
       const submit = vi

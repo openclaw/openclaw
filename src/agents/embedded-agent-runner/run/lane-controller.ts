@@ -219,6 +219,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       reason === undefined ? undefined : { cause: reason },
     );
   };
+  const assertCurrent = () => {
+    throwIfAborted();
+    assertAgentRunLifecycleGenerationCurrent(options.getLifecycleGeneration());
+    options.getParams().preparedRunAdmission?.assertSourceCurrent();
+  };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,
     allowPendingGlobalAdmissionHeartbeat = false,
@@ -465,5 +470,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     setLaneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
+    assertCurrent,
   };
 }

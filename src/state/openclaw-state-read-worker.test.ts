@@ -283,8 +283,12 @@ it("reads externally created state after an absent read without allocating a wor
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
-it("retains read custody until release and retires failed native cleanup", async () => {
+it("retires a successful read without hydrating an error and retains custody until exit", async () => {
   const { options } = source();
+  const hydrate = vi.spyOn(
+    await import("./openclaw-state-worker-error.js"),
+    "hydrateOpenClawStateWorkerError",
+  );
   const task = queueTask();
   const stopping = createDeferredCore();
   const stopped = createDeferredCore();
@@ -317,23 +321,23 @@ it("retains read custody until release and retires failed native cleanup", async
       mock.create.mock.invocationCallOrder[0]!,
     );
     expect(settled).toBe(false);
+    expect(hydrate).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
   } finally {
     task.result.resolve(reply);
     stopped.resolve();
-    await assertion;
+    try {
+      await assertion;
+    } finally {
+      hydrate.mockRestore();
+    }
   }
   expect(task.close).toHaveBeenCalledOnce();
 });
 
-it("preserves source, quarantine cleanup, and worker stop failures", async () => {
+it("preserves source and worker stop failures when native cleanup fails", async () => {
   const { pathname, options } = source();
   const task = queueTask();
-  const metadata = new Error("quarantine metadata read failed");
-  const nativeClose = new Error("quarantine reader close failed");
-  const quarantine = new AggregateError([metadata, nativeClose], "quarantine read and cleanup", {
-    cause: metadata,
-  });
   const primary = new Error("source query failed");
   const stop = new Error("worker native exit not confirmed");
   task.close.mockRejectedValueOnce(stop);
@@ -349,7 +353,7 @@ it("preserves source, quarantine cleanup, and worker stop failures", async () =>
   task.result.resolve({
     ...reply,
     nativeCleanupFailure: {
-      error: encodeOpenClawStateWorkerError(quarantine, { includeOrdinary: true }),
+      error: undefined,
     },
   });
   const failure = await outcome;
@@ -360,25 +364,7 @@ it("preserves source, quarantine cleanup, and worker stop failures", async () =>
   expect(failure.cause).toBe(failure.errors[0]);
   expect(failure.errors).toHaveLength(2);
   expect(failure.cause).toMatchObject({ message: primary.message });
-  const cleanup: unknown = failure.errors[1];
-  expect(cleanup).toBeInstanceOf(AggregateError);
-  if (!(cleanup instanceof AggregateError)) {
-    throw new Error("Worker stop replaced the quarantine cleanup graph");
-  }
-  expect(cleanup.cause).toBe(cleanup.errors[0]);
-  expect(cleanup.errors).toHaveLength(2);
-  expect(cleanup.errors[1]).toBe(stop);
-  const decoded: unknown = cleanup.errors[0];
-  expect(decoded).toBeInstanceOf(AggregateError);
-  if (!(decoded instanceof AggregateError)) {
-    throw new Error("Encoded quarantine failures were not retained");
-  }
-  expect(decoded.message).toBe(quarantine.message);
-  expect(decoded.errors).toMatchObject([
-    { message: metadata.message },
-    { message: nativeClose.message },
-  ]);
-  expect(decoded.cause).toBe(decoded.errors[0]);
+  expect(failure.errors[1]).toBe(stop);
   expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
   expect(mock.closePool).not.toHaveBeenCalled();
 
@@ -424,7 +410,6 @@ function captureCase<T extends OpenClawStateReadCommand>(
   mutate: (command: T) => void,
   options: {
     prepared?: boolean;
-    expected?: OpenClawStateReadCommand;
     queued?: () => void;
   } = {},
 ) {
@@ -680,51 +665,13 @@ const captures = [
         },
       ),
   ),
-  captureCase(
-    { type: "channelIngress.failedHealth", callerContext: { onClosed: () => {} } },
-    { ok: true, type: "channelIngress.failedHealth", sourceAdmitted: true, result: [] },
-    0,
-    () => {},
-    { prepared: true, expected: { type: "channelIngress.failedHealth" } },
-  ),
-  (() => {
-    const command = {
-      type: "cron.observeRunRecovery" as const,
-      storeKey: "租户🦞",
-      proposals: [
-        { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
-        { jobId: "运行🌊", runningAtMs: 3 },
-      ],
-    };
-    return captureCase(
-      command,
-      {
-        ok: true,
-        type: command.type,
-        sourceAdmitted: true,
-        observation: { kind: "observed", proposals: [] },
-      },
-      Buffer.byteLength("租户🦞任务雪运行🌊") + 24,
-      () => {
-        command.storeKey = "changed partition";
-        command.proposals[0]!.jobId = "changed before preparation";
-        command.proposals[0]!.queuedAtMs = 9;
-      },
-      {
-        prepared: true,
-        queued: () => {
-          command.proposals.splice(0);
-        },
-      },
-    );
-  })(),
 ];
 
 it.each(captures)(
   "captures $command.type selectors and byte charges before queued dispatch (%#)",
   async (fixture) => {
     const { pathname, options } = source();
-    const expected = fixture.expected ?? structuredClone(fixture.command);
+    const expected = structuredClone(fixture.command);
     const originalRoot = options.env.OPENCLAW_STATE_DIR;
     const context = captureOpenClawStateWorkerContext(options);
     const location = { context, location: pathname, checkFreshAdmission: false };

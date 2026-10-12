@@ -3,6 +3,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   beginSessionWorkAdmission,
@@ -14,7 +15,7 @@ import {
   consumeExpectedSessionWorkAdmission,
   type ExpectedExistingSessionConstraint,
 } from "../server-methods/agent-expected-session.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import {
   buildAbortedAgentPayload,
@@ -40,6 +41,8 @@ export function createAgentAdmissionController(params: {
   getRequestedSessionKey: () => string | undefined;
   getResolvedSessionKey: () => string | undefined;
   getResolvedSessionId: () => string | undefined;
+  getSessionEntry: () => SessionEntry | undefined;
+  setSessionEntry: (entry: SessionEntry | undefined) => void;
   getResolvedSessionAgentId: () => string | undefined;
   getAgentId: () => string | undefined;
   getSessionPersisted: () => boolean;
@@ -126,19 +129,8 @@ export function createAgentAdmissionController(params: {
     if (!resolvedSessionKey) {
       return undefined;
     }
-    const admissionAgent = admissionAgentId();
-    let latestEntry = loadSessionEntry(resolvedSessionKey, {
-      agentId: admissionAgent,
-      clone: false,
-      projection: "list",
-    }).entry;
-    if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
-      latestEntry = loadSessionEntry(requestedSessionKey, {
-        agentId: admissionAgent,
-        clone: false,
-        projection: "list",
-      }).entry;
-    }
+    // The work lease owns lifecycle interruption; committed request writes update this entry.
+    const latestEntry = params.getSessionEntry();
     assertExpectedExistingSession({
       constraint: params.expectedSession,
       entry: latestEntry,
@@ -191,6 +183,7 @@ export function createAgentAdmissionController(params: {
         runId: params.runId,
         stopReason,
       });
+      return { runId: params.runId };
     }
     return undefined;
   };
@@ -213,6 +206,12 @@ export function createAgentAdmissionController(params: {
       (await beginSessionWorkAdmission({
         agentId: params.getResolvedSessionAgentId() ?? params.getAgentId(),
         scope,
+        run: {
+          runId: params.runId,
+          sessionKey: params.getResolvedSessionKey(),
+          sessionId: params.getResolvedSessionId(),
+          agentId: admissionAgentId(),
+        },
         isSettling,
         getAbortReason,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
@@ -225,6 +224,19 @@ export function createAgentAdmissionController(params: {
         },
         onInterrupt: interrupt,
       }));
+    const sessionKey = params.getResolvedSessionKey();
+    if (sessionKey) {
+      // A queued lifecycle mutation may finish before this lease is acquired.
+      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.context.getRuntimeConfig(),
+        key: sessionKey,
+        agentId: admissionAgentId(),
+        excludeInternalEffects: true,
+        assertActive: params.assertAdmissionCurrent,
+      });
+      params.setSessionEntry(loaded.entry);
+      assertAllowed();
+    }
   };
 
   const respondToOutcome = () => {

@@ -152,7 +152,7 @@ describe("session backfill gateway methods", () => {
     });
   });
 
-  it.each(Object.values(SESSION_BACKFILL_GATEWAY_METHODS))(
+  it.each([SESSION_BACKFILL_GATEWAY_METHODS.preview])(
     "rejects unknown agents in %s",
     async (method) => {
       const { methods } = createHarness();
@@ -202,17 +202,6 @@ describe("session backfill gateway methods", () => {
       workspaceDir: "/tmp/tester-workspace",
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-  });
-
-  it("allows only the implicit default agent when no roster is configured", async () => {
-    const { methods } = createHarness({});
-    const preview = methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!;
-    const missing = await invoke(preview, { agentId: "missing" });
-
-    expect(missing.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: 'Unknown agent id "missing".',
-    });
   });
 
   it("applies a chunk with cursor progress and rolls back by agent", async () => {

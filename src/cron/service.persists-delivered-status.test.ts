@@ -27,7 +27,9 @@ import {
   installCronTestHooks,
 } from "./service.test-harness.js";
 import { abortActiveCronTaskRuns } from "./service/active-run-cancellation.js";
+import * as cronServiceState from "./service/state.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
@@ -220,6 +222,14 @@ async function runIsolatedJobAndReadState(
   const { storePath } = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
   const finished = createDeferred<CronEvent>();
+  let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
+  const createState = cronServiceState.createCronServiceState;
+  const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
+  captureState.mockImplementationOnce((deps) => {
+    captureState.mockRestore();
+    ownedState = createState(deps);
+    return ownedState;
+  });
   const cron = createService(storePath, {
     scheduler: createTestGatewayScheduler(clock.clock),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done", ...result })),
@@ -232,7 +242,11 @@ async function runIsolatedJobAndReadState(
   await cron.start();
   try {
     const added = await cron.add(job);
-    await clock.advanceTo(added.state.nextRunAtMs! + 5);
+    clock.setTime(added.state.nextRunAtMs! + 5);
+    if (!ownedState) {
+      throw new Error("Expected the constructed cron state");
+    }
+    await onTimer(ownedState);
     const event = await finished.promise;
     const updated = (await cron.list({ includeDisabled: true })).find(
       (entry) => entry.id === added.id,
@@ -684,6 +698,14 @@ describe("CronService persists delivery suppression", () => {
       deliveryAttempted: true,
       deliverySuppressionReason: "channel_transform",
     });
+    let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
+    const createState = cronServiceState.createCronServiceState;
+    const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
+    captureState.mockImplementationOnce((deps) => {
+      captureState.mockRestore();
+      ownedState = createState(deps);
+      return ownedState;
+    });
     const cron = createService(storePath, {
       scheduler: createTestGatewayScheduler(schedulerClock.clock),
       runIsolatedAgentJob,
@@ -706,7 +728,11 @@ describe("CronService persists delivery suppression", () => {
         delivery: { mode: "announce", channel: "forum", to: "123" },
       });
       const done = finished.waitForOk(job.id);
-      await schedulerClock.advanceTo(job.state.nextRunAtMs!);
+      schedulerClock.setTime(job.state.nextRunAtMs!);
+      if (!ownedState) {
+        throw new Error("Expected the constructed cron state");
+      }
+      await onTimer(ownedState);
       await done;
       const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
       expect.soft(persisted?.state).toMatchObject({

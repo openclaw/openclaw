@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { isDeepStrictEqual } from "node:util";
 import {
   MessageChannel,
   MessagePort,
@@ -172,22 +171,10 @@ function createOperationAdmission(
     kind: "commit receipt" | "native settlement" | "admission request",
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
-  const installCommitted = (receipt: NativeCommitReceipt): boolean => {
-    if (nativeReceipt) {
-      if (
-        receipt.operationId !== nativeReceipt.operationId ||
-        (receipt.sequence === nativeReceipt.sequence && !isDeepStrictEqual(nativeReceipt, receipt))
-      ) {
-        invalidProtocol("commit receipt");
-        return false;
-      }
-      if (receipt.sequence <= nativeReceipt.sequence) {
-        return true;
-      }
-    }
-    if (settlement) {
-      invalidProtocol("commit receipt");
-      return false;
+  const installCommitted = (receipt: NativeCommitReceipt): void => {
+    // Settlement repeats the latest receipt; each private port otherwise delivers in order.
+    if (nativeReceipt && receipt.sequence <= nativeReceipt.sequence) {
+      return;
     }
     nativeReceipt = receipt;
     const publication = { facts: receipt.facts };
@@ -206,7 +193,6 @@ function createOperationAdmission(
     } finally {
       observingCommit = false;
     }
-    return true;
   };
   const receive = (message: unknown) => {
     started = true;
@@ -342,19 +328,13 @@ function createOperationAdmission(
       if (
         !isRecord(value) ||
         (value.kind !== "completed" && value.kind !== "unknown") ||
-        (value.committed !== undefined && !receipt) ||
-        (nativeReceipt &&
-          (!receipt ||
-            receipt.operationId !== nativeReceipt.operationId ||
-            receipt.sequence < nativeReceipt.sequence)) ||
-        (settlement &&
-          (settlement.kind !== value.kind || !isDeepStrictEqual(nativeReceipt, receipt)))
+        (value.committed !== undefined && !receipt)
       ) {
         invalidProtocol("native settlement");
         return;
       }
-      if (receipt && !installCommitted(receipt)) {
-        return;
+      if (receipt) {
+        installCommitted(receipt);
       }
       settlement = {
         kind: value.kind,

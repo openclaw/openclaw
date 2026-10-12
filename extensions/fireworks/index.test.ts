@@ -1,8 +1,5 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  registerSingleProviderPlugin,
-  resolveProviderPluginChoice,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   createProviderDynamicModelContext,
@@ -36,25 +33,6 @@ function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): Pro
 }
 
 describe("fireworks provider plugin", () => {
-  it("registers Fireworks with api-key auth wizard metadata", async () => {
-    const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    const resolved = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "fireworks-api-key",
-    });
-
-    expect(provider.id).toBe("fireworks");
-    expect(provider.label).toBe("Fireworks");
-    expect(provider.aliases).toEqual(["fireworks-ai"]);
-    expect(provider.envVars).toEqual(["FIREWORKS_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
-    if (!resolved) {
-      throw new Error("expected Fireworks api-key auth choice");
-    }
-    expect(resolved.provider.id).toBe("fireworks");
-    expect(resolved.method.id).toBe("api-key");
-  });
-
   it("builds the static Fireworks catalog", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
     const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });

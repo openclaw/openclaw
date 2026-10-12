@@ -152,6 +152,7 @@ async function createAdmittedGatewaySession(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
+  let releaseRuntimeSelection: (() => void) | undefined;
   const commitGuard = resolveSessionCreationCommitGuard(params, {
     readOperatorAuthority: () => operatorAuthority,
     assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
@@ -298,6 +299,13 @@ async function createAdmittedGatewaySession(
       agentId,
       assertActive: commitGuard,
     }));
+  const followRegistration: SessionEntryCreateWithTranscriptOptions["followRegistration"] = (
+    change,
+  ) =>
+    params.followSharingRegistration?.(
+      { agentId: target.agentId, sessionKey: target.canonicalKey },
+      change,
+    );
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,
@@ -347,6 +355,7 @@ async function createAdmittedGatewaySession(
           creation: {
             ready: operatorReady,
             assertCurrent: () => commitGuard?.(),
+            followRegistration,
             selectTargetInLifecycle: Boolean(
               explicitTargetKey && !initialTargetEntry && !params.initialEntry,
             ),
@@ -967,6 +976,8 @@ async function createAdmittedGatewaySession(
         if (!runtimeSelection.ok) {
           return runtimeSelection;
         }
+        releaseRuntimeSelection?.();
+        releaseRuntimeSelection = runtimeSelection.release;
         validateRuntimeSelection = runtimeSelection.validate;
         if (params.childSessionPublication) {
           params.childSessionPublication.claim({
@@ -1055,11 +1066,13 @@ async function createAdmittedGatewaySession(
             }
           : {}),
         ...(commitGuard ? { commitGuard } : {}),
-        ...(bindPreparedCreation
+        followRegistration,
+        ...(bindPreparedCreation || params.bindSharingCreation
           ? {
               bindCreation: (operation) => {
                 commitGuard?.();
                 bindPreparedCreation?.(operation);
+                params.bindSharingCreation?.(operation);
                 creationOperation = operation;
               },
             }
@@ -1186,22 +1199,26 @@ async function createAdmittedGatewaySession(
   // Generated, keyed, same-store, and cross-agent creations all share the
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");
-  const result = await runExclusiveSessionLifecycleMutation("create", {
-    targets: lifecycleTargets,
-    run: createChildSession,
-    finalize: async () => {
-      if (!lifecyclePreparationCommitted) {
-        await rollbackGatewaySessionPreparation({
-          prepared: preparedLifecycle,
-          onError: params.onLifecycleCleanupError,
-        });
-      }
-    },
-  });
-  if (!result.ok) {
-    return result;
+  try {
+    const result = await runExclusiveSessionLifecycleMutation("create", {
+      targets: lifecycleTargets,
+      run: createChildSession,
+      finalize: async () => {
+        if (!lifecyclePreparationCommitted) {
+          await rollbackGatewaySessionPreparation({
+            prepared: preparedLifecycle,
+            onError: params.onLifecycleCleanupError,
+          });
+        }
+      },
+    });
+    if (!result.ok) {
+      return result;
+    }
+    onPhase?.("initialTurn");
+    return await completeGatewaySessionCreation(params, result, createdContext, commitGuard);
+  } finally {
+    releaseRuntimeSelection?.();
   }
-  onPhase?.("initialTurn");
-  return await completeGatewaySessionCreation(params, result, createdContext, commitGuard);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

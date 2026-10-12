@@ -319,7 +319,14 @@ void (async () => {
     sleep(${options?.systemdStopDelayMs ?? 0});
     ${managedServiceStateUpdateScript(
       statePath,
-      `${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+      `${
+        options?.revokeOwner
+          ? `const config = JSON.parse(fs.readFileSync(${JSON.stringify(params.configPath)}, "utf8"));
+          config.commands = { ...config.commands, ownerAllowFrom: [] };
+          fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify(config));
+          state.ownerRevokedAfterExit = true;`
+          : ""
+      }
       state.stopCompleted = true`,
     )};
     return;

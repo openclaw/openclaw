@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
 import "../../../components/resizable-divider.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
 import {
@@ -26,11 +26,19 @@ import {
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
 import "./chat-sidebar-region.runtime.tsx";
 
-type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"] & {
-  updateComplete: Promise<unknown>;
-};
+type Region = HTMLElementTagNameMap["openclaw-chat-sidebar-region"];
 
 const regions: Region[] = [];
+
+function element(markup: string): HTMLElement {
+  const template = document.createElement("template");
+  template.innerHTML = markup;
+  const child = template.content.firstElementChild;
+  if (!(child instanceof HTMLElement)) {
+    throw new Error("Expected a fixture element");
+  }
+  return child;
+}
 
 async function createRegion(
   layout: SidebarLayout = openSlot({ columns: [] }, "detail"),
@@ -38,14 +46,18 @@ async function createRegion(
 ) {
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
-  const region = document.createElement("openclaw-chat-sidebar-region") as Region;
+  const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
-  const content: Partial<Record<SidebarPanelDefinition["slot"], TemplateResult>> = {
-    detail: html`<div data-panel="detail">Detail panel</div>`,
-    terminal: html`<div data-panel="terminal">Terminal panel</div>`,
-    workspace: html`<div data-panel="workspace">Workspace panel</div>`,
-  };
+  const content: Partial<Record<SidebarPanelDefinition["slot"], ReturnType<typeof solidContent>>> =
+    {
+      detail: solidContent(() => element('<div data-panel="detail">Detail panel</div>'), {}),
+      terminal: solidContent(() => element('<div data-panel="terminal">Terminal panel</div>'), {}),
+      workspace: solidContent(
+        () => element('<div data-panel="workspace">Workspace panel</div>'),
+        {},
+      ),
+    };
   region.panelDefinitions =
     definitions ??
     sidebarPanelDefinitions().map((definition) =>
@@ -96,7 +108,9 @@ describe("chat sidebar region", () => {
       expanded: true,
       expandedSide: true,
     });
-    const tab = root(region).querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    const tab = root(region).querySelector<HTMLElement>(
+      '.tabstrip-tab[data-tab-value="workspace"]',
+    )!;
     tab.click();
     tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     tab.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
@@ -114,35 +128,44 @@ describe("chat sidebar region", () => {
     const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
     const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
     const label = () =>
-      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .tabstrip-tab__label',
+      );
     expect(label()?.textContent).toBe("Chat");
 
-    region.conversationTab = {
-      label: "Research assistant",
-      icon: html`<span data-agent-avatar>🦉</span>`,
-    };
+    Object.assign(region, {
+      conversationTab: {
+        label: "Research assistant",
+        icon: element("<span data-agent-avatar>\ud83e\udd89</span>"),
+      },
+    });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] [data-agent-avatar]',
+      ),
     ).not.toBeNull();
     expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
     expect(
       [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
     ).toContain("Files");
 
-    region.conversationTab = { label: "", icon: html`` };
+    Object.assign(region, { conversationTab: { label: "", icon: null } });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Chat");
     expect(
-      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
-        ?.content,
+      root(region)
+        .querySelector('.tabstrip-tab[data-tab-value="conversation"]')
+        ?.querySelector("openclaw-tooltip")?.content,
     ).toBe("Chat");
 
-    region.conversationTab = {
-      label: "Planning assistant",
-      icon: html`<span data-agent-avatar>🦊</span>`,
-    };
+    Object.assign(region, {
+      conversationTab: {
+        label: "Planning assistant",
+        icon: element("<span data-agent-avatar>\ud83e\udd8a</span>"),
+      },
+    });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Planning assistant");
     expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
@@ -208,11 +231,14 @@ describe("chat sidebar region", () => {
     const region = await createRegion(
       openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
     );
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content:
-        definition.slot === "companion" ? html`<textarea aria-label="Side chat"></textarea>` : null,
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        content:
+          definition.slot === "companion"
+            ? element('<textarea aria-label="Side chat"></textarea>')
+            : null,
+      }),
+    );
     region.callbacks!.closeSlot = (slot) => {
       region.layout = closeSlot(region.layout, slot);
     };
@@ -280,13 +306,14 @@ describe("chat sidebar region", () => {
   it("routes native Browser focus by its presentation scope, not stale page focus", async () => {
     const other = await createRegion();
     const region = await createRegion(openSlot({ columns: [] }, "browser"));
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      content:
-        definition.slot === "browser"
-          ? html`<div data-native-browser-scope="native-owner"></div>`
-          : null,
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        content:
+          definition.slot === "browser"
+            ? element('<div data-native-browser-scope="native-owner"></div>')
+            : null,
+      }),
+    );
     await region.updateComplete;
     root(other)
       .querySelector("[data-panel-slot]")!
@@ -395,9 +422,9 @@ describe("chat sidebar region", () => {
       desktopSource: null,
       desktopFocusHref: "",
       onDesktopFocusTargetChange: vi.fn(),
-      dashboard: nothing,
-      workspace: html`<div data-panel="workspace">Workspace panel</div>`,
-      renderDetail: () => html``,
+      dashboard: emptyLegacyContent,
+      workspace: emptyLegacyContent,
+      renderDetail: vi.fn(),
       digest: null,
       activeRunId: null,
       pullRequests: [],
@@ -417,6 +444,9 @@ describe("chat sidebar region", () => {
       pluginPanels: [],
       isPluginPanelPresented: () => true,
     };
+    Object.assign(params, {
+      workspace: element('<div data-panel="workspace">Workspace panel</div>'),
+    });
     const region = await createRegion(layout, sidebarPanelDefinitions(params));
     params.pluginPanels = [];
     const refresh = async () => {
@@ -428,7 +458,6 @@ describe("chat sidebar region", () => {
     const unavailable = root(region).querySelector(
       `[data-panel-slot="${slot}"] openclaw-panel-empty-state`,
     );
-    await (unavailable as HTMLElement & { updateComplete?: Promise<unknown> })?.updateComplete;
     expect(unavailable?.textContent).toContain("The plugin that owns this tab is not active");
     expect(region.panelDefinitions.find((definition) => definition.slot === slot)?.available).toBe(
       false,
@@ -440,10 +469,8 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.closeSlot).toHaveBeenCalledWith(slot);
 
     root(region)
-      .querySelector('wa-tab[panel="workspace"]')
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "workspace" } }),
-      );
+      .querySelector<HTMLButtonElement>('.tabstrip-tab[data-tab-value="workspace"]')
+      ?.click();
     expect(region.callbacks?.activatePanel).toHaveBeenCalledWith("workspace");
     region.layout = activatePanel(region.layout, "workspace");
     await region.updateComplete;
@@ -473,14 +500,15 @@ describe("chat sidebar region", () => {
     async ({ slot, eventType, detail }) => {
       const handleToggleRequest = vi.fn();
       const region = await createRegion(openSlot({ columns: [] }, slot));
-      region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-        ...definition,
-        available: definition.slot === slot,
-        content:
-          definition.slot === slot
-            ? html`<div .handleToggleRequest=${handleToggleRequest}>Panel content</div>`
-            : null,
-      }));
+      region.panelDefinitions = region.panelDefinitions.map((definition) =>
+        Object.assign({}, definition, {
+          available: definition.slot === slot,
+          content:
+            definition.slot === slot
+              ? Object.assign(element("<div>Panel content</div>"), { handleToggleRequest })
+              : null,
+        }),
+      );
       await region.updateComplete;
       const menuItem = Array.from(
         root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
@@ -534,19 +562,20 @@ describe("chat sidebar region", () => {
 
   it("offers every chat-side content owner through the shared type menu", async () => {
     const region = await createRegion();
-    region.panelDefinitions = region.panelDefinitions.map((definition) => ({
-      ...definition,
-      available: [
-        "detail",
-        "terminal",
-        "browser",
-        "workspace",
-        "companion",
-        "desktop",
-        "discussion",
-        "dashboard",
-      ].includes(definition.slot),
-    }));
+    region.panelDefinitions = region.panelDefinitions.map((definition) =>
+      Object.assign({}, definition, {
+        available: [
+          "detail",
+          "terminal",
+          "browser",
+          "workspace",
+          "companion",
+          "desktop",
+          "discussion",
+          "dashboard",
+        ].includes(definition.slot),
+      }),
+    );
     await region.updateComplete;
 
     expect(
@@ -658,7 +687,9 @@ describe("chat sidebar region", () => {
     );
     region.panelDefinitions = region.panelDefinitions.map((definition) =>
       definition.slot === "dashboard"
-        ? { ...definition, content: html`<input aria-label="Unsaved app input" />` }
+        ? Object.assign({}, definition, {
+            content: solidContent(() => element('<input aria-label="Unsaved app input" />'), {}),
+          })
         : definition,
     );
     await region.updateComplete;

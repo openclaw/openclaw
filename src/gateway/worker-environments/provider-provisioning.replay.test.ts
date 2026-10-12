@@ -1,10 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
@@ -21,6 +25,10 @@ type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service provision replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
   it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
     const provision = vi.fn<WorkerProvider["provision"]>(async () => {
@@ -151,6 +159,7 @@ describe("worker environment service provision replay", () => {
   });
 
   it("replays one node lease once across overlapping reconciliation and activates once", async () => {
+    setRuntimeConfigSnapshot(support.testState.config);
     const events: string[] = [];
     const operationIds: string[] = [];
     const physicalLeases = new Set<string>();
@@ -284,7 +293,7 @@ describe("worker environment service provision replay", () => {
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
     const dispatch = createProviderReplayDispatch({
-      initialPlacements: placements.list(),
+      initialPlacements: await placements.listAsync(),
       placements,
       environments: restarted,
       resolveDevicePlacementRequirement: async () => ({
@@ -298,9 +307,9 @@ describe("worker environment service provision replay", () => {
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
       async (environmentId, reconcileEnvironmentCore) => {
-        const owners = placements
-          .list()
-          .filter((candidate) => candidate.environmentId === environmentId);
+        const owners = (await placements.listAsync()).filter(
+          (candidate) => candidate.environmentId === environmentId,
+        );
         if (owners.length !== 1 || owners[0]?.state !== "provisioning") {
           await reconcileEnvironmentCore();
           return;

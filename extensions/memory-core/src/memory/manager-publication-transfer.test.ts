@@ -11,7 +11,10 @@ import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureMemorySessionTombstones } from "../memory-session-tombstones.js";
+import {
+  ensureMemorySessionTombstones,
+  recordMemorySessionTombstonesInDatabase,
+} from "../memory-session-tombstones.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
@@ -28,6 +31,7 @@ import type {
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
+import { memoryChunkRowId } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
 const fixtureWriters = new Map<MemoryIndexDatabase, DatabaseSync>();
@@ -247,14 +251,16 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it("rolls back a refused inline cache commit and preserves tombstone and revision fences", async () => {
+  it("rolls back a refused inline cache commit and preserves tombstones", async () => {
     const owner = await createOwner();
     const db = fixtureWriter(owner);
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
     ensureMemorySessionTombstones(db);
-    db.exec(
-      "INSERT INTO memory_session_tombstones (session_id, agent_id, reason, created_at) VALUES ('forgotten', 'main', 'forgotten', 1)",
-    );
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: ["forgotten"],
+      createdAt: 1,
+    });
     let refused = true;
     const backend = await createBackend(owner, (stage) => {
       if (stage === "commit" && refused) {
@@ -274,7 +280,6 @@ describe("bounded memory publication transfer", () => {
           { hash: "current", embedding: [-0, 0.25] },
           { hash: "forgotten", embedding: [9], sessionId: "forgotten" },
         ],
-        expectedRevision: readMemoryDatabaseRevision(db),
       },
     };
     const sql = observeHostDataSql();
@@ -287,12 +292,6 @@ describe("bounded memory publication transfer", () => {
       });
       expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
       refused = false;
-      expect(
-        backend.execute({
-          ...command,
-          input: { ...command.input, expectedRevision: command.input.expectedRevision + 1 },
-        }),
-      ).toEqual({ ok: true, value: false });
       expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
       expect(db.prepare("SELECT hash, embedding FROM memory_embedding_cache").all()).toEqual([
         { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
@@ -714,9 +713,11 @@ describe("bounded memory publication transfer", () => {
       hash: "source-hash",
     });
     refuseCommit = false;
-    db.prepare(
-      "INSERT INTO memory_session_tombstones (session_id, agent_id, reason, created_at) VALUES (?, ?, 'forgotten', 1)",
-    ).run("inline-session", "main");
+    recordMemorySessionTombstonesInDatabase(db, {
+      agentId: "main",
+      sessionIds: ["inline-session"],
+      createdAt: 1,
+    });
     expect(backend.execute(command)).toMatchObject({
       ok: false,
       committed: false,
@@ -752,7 +753,7 @@ describe("bounded memory publication transfer", () => {
     ).toEqual(inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })));
   });
 
-  it("publishes a session delta that keeps retained rows and reports retained drift", async () => {
+  it("publishes planned removals and keeps unchanged session rows searchable", async () => {
     const owner = await createOwner();
     ensureMemorySessionTombstones(fixtureWriter(owner));
     const [template] = replacement().chunks;
@@ -768,7 +769,7 @@ describe("bounded memory publication transfer", () => {
       hash: string,
       chunks: ReturnType<typeof turn>[],
       retained: ReturnType<typeof turn>[] = [],
-    ): MemorySourceIndexReplacement => ({
+    ): Extract<MemorySourceIndexReplacement, { source: "sessions" }> => ({
       ...replacement(),
       source: "sessions",
       agentId: "main",
@@ -792,13 +793,14 @@ describe("bounded memory publication transfer", () => {
     );
     const [first] = rows();
     const delta = session("v2", [turn(3)], [turn(1)]);
+    delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
     await expect(
       owner.replaceSource(
         delta,
         () => undefined,
         async () => true,
       ),
-    ).resolves.toMatchObject({ retainedDrift: false });
+    ).resolves.toBe(true);
     expect(rows()).toEqual([
       first,
       expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
@@ -807,21 +809,17 @@ describe("bounded memory publication transfer", () => {
       { count: 2 },
     );
 
-    fixtureWriter(owner).prepare("DELETE FROM memory_index_chunks WHERE start_line = 1").run();
-    await expect(
-      owner.replaceSource(
-        session("v3", [turn(4)], [turn(1)]),
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toMatchObject({ retainedDrift: true });
-    expect(owner.db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([
-      { hash: "v2" },
-    ]);
+    expect(
+      owner.db
+        .prepare(
+          "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+        )
+        .all(),
+    ).toEqual([{ start_line: 1 }, { start_line: 3 }]);
   });
 
   it.each([8, 4 * 1024 * 1024 + 1])(
-    "roundtrips %i-coordinate cache vectors with revision, tombstone, and capacity fences",
+    "roundtrips %i-coordinate cache vectors with tombstone and capacity limits",
     async (coordinates) => {
       const owner = await createOwner();
       const writer = fixtureWriter(owner);
@@ -847,35 +845,12 @@ describe("bounded memory publication transfer", () => {
       }
       const readRows = () =>
         owner.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
-      const before = readRows();
-      const staleRevision = readMemoryDatabaseRevision(owner.db);
-      writer.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
-      const outcomes: Array<boolean | undefined> = [];
       const assertCurrent = () => undefined;
-      outcomes.push(
-        await owner.mutateEmbeddingCache(
-          {
-            kind: "clear",
-            identities: [
-              {
-                provider: header.provider.id,
-                model: header.provider.model,
-                providerKey: header.providerKey,
-              },
-            ],
-          },
-          assertCurrent,
-          () => staleRevision,
-          () => undefined,
-        ),
-      );
-      expect(outcomes).toEqual([false]);
-      expect(readRows()).toEqual(before);
-
-      writer
-        .prepare(`INSERT INTO memory_session_tombstones
-      (session_id, agent_id, reason, created_at) VALUES ('forgotten', 'main', 'forgotten', 1)`)
-        .run();
+      recordMemorySessionTombstonesInDatabase(writer, {
+        agentId: "main",
+        sessionIds: ["forgotten"],
+        createdAt: 1,
+      });
       const vector = Array.from({ length: coordinates }, () => 0.125);
       vector.splice(0, 4, -0, Number.MIN_VALUE, Number.MAX_VALUE, 1 + Number.EPSILON);
       const entries = [
@@ -892,15 +867,9 @@ describe("bounded memory publication transfer", () => {
         expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
       }
       expect(batches > 1).toBe(coordinates > 8);
-      outcomes.push(
-        await owner.mutateEmbeddingCache(
-          { kind: "upsert", header, entries },
-          assertCurrent,
-          () => readMemoryDatabaseRevision(owner.db),
-          () => undefined,
-        ),
-      );
-      expect(outcomes).toEqual([false, true]);
+      await expect(
+        owner.mutateEmbeddingCache({ kind: "upsert", header, entries }, assertCurrent, () => true),
+      ).resolves.toBe(true);
       const rows = readRows();
       expect(rows.map((row) => row.hash)).toEqual(["large", "survivor"]);
       expect(rows.map((row) => [row.provider, row.model, row.provider_key, row.dims])).toEqual([

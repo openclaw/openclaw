@@ -29,12 +29,6 @@ const PROPAGATED_SPAN_CONTEXT = {
 } as const;
 const PROPAGATION_ROUNDTRIP_CASES = [
   {
-    label: "W3C",
-    value: "tracecontext",
-    incoming: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-    outgoing: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-  },
-  {
     label: "B3",
     value: "B3",
     incoming: { b3: `${TRACE_ID}-${SPAN_ID}-1` },

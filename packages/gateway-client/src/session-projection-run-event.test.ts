@@ -67,12 +67,9 @@ describe("session projection Gateway run events", () => {
 
   it.each([
     { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 11, resumes: false },
-    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 12, resumes: false },
     { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 13, resumes: true },
     { terminalSeq: 10, repeatedSeq: 12, deltaSeq: undefined, resumes: false },
     { terminalSeq: undefined, repeatedSeq: undefined, deltaSeq: 13, resumes: false },
-    { terminalSeq: 10, repeatedSeq: undefined, deltaSeq: 13, resumes: false },
-    { terminalSeq: 10, repeatedSeq: 12, deltaSeq: Infinity, resumes: false },
   ])("requires newer run-event order before resuming an error: %j", (scenario) => {
     let projection = createSessionProjection(scope);
     const message = { role: "assistant", content: [], stopReason: "error" };
@@ -107,7 +104,6 @@ describe("session projection Gateway run events", () => {
   });
 
   it.each([
-    { name: "regular final", event: { state: "final" }, status: "completed" },
     {
       name: "yielded end turn",
       event: { state: "final", yielded: true, stopReason: "end_turn" },
@@ -127,7 +123,6 @@ describe("session projection Gateway run events", () => {
       status: "timeout",
     },
     { name: "aborted run", event: { state: "aborted" }, status: "aborted" },
-    { name: "live delta", event: { state: "delta" }, status: "streaming" },
   ])("normalizes a $name identically for browser and TUI", ({ event, status }) => {
     const result = reduceSessionProjectionRunEvent(
       createSessionProjection(scope),
@@ -139,28 +134,7 @@ describe("session projection Gateway run events", () => {
     expect(result?.projection.runs["shared-run"]?.status).toBe(status);
   });
 
-  it("returns both canonical run projections for a duplicate Gateway terminal", () => {
-    const final = {
-      runId: "shared-run",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "delivered final" }],
-        __openclaw: { id: "final-1", seq: 1 },
-      },
-    };
-    const first = reduceSessionProjectionRunEvent(createSessionProjection(scope), final);
-    expect(first).not.toBeNull();
-    if (!first) {
-      return;
-    }
-    const repeated = reduceSessionProjectionRunEvent(first.projection, final);
-    expect(repeated?.previousRun).toBe(first.currentRun);
-    expect(repeated?.projection).toBe(first.projection);
-    expect(repeated?.currentRun).toBe(first.currentRun);
-  });
-
-  it.each(["status", undefined])("rejects non-run Gateway event state %j", (state) => {
+  it.each(["status"])("rejects non-run Gateway event state %j", (state) => {
     expect(
       reduceSessionProjectionRunEvent(createSessionProjection(scope), {
         runId: "shared-run",

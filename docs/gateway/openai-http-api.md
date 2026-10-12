@@ -126,6 +126,9 @@ Owner/admin callers keep explicit incognito session continuation. A private no-a
 
 ## Request limits
 
+`POST /v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` have a
+60-second request-body read deadline. Uploads that exceed it return HTTP `408`.
+
 The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
 parts from the latest user message, and 20 MB of cumulative decoded image
 data. Image source policy remains configurable under

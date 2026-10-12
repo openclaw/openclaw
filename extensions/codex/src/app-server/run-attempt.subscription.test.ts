@@ -60,12 +60,12 @@ describe("Codex attempt subscription recovery", () => {
       expect(registration?.historyOwner?.lifecycleRevision).toBeUndefined();
       const submission = registration?.submissionStore;
       expect(submission).toBeDefined();
-      submission!.assertCurrent();
+      await submission!.assertCurrentAsync();
       await patchSessionEntry({
         ...target,
         update: () => ({ sessionId: "replacement-parent" }),
       });
-      expect(() => submission!.assertCurrent()).toThrow(
+      await expect(submission!.assertCurrentAsync()).rejects.toThrow(
         "Native submission session lifecycle is no longer current.",
       );
     } finally {

@@ -245,7 +245,12 @@ describe("application update campaign overlays", () => {
 
     await overlays.refreshUpdateStatus();
 
-    expect(request).toHaveBeenCalledWith("update.status", { refreshCheckout: true }, undefined);
+    expect(request).toHaveBeenCalledWith(
+      "update.status",
+      { refreshCheckout: true },
+      { timeoutMs: null },
+    );
+    expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: 5_000 });
     expect(overlays.snapshot.updateSchedule?.install?.git).toEqual({
       status: "behind",
       commitsBehind: 12,

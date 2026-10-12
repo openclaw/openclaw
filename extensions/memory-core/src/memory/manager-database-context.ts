@@ -327,6 +327,7 @@ export class MemoryIndexDatabase {
     return {
       vector: { enabled: this.vector.enabled, available: this.vector.available },
       fts: { enabled: this.fts.enabled, available: this.fts.available },
+      hasVectorTable: this.facts.hasVectorTable,
       ...(this.vector.available && this.vector.extensionPath
         ? { extensionPath: this.vector.extensionPath }
         : {}),
@@ -567,16 +568,14 @@ export class MemoryIndexDatabase {
   async mutateEmbeddingCache(
     mutation: MemoryEmbeddingCacheMutation,
     assertCurrent: () => void,
-    prepareRevision: () => number | undefined,
-    invalidate: () => void,
+    prepare: () => boolean,
   ): Promise<boolean | undefined> {
     const publish = (scope: PublicationScope) =>
       publishMemoryEmbeddingCache({
         scope,
         mutation,
-        prepareRevision,
-        invalidate,
-        retry: (run, prepare) => this.retryPublication(run, prepare),
+        prepare,
+        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
       });
     return mutation.kind === "clear" ||
       memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)

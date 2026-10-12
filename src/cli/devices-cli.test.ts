@@ -25,7 +25,10 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 // mock-isolation: Pairing policy is stubbed below; runtime config loading is not part of this unit contract.
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+}));
 vi.mock("./progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));

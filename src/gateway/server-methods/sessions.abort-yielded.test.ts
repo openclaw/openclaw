@@ -31,7 +31,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { createChatAbortContext } from "./chat.abort.test-helpers.js";
@@ -81,6 +81,8 @@ async function seedYieldedParent() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,
@@ -129,10 +131,13 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         agentId: "broken",
         sessionKey: brokenKey,
         defaultSessionId: "broken-child-session",
+        lifecycleRevision: "broken-child-revision",
       });
       await registerSubagentRun({
         runId: "broken-child-run",
         childSessionKey: brokenKey,
+        childAgentId: "broken",
+        sessionEntry: loadSessionEntry({ agentId: "broken", sessionKey: brokenKey }),
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -146,7 +151,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (!database) {
         throw new Error("Missing sibling database");
       }
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       await writeFile(database.path, "not a SQLite database");
     }
     const context = createChatAbortContext({

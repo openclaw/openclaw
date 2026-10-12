@@ -20,12 +20,13 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
 import {
+  captureNativeSessionWorkerDeletion,
   hasPreparedNativeSessionDeletion,
-  runPreparedSqliteSessionWrite,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { runPreparedSqliteSessionWrite } from "./session-accessor.sqlite-prepared-write.js";
 import {
   readSessionEntryReplacementState,
   type SessionEntryReplacementState,
@@ -399,9 +400,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       return {
         deletedEntries: deletedOwners,
         commit: async (assertSourceCurrent) => {
-          // Native companions and process-held stores retain their synchronous transaction view.
+          const nativeDeletion = captureNativeSessionWorkerDeletion(deletedOwners);
+          // Only opaque companions require the parent's synchronous transaction view.
           const workerCommit =
-            Boolean(incognito) || (useWorker && !hasPreparedNativeSessionDeletion());
+            Boolean(incognito) ||
+            (useWorker && (!hasPreparedNativeSessionDeletion() || Boolean(nativeDeletion)));
           const preparedPreservation =
             params.skipMaintenance === false
               ? await prepareSessionMaintenancePreservation(params.storePath, {
@@ -553,6 +556,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                   : undefined,
               },
               params.retainedExecution,
+              nativeDeletion,
             );
             return { maintenancePlans: committed.maintenancePlans, result: operation.result };
           } finally {

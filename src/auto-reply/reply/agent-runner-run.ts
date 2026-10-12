@@ -79,7 +79,6 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-source.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { prepareSessionVerboseLevelReader } from "./session-verbose-level.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -286,6 +285,20 @@ export async function runReplyAgent(
     return questionInput.payload;
   }
 
+  const toolResultOptions = {
+    getVerboseLevel: () =>
+      (sessionKey ? activeSessionStore?.[sessionKey]?.verboseLevel : undefined) ??
+      activeSessionEntry?.verboseLevel,
+    resolvedVerboseLevel,
+    verboseLevelOverride: followupRun.run.verboseLevelOverride,
+  };
+  const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
+  const channelProgressCanConsumeToolResults =
+    Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
+  const shouldEmitToolResult = () =>
+    channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
+  const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
+
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
   const touchActiveSessionEntry = async () => {
@@ -428,7 +441,7 @@ export async function runReplyAgent(
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     releaseAdmissionTicket();
-    const queuedBehindActiveRun = isRunActive?.() === true;
+    const queuedBehindActiveRun = (await isRunActive?.()) === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -445,23 +458,6 @@ export async function runReplyAgent(
     agentAccountId: followupRun.run.agentAccountId,
   });
   followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
-
-  const toolResultOptions = {
-    readVerboseLevel: await prepareSessionVerboseLevelReader({
-      scope:
-        sessionKey && storePath && followupRun.run.verboseLevelOverride === undefined
-          ? { sessionKey, storePath, agentId: followupRun.run.agentId }
-          : undefined,
-      initialLevel: activeSessionEntry?.verboseLevel,
-      assertCurrent: assertReadCurrent,
-    }),
-    resolvedVerboseLevel,
-    verboseLevelOverride: followupRun.run.verboseLevelOverride,
-  };
-  const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
-  const shouldEmitToolResult = () =>
-    Boolean(opts?.forceToolResultProgress && opts?.onToolResult) || baseShouldEmitToolResult();
-  const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -625,6 +621,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    prepareCompletionCleanup: prepareRestartClaimCleanup,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -662,6 +659,7 @@ export async function runReplyAgent(
       blockReplyPipeline,
       cfg,
       checkpointBeforeAgentReply,
+      prepareRestartClaimCleanup,
       resolveVisibleReplyDelivery,
       activeIsNewSession: isNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -677,9 +675,7 @@ export async function runReplyAgent(
       returnWithQueuedFollowupDrain,
       runFollowupTurn,
       sendDirectCompactionNotice,
-      onCompactionNoticePayload: (payload) => {
-        pendingCompactionNotices.push(payload);
-      },
+      onCompactionNoticePayload: (payload) => pendingCompactionNotices.push(payload),
       setActiveSessionEntry: (entry) => {
         activeSessionEntry = entry;
       },

@@ -171,8 +171,8 @@ describe("runtime conversation binding route", () => {
     },
   );
 
-  it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
-    let binding = createBinding();
+  it("awaits activity persistence and keeps inspection pure", async () => {
+    const binding = createBinding();
     const gate = createDeferredCore();
     const touchAsync = vi.fn(() => gate.promise);
     const touch = vi.fn();
@@ -200,7 +200,6 @@ describe("runtime conversation binding route", () => {
     });
     await Promise.resolve();
     expect(settled).toBe(false);
-    binding = createBinding({ targetSessionKey: "agent:replacement:acp:session-2" });
     gate.resolve();
     expect((await pending).boundSessionKey).toBe(binding.targetSessionKey);
     expect(touch).not.toHaveBeenCalled();

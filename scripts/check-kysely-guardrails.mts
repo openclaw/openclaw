@@ -42,6 +42,9 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync.ts",
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    // Engine admission owns anchor metadata and schema bootstrap, not application queries.
+    "src/infra/database-engine/adapters.ts",
+    "src/infra/database-engine/open.ts",
     "src/infra/node-sqlite.ts",
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",

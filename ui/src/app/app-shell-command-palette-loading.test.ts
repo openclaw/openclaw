@@ -161,7 +161,7 @@ describe("cold command palette input custody", () => {
     { remount: true, value: "retain this selection", start: 3, end: 10 },
   ])(
     "hands off live text, selection and original focus (remounted: $remount)",
-    ({ remount, value, start, end }) => {
+    async ({ remount, value, start, end }) => {
       const { state, input, foreground, close } = mountLoader();
       expect(input.disabled).toBe(false);
       type(input, remount ? value : "early draft");
@@ -179,6 +179,8 @@ describe("cold command palette input custody", () => {
           replacement.selectionEnd,
           replacement.selectionDirection,
         ]).toEqual([start, end, "backward"]);
+        // The removed Solid root cleans up after its replacement has mounted.
+        await Promise.resolve();
       }
       expect(take()).toEqual({
         value,

@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -236,9 +237,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         if (prop === "config") {
           const config: PluginRuntime["config"] = getRuntimeProperty();
+          const readCurrent = () => runWithPluginScope(() => config.current(), false);
+          function current(options: { clone: true }): OpenClawConfig;
+          function current(): ReturnType<typeof readCurrent>;
+          function current(options?: { clone: true }) {
+            return options
+              ? runWithPluginScope(() => config.current(options), false)
+              : readCurrent();
+          }
           return {
             ...config,
-            current: () => runWithPluginScope(() => config.current(), false),
+            current,
             mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
             replaceConfigFile: (params) =>
               runWithPluginScope(() => config.replaceConfigFile(params)),
@@ -343,7 +352,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                           : undefined,
                   },
                   async () => {
-                    assertGatewaySessionRequestOwned(method, params);
+                    await assertGatewaySessionRequestOwned(method, params);
                     return await gateway.request(method, params, options);
                   },
                 ),
@@ -477,14 +486,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                       sessionKey: params.sessionKey,
                       storePath: params.storePath,
                     });
-                  const ownerPluginId = resolveCurrentExecutionOwner();
+                  const ownerPluginId = await resolveCurrentExecutionOwner();
                   const admissionSession = ownerPluginId
                     ? resolveDelegatedRuntime(ownerPluginId).agent.session
                     : session;
                   return await admissionSession.runWithWorkAdmission(params, async (signal) => {
                     // Admission can wait behind another run that changes ownership.
                     // Recheck delegation inside the admitted callback before plugin work starts.
-                    if (resolveCurrentExecutionOwner() !== ownerPluginId) {
+                    if ((await resolveCurrentExecutionOwner()) !== ownerPluginId) {
                       throw new Error(
                         `Session "${params.sessionKey}" changed execution ownership while starting work.`,
                       );
@@ -501,7 +510,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 await loadSessionOwnership();
               return await runWithPluginScope(() =>
                 withPreparedSessionOwnership(params, async () => {
-                  const update = prepareSessionStoreUpdate(params, assertRuntimeCurrent);
+                  const update = await prepareSessionStoreUpdate(params, assertRuntimeCurrent);
                   return await session.updateSessionStoreEntry({ ...params, update });
                 }),
               );
@@ -516,7 +525,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 { ...runParams, ...runParams.sessionTarget },
                 async () => {
                   const { ownerPluginId, agentHarnessRuntimeOverride } =
-                    prepareRunSessionExecution(runParams);
+                    await prepareRunSessionExecution(runParams);
                   if (agentHarnessRuntimeOverride !== undefined) {
                     runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
                   }
@@ -606,7 +615,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               await loadSessionOwnership();
             return await runWithPluginScope(() =>
               withPreparedSessionOwnership(params, async () => {
-                assertSessionIdentitiesOwned({
+                await assertSessionIdentitiesOwned({
                   action: "run",
                   sessionKeys: [params.sessionKey],
                 });
@@ -622,7 +631,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               await loadSessionOwnership();
             return await runWithPluginScope(() =>
               withPreparedSessionOwnership(params, async () => {
-                assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });
+                await assertStoredSessionEntryOwned({
+                  action: "delete",
+                  sessionKey: params.sessionKey,
+                });
                 await subagent.deleteSession(params);
               }),
             );

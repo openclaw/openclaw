@@ -110,6 +110,8 @@ export async function withCurrentChatSendRetry(
       session: params.session,
       getRuntimeConfig: params.context.getRuntimeConfig,
       includeMembership: Boolean(params.withPreparedCurrent),
+      includeActivePath: params.request.p.queueMode !== "steer",
+      includeLifecycle: true,
       consume: (latest, membership, assertSourceCurrent) => {
         const consumeCurrent = () => read(latest);
         if (params.withPreparedCurrent) {
@@ -258,6 +260,7 @@ export function interruptChatSendWork(params: {
 /** Queued and collected turns share the original session and caller admission until settlement. */
 export function createChatSendWorkAdmission(params: {
   admission: Pick<SessionWorkAdmissionLease, "release">;
+  followRegistration?: SessionMutationAuthorization["followRegistration"];
   releaseCallerAuthority?: () => void;
   releaseGatewayRootContinuation?: () => void;
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
@@ -405,6 +408,7 @@ export function createChatSendWorkAdmission(params: {
             throw new Error("Chat input actor admission ended");
           }
         };
+        const followRegistration = params.followRegistration;
         inputActor = acquireSessionInputActor(
           {
             agentId: terminal.target.agentId,
@@ -416,6 +420,12 @@ export function createChatSendWorkAdmission(params: {
             },
           },
           { assertCurrent, assertReadable: assertCurrent },
+          followRegistration &&
+            ((change) =>
+              followRegistration(
+                { sessionKey: terminal.target.canonicalKey, agentId: terminal.target.agentId },
+                change,
+              )),
         );
       }
       return inputActor;
@@ -443,7 +453,11 @@ export function createChatSendWorkAdmission(params: {
         settlement.release();
       }
     },
-    withInputCommitPublication<T>(this: void, run: () => Promise<T>): Promise<T> {
+    withInputCommitPublication<T>(
+      this: void,
+      run: () => Promise<T>,
+      onCommitted?: Parameters<typeof withSessionTranscriptSourcePublication>[1],
+    ): Promise<T> {
       const terminal = params.terminal;
       if (!terminal) {
         throw new Error("Chat input publication requires its original admission target");
@@ -467,6 +481,7 @@ export function createChatSendWorkAdmission(params: {
           }
           admittedSource ??= source;
           admittedLifecycleRevision = committedEntry.lifecycleRevision;
+          onCommitted?.(source, committedEntry);
         },
         run,
       );

@@ -39,12 +39,23 @@ the session and keep both stable. Start a new session for a planned change.
 Invalidating reuse means the next request misses that cached state; it does not
 necessarily delete the provider's older cache entry before its normal expiry.
 
+## Stable tools between turns
+
+WebChat keeps the `message` reaction description and schema stable between runs
+in the same conversation, including runs without a current-prompt reaction grant.
+Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
+changes. Its current callable index and capability guidance follow the stable
+prompt prefix; supported in-history prompt updates append changes to the
+conversation. Reaction
+execution still requires the current prompt's live authority; an advertised
+action does not grant permission to execute it.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request
 and when persisting the result. Subsequent turns therefore replay the same
-bounded text instead of introducing a different truncation notice. Redaction
-still runs before model-visible output is recorded. Large batches can exceed
+bounded text instead of introducing a different truncation notice. Tool text
+is preserved without secret masking. Large batches can exceed
 the aggregate result budget when reducing them would rewrite already-sent
 history; session pruning and compaction remain the owners of intentional
 history changes.
@@ -53,6 +64,11 @@ OpenAI Chat Completions also preserves valid native tool-call IDs during replay
 and disambiguates repeated IDs deterministically. Changing result text or IDs
 between turns can invalidate an otherwise reusable provider prefix. Stable
 request inputs support cache reuse; actual hits still depend on the provider.
+
+Responses replay derives synthetic assistant message IDs from recorded source-turn
+identity when available. Retiring earlier history therefore preserves the IDs of
+retained failed-turn markers. Error diagnostics remain transcript metadata and do
+not enter the provider request.
 
 Internal browser conversations reuse their opaque session cache key for private
 subagent completions, so the completion does not switch to a different affinity

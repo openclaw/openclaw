@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGoal } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import type { ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
@@ -50,6 +51,40 @@ describe("goal elapsed presentation", () => {
     resetChatComposerState();
     document.body.replaceChildren();
     vi.useRealTimers();
+  });
+
+  it("keeps Resume progress and its saved retry in the goal pill", () => {
+    const onCheck = vi.fn(async () => true);
+    const [recovery, setRecovery] = createSignal<ChatGoalRecovery>({ pending: true, onCheck });
+    const [connected, setConnected] = createSignal(true);
+    const view = mountSolid(() => (
+      <ChatGoal
+        goal={{ ...goal, status: "paused", lastStatusNote: "Previous pause" }}
+        expanded={true}
+        canAct={false}
+        connected={connected()}
+        resumeRecovery={recovery()}
+        onExpandedChange={() => {}}
+      />
+    ));
+    flush();
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe("Resuming goal…");
+    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(view.container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(view.container.textContent).not.toContain("Previous pause");
+    setRecovery({ pending: false, onCheck });
+    flush();
+    expect(view.container.querySelector('[role="status"]')?.textContent).toBe(
+      "Resume not confirmed",
+    );
+    const retry = view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-resume")!;
+    expect(retry.textContent).toBe("Retry resume");
+    retry.click();
+    expect(onCheck).toHaveBeenCalledOnce();
+    setConnected(false);
+    flush();
+    expect(retry.disabled).toBe(true);
+    expect(view.container.querySelector(".session-run-spinner")).toBeNull();
   });
 
   it.each([

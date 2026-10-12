@@ -27,7 +27,7 @@ import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
-  resolveAgentHarnessNativeToolPolicyRestricted,
+  prepareAgentHarnessNativeToolPolicyRestricted,
 } from "../../harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
@@ -158,7 +158,6 @@ async function prepareNativeSessionRuntime(
       const prepared = await reader.withRead(
         {
           sessionKeys: [admission.sessionKey],
-          lifecycleSessionKey: admission.sessionKey,
           snapshotFields: [],
         },
         assertCallerCurrent,
@@ -176,7 +175,6 @@ async function prepareNativeSessionRuntime(
       {
         agentId: sessionAgentId,
         sessionKeys: [admission.sessionKey],
-        lifecycleSessionKey: admission.sessionKey,
         storePath: admission.storePath,
         includeAuthorization: true,
         snapshotFields: [],
@@ -260,6 +258,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     runParams.resolvedModelSelection ??
     (await resolveHookModelSelection({
       prompt: runParams.prompt,
+      awaitSessionDiffBaseline: runParams.awaitSessionDiffBaseline,
       attachments: buildBeforeModelResolveAttachments(runParams.images),
       provider: params.provider,
       modelId: params.modelId,
@@ -343,14 +342,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
           agentHarnessId: runParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
-  const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(
+  const nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
     agentHarness,
     runParams,
   );
   if (agentHarness.executionEnvironment === "host-only" && !nativePermissionsConsented) {
     assertPluginHarnessConversationToolPolicySupport(
       agentHarness,
-      resolveAgentHarnessNativeToolPolicyRestricted(
+      await prepareAgentHarnessNativeToolPolicyRestricted(
         { ...runParams, provider, modelId },
         agentHarness,
       ),

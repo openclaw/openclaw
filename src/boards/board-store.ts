@@ -57,7 +57,7 @@ export type BoardSnapshotWithHtmlViewMetadata = {
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
 export type BoardWriteOptions = {
-  /** Recheck the caller after write admission, inside the synchronous mutation. */
+  /** Recheck caller authority at the worker's transaction and commit boundaries. */
   assertCurrent?: () => void;
 };
 
