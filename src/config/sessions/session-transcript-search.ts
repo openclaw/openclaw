@@ -2,20 +2,13 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
-import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
-import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import {
-  getSqliteReadOperationRevision,
-  runSqliteReadOperationSync,
-} from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -59,40 +52,6 @@ import type {
 } from "./session-transcript-search.types.js";
 import { transcriptSearchLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-
-// Local mutation revisions are comparable only on the same live connection.
-const searchConnections = new WeakMap<DatabaseSync, string>();
-
-function readSearchRevision(database: DatabaseSync): string | undefined {
-  return runSqliteReadOperationSync(database, () => {
-    const revision = getSqliteReadOperationRevision(database);
-    if (!revision) {
-      return undefined;
-    }
-    let connection = searchConnections.get(database);
-    if (!connection) {
-      connection = randomUUID();
-      searchConnections.set(database, connection);
-      const unregister = registerNodeSqliteDisposeCallback(database, () => {
-        searchConnections.delete(database);
-        unregister();
-      });
-    }
-    return `${connection}:${revision.schema.revision}:${revision.writeRevision}:${revision.mutationRevision}`;
-  });
-}
-
-/** A later clean status certifies hits only while their reader's snapshot is unchanged. */
-export function isSessionTranscriptSearchCurrentSync(
-  revision: string,
-  options: OpenClawAgentDatabaseOptions,
-): boolean {
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSearchRevision(database.db) === revision,
-    options,
-  );
-  return result.found && result.value;
-}
 
 /** Query a captured disk owner off-thread; reconciliation remains host-owned. */
 export async function searchSessionTranscripts(
@@ -266,20 +225,14 @@ export async function searchSessionTranscripts(
   };
   if (isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options)) {
     // Process-local SQLite cannot cross the worker boundary without changing its lifetime.
-    const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(request, options);
+    const { found, ...result } = searchSessionTranscriptsReadOnlySync(request, options);
     const indexing = found && (await readIndexStatus());
-    const current =
-      !found ||
-      (!indexing &&
-        revision !== undefined &&
-        isSessionTranscriptSearchCurrentSync(revision, options));
-    return { ...result, indexing: !current || isSessionTranscriptIndexReconcileRunning(options) };
+    return { ...result, indexing: indexing || isSessionTranscriptIndexReconcileRunning(options) };
   }
   let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
     try {
-      // Status reads must not idle-close and checkpoint the writer between the hit
-      // snapshot and its revision check. Native opening remains lazy and off-thread.
+      // Retain writer admission while the search checks projection readiness.
       if (supportsOpenClawAgentDatabaseExecution(options)) {
         execution = captureOpenClawAgentDatabaseExecution(options);
       }
@@ -315,8 +268,6 @@ export function searchSessionTranscriptsReadOnlySync(
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => ({
-      // Capture before BEGIN to detect commits during or after the hit snapshot.
-      revision: readSearchRevision(database.db),
       ...runSqliteDeferredTransactionSync(
         database.db,
         () => {

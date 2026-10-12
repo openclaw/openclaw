@@ -342,7 +342,6 @@ describe("SQLite exact transcript rewrite", () => {
       };
       rewrite({ ...rewriteEvents[1], message });
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      const before = prepareSessionTranscriptProjection(db, scope.sessionId)!;
       const work = trackSqliteStatementExecutions(db, ["fts"], (sql) =>
         /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
       );
@@ -357,7 +356,6 @@ describe("SQLite exact transcript rewrite", () => {
         SessionTranscriptProjectionUnavailableError,
       );
       expect(searchSessionTranscripts({ ...scope, query: "question" }).hits).toEqual([]);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, before, -1)).toBe(false);
       await waitForSessionTranscriptIndexReconcile(scope);
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
@@ -416,7 +414,6 @@ describe("SQLite exact transcript rewrite", () => {
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       expect(snapshot().active).toEqual(before.active);
       expect(snapshot().search).toEqual(before.search);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -2)).toBe(false);
       expect(
         appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
           sessionId: scope.sessionId,

@@ -112,6 +112,14 @@ legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
 operations; final tool, disclosure, and mutation authority checks retain their
 current owner and timing.
 
+For a complete cross-session store view, await
+`loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
+and excludes incognito sessions while reading durable stores through the existing
+database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
+return value and emits a bounded deprecation warning; it remains supported until
+the next Plugin SDK major.
+
 ### Session reset freshness
 
 Channel runtime consumers should await

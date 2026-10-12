@@ -5,8 +5,6 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
-import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -22,7 +20,6 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import {
-  isSessionTranscriptSearchCurrentSync,
   searchSessionTranscripts,
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
@@ -126,43 +123,6 @@ it("keeps a warmed search reader through discovery and retires it through its ca
       } finally {
         hostSql.restore();
       }
-      const broker = new SqliteWorkerBroker();
-      const receiptSql = observeHostDataSql();
-      try {
-        const store = await broker.open<AdmissionOperations>({
-          moduleUrl: new URL(
-            "../../infra/sqlite-database-admission.worker.test-support.ts",
-            import.meta.url,
-          ),
-          databasePath: storePath,
-          input: undefined,
-        });
-        const before = searchSessionTranscriptsReadOnlySync(request, database);
-        expect(before.revision).toBeDefined();
-        const changed = await reader.owner.searchTranscripts(request, async () => {
-          await broker.runOperation(store!, (operation) =>
-            operation.execute({
-              type: "writeRows",
-              input: {
-                sql: "UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'",
-              },
-            }),
-          );
-          return projectionWriter.readSessionTranscriptIndexStatus(database);
-        });
-        expect(changed.indexing).toBe(true);
-        expect(isSessionTranscriptSearchCurrentSync(before.revision!, database)).toBe(false);
-        const refreshed = await search();
-        expect(refreshed.hits).toEqual(initial.hits);
-        expect(refreshed.indexing).toBe(false);
-        const after = searchSessionTranscriptsReadOnlySync(request, database);
-        expect(after.revision).toBeDefined();
-        expect(isSessionTranscriptSearchCurrentSync(after.revision!, database)).toBe(true);
-        expect(receiptSql.queries.filter((sql) => /\bdata_version\b/iu.test(sql))).toEqual([]);
-      } finally {
-        receiptSql.restore();
-        await broker.close();
-      }
       await closeOpenClawAgentDatabaseByPathAsync(aliasPath, "main");
       await expect(search()).rejects.toThrow("revoked");
     } finally {
@@ -194,11 +154,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     });
     const request = { ...scope, query: "needle", sessionKeys: ["agent:main:selected"], limit: 1 };
     const database = { agentId: "main", path: storePath };
-    const {
-      found,
-      revision: _revision,
-      ...golden
-    } = searchSessionTranscriptsReadOnlySync(request, {
+    const { found, ...golden } = searchSessionTranscriptsReadOnlySync(request, {
       ...database,
       env: state.env,
     });
@@ -294,27 +250,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       },
       { ...database, env: state.env },
     );
-    const readStatus = projectionWriter.readSessionTranscriptIndexStatus;
-    const status = vi
-      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
-      .mockImplementationOnce(async (...args) => {
-        // Complete publication after the hit snapshot but before its clean status is read.
-        await reconcileSessionTranscriptIndexes({ ...database, env: state.env });
-        const pending = await readStatus(...args);
-        expect(pending).toBe(false);
-        expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
-          false,
-        );
-        return pending;
-      });
-    try {
-      expect(await searchSessionTranscripts(request, database)).toMatchObject({
-        hits: [],
-        indexing: true,
-      });
-    } finally {
-      status.mockRestore();
-    }
+
     expect(await searchSessionTranscripts(request, database)).toEqual({
       ...golden,
       indexing: false,

@@ -98,29 +98,22 @@ serveOwnedWorkerTasks(
         if (!channel) {
           throw new Error("Transcript search requires its host status channel");
         }
-        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+        const { searchSessionTranscriptsReadOnlySync } =
           await import("./session-transcript-search.js");
         const options = {
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
-          request.params,
-          options,
-        );
+        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
         let indexing = false;
         if (found) {
-          // Keep the connection in this task while the host checks its writer's status.
-          // A second pool request can run on another connection with an unrelated revision.
+          // Search hits describe their read snapshot; readiness comes from the projection owner.
           const status = await channel.request("transcript-index-status");
           try {
             if (typeof status.input !== "boolean") {
               throw new Error("Invalid transcript search index status");
             }
-            indexing =
-              status.input ||
-              revision === undefined ||
-              !isSessionTranscriptSearchCurrentSync(revision, options);
+            indexing = status.input;
           } finally {
             status.consumed();
           }
