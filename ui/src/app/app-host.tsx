@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, untrack } from "solid-js";
+import { createEffect, createRoot, getOwner, runWithOwner, untrack } from "solid-js";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
@@ -712,17 +712,25 @@ declare module "@solidjs/web" {
 }
 
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
+  const componentOwner = getOwner();
   const element = document.createElement("openclaw-app-shell");
   const owner = untrack(
     () => new ShellOwner(element, props.runtime, props.getReadiness?.(), props.onboarding),
   );
+  // Effect callbacks are unowned; each runtime epoch owns and retires its projections.
   createEffect(
     () => props.runtime,
-    (runtime) => {
-      owner.replaceRuntime(runtime);
-      owner.connect();
-      return () => owner.disconnect();
-    },
+    (runtime) =>
+      runWithOwner(componentOwner, () =>
+        createRoot((dispose) => {
+          owner.replaceRuntime(runtime);
+          owner.connect();
+          return () => {
+            owner.disconnect();
+            dispose();
+          };
+        }),
+      ),
   );
   createEffect(
     () => owner.shellRevision(),

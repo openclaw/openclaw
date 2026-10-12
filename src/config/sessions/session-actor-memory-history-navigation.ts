@@ -36,6 +36,8 @@ export function createSessionActorMemoryHistoryNavigation(window: SessionActorMe
       rawSeq: row.rawSeq,
       event: row.event,
       eventJson: row.eventJson,
+      createdAt: row.createdAt,
+      searchOrder: row.searchOrder,
       node: nodes.get(row),
       activePosition,
       messagePosition: hasTranscriptMessage(row.event) ? messagePosition++ : null,

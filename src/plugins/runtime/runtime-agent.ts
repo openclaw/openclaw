@@ -1,4 +1,8 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   resolveEmbeddedCliBackendDispatchEligibility,
@@ -123,6 +127,8 @@ async function runWithSessionWorkAdmission<T>(
     });
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
+      agentId: resolveSessionAgentIds({ config: getRuntimeConfig(), sessionKey: params.sessionKey })
+        .sessionAgentId,
       scope: params.storePath,
       identities: [params.sessionKey, initialEntry?.sessionId],
       signal: params.signal,

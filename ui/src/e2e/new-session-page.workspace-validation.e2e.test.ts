@@ -721,9 +721,7 @@ suite.define(() => {
         const originalCreate = await gateway.waitForRequest("sessions.create");
         await expectPendingNewSession(page, submittedMessage);
         await gateway.deferNext("sessions.create");
-        const agentRequestsBefore = (
-          await gateway.getRequests("agents.list", {}, { exactParams: true })
-        ).length;
+        const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse(
@@ -747,10 +745,7 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
         }
         await expect
-          .poll(
-            async () =>
-              (await gateway.getRequests("agents.list", {}, { exactParams: true })).length,
-          )
+          .poll(async () => (await gateway.getRequests("agents.list")).length)
           .toBe(agentRequestsBefore + 1);
         await expect
           .poll(async () => (await gateway.getRequests("sessions.create")).length)

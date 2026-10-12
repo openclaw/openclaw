@@ -146,7 +146,15 @@ export function executeSessionActorMemoryForkCommand(
       const plan = planSessionMessageCut(
         source?.hot.entry,
         source?.events.map(({ event }) => event) ?? [],
-        intent,
+        {
+          ...intent,
+          expectedState:
+            intent.expectedState ??
+            (source?.hot.entry && {
+              sessionId: source.hot.entry.sessionId,
+              lifecycleRevision: source.hot.entry.lifecycleRevision,
+            }),
+        },
         sourceRepositoryWorkspaceId,
       );
       if (plan.status !== "prepared") {

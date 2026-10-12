@@ -6,6 +6,7 @@ import {
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
 import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
@@ -38,6 +39,10 @@ import {
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
+import {
+  createChatGPTV2CompactionBoundary,
+  isChatGPTV2CompactionEligible,
+} from "./chatgpt-v2-compaction.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
@@ -57,10 +62,23 @@ export async function runEmbeddedAttemptPromptPhase(
   input: EmbeddedAttemptExecutionPhaseInput & { preparedStreamRuntime: PreparedStreamRuntime },
   promptState: EmbeddedAttemptPromptState,
 ): Promise<{ promptStartedAt: number; transcriptLeafId: string | null }> {
-  const { attempt, isRawModelRun, prepared, preparedStreamRuntime, runAbortController } = input;
+  const {
+    attempt,
+    activeContextEngine,
+    isRawModelRun,
+    prepared,
+    preparedStreamRuntime,
+    runAbortController,
+  } = input;
   const { sessionRuntime, promptToolPolicy } = prepared;
   const {
-    agentSession: { activeSession, hookRunner, setActiveSessionSystemPrompt, settingsManager },
+    agentSession: {
+      activeSession,
+      compactionEnabled,
+      hookRunner,
+      setActiveSessionSystemPrompt,
+      settingsManager,
+    },
     boundary: {
       boundaryTimezone,
       includeBoundaryTimestamp,
@@ -109,6 +127,20 @@ export async function runEmbeddedAttemptPromptPhase(
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
+  let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
+  const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
+    config: attempt.config,
+    model: attempt.model,
+    extraParams: effectiveExtraParams,
+    compactionEnabled,
+    compactionReplayEnabled,
+    contextEngineOwnsCompaction: activeContextEngine?.info.ownsCompaction,
+    operation: attempt.operation,
+  });
+  const previousThresholdDeferral = activeSession[agentSessionDeferThresholdCompaction];
+  if (providerCompactionAtRequestBoundary) {
+    activeSession[agentSessionDeferThresholdCompaction] = true;
+  }
 
   const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
     input.state.terminal = setAgentRunAttemptTerminalFailure(
@@ -364,6 +396,7 @@ export async function runEmbeddedAttemptPromptPhase(
     state = await prepareEmbeddedAttemptPromptPreflight({
       appendOnlyRuntimeContext,
       compactionReplayEnabled,
+      providerCompactionAtRequestBoundary,
       contextEnginePromptAuthority,
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
@@ -393,6 +426,61 @@ export async function runEmbeddedAttemptPromptPhase(
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,
+        ...(providerCompactionAtRequestBoundary
+          ? {
+              compactBeforeRequest: createChatGPTV2CompactionBoundary({
+                session: activeSession,
+                config: attempt.config,
+                contextTokenBudget: promptContext.contextTokenBudget,
+                reserveTokens,
+                timeoutMs: input.sessionLock.compactionTimeoutMs,
+                authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+                ...(attempt.sessionKey
+                  ? {
+                      hookContext: {
+                        hookRunner,
+                        sessionId: attempt.sessionId,
+                        sessionKey: attempt.sessionKey,
+                        sessionAgentId,
+                        workspaceDir: effectiveWorkspace,
+                        messageProvider: attempt.messageProvider,
+                        onHookMessages: async ({ phase, messages }) => {
+                          const visible = messages.filter((message) => message.trim());
+                          if (visible.length) {
+                            await attempt.onAgentEvent?.({
+                              stream: "compaction",
+                              data: {
+                                phase: phase === "before" ? "start" : "end",
+                                ...(phase === "after" ? { completed: true } : {}),
+                                messages: visible,
+                              },
+                              sessionKey: attempt.sessionKey,
+                            });
+                          }
+                        },
+                      },
+                    }
+                  : {}),
+                postCompaction: {
+                  config: attempt.config,
+                  sessionKey: attempt.sessionKey,
+                  sessionId: attempt.sessionId,
+                  agentId: sessionAgentId,
+                  memoryAudience: attempt.memoryAudience,
+                  sandboxed: sandbox?.enabled === true,
+                  sessionFile: attempt.sessionFile,
+                },
+                assertActive: () => {
+                  runAbortController.signal.throwIfAborted();
+                  promptAssembly.assertHostActive?.();
+                },
+                withTranscriptWrite,
+                onFallback: (request) => {
+                  providerBoundaryPrecheck = request;
+                },
+              }),
+            }
+          : {}),
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
@@ -522,13 +610,15 @@ export async function runEmbeddedAttemptPromptPhase(
       setFailure(promptErrorOutcome.promptFailure.error, promptErrorOutcome.promptFailure.source);
     }
   } finally {
+    activeSession[agentSessionDeferThresholdCompaction] = previousThresholdDeferral;
     stopAcceptingSteerMessages();
     log.debug(
       `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
     );
   }
 
-  const pendingMidTurnPrecheckRequest = contextGuards.takePendingMidTurnPrecheckRequest();
+  const pendingMidTurnPrecheckRequest =
+    providerBoundaryPrecheck ?? contextGuards.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
     await withTranscriptWrite(async () => {
       await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });

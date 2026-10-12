@@ -6,11 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  navigateToControlUiSession,
-  pauseVirtualClock,
-  releasePlacementPolicyRead,
-} from "../test-helpers/control-ui-e2e.ts";
+import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   type createControlUiE2eSuite,
   tooltipTitleText,
@@ -384,9 +380,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
           await gateway.deferNext("environments.list");
           const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
-          await releasePlacementPolicyRead(page, gateway, () =>
-            page.clock.fastForward(delayMs + 1),
-          );
+          await page.clock.fastForward(delayMs + 1);
           await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
           await expect.poll(() => startButton.isDisabled()).toBe(true);
           await gateway.rejectDeferred("environments.list", profileCatalogError);

@@ -410,6 +410,15 @@ describe("Docs Agent full-CI admission", () => {
     return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
   }
 
+  it("subscribes only to main CI completions while preserving manual dispatch", () => {
+    expect(workflow.on.workflow_run).toEqual({
+      workflows: ["CI"],
+      branches: ["main"],
+      types: ["completed"],
+    });
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+  });
+
   const admissionCases: { name: string; options: AdmissionOptions; allowed: boolean }[] = [
     { name: "a successful exact-attempt scheduled run", options: {}, allowed: true },
     {
