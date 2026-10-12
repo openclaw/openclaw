@@ -24,7 +24,7 @@ export async function readAttachmentText(
       signal: AbortSignal.any([signal, timeoutController.signal]),
     });
     if (!response.ok) {
-      await response.body?.cancel();
+      void response.body?.cancel().catch(() => undefined);
       throw new Error("Text attachment unavailable");
     }
     const bytes = await readResponseBytesWithinLimit(response, maxBytes, { truncate: excerpt });
