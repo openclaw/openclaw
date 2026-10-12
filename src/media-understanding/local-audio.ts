@@ -29,6 +29,7 @@ type LocalAudioSelection = {
 };
 
 type InspectionOptions = {
+  language?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -309,6 +310,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
+    ...(options.language ? ["--language", "{{Language}}"] : []),
     "{{AttachmentPath}}",
   ];
 
