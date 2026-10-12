@@ -2,7 +2,7 @@ import { createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO, readConfigFileSnapshotForWrite, type ConfigWriteOptions } from "./io.js";
 import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
-import type { ConfigMutationIO } from "./mutate.js";
+import type { ConfigMutationIO } from "./mutate.io.types.js";
 import { hasManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 
 export async function readConfigSnapshotForMutation(params: {

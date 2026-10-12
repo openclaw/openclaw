@@ -37,7 +37,6 @@ import {
 import { hashConfigIncludeRaw, isInternalIncludeWriteTarget } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
-  type readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   writeConfigFile,
   type ConfigWriteOptions,
@@ -62,6 +61,7 @@ import {
   rollbackJsonFileWriteIfUnchanged,
   writeRootBoundJsonFile,
 } from "./mutate.include-io.js";
+import type { ConfigMutationIO } from "./mutate.io.types.js";
 import { readConfigSnapshotForMutation } from "./mutate.snapshot.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
@@ -100,6 +100,7 @@ import {
 const DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS = 5;
 
 export { ConfigMutationConflictError } from "./mutation-conflict.js";
+export type { ConfigMutationIO } from "./mutate.io.types.js";
 
 export type ConfigReplaceResult = {
   path: string;
@@ -114,14 +115,6 @@ export type ConfigReplaceResult = {
 
 type ConfigMutationWriteResult = Omit<ConfigWriteResult, "persistedHash"> & {
   persistedHash: string | null;
-};
-
-export type ConfigMutationIO = {
-  env?: NodeJS.ProcessEnv;
-  readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
-  writeConfigFile: (
-    ...args: Parameters<typeof writeConfigFile>
-  ) => Promise<ConfigWriteResult | void>;
 };
 
 export type ConfigMutationContext = {
