@@ -1,5 +1,4 @@
 import { html, render } from "lit";
-/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -9,6 +8,8 @@ import {
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
+/* @vitest-environment jsdom */
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
@@ -21,6 +22,8 @@ import {
 import { renderNewSessionComposer } from "./composer.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+
+beforeEach(stubScrollObservers);
 
 function composerTextarea(composer: HTMLElement): HTMLTextAreaElement {
   const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");

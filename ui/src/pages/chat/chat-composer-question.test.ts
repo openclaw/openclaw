@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import {
   createComposerContainer,
   createComposerProps as props,
@@ -11,6 +12,8 @@ import {
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
+
+beforeEach(stubScrollObservers);
 
 function questionPrompt(id: string, question: string): QuestionPrompt {
   return {

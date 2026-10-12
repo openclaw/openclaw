@@ -1,8 +1,7 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentSelect } from "../../components/agent-select.ts";
@@ -10,10 +9,14 @@ import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+/* @vitest-environment jsdom */
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
+
+beforeEach(stubScrollObservers);
 
 class PaletteDraftHost extends OpenClawLightDomElement {
   context: ApplicationContext | undefined;

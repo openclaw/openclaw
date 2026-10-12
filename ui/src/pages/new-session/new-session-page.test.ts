@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
+
+beforeEach(stubScrollObservers);
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;

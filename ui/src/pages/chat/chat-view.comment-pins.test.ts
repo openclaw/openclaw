@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+
+beforeEach(stubScrollObservers);
 
 afterEach(() => {
   vi.unstubAllGlobals();

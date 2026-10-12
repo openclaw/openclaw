@@ -1,10 +1,13 @@
-/* @vitest-environment jsdom */
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+/* @vitest-environment jsdom */
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+
+beforeEach(stubScrollObservers);
 afterEach(() => resetComposerFixture());
 
 describe("progress card refresh admission", () => {

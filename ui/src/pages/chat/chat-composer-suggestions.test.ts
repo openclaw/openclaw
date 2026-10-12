@@ -11,6 +11,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   createReactiveDraftHarness,
@@ -26,6 +27,8 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+
+beforeEach(stubScrollObservers);
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));

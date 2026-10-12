@@ -1,6 +1,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { stubScrollObservers } from "../../../test-helpers/scroll-observers.test-support.ts";
 import "../../../lib/toast.ts";
 import {
   getChatAttachmentDataUrl,
@@ -14,6 +15,8 @@ import "./chat-comment-controller.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 
+beforeEach(stubScrollObservers);
+
 const payloads = new Set<string>();
 type CommentControllerElement = HTMLElement & {
   props: ChatAttachmentControlsProps;
@@ -22,17 +25,6 @@ type CommentControllerElement = HTMLElement & {
   presented: boolean;
   updateComplete: Promise<unknown>;
 };
-
-beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-});
 
 afterEach(() => {
   document.body.replaceChildren();

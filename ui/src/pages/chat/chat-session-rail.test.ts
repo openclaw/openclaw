@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -13,6 +14,8 @@ import {
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import "./components/chat-session-rail.tsx";
+
+beforeEach(stubScrollObservers);
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
   return {

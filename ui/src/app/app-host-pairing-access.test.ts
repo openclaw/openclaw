@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type LitElement, type TemplateResult } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
@@ -13,6 +13,7 @@ import {
   persistChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import "../components/app-sidebar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -23,6 +24,8 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.t
 import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
+
+beforeEach(stubScrollObservers);
 
 type PairingShell = HTMLElement &
   Pick<ShellViewHost, "devicePairSetup" | "settingsSidebar"> & {

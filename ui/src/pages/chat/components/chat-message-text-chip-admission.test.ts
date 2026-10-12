@@ -2,12 +2,15 @@
 
 import { render, type LitElement } from "lit";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubScrollObservers } from "../../../test-helpers/scroll-observers.test-support.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+
+beforeEach(stubScrollObservers);
 
 const observations: Array<{ element: Element; show: () => void }> = [];
 const views: Array<{ container: HTMLElement; update: () => void }> = [];
@@ -25,6 +28,9 @@ beforeEach(() => {
     class {
       constructor(private readonly callback: IntersectionObserverCallback) {}
       observe(element: Element) {
+        if (!element.matches(".chat-selection-annotations__chip")) {
+          return;
+        }
         observations.push({
           element,
           show: () =>
@@ -34,6 +40,7 @@ beforeEach(() => {
             ),
         });
       }
+      unobserve() {}
       disconnect() {}
     },
   );

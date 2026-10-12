@@ -55,7 +55,17 @@ describe("AppSidebar scroll", () => {
     }
 
     visible?.(
-      [{ target: scroller, isIntersecting: true } as IntersectionObserverEntry],
+      [
+        {
+          target: scroller,
+          isIntersecting: true,
+          intersectionRatio: 1,
+          time: 0,
+          boundingClientRect: new DOMRect(),
+          intersectionRect: new DOMRect(),
+          rootBounds: null,
+        },
+      ],
       {} as IntersectionObserver,
     );
     let scrollHeight = 100;

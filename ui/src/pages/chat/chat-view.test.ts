@@ -30,6 +30,7 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -99,6 +100,8 @@ import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
 } from "./workspace-conflict.ts";
+
+beforeEach(stubScrollObservers);
 
 const registeredAttachmentPayloads = new Map<
   string,

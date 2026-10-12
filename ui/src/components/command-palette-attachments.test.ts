@@ -13,8 +13,11 @@ import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
+
+beforeEach(stubScrollObservers);
 
 let restoreDialog: () => void;
 let readers: FileReader[];

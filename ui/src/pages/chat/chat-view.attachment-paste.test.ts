@@ -2,12 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -25,6 +26,8 @@ import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+
+beforeEach(stubScrollObservers);
 
 const payloads: ChatAttachment[] = [];
 

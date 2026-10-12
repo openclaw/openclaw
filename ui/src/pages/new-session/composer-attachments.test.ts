@@ -2,12 +2,15 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render, nothing } from "lit";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import { renderNewSessionComposer } from "./composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
+
+beforeEach(stubScrollObservers);
 
 afterEach(() => {
   document.body.replaceChildren();
