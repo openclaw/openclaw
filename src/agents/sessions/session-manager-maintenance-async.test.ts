@@ -9,7 +9,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { rewriteTranscriptMessageAtAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-message-rewrite.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -196,7 +196,7 @@ it("preserves a steer acknowledgment committed after rewrite preparation", async
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   await rewrite.sessionManager.resetLeafAsync();
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
-  const acknowledged = await rewriteTranscriptMessageAtAnchor(source.anchor, () => ({
+  const acknowledged = await rewritePreparedTranscriptMessageAtAnchor(source.anchor, () => ({
     ...source.message,
     __openclaw: { steerTargetRunId: "steered-run" },
   }));

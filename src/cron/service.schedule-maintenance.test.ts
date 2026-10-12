@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import type { CronJob } from "./types.js";
 
 const now = Date.parse("2026-05-05T12:00:00.000Z");

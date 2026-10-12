@@ -1,3 +1,4 @@
+import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -397,11 +398,12 @@ export function retainSessionEntryWorkerPublication(params: {
           if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
             return { kind: "removed" };
           }
-          const currentProjection = readCurrent(sessionKey)?.projection;
-          return currentProjection
+          const currentEntry = readCurrent(sessionKey);
+          return currentEntry?.projection
             ? {
                 kind: "replacement",
-                membership: currentProjection.membership,
+                membership: currentEntry.projection.membership,
+                communicationBinding: communicationEntryBinding(currentEntry.entry),
                 lifecycleChanged: !generationUnchanged.has(sessionKey),
               }
             : undefined;

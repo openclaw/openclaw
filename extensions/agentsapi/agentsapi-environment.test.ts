@@ -59,6 +59,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
   },
   racePromiseWithAbortSignal: (promise: Promise<unknown>) => promise,
 }));
+// mock-isolation: Environment propagation uses synthetic prompt and side-effect owners, without a live Gateway.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
   loadAgentHarnessMcpConfig: async () => ({
@@ -96,7 +97,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: { warn: vi.fn() },
   formatErrorMessage: (error: unknown) => String(error),
   resolveAgentDir: () => "/fixture/agent",
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   runAgentHarnessLlmOutputHook: vi.fn(),
   sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),

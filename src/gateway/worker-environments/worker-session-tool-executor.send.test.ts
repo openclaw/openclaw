@@ -151,7 +151,7 @@ describe("worker session tool send delivery", () => {
         await placements.releaseTurn(claim);
         expect(placements.get(PARENT.sessionId)?.state).toBe("local");
       } else {
-        expect(placements.get(PARENT.sessionId)).toBeUndefined();
+        expect(await placements.getAsync(PARENT.sessionId)).toBeUndefined();
       }
 
       const result = await execute({

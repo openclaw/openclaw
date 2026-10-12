@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptWriteScope,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -16,11 +13,7 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
-import {
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
@@ -46,7 +39,6 @@ import {
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
 
 export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 
@@ -77,32 +69,12 @@ function serializePreparedMessageEvent(envelope: TranscriptMessageEnvelope, mess
 /** The append owner retains its canonical message and storage bytes across retries. */
 export function prepareTranscriptMessageAppend<TMessage extends object>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
-  candidate?: {
-    scope: SessionTranscriptWriteScope;
-    envelope: TranscriptMessageEnvelope;
-  },
 ): PreparedTranscriptMessageAppend<TMessage> | undefined {
   if (!isRecord(options.message) || options.message.role === "user") {
     // Pending user custody retains its transaction-owned preparation.
     return undefined;
   }
-  const prepared = prepareTranscriptMessageAppendForWorker(options);
-  if (
-    !candidate ||
-    (options.message.role !== "assistant" && options.message.role !== "toolResult")
-  ) {
-    return prepared;
-  }
-  const eventJson = serializePreparedMessageEvent(candidate.envelope, prepared.messageJson);
-  const read = withOpenClawAgentDatabaseReadOnly(
-    ({ db }) =>
-      prepareTranscriptPayloadForReuse(db, eventJson, {
-        ...candidate.envelope,
-        message: prepared.persistedMessage,
-      }),
-    toDatabaseOptions(resolveSqliteTranscriptScope(candidate.scope)),
-  );
-  return read.found ? { ...prepared, physicalPayload: read.value } : prepared;
+  return prepareTranscriptMessageAppendForWorker(options);
 }
 
 /** Redaction stays on the host; physical payload preparation belongs to the writer. */
@@ -304,7 +276,6 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     message: persistedMessage,
   });
   const { anchor } = metadata;
-  const revision = readSqliteNativeMutationRevision(database.db);
   if (pending) {
     if (pending.stageRelocation) {
       pending.stageRelocation(messageId);
@@ -321,9 +292,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
         message: persistedMessage,
         messageId,
       },
-      ...(metadata.visibleTailEntryId !== undefined &&
-      revision !== undefined &&
-      readSqliteNativeMutationRevision(database.db) === revision
+      ...(metadata.visibleTailEntryId !== undefined
         ? { visibleTailEntryId: metadata.visibleTailEntryId }
         : {}),
     },

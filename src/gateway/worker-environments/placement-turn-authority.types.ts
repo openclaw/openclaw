@@ -59,6 +59,10 @@ export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
+  placements: Map<
+    string,
+    { placement: WorkerSessionPlacementRecord | undefined; sequence: number }
+  >;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
   placementReaders: Map<string, Set<RetainedPlacement>>;
   pending: Set<ClaimChange>;

@@ -169,6 +169,7 @@ describe("worker placement move destination", () => {
         const options = {
           placements: {
             get: () => undefined,
+            getAsync: async () => undefined,
             waitForTurnClaimRelease: async () => {
               effects.push("claims released");
             },

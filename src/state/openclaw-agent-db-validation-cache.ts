@@ -328,10 +328,9 @@ function captureValidationTransfer(
     ? Atomics.load(new Int32Array(capturedValidation.valid), 0)
     : undefined;
   return (identity, value) => {
-    // SAFETY: Bundled worker admission transports the schema owner's typed receipt.
-    const received = value as OpenClawAgentDatabaseValidation | undefined;
+    const received = agentDatabaseValidationKey.read(value);
     if (
-      !isRecord(received) ||
+      !received ||
       received.agentId !== database.agentId ||
       received.identity !== identity ||
       typeof received.birthtime !== "string" ||
@@ -404,17 +403,8 @@ function captureValidationTransfer(
       captured.validation.schema = schema;
       return "accepted";
     }
-    const validation = {
-      agentId: database.agentId,
-      identity,
-      birthtime: received.birthtime,
-      receiptId: received.receiptId,
-      valid: received.valid,
-      canonicalReady: received.canonicalReady,
-      schema,
-    };
     if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
-      Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+      Atomics.store(new Int32Array(received.canonicalReady), 0, 0);
     }
     const aliases =
       captured.validation?.identity === identity
@@ -432,15 +422,15 @@ function captureValidationTransfer(
       // Worker cleanup can revoke one borrowed receipt while independent aliases remain live.
       for (const alias of aliases) {
         const superseded = validatedPaths.get(alias)?.validation;
-        if (superseded && superseded.receiptId !== validation.receiptId) {
+        if (superseded && superseded.receiptId !== received.receiptId) {
           Atomics.store(new Int32Array(superseded.valid), 0, 0);
         }
       }
     }
-    validatedPaths.set(pathname, { validation, integrityVerified: true });
+    validatedPaths.set(pathname, { validation: received, integrityVerified: true });
     // A verified replacement is one physical receipt, including its already-admitted aliases.
     for (const alias of aliases) {
-      validatedPaths.set(alias, { validation, integrityVerified: true });
+      validatedPaths.set(alias, { validation: received, integrityVerified: true });
     }
     return "accepted";
   };

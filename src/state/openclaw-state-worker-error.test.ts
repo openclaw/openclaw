@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -433,6 +434,34 @@ describe("shared-state worker error transport", () => {
     expect(decoded.errors[1]).not.toBeInstanceOf(CustomError);
     expect(decoded.errors[1]).toMatchObject({ name: "CustomError", code: 17, cause: "detail" });
     expect(decoded.errors.slice(2)).toEqual(["plain failure", 2, true, null, undefined, undefined]);
+  });
+
+  it("projects typed ownership metadata before transporting it", () => {
+    const pluginOwner = {
+      pid: 123,
+      threadId: 4,
+      version: "test",
+      privateState: "not-for-transport",
+    };
+    const blockedByRun = { worktreeId: "fixture", pid: 456, privateState: "not-for-transport" };
+    const original = new AggregateError(
+      [
+        new PluginStateStoreError("fixture plugin error", {
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation: "lookup",
+          owner: pluginOwner,
+        }),
+        new WorktreeRemovalContentionError("busy", "fixture contention", blockedByRun),
+      ],
+      "typed metadata",
+    );
+    expect(JSON.stringify(encodeOpenClawStateWorkerError(original))).not.toContain(
+      "not-for-transport",
+    );
+    const restored = roundTrip(original);
+    assert(restored instanceof AggregateError);
+    expect(restored.errors[0]).toMatchObject({ owner: { pid: 123, threadId: 4, version: "test" } });
+    expect(restored.errors[1]).toMatchObject({ blockedByRun: { worktreeId: "fixture", pid: 456 } });
   });
 
   it("transports only redacted refusal fields belonging to a transcript writer error", () => {

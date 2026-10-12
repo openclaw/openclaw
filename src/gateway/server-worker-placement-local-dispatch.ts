@@ -17,7 +17,9 @@ const loadWorkerWorkspacePreflight = createLazyRuntimeNamedExport(
 );
 
 export function createGatewayWorkerPlacementLocalDispatchBarrier(
-  params: WorkerPlacementHandoffParams & { placements: Pick<WorkerSessionPlacementStore, "get"> },
+  params: WorkerPlacementHandoffParams & {
+    placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync">;
+  },
 ): Parameters<typeof createWorkerPlacementDispatchService>[0]["runLocalBarrier"] {
   return async (request) => {
     const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
@@ -55,6 +57,9 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(
         if (workspace.kind === "local") {
           const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
           await preflightWorkerWorkspace({ localPath: workspace.path, signal });
+        }
+        if (requiredProfile) {
+          await params.placements.getAsync(sessionId);
         }
         assertCurrent(getRuntimeConfig());
         authorize?.();

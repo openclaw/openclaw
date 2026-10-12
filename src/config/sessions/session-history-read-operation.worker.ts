@@ -22,6 +22,7 @@ type DurableHistoryReadOperationRequest = Extract<
       | "model-context"
       | "context-messages"
       | "transcript-watermark"
+      | "transcript-stats"
       | "transcript-message-presence"
       | "transcript-anchors"
       | "transcript-raw-delta"
@@ -60,6 +61,7 @@ export function isSessionHistoryReadOperation(
     case "model-context":
     case "context-messages":
     case "transcript-watermark":
+    case "transcript-stats":
     case "transcript-message-presence":
     case "transcript-anchors":
     case "transcript-raw-delta":
@@ -445,6 +447,23 @@ async function prepareHistoryRead(
         await import("./session-accessor.sqlite-transcript-watermark.js");
       return () => {
         return { kind: request.kind, watermark: readSessionTranscriptWatermark(request.scope) };
+      };
+    }
+    case "transcript-stats": {
+      const [{ withOpenClawAgentDatabaseReadOnly }, { readTranscriptStatsFromDatabase }] =
+        await Promise.all([
+          import("../../state/openclaw-agent-db-readonly.js"),
+          import("./session-accessor.sqlite-transcript-stats.js"),
+        ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => readTranscriptStatsFromDatabase(database, request.scope.sessionId),
+          { ...request.database, env: request.scope.env },
+        );
+        return {
+          kind: request.kind,
+          stats: read.found ? read.value : { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
+        };
       };
     }
     case "transcript-message-presence": {

@@ -29,7 +29,7 @@ import {
   recoverCronRunForTest,
 } from "./run-recovery.test-support.js";
 import type { CronEvent } from "./state.js";
-import { runMissedJobs } from "./timer.js";
+import { runMissedJobs } from "./timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
@@ -204,7 +204,6 @@ describe("cron stale job-family adoption", () => {
         { store_key: path.resolve(staleStorePath), job_id: "operator-same-name" },
       ]),
     );
-    state.timer?.cancel();
   });
 });
 
@@ -300,7 +299,6 @@ describe("cron service ops seam coverage", () => {
     });
 
     await start(state);
-    state.timer?.cancel();
 
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const persisted = loaded.store.jobs[0] as CronJob & { notify?: unknown };
@@ -976,7 +974,6 @@ describe("cron service ops seam coverage", () => {
     events.length = 0;
     await remove(state, job.id);
     expect(events.map((event) => event.action)).toEqual(["removed"]);
-    state.timer?.cancel();
   });
 
   it("emits repaired sibling schedules during add before the target lifecycle event", async () => {
@@ -1005,6 +1002,5 @@ describe("cron service ops seam coverage", () => {
       { jobId: sibling.id, action: "scheduled" },
       { jobId: added.id, action: "added" },
     ]);
-    state.timer?.cancel();
   });
 });

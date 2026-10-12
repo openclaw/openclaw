@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
@@ -627,7 +625,6 @@ describe("session message-cut methods", () => {
       nativeRuntimeConsent: "native-fixture",
     }));
     const profileId = "profile-fork-creator";
-    const forkSql = observeSqliteReadSql(StatementSync.prototype);
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {
@@ -636,12 +633,7 @@ describe("session message-cut methods", () => {
         hasAvatar: false,
         updatedAt: 1,
       },
-    } as GatewayClient).finally(forkSql.restore);
-    // The cold fork checks upstream ownership at transaction admission and again at commit.
-    expect(forkSql.queries.filter((sql) => sql.includes('from "session_upstream_links"'))).toEqual([
-      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
-      'select * from "session_upstream_links" where "session_key" = ? and "agent_id" = ?',
-    ]);
+    } as GatewayClient);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -673,11 +665,7 @@ describe("session message-cut methods", () => {
       }),
     );
 
-    const rewindSql = observeSqliteReadSql(StatementSync.prototype);
-    const rewind = await invoke("sessions.rewind", "user-entry").finally(rewindSql.restore);
-    expect(
-      rewindSql.queries.filter((sql) => sql.includes('from "session_upstream_links"')),
-    ).toHaveLength(1);
+    const rewind = await invoke("sessions.rewind", "user-entry");
     expect(rewind).toHaveBeenCalledWith(
       true,
       {

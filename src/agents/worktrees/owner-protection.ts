@@ -10,7 +10,8 @@ import {
   resolveSessionWorkerPlacementContext,
   type SessionWorkerPlacementContext,
 } from "../../gateway/session-worker-placement-context.js";
-import { prepareSessionWorkerPlacementMutationCheck } from "../../gateway/worker-environments/session-placement-lifecycle.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
+import { resolveSessionWorkerPlacementMutationError } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import {
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
@@ -31,7 +32,10 @@ export function createManagedWorktreeOwnerPolicy(
 ): Required<
   Pick<WorktreeCleanupOwnerPolicy, "prepareOwners" | "readOwnerState" | "withOwnerCleanup">
 > {
-  const placementChecks = new Map<string, { sessionId?: string; assertCurrent: () => void }>();
+  type PlacementFacts = {
+    context: SessionWorkerPlacementContext;
+    current: () => readonly WorkerSessionPlacementRecord[];
+  };
   let preparedOwners = new Map<string, ResolvedSessionEntryAccessTarget>();
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
@@ -40,14 +44,14 @@ export function createManagedWorktreeOwnerPolicy(
     target: ResolvedSessionEntryAccessTarget;
     hasChanged: () => boolean;
     lifecycleHeld?: boolean;
+    placements: PlacementFacts;
   }>();
   const state = (
     ownerKind: ManagedWorktreeOwnerKind,
     ownerId: string,
     prepared?: {
       target: ResolvedSessionEntryAccessTarget;
-      context: SessionWorkerPlacementContext;
-      checks: typeof placementChecks;
+      placements: PlacementFacts;
     },
   ) => {
     if (ownerKind !== "session") {
@@ -85,38 +89,35 @@ export function createManagedWorktreeOwnerPolicy(
       ) {
         return "active";
       }
-      const placementCheckCache = prepared?.checks ?? placementChecks;
-      let placementCheck = placementCheckCache.get(target.canonicalKey);
-      if (placementCheck && placementCheck.sessionId !== entry?.sessionId) {
+      const placements = prepared?.placements ?? (ownsCleanup ? cleanup.placements : undefined);
+      if (!placements) {
         return "active";
       }
-      if (!placementCheck) {
-        const context = prepared?.context ?? resolveSessionWorkerPlacementContext();
-        const store = context.workerSessionPlacementService;
-        if (!store?.listForReconcile) {
+      // Missing session metadata cannot erase a durable remote worker's ownership.
+      for (const placement of placements.current()) {
+        if (
+          placement.sessionKey !== target.canonicalKey &&
+          placement.sessionId !== entry?.sessionId
+        ) {
+          continue;
+        }
+        if (
+          placement.turnClaim ||
+          resolveSessionWorkerPlacementMutationError({
+            action: "fork",
+            context: {
+              ...placements.context,
+              workerSessionPlacementService: {
+                getMany: () => new Map([[placement.sessionId, placement]]),
+              },
+            },
+            key: target.canonicalKey,
+            sessionId: placement.sessionId,
+          })
+        ) {
           return "active";
         }
-        // Missing session metadata cannot erase a durable remote worker's ownership.
-        const related = () =>
-          store.listForReconcile!(target.canonicalKey)
-            .map((placement) => placement.sessionId)
-            .toSorted();
-        const initial = related();
-        const checks = [
-          ...new Set([...initial, ...(entry?.sessionId ? [entry.sessionId] : [])]),
-        ].map((sessionId) => prepareSessionWorkerPlacementMutationCheck({ context, sessionId }));
-        const assertCurrent = () => {
-          if (JSON.stringify(related()) !== JSON.stringify(initial)) {
-            throw new Error("worktree worker placement changed during cleanup");
-          }
-          for (const check of checks) {
-            check();
-          }
-        };
-        placementCheck = { sessionId: entry?.sessionId, assertCurrent };
-        placementCheckCache.set(target.canonicalKey, placementCheck);
       }
-      placementCheck.assertCurrent();
       return !entry || entry.archivedAt !== undefined ? "retired" : "idle";
     } catch {
       // GC is destructive. Unknown session state must defer cleanup instead of
@@ -124,7 +125,7 @@ export function createManagedWorktreeOwnerPolicy(
       return "active";
     }
   };
-  // Census facts are advisory; cleanup reads once and invalidates on committed owner changes.
+  // Census facts are advisory; cleanup retains receipt-invalidated facts through the mutation.
   return {
     prepareOwners: async (records) => {
       preparedOwners = new Map();
@@ -148,25 +149,8 @@ export function createManagedWorktreeOwnerPolicy(
           context.workerSessionPlacementService.listAsync(),
         ]);
         preparedOwners = targets;
-        const byId = new Map(placements.map((placement) => [placement.sessionId, placement]));
-        const byKey = new Map<string, typeof placements>();
-        for (const placement of placements) {
-          if (placement.state !== "local" && placement.state !== "reclaimed") {
-            const related = byKey.get(placement.sessionKey) ?? [];
-            related.push(placement);
-            byKey.set(placement.sessionKey, related);
-          }
-        }
-        // Advisory facts never escape into the exact pre-mutation placement guards.
         const prepared = {
-          checks: new Map<string, { sessionId?: string; assertCurrent: () => void }>(),
-          context: {
-            ...context,
-            workerSessionPlacementService: {
-              getMany: () => byId,
-              listForReconcile: (key?: string) => byKey.get(key ?? "") ?? [],
-            },
-          },
+          placements: { context, current: () => placements },
         };
         for (const [index, id] of ownerIds.entries()) {
           if (index % 32 === 0) {
@@ -224,17 +208,41 @@ export function createManagedWorktreeOwnerPolicy(
           entry: entry && { ...entry, worktree: entry.worktree && { ...entry.worktree } },
         };
         const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
-        // The registry claim protects Git work; final guards consume this receipt-invalidated view.
-        return await cleanupOwner.run(owner, () =>
-          run((mutation, options) =>
-            runExclusiveSessionLifecycleMutation("worktree-cleanup", {
-              scope,
-              identities,
-              signal: options?.settle ? undefined : signal,
-              run: () => cleanupOwner.run({ ...owner, lifecycleHeld: true }, mutation),
-            }),
-          ),
-        );
+        const context = resolveSessionWorkerPlacementContext();
+        const store = context.workerSessionPlacementService;
+        if (!store?.prepareMaintenancePlacements || !store.prepareSessionPlacement) {
+          throw new WorktreeRemovalLockError("busy", "worker placement preparation is unavailable");
+        }
+        const inventory = await store.prepareMaintenancePlacements();
+        let sessionPlacement: Awaited<ReturnType<typeof store.prepareSessionPlacement>> | undefined;
+        try {
+          if (entry?.sessionId) {
+            sessionPlacement = await store.prepareSessionPlacement(entry.sessionId);
+          }
+          const placements: PlacementFacts = {
+            context,
+            current: () => {
+              inventory.assertCurrent();
+              const current = sessionPlacement?.current();
+              return current ? [...inventory.placements, current] : inventory.placements;
+            },
+          };
+          // The registry claim protects Git work; final guards consume receipt-invalidated facts.
+          return await cleanupOwner.run({ ...owner, placements }, () =>
+            run((mutation, options) =>
+              runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+                scope,
+                identities,
+                signal: options?.settle ? undefined : signal,
+                run: () =>
+                  cleanupOwner.run({ ...owner, placements, lifecycleHeld: true }, mutation),
+              }),
+            ),
+          );
+        } finally {
+          sessionPlacement?.release();
+          inventory.release();
+        }
       } finally {
         stop();
       }

@@ -439,23 +439,18 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       lookupModelContextTokensMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-                ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
-              },
-            },
+      resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+            agentHarnessId: "codex",
+            ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
           },
         },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
       });
       await runSkillFilterCase();
       expect(session.sessionEntry).toMatchObject({

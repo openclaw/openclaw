@@ -135,7 +135,7 @@ describe("local claim recovery before backend registration", () => {
         });
         expect(localTask).toHaveBeenCalledTimes(execution === "remote" ? 0 : 1);
         expect(remoteTask).toHaveBeenCalledTimes(execution === "remote" ? 1 : 0);
-        expect(placements.get(SESSION_ID)?.turnClaim ?? null).toBeNull();
+        expect((await placements.getAsync(SESSION_ID))?.turnClaim ?? null).toBeNull();
       } finally {
         gate.resolve();
         await Promise.allSettled([child]);

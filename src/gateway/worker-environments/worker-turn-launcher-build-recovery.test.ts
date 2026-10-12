@@ -18,9 +18,11 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import {
   WorkerRuntimeRefreshPendingError,
@@ -65,6 +67,23 @@ async function expectSinglePersistedInput() {
       .buildSessionContext()
       .messages.filter((message) => message.role === "user"),
   ).toHaveLength(1);
+}
+
+function refreshPlacementBundle(bundleHash: string) {
+  const placement = placements.get(SESSION_ID);
+  if (placement?.state !== "active") {
+    throw new Error("runtime refresh fixture requires an active placement");
+  }
+  // The mock refresh owns this write, including the postimage published by a real refresh.
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare(
+        "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
+      ).run(bundleHash, SESSION_ID);
+      publishPlacementTurnClaimState(db, { ...placement, workerBundleHash: bundleHash });
+    },
+    { database },
+  );
 }
 
 async function createBuildRecoveryHarness(
@@ -188,7 +207,7 @@ async function createBuildRecoveryHarness(
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const dispatch = createWorkerPlacementDispatchService({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -249,11 +268,7 @@ async function createBuildRecoveryHarness(
             ...environment,
             bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash },
           };
-          database.db
-            .prepare(
-              "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
-            )
-            .run(bundleHash, SESSION_ID);
+          refreshPlacementBundle(bundleHash);
           replaced = true;
         } else {
           await dispatch.reconcileActive(environmentId);
@@ -390,11 +405,7 @@ describe("worker turn launcher build recovery", () => {
           ...environment,
           bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash },
         };
-        database.db
-          .prepare(
-            "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
-          )
-          .run(bundleHash, SESSION_ID);
+        refreshPlacementBundle(bundleHash);
         inFlight = false;
         settled.resolve();
       },

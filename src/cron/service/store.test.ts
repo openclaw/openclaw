@@ -21,12 +21,7 @@ import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
-import {
-  ensureLoaded,
-  snapshotStoreForRollback,
-  captureCronJobMutationSource,
-  persistCronJobMutation,
-} from "./store.js";
+import { ensureLoaded, captureCronJobMutationSource, persistCronJobMutation } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -435,7 +430,12 @@ describe("cron service store seam coverage", () => {
 
   it("does not let quarantine recovery bypass an active receipt fence", async () => {
     const { storePath } = await makeStorePath();
-    const job = createReloadCronJob({ id: "quarantined-receipt-conflict", agentId: "alpha" });
+    const job = createReloadCronJob({
+      id: "quarantined-receipt-conflict",
+      agentId: "alpha",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "receipt-owned job" },
+    });
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const state = createStoreTestState(storePath);
     await ensureLoaded(state);
@@ -453,13 +453,11 @@ describe("cron service store seam coverage", () => {
         resolveAgentId: (current) => current.agentId!,
       }),
     );
-    const snapshot = snapshotStoreForRollback(state);
     const ownerMutation = await prepareCronRunReceiptOwnerMutation({
       state,
       previousJob: job,
       nextJob: { ...job, agentId: "beta" },
     });
-    findJobOrThrow(state, job.id).agentId = "beta";
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];
@@ -469,8 +467,13 @@ describe("cron service store seam coverage", () => {
         persistCronJobMutation({
           state,
           source: captureCronJobMutationSource(state),
-          previous: snapshot.store!,
-          next: state.store!,
+          jobMutation: {
+            kind: "update",
+            id: job.id,
+            patch: { agentId: "beta" },
+            options: { captured: false },
+          },
+          jobMutationSnapshot: { nowMs: STORE_TEST_NOW },
           method: "cron.update",
           assertCurrent: ownerMutation?.assertCurrent,
           receiptMutation: {

@@ -21,8 +21,7 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 import { stop } from "./ops-lifecycle.js";
 import type { CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
-import { runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const SCHEDULED_AT = Date.parse("2026-05-10T09:00:00.000Z");
 const fixtures = setupCronRegressionFixtures({

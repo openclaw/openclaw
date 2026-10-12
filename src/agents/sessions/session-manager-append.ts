@@ -5,6 +5,10 @@ import {
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
   prepareTranscriptMessageAppend,
   prepareTranscriptMessageAppendForWorker,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
@@ -12,6 +16,7 @@ import { SqliteTranscriptMutationConflictError } from "../../config/sessions/ses
 import { transcriptEventContextEligibility } from "../../config/sessions/session-transcript-projection-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -19,6 +24,7 @@ import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -39,13 +45,13 @@ import {
   type PersistWorkerRecordResult,
 } from "./session-manager-persistence-entry.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
+import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
-import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 
 export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   #lastMessageAppend:
@@ -167,7 +173,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
             assertNavigation();
           }
-          return this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+          return await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
         } catch (cause) {
           if (committed.result?.appended === false) {
             // A replay refusal has no newly committed transcript row to recover.
@@ -240,17 +246,35 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
               message: canonicalEntry.message,
               config: options?.config,
             }),
-            {
-              scope: this.persistenceTarget,
-              envelope: {
-                type: "message",
-                id: canonicalEntry.id,
-                parentId: canonicalEntry.parentId,
-                timestamp: canonicalEntry.timestamp,
-              },
-            },
           )
         : undefined;
+    if (
+      preparedMessage &&
+      canonicalEntry.type === "message" &&
+      (canonicalEntry.message.role === "assistant" ||
+        canonicalEntry.message.role === "toolResult") &&
+      this.persistenceTarget
+    ) {
+      // The deprecated synchronous API prepares compression before taking its writer lock.
+      const envelope = {
+        type: "message" as const,
+        id: canonicalEntry.id,
+        parentId: canonicalEntry.parentId,
+        timestamp: canonicalEntry.timestamp,
+      };
+      const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${preparedMessage.messageJson}}`;
+      const physical = withOpenClawAgentDatabaseReadOnly(
+        ({ db }) =>
+          prepareTranscriptPayloadForReuse(db, eventJson, {
+            ...envelope,
+            message: preparedMessage.persistedMessage,
+          }),
+        toDatabaseOptions(resolveSqliteTranscriptScope(this.persistenceTarget)),
+      );
+      if (physical.found) {
+        preparedMessage.physicalPayload = physical.value;
+      }
+    }
     let persistenceResult;
     try {
       persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
@@ -299,20 +323,30 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       });
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
-    return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
+    return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId, (append) => {
+      if (append) {
+        this.reloadPersistedTranscriptAfterAppend(
+          append.expectedMutationAt,
+          append.expectedEntryId,
+          append.admittedUserId,
+        );
+      } else {
+        this.reloadPersistedTranscriptSync();
+      }
+    });
   }
 
-  protected adoptWorkerCommittedEntry<T extends SessionEntry>(
+  protected async adoptWorkerCommittedEntry<T extends SessionEntry>(
     entry: T,
     committed: PersistWorkerRecordResult,
     admittedUserId?: string,
-  ): {
+  ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
     lifecycleRevision?: string;
     appended: boolean;
     viewWasSuperseded?: true;
-  } {
+  }> {
     if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
       throw committed.viewFailure;
     }
@@ -346,23 +380,38 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (committed.viewFailure) {
       throw committed.viewFailure;
     }
+    const needsReload =
+      committed.result?.adoptedMessageId ||
+      committed.result?.reloadAfterAppend ||
+      (committed.result?.effectiveParentId !== undefined &&
+        committed.result.effectiveParentId !== entry.parentId);
+    const reload =
+      committed.reload ??
+      (needsReload && this.persistenceTarget
+        ? await readCommittedSessionManagerReload(this.persistenceTarget, this.boundedContextLimits)
+        : undefined);
     this.transcriptVersion = committed.committedVersion;
     this.transcriptMutationAt = committed.committedVersion.updatedAt;
-    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, committed.reload);
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, (append) => {
+      if (!reload) {
+        throw new Error("Committed session append did not supply its transcript reload");
+      }
+      this.adoptPreparedTranscriptReload(reload, append);
+    });
   }
 
   protected adoptPersistedEntry<T extends SessionEntry>(
     canonicalEntry: T,
     persistenceResult: PersistRecordResult,
-    admittedUserId?: string,
-    preparedReload?: PreparedSessionTranscriptReload,
+    admittedUserId: string | undefined,
+    reload: (append?: {
+      expectedMutationAt: number | null;
+      expectedEntryId: string;
+      admittedUserId: string;
+    }) => void,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     if (persistenceResult?.adoptedMessageId) {
-      if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
-      } else {
-        this.reloadPersistedTranscriptSync();
-      }
+      reload();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
       // Final Talk speech records history without consuming the consult's keyed input.
@@ -384,23 +433,13 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         if (this.transcriptMutationAt === undefined) {
           throw new Error("Session transcript append mutation fence was not returned");
         }
-        if (preparedReload) {
-          this.adoptPreparedTranscriptReload(preparedReload, {
-            expectedMutationAt: this.transcriptMutationAt,
-            expectedEntryId: canonicalEntry.id,
-            admittedUserId,
-          });
-        } else {
-          this.reloadPersistedTranscriptAfterAppend(
-            this.transcriptMutationAt,
-            canonicalEntry.id,
-            admittedUserId,
-          );
-        }
-      } else if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
+        reload({
+          expectedMutationAt: this.transcriptMutationAt,
+          expectedEntryId: canonicalEntry.id,
+          admittedUserId,
+        });
       } else {
-        this.reloadPersistedTranscriptSync();
+        reload();
       }
     } else if (
       this.boundedContextIncomplete &&
@@ -490,7 +529,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   // SDK v2026.9.5 exposes this synchronous opt-in; internal replay uses async preparation.
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
-    options?: { includeOmittedCustomMessages?: boolean },
+    options?: {
+      /** @deprecated Await openAsync and traverse the complete view without this option. */
+      includeOmittedCustomMessages?: boolean;
+    },
   ): string | null {
     this.assertTranscriptViewAvailable();
     const includeOmitted = options?.includeOmittedCustomMessages === true;
