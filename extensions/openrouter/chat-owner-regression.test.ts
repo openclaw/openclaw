@@ -240,22 +240,28 @@ describe("OpenRouter chat owner invariants", () => {
     "openrouter/z-ai/glm-5.2",
     "~anthropic/claude-opus-latest",
     "~moonshotai/kimi-latest",
+    "x-ai/grok-4-1-fast",
+    "openrouter/x-ai/grok-4-1-fast",
+    "google/gemini-2.5-pro",
+    "openrouter/google/gemini-3.1-pro-preview",
   ])("recognizes the live upstream cacheable model reference %s", async (modelId) => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
     expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(true);
   });
 
-  it.each(["openai/gpt-5.4", "~openai/gpt-5.4", "openrouter/openai/gpt-5.4"])(
-    "does not infer provider cache support for unrelated model reference %s",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+  it.each([
+    "openai/gpt-5.4",
+    "~openai/gpt-5.4",
+    "openrouter/openai/gpt-5.4",
+    // OpenRouter documents implicit Gemini caching only for 2.5 and newer.
+    "google/gemini-2.0-flash-001",
+    "google/gemma-3-27b-it",
+  ])("does not infer provider cache support for unrelated model reference %s", async (modelId) => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
-      expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(
-        false,
-      );
-    },
-  );
+    expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(false);
+  });
 
   it("preserves assistant prefill when the provider reasoning object disables reasoning", async () => {
     const payload = await captureProviderPayload("anthropic/claude-opus-5", "off", {

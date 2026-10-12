@@ -7,8 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  maintainOpenClawCompileCache,
+  enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
 } from "./node-compile-cache.mjs";
 import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
 import {
@@ -94,11 +95,6 @@ const ensureSupportedRuntimeVersion = async () => {
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
-const resolvePackagedCompileCacheDirectory = () =>
-  resolveOpenClawCompileCacheDirectory({
-    installRoot: fileURLToPath(new URL(".", import.meta.url)),
-  });
-
 const resolveCompileCacheRespawnLauncher = () => {
   const moduleLauncher = fileURLToPath(import.meta.url);
   const invokedLauncher = process.argv[1];
@@ -139,37 +135,11 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   );
 };
 
-const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
+  const env = resolveOpenClawCompileCacheRespawnEnv({ directory });
+  if (!env) {
     return false;
   }
-  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
-    return false;
-  }
-  const currentDirectory = module.getCompileCacheDir?.();
-  if (!currentDirectory) {
-    return false;
-  }
-  const desiredDirectory = resolvePackagedCompileCacheDirectory();
-  if (!desiredDirectory) {
-    return false;
-  }
-  const desired = path.resolve(desiredDirectory);
-  if (
-    path.resolve(currentDirectory) === desired ||
-    (process.env.NODE_COMPILE_CACHE &&
-      path.resolve(process.env.NODE_COMPILE_CACHE) === desired &&
-      path.dirname(path.resolve(currentDirectory)) === desired)
-  ) {
-    // Node reports its version-specific leaf; an inherited, already scoped base
-    // does not need another launcher process to enable that same cache.
-    return false;
-  }
-  const env = {
-    ...process.env,
-    NODE_COMPILE_CACHE: desiredDirectory,
-    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
-  };
   return runRespawnedChild(
     process.execPath,
     [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
@@ -705,6 +675,13 @@ async function runLauncher() {
     }
   }
 
+  const compileCacheDirectory =
+    !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
+      ? resolveOpenClawCompileCacheDirectory({
+          installRoot: fileURLToPath(new URL(".", import.meta.url)),
+        })
+      : undefined;
+
   // Codex owns the relay timeout by PID. Keep the launcher as that exact process
   // so a timeout cannot strand a compile-cache respawn child.
   const waitingForCompileCacheRespawn =
@@ -713,33 +690,11 @@ async function runLauncher() {
       !isForegroundGmailRunInvocation(process.argv) &&
       !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
       ((await respawnWithoutCompileCacheIfNeeded()) ||
-        (await respawnWithPackagedCompileCacheIfNeeded())));
+        (await respawnWithPackagedCompileCacheIfNeeded(compileCacheDirectory))));
 
   // https://nodejs.org/api/module.html#module-compile-cache
-  if (
-    !waitingForCompileCacheRespawn &&
-    module.enableCompileCache &&
-    !isNodeCompileCacheDisabled() &&
-    !isSourceCheckoutLauncher()
-  ) {
-    try {
-      const directory = resolvePackagedCompileCacheDirectory();
-      if (directory) {
-        const baseDirectory = path.resolve(directory);
-        const result = module.enableCompileCache(directory);
-        void maintainOpenClawCompileCache(directory);
-        const enabled = module.constants?.compileCacheStatus?.ENABLED;
-        if (enabled !== undefined && result?.status === enabled) {
-          // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
-          // successful input without importing runtime code before cache activation.
-          const key = Symbol.for("openclaw.nodeCompileCacheBase");
-          const owner = (globalThis[key] ??= {});
-          owner.baseDirectory ??= baseDirectory;
-        }
-      }
-    } catch {
-      // Ignore errors
-    }
+  if (!waitingForCompileCacheRespawn && module.enableCompileCache) {
+    enableOpenClawCompileCache({ directory: compileCacheDirectory });
   }
 
   if (!waitingForCompileCacheRespawn) {

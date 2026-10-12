@@ -129,7 +129,7 @@ export function renderToolApprovalReviews(card: ToolCard) {
   ></openclaw-chat-tool-reviews>`;
 }
 
-export function renderPluginToolResult(
+function renderPluginToolResult(
   card: ToolCard | null | undefined,
   opts: ToolRenderOptions & { expanded: boolean },
   defaultView: unknown,

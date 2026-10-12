@@ -48,6 +48,13 @@ it("reads fresh deletion and surviving-owner facts from its captured source with
       },
       options,
     );
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options).read()).snapshot?.retainedDeletions,
+    ).toMatchObject({ status: "present", entries: [{ agentId: "retired" }] });
+    expect(
+      (await prepareAgentDatabaseDeletionSnapshotRead(options, "runtime").read()).snapshot
+        ?.retainedDeletions,
+    ).toEqual({ status: "empty" });
     runOpenClawStateWriteTransaction((database) => {
       expect(
         updateAgentDeletionJournalPathsInDatabase(

@@ -31,9 +31,6 @@ export const loadCliCompactionRuntime = createLazyPromise(() => import("./cli-co
 export const loadAgentRunnerMemoryRuntime = createLazyPromise(
   () => import("../../auto-reply/reply/agent-runner-memory.js"),
 );
-export const loadTranscriptResolveRuntime = createLazyPromise(
-  () => import("../../config/sessions/transcript-resolve.runtime.js"),
-);
 export const loadTranscriptAppendRuntime = createLazyPromise(
   () => import("../../config/sessions/transcript.runtime.js"),
 );
