@@ -432,8 +432,11 @@ For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
 counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Single-line limits and bounded
-frame counts remain active, including for empty or unrecognized events.
+tool results still count toward the output budget. Records Claude Code forwards
+from its subagents (`parent_tool_use_id` set) are charged a fixed allowance each,
+because OpenClaw keeps only their parent id; the subagent's answer arrives through
+the Agent tool result. Single-line limits and bounded frame counts remain active,
+including for empty or unrecognized events and for subagent records.
 
 Input modes:
 
