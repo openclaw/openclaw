@@ -1,5 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -19,7 +20,7 @@ import {
   handleRouteError,
   resolveProfileContext,
 } from "./agent.shared.js";
-import { readRouteNonNegativeInteger } from "./route-numeric.js";
+import { readRouteNonNegativeInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
 
@@ -237,6 +238,19 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    // The opening navigation honors the same bounded budget as /navigate.
+    let timeoutMs: number | undefined;
+    try {
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(
+        (req.body as { timeoutMs?: unknown })?.timeoutMs,
+      );
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
 
     await runTabsProfileRoute({
       req,
@@ -253,6 +267,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         const opened = await profileCtx.openTab(url, {
           label,
           signal,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
         });
         return { ...opened, resolvedProfile: profileCtx.profile.name };

@@ -571,4 +571,20 @@ describe("browser client", () => {
     ) as { timeoutMs?: unknown };
     expect(screenshotBody.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
+
+  it("sends an explicit open timeoutMs as the opening navigation budget", async () => {
+    const requests: Array<{ body?: unknown; timeoutMs?: number }> = [];
+    const transport = async (request: { body?: unknown; timeoutMs?: number }) => {
+      requests.push(request);
+      return { targetId: "t-open", title: "", url: "https://example.com", type: "page" };
+    };
+
+    await browserOpenTab(transport, "https://example.com", { timeoutMs: 60_000 });
+    await browserOpenTab(transport, "https://example.com");
+
+    expect(requests[0]?.body).toEqual({ url: "https://example.com", timeoutMs: 60_000 });
+    // The client watchdog leaves room for the browser to report its own navigation timeout.
+    expect(requests[0]?.timeoutMs).toBeGreaterThan(60_000);
+    expect(requests[1]?.body).toEqual({ url: "https://example.com" });
+  });
 });

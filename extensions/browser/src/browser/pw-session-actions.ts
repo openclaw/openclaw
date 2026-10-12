@@ -62,6 +62,9 @@ import {
 } from "./pw-session.page-cdp.js";
 import { dispatchBrowserTabClose, readBrowserDashboardTabs } from "./session-tab-store.js";
 
+/** Opening navigation budget when the caller does not request one. */
+const DEFAULT_OPEN_NAVIGATION_TIMEOUT_MS = 30_000;
+
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -506,6 +509,8 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    /** Bounded opening-navigation budget; callers resolve it like navigate. */
+    timeoutMs?: number;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
   const assertCurrent = () => {
@@ -574,7 +579,7 @@ export async function createPageViaPlaywright(
           cdpUrl: opts.cdpUrl,
           page,
           url: targetUrl,
-          timeoutMs: 30_000,
+          timeoutMs: opts.timeoutMs ?? DEFAULT_OPEN_NAVIGATION_TIMEOUT_MS,
           ...navigationPolicy,
           targetId: createdTargetId ?? undefined,
           assertPageCurrent: assertCurrent,

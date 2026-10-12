@@ -262,6 +262,53 @@ it("returns the profile that actually handled tab open", async () => {
   });
 });
 
+it.each([
+  { requested: 60_000, expected: 60_000 },
+  { requested: 600_000, expected: 120_000 },
+  { requested: undefined, expected: undefined },
+])(
+  "passes open timeoutMs $requested to the opening navigation",
+  async ({ requested, expected }) => {
+    const openTab = vi.fn(async () => ({
+      targetId: "SLOW-TAB",
+      title: "Slow",
+      url: "https://example.com",
+      type: "page" as const,
+    }));
+    const profileCtx = createProfileContext({ openTab });
+
+    const response = await callTabsRoute({
+      method: "post",
+      path: "/tabs/open",
+      body: {
+        url: "https://example.com",
+        ...(requested === undefined ? {} : { timeoutMs: requested }),
+      },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(openTab).toHaveBeenCalledWith(
+      "https://example.com",
+      expected === undefined
+        ? expect.not.objectContaining({ timeoutMs: expect.anything() })
+        : expect.objectContaining({ timeoutMs: expected }),
+    );
+  },
+);
+
+it("rejects an invalid open timeoutMs before opening a tab", async () => {
+  const profileCtx = createProfileContext({ openTab: vi.fn() });
+  const response = await callTabsRoute({
+    method: "post",
+    path: "/tabs/open",
+    body: { url: "https://example.com", timeoutMs: -5 },
+    profileCtx,
+  });
+  expect(response.statusCode).toBe(400);
+  expect(profileCtx.openTab).not.toHaveBeenCalled();
+});
+
 async function callTabsAction(params: {
   body: Record<string, unknown>;
   profileCtx: ProfileContext;

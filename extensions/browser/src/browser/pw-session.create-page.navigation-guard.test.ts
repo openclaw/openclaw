@@ -298,6 +298,16 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(f.pageGoto).toHaveBeenCalledTimes(1);
     expect(f.pageClose).not.toHaveBeenCalled();
   });
+  it.each([
+    { requested: 60_000, expected: 60_000 },
+    { requested: undefined, expected: 30_000 },
+  ])(
+    "navigates a new tab with timeout $expected when open requests $requested",
+    async ({ requested, expected }) => {
+      await create(requested === undefined ? {} : { timeoutMs: requested }).catch(() => undefined);
+      expect(f.pageGoto).toHaveBeenCalledWith(publicUrl, { timeout: expected });
+    },
+  );
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     blockedRedirect({ url: "file:///etc/passwd" });
     await expect(create()).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
