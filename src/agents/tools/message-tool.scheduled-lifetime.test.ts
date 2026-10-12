@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPollContext } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -428,20 +428,10 @@ it.each([
 
       pending = execute(existingGatewayJob ? "existing-job-message" : "accepted-before-revocation");
       void pending.catch(() => undefined);
-      await withTestTimeout(
-        Promise.race([
-          boundaryEntered.promise,
-          pending.then(
-            () => {
-              throw new Error("Scheduled message action completed before its provider boundary");
-            },
-            (error: unknown) => {
-              throw error;
-            },
-          ),
-        ]),
-        5000,
-        "Scheduled provider boundary not reached",
+      await awaitGateBeforeSettlement(
+        boundaryEntered.promise,
+        pending,
+        "Scheduled message action completed before its provider boundary",
       );
       if (revokeAt === "config") {
         currentConfig = {
