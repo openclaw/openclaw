@@ -1,8 +1,4 @@
-import pMap, { pMapSkip } from "p-map";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { SqliteWorkerAdmissionTimeoutError } from "../../infra/sqlite-worker-contract.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import {
@@ -21,16 +17,8 @@ import {
   summarizeCronJobSchedule,
 } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { releaseReservedCronRuns } from "./run-admission-mutation.js";
-import {
-  cleanupQueuedCronRunReservations,
-  executeQueuedCronRun,
-  persistQueuedCronRunReservations,
-  reserveQueuedCronRun,
-  setCronRunCapacityListener,
-  tryAcquireCronRunSlots,
-} from "./run-admission.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
+import { requestCronRuns, drainCronRunQueue } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -40,18 +28,7 @@ import {
   ensureLoaded,
   runPostPersistCronNotifications,
 } from "./store.js";
-import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
-import { createCronCapacityRecheckGate } from "./timer-capacity-recheck.js";
-import {
-  MAX_CRON_TIMER_DELAY_MS,
-  MIN_REFIRE_GAP_MS,
-  type TimedCronRunOutcome,
-} from "./timer-execution-timeout.js";
-import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
-import {
-  createCompletedCronRunOutcomeDrain,
-  finalizeCompletedCronRunOutcomes,
-} from "./timer-outcome-finalization.js";
+import { MAX_CRON_TIMER_DELAY_MS, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { collectRunnableJobs } from "./timer-runnable.js";
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */
@@ -130,30 +107,6 @@ function setCronTimer(state: CronServiceState, delayMs: number): void {
   });
 }
 
-/** Capacity wakes have their own scoped registration, independent of the current batch. */
-function requestImmediateCronRecheck(
-  state: CronServiceState,
-  scheduler: GatewaySchedulerScope,
-): void {
-  if (
-    state.stopped ||
-    state.schedulingPaused ||
-    !state.deps.cronEnabled ||
-    scheduler !== state.schedulerScope ||
-    scheduler.signal.aborted
-  ) {
-    return;
-  }
-  scheduler.schedule({
-    id: `cron:${state.deps.storePath}:capacity`,
-    delayMs: 0,
-    run: () =>
-      runInDetachedAsyncContext(() => onTimer(state, scheduler)).catch((err: unknown) => {
-        state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
-      }),
-  });
-}
-
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState, scheduler = state.schedulerScope) {
   if (scheduler !== state.schedulerScope || scheduler.signal.aborted) {
@@ -174,7 +127,7 @@ export async function onTimer(state: CronServiceState, scheduler = state.schedul
   try {
     // Reopening admission cannot transfer a retired tick to a restarted scheduler.
     if (state.lifecycleGeneration === lifecycleGeneration) {
-      const run = () => onAdmittedTimer(state, scheduler);
+      const run = () => onAdmittedTimer(state);
       await admission.run(() =>
         state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
       );
@@ -189,8 +142,8 @@ export async function onTimer(state: CronServiceState, scheduler = state.schedul
   }
 }
 
-/** Loads due jobs, reserves them, executes, persists, and re-arms. */
-async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedulerScope) {
+/** Produces timed requests; the worker owns capacity and activation. */
+async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     return;
   }
@@ -201,15 +154,11 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
-  const capacityRechecks = createCronCapacityRecheckGate(() =>
-    requestImmediateCronRecheck(state, scheduler),
-  );
-  let allowEmptyCapacityRecheck = false;
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true });
       if (state.stopped || state.startupCatchup || state.lifecycleGeneration !== generation) {
-        state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
+        state.deps.log.warn({}, "cron: due job request skipped - scheduler unavailable");
         return [];
       }
       const proposals = (state.store?.jobs ?? [])
@@ -275,282 +224,24 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
         return [];
       }
 
-      const admissionReleases = tryAcquireCronRunSlots(state, due.length);
-      const admittedDue = due.slice(0, admissionReleases.length);
-      if (admittedDue.length < due.length) {
-        // Keep unreserved work durable and wake it as soon as shared capacity
-        // becomes available. A partial batch gates that wake until its own
-        // receipt-backed reservations have either activated or been fenced.
-        setCronRunCapacityListener(
-          state,
-          admittedDue.length > 0
-            ? () => capacityRechecks.request()
-            : () =>
-                // A zero-admission tick returns before this wake and cannot drain it.
-                requestImmediateCronRecheck(state, scheduler),
-        );
-        allowEmptyCapacityRecheck = admittedDue.length > 0;
-      }
-      if (admittedDue.length === 0) {
-        return [];
-      }
-
-      const now = state.deps.nowMs();
-      try {
-        const reservedJobs = await persistQueuedCronRunReservations({
-          state,
-          source,
-          candidates: admittedDue,
-          reservedAtMs: now,
-        });
-        const reservedDue = reservedJobs.map(({ job, runReceipt, runReceiptContext }, index) => ({
-          id: job.id,
-          job,
-          reservedAtMs: now,
-          reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
-            runReceipt,
-            runReceiptContext,
-            lifecycleGeneration: generation,
-          }),
-          releaseAdmission: admissionReleases[index]!,
-        }));
-        if (reservedDue.length === 0 && allowEmptyCapacityRecheck) {
-          // Releasing an unused slot is not progress. Retry immediately only
-          // when the refreshed store removed a candidate from the due set;
-          // otherwise child ticks retain their parents and starve the event loop.
-          const stillDue = new Set(
-            collectRunnableJobs(state, state.deps.nowMs()).map((job) => job.id),
-          );
-          allowEmptyCapacityRecheck = admittedDue.some((job) => !stillDue.has(job.id));
-        }
-        for (const releaseAdmission of admissionReleases.slice(reservedDue.length)) {
-          releaseAdmission();
-        }
-        return reservedDue;
-      } catch (error) {
-        for (const releaseAdmission of admissionReleases) {
-          releaseAdmission();
-        }
-        throw error;
-      }
+      return due;
     });
 
-    if (state.lifecycleGeneration === generation) {
-      // Future unclaimed work must stay armed while this batch executes. When
-      // overdue work is capacity-blocked, the release listener is the fast path
-      // and this minute timer is only a bounded safety recheck.
-      if (state.runAdmission.capacityListener) {
-        armRunningRecheckTimer(state);
-      } else {
-        armTimer(state);
-      }
-    }
-
-    const concurrency = Math.min(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.max(1, dueJobs.length));
-    capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
-    const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
-    const claimedIndexes = new Set<number>();
-    let reservationReleaseError: unknown;
-    let setupTimeoutNotified = false;
-    let stopAdmittingDueJobs = false;
-    const releaseUnclaimedDueJobReservationsWithRetry = async () => {
-      const unclaimed = dueJobs.filter((_, index) => !claimedIndexes.has(index));
-      const reservations = unclaimed.map((due) => ({
-        jobId: due.id,
-        reservationIdentity: due.reservationIdentity,
-      }));
-      try {
-        await cleanupQueuedCronRunReservations({
-          state,
-          reservations,
-          recompute: "maintenance",
-        });
-      } finally {
-        for (const due of unclaimed) {
-          due.releaseAdmission();
-        }
-      }
-    };
-    // Retired batches still own their reservations until canonical cleanup settles.
     if (state.stopped || state.lifecycleGeneration !== generation) {
-      capacityRechecks.abort();
-      if (dueJobs.length > 0) {
-        await releaseUnclaimedDueJobReservationsWithRetry();
-      }
       return;
     }
-    // Skipped mappers must not claim reservations: recovery releases those rows,
-    // while already-started jobs drain under the same service-wide cap.
-    let completedResults: TimedCronRunOutcome[];
-    let batchExecutionError: unknown;
-    try {
-      completedResults = await pMap(
-        dueJobs,
-        async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
-          let initialActivationSettled = false;
-          const settleThisInitialActivation = (allowRecheck: boolean) => {
-            if (initialActivationSettled) {
-              return;
-            }
-            initialActivationSettled = true;
-            capacityRechecks.settleActivation(allowRecheck);
-          };
-          if (stopAdmittingDueJobs || state.stopped) {
-            stopAdmittingDueJobs = true;
-            settleThisInitialActivation(false);
-            return pMapSkip;
-          }
-          try {
-            const execution = await executeQueuedCronRun({
-              state,
-              jobId: due.id,
-              reservedAtMs: due.reservedAtMs,
-              reservationIdentity: due.reservationIdentity,
-              admissionRelease: due.releaseAdmission,
-              isUnavailable: () => stopAdmittingDueJobs,
-              onUnavailable: () => {
-                stopAdmittingDueJobs = true;
-              },
-              onActivated: () => {
-                claimedIndexes.add(index);
-                settleThisInitialActivation(true);
-              },
-              onNotRunnable: async () => {
-                const owner = state.queuedRunReservationsByJobId.get(due.id);
-                if (owner?.identity !== due.reservationIdentity) {
-                  return;
-                }
-                await releaseReservedCronRuns({
-                  state,
-                  context: owner.runReceiptContext,
-                  storeKey: owner.runReceipt.storeKey,
-                  reservations: [{ jobId: due.id, reservationIdentity: due.reservationIdentity }],
-                  policy: { kind: "scheduled-ineligible" },
-                  onSettled() {},
-                });
-              },
-              onSetupError: (job, errorText) => {
-                state.deps.log.warn(
-                  {
-                    jobId: due.id,
-                    jobName: job.name,
-                    timeoutMs: resolveCronJobTimeoutMs(job) ?? null,
-                  },
-                  `cron: job failed: ${errorText}`,
-                );
-              },
-              onCompleted: async (result) => {
-                if (!result.isolatedAgentSetupTimeout) {
-                  // Drain finished state independently: a slow sibling must not
-                  // strand outcomes, and store I/O must not own execution slots.
-                  completedOutcomeDrain.enqueue(result);
-                  return true;
-                }
-                let finalizedResults: TimedCronRunOutcome[];
-                try {
-                  finalizedResults = await finalizeCompletedCronRunOutcomes(state, [result], {
-                    clearOnFailure: false,
-                  });
-                } catch {
-                  return false;
-                }
-                if (
-                  finalizedResults.length > 0 &&
-                  !setupTimeoutNotified &&
-                  maybeNotifyIsolatedAgentSetupTimeout(state, result)
-                ) {
-                  setupTimeoutNotified = true;
-                  stopAdmittingDueJobs = true;
-                  try {
-                    await releaseUnclaimedDueJobReservationsWithRetry();
-                  } catch (err) {
-                    reservationReleaseError = err;
-                  }
-                }
-                return true;
-              },
-            });
-            if (execution.kind === "stopped") {
-              stopAdmittingDueJobs = true;
-              return pMapSkip;
-            }
-            if (execution.kind === "skipped") {
-              settleThisInitialActivation(!stopAdmittingDueJobs && !state.stopped);
-              return pMapSkip;
-            }
-            if (execution.handled) {
-              return pMapSkip;
-            }
-            return execution.outcome;
-          } catch (error) {
-            stopAdmittingDueJobs = true;
-            batchExecutionError ??= error;
-            return pMapSkip;
-          } finally {
-            settleThisInitialActivation(false);
-          }
-        },
-        // Let already-admitted mappers drain so their outcomes can be persisted
-        // even when a sibling activation fails.
-        { concurrency, stopOnError: false },
-      );
-    } catch (error) {
-      let finalizationError: unknown;
-      try {
-        await completedOutcomeDrain.flush();
-      } catch (drainError) {
-        finalizationError = drainError;
-      }
-      await releaseUnclaimedDueJobReservationsWithRetry();
-      if (finalizationError) {
-        throw finalizationError instanceof Error
-          ? finalizationError
-          : new Error(formatErrorMessage(finalizationError));
-      }
-      throw error instanceof AggregateError && error.errors.length > 0 ? error.errors[0] : error;
+    const requests = await requestCronRuns(state, dueJobs);
+    await drainCronRunQueue(state);
+    if (state.lifecycleGeneration === generation) {
+      // Queued rows are durable; completion pumps their next activation.
+      armTimer(state);
     }
-    let postBatchError = reservationReleaseError;
-    try {
-      await completedOutcomeDrain.flush();
-    } catch (error) {
-      // Finalization errors still need to release every unclaimed durable
-      // reservation before the failed timer batch can exit.
-      postBatchError ??= error;
-      stopAdmittingDueJobs = true;
-    }
-    if (stopAdmittingDueJobs) {
-      try {
-        await releaseUnclaimedDueJobReservationsWithRetry();
-      } catch (error) {
-        postBatchError ??= error;
-      }
-    }
-
-    if (completedResults.length > 0) {
-      const finalizedResults = await finalizeCompletedCronRunOutcomes(state, completedResults);
-      for (const result of finalizedResults) {
-        if (
-          !setupTimeoutNotified &&
-          result.isolatedAgentSetupTimeout &&
-          maybeNotifyIsolatedAgentSetupTimeout(state, result)
-        ) {
-          setupTimeoutNotified = true;
-          break;
-        }
-      }
-    }
-    if (postBatchError) {
-      throw postBatchError instanceof Error
-        ? postBatchError
-        : new Error(formatErrorMessage(postBatchError));
-    }
-    if (batchExecutionError) {
-      throw batchExecutionError instanceof Error
-        ? batchExecutionError
-        : new Error(formatErrorMessage(batchExecutionError));
+    const results = await Promise.allSettled(requests.map(({ completion }) => completion));
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
     }
   } finally {
-    capacityRechecks.abort();
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.

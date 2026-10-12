@@ -19,16 +19,20 @@ import {
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
-import { reserveQueuedCronRun } from "../cron/service/run-admission.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { readActiveCronRunReceiptsInDatabase } from "../cron/store/run-receipt-read.js";
-import { finishCronRunReceiptAsync } from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptForTest } from "../cron/store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptForTest,
+  finishCronRunReceiptAsync,
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
-import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../infra/outbound/deliver-types.js";
 import * as outboundSession from "../infra/outbound/outbound-session.js";
 import { getChildLogger } from "../logging.js";
 import {
@@ -45,7 +49,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -116,10 +119,6 @@ async function createCompletionFixture(
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
-  });
-  reserveQueuedCronRun(service, job.id, 1000, {
-    runReceipt: receipt,
-    runReceiptContext: captureOpenClawStateWorkerContext(),
   });
   const marker = markServiceCronJobActive(service, job, receipt);
   const controller = new AbortController();
@@ -419,7 +418,10 @@ describe("completion announcement", () => {
             });
           }
           if (failure === "rejected") {
-            throw new Error("notification rejected");
+            throw new PlatformMessageNotDispatchedError("notification rejected", {
+              cause: new Error("synthetic recipient rejection"),
+              retryable: false,
+            });
           }
           return { channel: "telegram", messageId: "notification-message" };
         });
