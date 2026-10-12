@@ -114,7 +114,6 @@ describePosix("correction authority through native merge admission", () => {
     configureCorrection(f);
     const state = f.state();
     state.pr.headRefOid = hosted;
-    state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, hosted);
     f.save(state);
     const result = f.run();
     expect(result.status, result.output).toBe(0);
@@ -149,7 +148,6 @@ describePosix("correction authority through native merge admission", () => {
       const state = f.state();
       state.mode = "success";
       state.pr.headRefOid = replacement;
-      state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, replacement);
       f.save(state);
       if (fault === "incoming digest") {
         const path = join(f.worktree, ".local/review.json");

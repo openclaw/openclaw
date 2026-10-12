@@ -13,7 +13,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
-import { validClawsweeperReviewCommentPages, validReview } from "./pr-review-artifact-fixture.js";
+import { validReview } from "./pr-review-artifact-fixture.js";
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
@@ -406,7 +406,6 @@ function runProtectedShell(
     // Exercise pipe backpressure during trailer parsing without changing authorization.
     mergePreview: "Reviewed fixture body".repeat(longPreview ? 16_384 : 1),
   };
-  const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
   evidence.pullRequest.base.sha = mainSha;
@@ -458,7 +457,6 @@ const apiOut = (data) => out(args.includes("--jq")
   : data);
 const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/openclaw/openclaw"};
 const repoNodeId = "fixture-repo";
-const reviewComments = ${JSON.stringify(reviewComments)};
 const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPEN",isDraft:false,
   headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:value.currentMainSha,
   headRepository:{name:"openclaw",nameWithOwner:repo.nameWithOwner,url:repo.url},headRepositoryOwner:{login:"openclaw"},
@@ -519,7 +517,6 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     base:{...value.pullRequest.base,repo:{id:repo.id,node_id:repoNodeId,html_url:repo.url,...value.pullRequest.base.repo}},
     head:{...value.pullRequest.head,ref:pr.headRefName,repo:{id:repo.id,name:"openclaw",html_url:repo.url,owner:{login:"openclaw"},...value.pullRequest.head.repo}}});
   else if (endpoint === prefix + "commits?sha=" + value.headSha + "&per_page=1") out([{sha:value.headSha,commit:{author:{name:"Fixture Contributor",email:"fixture@example.com"}},author:{login:"fixture-contributor",type:"User"}}]);
-  else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});
   else if (endpoint === prefix + "actions/runs/8001") out({...value.publisherRun,html_url:repo.url+"/actions/runs/8001"});
