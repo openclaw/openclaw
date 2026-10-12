@@ -227,6 +227,7 @@ public final class OpenClawChatViewModel {
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
+    var outboxQueueModesByMessageID: [UUID: OpenClawChatQueueMode] = [:]
     @ObservationIgnored
     var outboxCommandIDsByMessageID: [UUID: String] = [:]
     @ObservationIgnored

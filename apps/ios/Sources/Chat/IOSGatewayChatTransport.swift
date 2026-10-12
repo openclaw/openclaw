@@ -66,12 +66,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         guard let routingContract = try? await self.sessionRoutingContract(ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: { key, agent, settings, text, thinking, id, attachments in
+            sendTargetedMessage: { key, target, text, thinking, id, attachments in
                 try await self.sendMessage(
                     sessionKey: key,
-                    agentID: agent,
+                    agentID: target.agentID,
                     expectedSessionRoutingContract: routingContract,
-                    expectedSessionSettings: settings,
+                    expectedSessionSettings: target.expectedSessionSettings,
+                    queueMode: target.queueMode,
                     message: text,
                     thinking: thinking,
                     idempotencyKey: id,
