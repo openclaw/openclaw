@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
@@ -84,11 +86,39 @@ export async function openUrl(url: string): Promise<boolean> {
     return false;
   }
   const normalizedUrl = parsed.toString();
+  return await openBrowserPath(normalizedUrl);
+}
+
+/**
+ * Open a local file in the user's browser when the platform supports it.
+ *
+ * Unlike {@link openUrl}, this accepts a `file://` path for private browser
+ * handoffs: the path contains no credential, so passing it as an opener
+ * argument does not expose secret material through process command lines.
+ * The target file itself is the caller's responsibility (for example a
+ * mode-0600 document inside a mode-0700 directory).
+ */
+export async function openLocalFile(filePath: string): Promise<boolean> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return false;
+  }
+  // Path-only seam: refuse URL-shaped inputs so a caller cannot smuggle an
+  // http(s) credential URL through this function into opener argv.
+  const asUrl = URL.parse(filePath);
+  if (asUrl && asUrl.protocol !== "file:") {
+    return false;
+  }
+  const absolute = path.resolve(asUrl && asUrl.protocol === "file:" ? asUrl.pathname : filePath);
+  const normalizedPath = pathToFileURL(absolute).toString();
+  return await openBrowserPath(normalizedPath);
+}
+
+async function openBrowserPath(normalizedPath: string): Promise<boolean> {
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
     return false;
   }
-  const command = [...resolved.argv, normalizedUrl];
+  const command = [...resolved.argv, normalizedPath];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return result.code === 0 && result.termination === "exit";

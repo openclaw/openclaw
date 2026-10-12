@@ -1,0 +1,103 @@
+// Covers the private browser handoff for credential-bearing dashboard URLs.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { openLocalFileMock } = vi.hoisted(() => ({
+  openLocalFileMock: vi.fn<(filePath: string) => Promise<boolean>>(),
+}));
+
+vi.mock("./browser-open.js", () => ({
+  openLocalFile: openLocalFileMock,
+}));
+
+let openUrlPrivately: typeof import("./browser-handoff.js").openUrlPrivately;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ openUrlPrivately } = await import("./browser-handoff.js"));
+  openLocalFileMock.mockReset().mockResolvedValue(true);
+});
+
+afterEach(async () => {
+  // Best-effort cleanup of any handoff directories left behind by tests.
+  const entries = await fs.readdir(os.tmpdir()).catch(() => [] as string[]);
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith("openclaw-browser-handoff-"))
+      .map((name) => fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true }).catch(() => {})),
+  );
+});
+
+describe("openUrlPrivately", () => {
+  it("hands the browser a private file path instead of the credential URL", async () => {
+    const targetUrl = "http://127.0.0.1:18789/#bootstrapToken=secret-handoff-token";
+
+    await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
+
+    expect(openLocalFileMock).toHaveBeenCalledTimes(1);
+    const openedPath = openLocalFileMock.mock.calls[0]![0];
+    // The opener argument must not contain the credential.
+    expect(openedPath).not.toContain("secret-handoff-token");
+    expect(openedPath).not.toContain(targetUrl);
+    expect(path.isAbsolute(openedPath)).toBe(true);
+
+    // The handoff document lives in a private directory and carries the URL.
+    const dir = path.dirname(openedPath);
+    const dirStat = await fs.stat(dir);
+    expect(dirStat.isDirectory()).toBe(true);
+    expect((dirStat.mode & 0o777).toString(8)).toBe("700");
+    const fileStat = await fs.stat(openedPath);
+    expect((fileStat.mode & 0o777).toString(8)).toBe("600");
+    const content = await fs.readFile(openedPath, "utf8");
+    expect(content).toContain(encodeURIComponent("secret-handoff-token"));
+    expect(content).toContain('location.replace("http://127.0.0.1:18789/#bootstrapToken=');
+  });
+
+  it("rejects non-http(s) targets without creating a handoff", async () => {
+    await expect(openUrlPrivately("file:///etc/passwd")).resolves.toBe(false);
+    expect(openLocalFileMock).not.toHaveBeenCalled();
+  });
+
+  it("removes the handoff when the browser opener reports failure", async () => {
+    openLocalFileMock.mockResolvedValue(false);
+
+    await expect(
+      openUrlPrivately("http://127.0.0.1:18789/#bootstrapToken=secret-handoff-token"),
+    ).resolves.toBe(false);
+
+    const openedPath = openLocalFileMock.mock.calls[0]?.[0];
+    expect(openedPath).toBeDefined();
+    await expect(fs.stat(openedPath!)).rejects.toThrow();
+    await expect(fs.stat(path.dirname(openedPath!))).rejects.toThrow();
+  });
+
+  it("removes the handoff when the browser opener throws", async () => {
+    openLocalFileMock.mockRejectedValue(new Error("opener failed"));
+
+    await expect(
+      openUrlPrivately("http://127.0.0.1:18789/#bootstrapToken=secret-handoff-token"),
+    ).resolves.toBe(false);
+
+    const openedPath = openLocalFileMock.mock.calls[0]?.[0];
+    await expect(fs.stat(path.dirname(openedPath!))).rejects.toThrow();
+  });
+
+  it("escapes the target URL inside the handoff document", async () => {
+    const targetUrl = 'http://127.0.0.1:18789/#bootstrapToken=a"b<c>&x';
+    await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
+
+    const openedPath = openLocalFileMock.mock.calls[0]![0];
+    const content = await fs.readFile(openedPath, "utf8");
+    const normalized = new URL(targetUrl).toString();
+    // URL normalization percent-encodes quotes and angle brackets in the
+    // fragment before the document is built, and the attribute context
+    // HTML-escapes ampersands — no tag breakout is possible.
+    expect(normalized).toContain("a%22b%3Cc%3E");
+    expect(content).toContain("a%22b%3Cc%3E");
+    expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
+    expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
+    expect(content).not.toContain('a"b<c>');
+  });
+});

@@ -47,10 +47,11 @@ vi.mock("node:fs/promises", async () => {
 
 let detectBrowserOpenSupport: typeof import("./browser-open.js").detectBrowserOpenSupport;
 let openUrl: typeof import("./browser-open.js").openUrl;
+let openLocalFile: typeof import("./browser-open.js").openLocalFile;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ detectBrowserOpenSupport, openUrl } = await import("./browser-open.js"));
+  ({ detectBrowserOpenSupport, openUrl, openLocalFile } = await import("./browser-open.js"));
   vi.stubEnv("VITEST", "");
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("DISPLAY", "");
@@ -84,6 +85,42 @@ describe("openUrl", () => {
     mockProcessPlatform("win32");
 
     await expect(openUrl("https://example.com/")).resolves.toBe(true);
+  });
+});
+
+describe("openLocalFile", () => {
+  it("passes only the private file:// path to the opener, never a credential URL", async () => {
+    mockProcessPlatform("linux");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("DISPLAY", ":0");
+    detectBinaryMock.mockResolvedValue(true);
+    runCommandWithTimeoutMock.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(openLocalFile("/tmp/openclaw-browser-handoff-X/handoff.html")).resolves.toBe(
+      true,
+    );
+    const argv = runCommandWithTimeoutMock.mock.calls[0]![0];
+    expect(argv[0]).toBe("xdg-open");
+    expect(argv).toHaveLength(2);
+    expect(argv[1]).toMatch(/^file:\/\//);
+    expect(argv[1]).not.toContain("bootstrapToken");
+  });
+
+  it("refuses http(s) URLs and non-file inputs", async () => {
+    mockProcessPlatform("linux");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+
+    await expect(openLocalFile("http://127.0.0.1:18789/#bootstrapToken=x")).resolves.toBe(false);
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 });
 
