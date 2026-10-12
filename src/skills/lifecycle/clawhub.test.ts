@@ -799,6 +799,83 @@ describe("skills-clawhub", () => {
     }
   });
 
+  it("persists the source URL from server-resolved verification provenance", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-source-");
+    const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
+    const verifiedSourceUrl =
+      "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
+    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      card: { available: true },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: {
+        source: "server-resolved-github-import",
+        kind: "github",
+        url: sourceUrl,
+        repo: "openclaw/skills",
+        ref: "main",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "agentreceipt",
+        importedAt: 4,
+      },
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    });
+    const skillContent = "# AgentReceipt\n";
+    const artifact = { kind: "archive", sha256: "a".repeat(64), integrity: "sha256-test" };
+    const skillFile = {
+      path: "SKILL.md",
+      sha256: createHash("sha256").update(skillContent).digest("hex"),
+    };
+    mockInstalledSkillFile(skillContent);
+
+    const result = await installTestSkill(workspaceDir, "agentreceipt", {
+      version: "1.0.0",
+    });
+
+    expectInstalledSkill(result, {
+      slug: "agentreceipt",
+      version: "1.0.0",
+      targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+    });
+    const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
+      path.join(workspaceDir, ".clawhub", "lock.json"),
+    );
+    expect(lock.skills.agentreceipt).toMatchObject({
+      version: "1.0.0",
+      registry: "https://clawhub.ai",
+      artifact,
+      skillFile,
+      sourceUrl: verifiedSourceUrl,
+      verification: {
+        provenance: {
+          source: "server-resolved-github-import",
+          kind: "github",
+          url: sourceUrl,
+          repo: "openclaw/skills",
+          ref: "main",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          path: "agentreceipt",
+          importedAt: 4,
+        },
+      },
+    });
+    const origin = await readJson<Record<string, unknown>>(
+      path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+    );
+    expect(origin).toMatchObject({
+      version: 1,
+      slug: "agentreceipt",
+      installedVersion: "1.0.0",
+      artifact,
+      skillFile,
+      sourceUrl: verifiedSourceUrl,
+    });
+  });
+
   it("requires a full commit SHA before promoting verified source provenance", () => {
     const baseProvenance = {
       source: "server-resolved-github-import",

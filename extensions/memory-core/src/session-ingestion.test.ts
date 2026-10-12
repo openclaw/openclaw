@@ -52,6 +52,53 @@ describe("session ingestion", () => {
     expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId });
   });
 
+  it("verifies backfill content despite an unchanged size and mtime", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
+    tempDirs.push(dir);
+    const archiveFile = path.join(dir, "archive.jsonl");
+    const record = (content: string) =>
+      `${JSON.stringify({
+        type: "message",
+        id: "message-1",
+        timestamp: "2026-04-05T18:00:00.000Z",
+        message: {
+          role: "user",
+          content,
+          timestamp: "2026-04-05T18:00:00.000Z",
+        },
+      })}\n`;
+    const firstRaw = record("Alpha durable note.");
+    const secondRaw = record("Bravo durable note.");
+    expect(Buffer.byteLength(secondRaw)).toBe(Buffer.byteLength(firstRaw));
+    const fixedTime = new Date("2026-04-06T00:00:00.000Z");
+    await fs.writeFile(archiveFile, firstRaw);
+    await fs.utimes(archiveFile, fixedTime, fixedTime);
+    const source = foreignSessionIngestionSource("main", archiveFile);
+    const first = await scanSessionIngestionSource({
+      source,
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+    if (!first.fileState) {
+      throw new Error("expected initial backfill checkpoint");
+    }
+
+    await fs.writeFile(archiveFile, secondRaw);
+    await fs.utimes(archiveFile, fixedTime, fixedTime);
+    const second = await scanSessionIngestionSource({
+      source,
+      previous: first.fileState,
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+
+    expect(second.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "User: Bravo durable note.",
+    ]);
+  });
+
   it.each([
     { maxCandidates: 1, expected: ["User: Bravo durable note.", "User: Charlie durable note."] },
   ])(
@@ -131,6 +178,71 @@ describe("session ingestion", () => {
       );
       expect(classifiedDays).toEqual(
         maxCandidates === 1 ? ["2026-04-06", "2026-04-06"] : ["2026-04-06"],
+      );
+    },
+  );
+
+  it.each(["text", "timestamp", "provenance", "ordinal", "truncation"] as const)(
+    "rescans when the previous snapshot changes by %s",
+    async (change) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
+      tempDirs.push(dir);
+      const archiveFile = path.join(dir, "archive.jsonl");
+      const record = (id: string, content: string) => ({
+        type: "message",
+        id,
+        timestamp: "2026-04-05T18:00:00.000Z",
+        message: { role: "user", content, timestamp: "2026-04-05T18:00:00.000Z" },
+      });
+      const firstRecord = record("message-1", "Alpha durable note.");
+      const original = [firstRecord, record("message-2", "Bravo durable note.")];
+      const writeRecords = (records: unknown[]) =>
+        fs.writeFile(archiveFile, `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      await writeRecords(original);
+      const source = foreignSessionIngestionSource("main", archiveFile);
+      const first = await scanSessionIngestionSource({
+        source,
+        seenMessages: {},
+        verifyContent: true,
+        classifyDay: () => "include",
+      });
+      if (!first.fileState) {
+        throw new Error("expected initial transcript checkpoint");
+      }
+      let current: unknown[] = [...original, record("message-3", "Charlie durable note.")];
+      if (change === "text") {
+        current[0] = {
+          ...firstRecord,
+          message: { ...firstRecord.message, content: "Altered durable note." },
+        };
+      } else if (change === "timestamp") {
+        current[0] = {
+          ...firstRecord,
+          message: { ...firstRecord.message, timestamp: "2026-04-05T18:01:00.000Z" },
+        };
+      } else if (change === "provenance") {
+        source.buildOptions.sessionKind = "unknown";
+      } else if (change === "ordinal") {
+        current.unshift({ type: "custom", customType: "fixture-note", data: {} });
+      } else {
+        current = [firstRecord];
+      }
+      await writeRecords(current);
+      const changed = await scanSessionIngestionSource({
+        source,
+        previous: first.fileState,
+        seenMessages: {},
+        verifyContent: true,
+        classifyDay: () => "include",
+      });
+      expect(changed.candidates.map((candidate) => candidate.snippet)).toEqual(
+        change === "truncation"
+          ? ["User: Alpha durable note."]
+          : [
+              change === "text" ? "User: Altered durable note." : "User: Alpha durable note.",
+              "User: Bravo durable note.",
+              "User: Charlie durable note.",
+            ],
       );
     },
   );

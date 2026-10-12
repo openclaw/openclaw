@@ -219,6 +219,36 @@ function startTraceExporterHealthService(
   });
 }
 
+test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {
+  const receiver = await startExporterHealthReceiver((_request, response, requestCount) => {
+    response.writeHead(requestCount === 1 ? 503 : 200, {
+      ...(requestCount === 1 ? { "retry-after": IMMEDIATE_RETRY_AFTER } : {}),
+      "content-type": "application/x-protobuf",
+    });
+    response.end();
+  });
+  const capture = captureExporterEvents();
+  const { service, ctx } = await startTraceExporterHealthService(receiver.endpoint, "1000");
+
+  try {
+    emitExporterHealthSpan("retry-then-success");
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+    await waitForDiagnosticEventsDrained();
+    expect(receiver.requestCount).toBe(2);
+    expect(capture.events.some((event) => event.status === "failure")).toBe(false);
+    expect(
+      getReportedExporterHealth(ctx).some(
+        (event) => event.status === "failure" || event.status === "recovered",
+      ),
+    ).toBe(false);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
+
 test.each([400] as const)(
   "records one final failure for a non-retryable real OTLP HTTP $statusCode response",
   async (statusCode) => {

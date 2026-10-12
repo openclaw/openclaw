@@ -79,6 +79,19 @@ describe("Tencent config compatibility", () => {
     });
   });
 
+  it.each([HY3, "openai/gpt-5.5"])(
+    "preserves an explicit string primary %s while repairing the allowlist",
+    (primary) => {
+      const config = {
+        agents: { defaults: { model: primary, models: { [HY3]: {} } } },
+      } as OpenClawConfig;
+      const result = migrateTencentTokenHubModelDefaults(config);
+
+      expect(result.config.agents?.defaults?.model).toBe(primary);
+      expect(result.config.agents?.defaults?.models).toEqual(DEFAULT_MODELS);
+    },
+  );
+
   it("does not create a model allowlist when TokenHub models are not already configured", () => {
     const config = {
       models: {
