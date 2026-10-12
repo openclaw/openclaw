@@ -19,7 +19,10 @@ type AgentIdentityEditorHost = {
   identityError: string | null;
 };
 
-const avatarSelections = new WeakMap<AgentIdentityEditorHost, symbol>();
+const avatarSelections = new WeakMap<
+  AgentIdentityEditorHost,
+  { pending: Promise<boolean> | null }
+>();
 
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
   avatarSelections.delete(host);
@@ -42,20 +45,20 @@ export function selectIdentityAvatar(
   file: File,
   config?: ApplicationConfigCapability,
 ) {
-  const selection = Symbol("avatar-selection");
+  const selection: { pending: Promise<boolean> | null } = { pending: null };
   avatarSelections.set(host, selection);
   if (!uploadsEnabled(config)) {
     host.identityError = uploadsDisabledMessage();
     return;
   }
-  void fileToAvatarDataUrl(file, config)
+  selection.pending = fileToAvatarDataUrl(file, config)
     .then((result) => {
       if (avatarSelections.get(host) !== selection) {
-        return;
+        return false;
       }
       if (!uploadsEnabled(config)) {
         host.identityError = uploadsDisabledMessage();
-        return;
+        return false;
       }
       if (result.ok) {
         host.identityDraft = { ...host.identityDraft, avatar: result.dataUrl };
@@ -63,11 +66,16 @@ export function selectIdentityAvatar(
       } else {
         host.identityError = t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]);
       }
+      return result.ok;
     })
     .catch((error: unknown) => {
       if (avatarSelections.get(host) === selection) {
         host.identityError = formatUiError(error);
       }
+      return false;
+    })
+    .finally(() => {
+      selection.pending = null;
     });
 }
 
@@ -86,22 +94,30 @@ export async function saveIdentityDraft(params: {
   onSaved: () => void;
 }) {
   const { host, expectedClient, agentId, agents, agentIdentity, runtimeConfig } = params;
-  const draft = host.identityDraft;
-  // Set/replace only: agents.update has no explicit clear operation. Keep a
-  // blank edit visible and unsaved instead of pretending it removed a field.
-  const name = draft.name?.trim();
-  const emoji = draft.emoji?.trim();
-  const avatar = draft.avatar ?? undefined;
-  if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
-    return;
-  }
-  if (!name && !emoji && !avatar) {
-    resetIdentityDraft(host);
-    return;
-  }
   host.identitySaving = true;
   host.identityError = null;
   try {
+    const selection = avatarSelections.get(host);
+    if (selection?.pending) {
+      // Save owns the chosen image too, even while the browser is still decoding it.
+      const ready = await selection.pending;
+      if (!params.isCurrent() || avatarSelections.get(host) !== selection || !ready) {
+        return;
+      }
+    }
+    const draft = host.identityDraft;
+    // Set/replace only: agents.update has no explicit clear operation. Keep a
+    // blank edit visible and unsaved instead of pretending it removed a field.
+    const name = draft.name?.trim();
+    const emoji = draft.emoji?.trim();
+    const avatar = draft.avatar ?? undefined;
+    if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
+      return;
+    }
+    if (!name && !emoji && !avatar) {
+      resetIdentityDraft(host);
+      return;
+    }
     if (avatar) {
       assertUploadsEnabled(params.config);
     }

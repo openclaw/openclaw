@@ -56,7 +56,7 @@ In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent
 
 Lobsterdex unlocks stay browser-local; this setting does not sync your collection. On another browser where your chosen lobster is not unlocked, OpenClaw keeps the choice but shows Default until that lobster is unlocked or you select another source. There are no custom uploads, per-tab choices, or agent-specific overrides.
 
-This setting only changes your tab icon. To customize an agent's image, use **Agent settings → Overview → Identity**; editing that image changes the shared agent identity, not only your favicon.
+This setting only changes your tab icon. To customize an agent's image, use **Agent settings → Overview → Identity**; editing that image changes the shared agent identity, not only your favicon. **Save** waits for a selected image to finish processing before saving it with your name or emoji edits. If image processing fails during that save, those edits remain unsaved so you can correct the image and retry.
 
 The choice is saved to your authenticated profile on the connected Gateway and has a browser-local mirror. Without a writable profile it stays local to the browser. This setting does not change other people's tab icons.
 

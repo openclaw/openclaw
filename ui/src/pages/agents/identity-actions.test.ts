@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -126,6 +127,101 @@ describe("agent identity actions", () => {
     expect(state.identityError).toContain(message);
     expect(state.identityDraft.avatar).toBeNull();
   });
+
+  it.each(["decode first", "save first", "rejected", "target changed", "uploads disabled"])(
+    "honors the selected avatar during Save: %s",
+    async (order) => {
+      const decode = createDeferred<avatarImage.AvatarDataUrlResult>();
+      const update = createDeferred();
+      fileToAvatarDataUrlMock.mockReturnValueOnce(decode.promise);
+      const request = vi.fn(async (method: string) => {
+        if (method === "agents.update") {
+          await update.promise;
+          return {};
+        }
+        if (method === "config.get") {
+          return { config: {}, sourceConfig: {}, raw: "{}", hash: "hash", valid: true, issues: [] };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const runtimeConfig = createRuntimeConfigCapability({
+        snapshot: {
+          client,
+          phase: "connected",
+          sessionKey: "main",
+          hello: gatewayHelloForMethods(["config.set"]),
+        },
+        subscribe: () => () => undefined,
+      });
+      const state = host();
+      state.identityDraft.name = "New name";
+      const dataUrl = "data:image/png;base64,aA==";
+      const base = createApplicationConfigCapability({ resourceBasePath: "" });
+      const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+      let current = true;
+      selectIdentityAvatar(state, {} as File, config);
+      const saving = saveIdentityDraft({
+        ...saveOptions(state, client),
+        config,
+        isCurrent: () => current,
+        canDispatch: () => current,
+        agents: {
+          refreshList: vi.fn(async () => undefined),
+        } as unknown as ApplicationContext["agents"],
+        agentIdentity: {
+          invalidate: vi.fn(),
+          ensure: vi.fn(async () => undefined),
+        } as unknown as ApplicationContext["agentIdentity"],
+        runtimeConfig,
+      });
+      try {
+        if (order === "target changed") {
+          current = false;
+          resetIdentityDraft(state);
+        } else if (order === "uploads disabled") {
+          config.current.uploadsEnabled = false;
+        }
+        if (order === "decode first") {
+          decode.resolve({ ok: true, dataUrl });
+          await decode.promise;
+          update.resolve();
+        } else {
+          update.resolve();
+          await update.promise;
+          decode.resolve(
+            order === "rejected" ? { ok: false, reason: "unusable" } : { ok: true, dataUrl },
+          );
+        }
+        await saving;
+        if (order === "decode first" || order === "save first") {
+          expect(request).toHaveBeenCalledWith("agents.update", {
+            agentId: "main",
+            name: "New name",
+            avatar: dataUrl,
+          });
+          expect(state.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+          expect(state.identityError).toBeNull();
+        } else {
+          expect(request.mock.calls.some(([method]) => method === "agents.update")).toBe(false);
+          expect(state.identityDraft.name).toBe(order === "target changed" ? null : "New name");
+          expect(state.identityError).toBe(
+            order === "target changed"
+              ? null
+              : order === "uploads disabled"
+                ? uploadsDisabledMessage()
+                : "That image can't be used. Pick an image file up to 2 MB.",
+          );
+        }
+        expect(state.identitySaving).toBe(false);
+      } finally {
+        decode.resolve({ ok: true, dataUrl });
+        update.resolve();
+        await saving;
+        runtimeConfig.dispose();
+      }
+    },
+  );
 
   it("config.set flushes a pending config draft before agents.update and refreshes afterward", async () => {
     vi.useFakeTimers();
