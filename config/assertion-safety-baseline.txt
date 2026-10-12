@@ -1816,7 +1816,6 @@ src/config/io.session-store-owner.ts	2
 src/config/io.snapshot.ts	1
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
-src/config/io.write.ts	1
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.ts	3

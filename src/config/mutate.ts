@@ -347,7 +347,7 @@ export async function withConfigMutationExclusive<T>(
  * eligibility check; a split decision lets Doctor advertise an include write
  * that the writer then declines. Null means the write belongs to the root writer.
  */
-function resolveIncludeOwnedWriteCandidate(params: {
+export function resolveIncludeOwnedWriteCandidate(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;

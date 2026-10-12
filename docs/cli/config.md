@@ -471,7 +471,7 @@ Use `--replace-path <path>` when one object or array must become exactly the pro
 openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.discord.guilds["123"].channels'
 ```
 
-`--dry-run` runs schema and SecretRef resolvability checks without writing. Exec-backed SecretRefs are skipped by default during dry-run; add `--allow-exec` when you intentionally want dry-run to execute provider commands.
+`--dry-run` runs schema and SecretRef resolvability checks without writing. Schema-validated previews also check the final persisted root configuration against write-safety guards, including large size drops. Include-only changes use their own write route; previews do not create backups or rejected payloads. Exec-backed SecretRefs are skipped by default during dry-run; add `--allow-exec` when you intentionally want dry-run to execute provider commands.
 
 ## Dry run
 
@@ -511,7 +511,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, `write-safety`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
 
   </Accordion>
 </AccordionGroup>
@@ -533,7 +533,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict",
+      kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict" | "write-safety",
       message: string,
       ref?: string, // present for resolvability errors
     },
