@@ -9,6 +9,7 @@ import {
   parseGitHubLinkTarget,
 } from "./github-link-target.ts";
 import { installAssistantTranscriptRoleMarkdown } from "./markdown-assistant-transcript.ts";
+import { installMarkdownAudioTranscript } from "./markdown-audio-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
@@ -133,6 +134,7 @@ export function createMarkdownParser(): MarkdownItParser {
   });
   markdownParser.use(markdownItCjkFriendly);
   markdownParser.enable("strikethrough");
+  installMarkdownAudioTranscript(markdownParser);
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
