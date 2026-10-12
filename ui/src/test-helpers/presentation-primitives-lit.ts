@@ -1,4 +1,5 @@
 import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { brandIcons } from "../components/brand-icons.ts";
 import { renderCopyButton } from "../components/copy-button.ts";
 import { icons } from "../components/icons.ts";
@@ -21,6 +22,14 @@ import {
 } from "../components/provider-icon.ts";
 import * as settings from "../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
+import {
+  SettingsLoadingSkeleton,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+  SettingsSummary,
+} from "../components/solid/settings-ui.tsx";
+import { solidContent } from "../lit/solid-content.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
 
 const keyboardStyles = document.createElement("style");
@@ -43,6 +52,23 @@ function card(label: string, content: unknown, kind = "") {
     </div>
   </section>`;
 }
+function ServiceStatus() {
+  return createComponent(SettingsSection, {
+    title: "Service status",
+    carapace: true,
+    get children() {
+      return (["ok", "warn", "danger", "accent", "muted"] as const).map((kind) =>
+        createComponent(SettingsRow, {
+          title: kind,
+          carapace: true,
+          get control() {
+            return createComponent(SettingsStatus, { kind, label: kind, carapace: true });
+          },
+        }),
+      );
+    },
+  });
+}
 function settingsPage() {
   return settings.renderSettingsPage(
     [
@@ -51,10 +77,12 @@ function settingsPage() {
         subtitle: "Shared settings layout and controls.",
         actions: button("Save"),
       }),
-      settings.renderSettingsSummary([
-        { label: "Enabled", value: 3 },
-        { label: "Available", value: 12 },
-      ]),
+      solidContent(SettingsSummary, {
+        items: [
+          { label: "Enabled", value: 3 },
+          { label: "Available", value: 12 },
+        ],
+      }),
       settings.renderSettingsSection(
         {
           title: "General",
@@ -86,16 +114,7 @@ function settingsPage() {
           }),
         ],
       ),
-      settings.renderSettingsSection(
-        { title: "Service status", carapace: true },
-        (["ok", "warn", "danger", "accent", "muted"] as const).map((kind) =>
-          settings.renderSettingsRow({
-            title: kind,
-            carapace: true,
-            control: settings.renderSettingsStatus({ kind, label: kind, carapace: true }),
-          }),
-        ),
-      ),
+      solidContent(ServiceStatus, {}),
       settings.renderSettingsSection(
         { title: "Danger zone", danger: true },
         settings.renderSettingsRow({
@@ -105,7 +124,7 @@ function settingsPage() {
         }),
       ),
       settings.renderSettingsEmpty("No additional settings"),
-      settings.renderSettingsLoadingSkeleton({
+      solidContent(SettingsLoadingSkeleton, {
         label: "Loading settings",
         rows: 2,
         carapace: true,

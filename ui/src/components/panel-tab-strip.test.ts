@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { html, nothing, render } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
-  panelTabStripStyles,
   renderPanelTabStrip,
   type PanelTabStripTab,
   type PanelTabStripParams,
@@ -171,7 +172,8 @@ afterEach(async () => {
 
 describe("renderPanelTabStrip", () => {
   it("keeps the new-tab control from shrinking when the strip overflows", () => {
-    expect(panelTabStripStyles.cssText).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
+    const styles = readFileSync(path.resolve(import.meta.dirname, "panel-tab-strip.css"), "utf8");
+    expect(styles).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
   });
 
   it("renders an unslotted new button without an empty tab group", async () => {
