@@ -95,3 +95,57 @@ it("clears a saved directory when the agent workspace choice closes the popover"
   await completed;
   expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: "", worktree: false });
 });
+
+it("retires a pending save without letting its late completion release a reopened dialog", async () => {
+  const owner = new AbortController();
+  let resolveSave!: (value: string | null) => void;
+  const save = new Promise<string | null>((resolve) => {
+    resolveSave = resolve;
+  });
+  const options = {
+    defaults: { cwd: "/workspace/a", worktree: false },
+    listDirectory: async () => ({ path: "/workspace", home: "/home/test", entries: [] }),
+    inspectRepository: async () => "not_git" as const,
+  };
+  const submit = fixture.mockRequest(async () => save);
+  const retired = fixture.track(
+    showSessionGroupDefaultsDialog({ ...options, group: "Earlier", signal: owner.signal, submit }),
+  );
+  try {
+    const { modal } = await getRenderedModalDialog(document.body);
+    await waitForSolid(() =>
+      expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
+    );
+    modal
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(submit).toHaveBeenCalledOnce();
+    owner.abort();
+    await retired;
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    const freshSubmit = vi.fn(async () => null);
+    const fresh = fixture.track(
+      showSessionGroupDefaultsDialog({ ...options, group: "Current", submit: freshSubmit }),
+    );
+    const { modal: current } = await getRenderedModalDialog(document.body);
+    resolveSave(null);
+    await save;
+    await waitForSolid(() =>
+      expect(current.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
+        false,
+      ),
+    );
+    void fixture.track(
+      showSessionGroupDefaultsDialog({ ...options, group: "Unexpected", submit: freshSubmit }),
+    );
+    expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
+    expect(current.getAttribute("label")).toContain("Current");
+    current
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await fresh;
+    expect(freshSubmit).toHaveBeenCalledExactlyOnceWith(options.defaults);
+  } finally {
+    resolveSave(null);
+  }
+});

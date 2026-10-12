@@ -485,10 +485,18 @@ export class SessionOrganizerController {
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
     const dialog = await this.loadDialog(import("./input-dialog.ts"));
+    if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
     // requireChange holds the submit closed on the name the group already has,
     // so the only rename that reaches the Gateway is one that changes something.
     const next = await dialog?.showInputDialog({
+      signal: scope.signal,
       title: t("sessionsView.renameGroupTitle", { group }),
       label: t("sessionsView.groupNameLabel"),
       defaultValue: group,
@@ -498,7 +506,8 @@ export class SessionOrganizerController {
     if (!next) {
       return;
     }
-    await this.runOperation(async (operations, scope) => {
+    const operations = await this.loadOperations(scope);
+    if (operations) {
       if (!(await operations.renameSessionGroup(this.host, group, next, scope))) {
         return;
       }
@@ -512,7 +521,7 @@ export class SessionOrganizerController {
         this.saveCollapsedSessionSections(collapsed);
       }
       this.host.requestUpdate();
-    });
+    }
   }
 
   deleteSessionGroupFromMenu(group: string): Promise<void> {
@@ -528,8 +537,12 @@ export class SessionOrganizerController {
   }
 
   async editSessionGroupDefaults(group: string): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
     const dialog = await this.loadDialog(import("./session-group-defaults-dialog.ts"));
-    if (!dialog) {
+    if (!dialog || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     const defaults = this.host.sessionGroupDefaults(group);
@@ -537,11 +550,24 @@ export class SessionOrganizerController {
       await dialog.showSessionGroupDefaultsDialog({
         group,
         defaults,
-        listDirectory: (path) => this.host.listSessionGroupFolders(path),
-        inspectRepository: (path) => this.host.inspectSessionGroupRepository(path),
+        signal: scope.signal,
+        listDirectory: (path) => {
+          if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
+            return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
+          }
+          return this.host.listSessionGroupFolders(path);
+        },
+        inspectRepository: (path) => {
+          if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
+            return Promise.reject(new Error(t("sessionsView.groupDefaultsStale")));
+          }
+          return this.host.inspectSessionGroupRepository(path);
+        },
         submit: async (nextDefaults) => {
-          const scope = this.host.sessionData.beginSessionMutation();
-          if (!scope || !this.host.sessionGroupDefaults(group)) {
+          if (
+            !this.host.sessionData.isSessionMutationScopeCurrent(scope) ||
+            !this.host.sessionGroupDefaults(group)
+          ) {
             return t("sessionsView.groupDefaultsStale");
           }
           const operations = await this.loadOperations(scope);
