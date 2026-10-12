@@ -126,7 +126,10 @@ suite.define(() => {
       });
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage
-        .getByText("Received the subagent update. The validation command needs attention.")
+        .getByRole("paragraph")
+        .filter({
+          hasText: "Received the subagent update. The validation command needs attention.",
+        })
         .waitFor();
       const group = historyPage.locator(".chat-activity-group__summary").first();
       expect(await group.textContent()).toContain("1 failed");
