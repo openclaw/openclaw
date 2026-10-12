@@ -143,6 +143,13 @@ const localSkillResourceReader: SkillResourceSourceReader = {
 export const SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS = 15_000;
 
 /**
+ * Bound on in-flight telemetry walks per preparation: discovery and delivery
+ * acquisitions run concurrently, but a slow or remote reader never accumulates
+ * more outstanding tree reads behind abandoned observations than this.
+ */
+export const SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY = 8;
+
+/**
  * Stamps the retained bundle identity onto ordinary local entries at the
  * preparation boundary, and arms delivery-time identity acquisition for the
  * entries a live tree serves. Discovery entries (the skills_read and command
@@ -264,6 +271,20 @@ export async function stampLocalSkillBundleIdentities(params: {
     }
     return caches;
   };
+  const mapWithBoundedWalks = async <T, R>(
+    items: readonly T[],
+    map: (item: T) => Promise<R>,
+  ): Promise<R[]> => {
+    const results: R[] = [];
+    for (let offset = 0; offset < items.length; offset += SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY) {
+      results.push(
+        ...(await Promise.all(
+          items.slice(offset, offset + SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY).map(map),
+        )),
+      );
+    }
+    return results;
+  };
   const resolveDiscoveredIdentity = async (
     skill: Skill,
   ): Promise<AcquiredBundleIdentity | undefined> => {
@@ -333,16 +354,15 @@ export async function stampLocalSkillBundleIdentities(params: {
   // every other entry acquires at delivery time.
   const isPinnedRevision = (skill: Skill): boolean => isLibraryPin(skill);
   const stampSkills = async (skills: readonly Skill[]): Promise<Skill[]> => {
-    // Discovery walks run concurrently under the preparation's shared budget:
-    // a slow remote reader delays traced turn startup at most once, not once
-    // per discovered bundle, and the reader+directory caches still coalesce
-    // same-bundle siblings into a single walk.
-    const identities = await Promise.all(
-      skills.map((skill) =>
-        skill.bundleFingerprint
-          ? Promise.resolve(skill.bundleFingerprint)
-          : resolveDiscoveredIdentity(skill).then((acquired) => acquired?.revision),
-      ),
+    // Discovery walks run concurrently and bounded under the preparation's
+    // shared budget: a slow remote reader delays traced turn startup at most
+    // once, never once per discovered bundle, never accumulates more than the
+    // walk bound in outstanding reads, and the reader+directory caches still
+    // coalesce same-bundle siblings into a single walk.
+    const identities = await mapWithBoundedWalks(skills, (skill) =>
+      skill.bundleFingerprint
+        ? Promise.resolve(skill.bundleFingerprint)
+        : resolveDiscoveredIdentity(skill).then((acquired) => acquired?.revision),
     );
     return skills.map((skill, index) => {
       const identity = identities[index];
@@ -372,28 +392,26 @@ export async function stampLocalSkillBundleIdentities(params: {
       ? stampedResolved
       : await stampSkills(discoverySkills)
     : undefined;
-  const stampedLibrary = await Promise.all(
-    params.libraryEntries.map(async (entry) => {
-      const identity =
-        entry.skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(entry.skill))?.revision;
-      if (identity === undefined || entry.skill.bundleFingerprint === identity) {
-        // Same retained-delivery rule as the snapshot stamps above: an entry
-        // provably serving its producer-stamped readContent trusts that stamp
-        // at delivery; only a stamp discovered here arms acquisition.
-        const servesRetainedStamp =
-          Boolean(entry.skill.bundleFingerprint) && typeof entry.skill.readContent === "string";
-        if (!servesRetainedStamp && !isPinnedRevision(entry.skill)) {
-          armDeliveredIdentityAcquirer(entry.skill);
-        }
-        return entry;
+  const stampedLibrary = await mapWithBoundedWalks(params.libraryEntries, async (entry) => {
+    const identity =
+      entry.skill.bundleFingerprint ?? (await resolveDiscoveredIdentity(entry.skill))?.revision;
+    if (identity === undefined || entry.skill.bundleFingerprint === identity) {
+      // Same retained-delivery rule as the snapshot stamps above: an entry
+      // provably serving its producer-stamped readContent trusts that stamp
+      // at delivery; only a stamp discovered here arms acquisition.
+      const servesRetainedStamp =
+        Boolean(entry.skill.bundleFingerprint) && typeof entry.skill.readContent === "string";
+      if (!servesRetainedStamp && !isPinnedRevision(entry.skill)) {
+        armDeliveredIdentityAcquirer(entry.skill);
       }
-      const stampedSkill = { ...entry.skill, bundleFingerprint: identity };
-      if (!isPinnedRevision(stampedSkill)) {
-        armDeliveredIdentityAcquirer(stampedSkill);
-      }
-      return { ...entry, skill: stampedSkill };
-    }),
-  );
+      return entry;
+    }
+    const stampedSkill = { ...entry.skill, bundleFingerprint: identity };
+    if (!isPinnedRevision(stampedSkill)) {
+      armDeliveredIdentityAcquirer(stampedSkill);
+    }
+    return { ...entry, skill: stampedSkill };
+  });
   const snapshot = params.snapshot
     ? stampedResolved !== resolvedSkills || stampedDiscovery !== discoverySkills
       ? {

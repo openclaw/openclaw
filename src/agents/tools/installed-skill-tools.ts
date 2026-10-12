@@ -109,18 +109,30 @@ export function createInstalledSkillTools(
           const name = readToolStringParam(params, "name", { required: true });
           const instructions = await readInstalledSkill(skills, name, signal);
           const markers = delivery?.skillInstructionDeliveryMarkers;
+          // The receipt cohort is the epoch this invocation's serving read
+          // started in: a clear during that read rejects acquisition, so this
+          // invocation never arms a walk a fresh generation could join.
+          const invocationCohort = markers?.generation();
           // Telemetry acquisition never holds a completed read: it is bound to
           // this invocation's abort signal — an abort omits the receipt — and
           // the serving read's cancellation and currency checks are revalidated
           // after it, mirroring readInstalledSkill's own post-await gate.
           let fingerprint: string | undefined;
-          try {
-            fingerprint = await racePromiseWithAbortSignal(
-              resolveDeliveredFingerprint(name, instructions.content, markers?.generation()),
-              signal,
-            );
-          } catch {
+          if (
+            markers &&
+            invocationCohort !== undefined &&
+            markers.generation() !== invocationCohort
+          ) {
             fingerprint = undefined;
+          } else {
+            try {
+              fingerprint = await racePromiseWithAbortSignal(
+                resolveDeliveredFingerprint(name, instructions.content, invocationCohort),
+                signal,
+              );
+            } catch {
+              fingerprint = undefined;
+            }
           }
           signal?.throwIfAborted();
           skills.find((entry) => entry.name === name)?.assertCurrent?.();

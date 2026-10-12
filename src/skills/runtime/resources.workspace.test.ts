@@ -24,6 +24,7 @@ import {
   resolveExplicitSkillResource,
   stampLocalSkillBundleIdentities,
   SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
+  SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY,
 } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -716,6 +717,96 @@ it("coalesces concurrent same-cohort acquisitions into a single walk", async () 
     expect(a).toBeTypeOf("string");
     expect(a).toBe(b);
     expect(a).toBe(entry.bundleFingerprint);
+  } finally {
+    f.release();
+  }
+});
+
+it("bounds outstanding discovery walks per preparation", async () => {
+  const f = await fixture();
+  try {
+    // Route the fixture's own guide bundle through the gated owning reader
+    // as well, so every discovered walk in this test is observable.
+    for (const skill of f.snapshot.resolvedSkills ?? []) {
+      recordSkillFileHost(skill, "workspace");
+    }
+    // Nine more workspace-hosted bundles beside the fixture's guide.
+    const extraSkills: Skill[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      const name = `bulk${i}`;
+      const hostDir = path.join(f.host, "skills", name);
+      await fs.mkdir(hostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hostDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name}\n---\nUse ${name}.\n`,
+      );
+      const gatewayDir = path.join(f.gateway, "skills", name);
+      extraSkills.push(
+        recordSkillFileHost(
+          createCanonicalFixtureSkill({
+            name,
+            description: name,
+            filePath: path.join(gatewayDir, "SKILL.md"),
+            baseDir: gatewayDir,
+            source: "openclaw-workspace",
+          }),
+          "workspace",
+        ),
+      );
+    }
+    const snapshot = {
+      ...f.snapshot,
+      skills: [...f.snapshot.skills, ...extraSkills.map((skill) => ({ name: skill.name }))],
+      resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
+    };
+    const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
+    const gates: Array<() => void> = [];
+    f.skillResources.readSkillFiles.mockImplementation(
+      async (skill: Skill, options: { allowMissingRoot: boolean }) => {
+        let release!: () => void;
+        gates.push(() => release());
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return orig(skill, options);
+      },
+    );
+    const pending = stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const total = snapshot.resolvedSkills!.length;
+    // Exactly one bound of walks is in flight; the next batch starts only
+    // when this one settles.
+    for (let i = 0; i < 100 && gates.length < SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(gates.length).toBe(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
+    for (let i = 0; i < 10; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(gates.length).toBe(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
+    for (const release of gates.splice(0, gates.length)) {
+      release();
+    }
+    // The next batch registers exactly the walks beyond the bound, and only
+    // now that the first bound has settled.
+    const remaining = total - SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY;
+    for (let i = 0; i < 100 && gates.length < remaining; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(gates.length).toBe(remaining);
+    for (const release of gates.splice(0, gates.length)) {
+      release();
+    }
+    const stamped = await pending;
+    for (const skill of snapshot.resolvedSkills ?? []) {
+      const entry = stamped.snapshot?.resolvedSkills?.find(
+        (candidate) => candidate.name === skill.name,
+      );
+      expect(entry?.bundleFingerprint).toBeTypeOf("string");
+    }
   } finally {
     f.release();
   }

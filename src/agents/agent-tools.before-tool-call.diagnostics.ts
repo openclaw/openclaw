@@ -338,6 +338,8 @@ function findResolvedSkillUsageMatch(params: {
   skillName: string;
   skillSource: SkillTelemetrySource;
   snapshot?: SkillSnapshot;
+  /** Never fall back to a same-name singleton whose source differs. */
+  exactSource?: boolean;
 }): SkillUsageMatch | undefined {
   const skillName = params.skillName.trim();
   const candidates = (params.snapshot?.resolvedSkills ?? []).filter(
@@ -345,7 +347,7 @@ function findResolvedSkillUsageMatch(params: {
   );
   const skill =
     candidates.find((candidate) => resolveSkillTelemetrySource(candidate) === params.skillSource) ??
-    (candidates.length === 1 ? candidates[0] : undefined);
+    (params.exactSource ? undefined : candidates.length === 1 ? candidates[0] : undefined);
   return skill ? resolvedSkillUsageMatch({ activation: params.activation, skill }) : undefined;
 }
 
@@ -419,6 +421,9 @@ export function findSkillUsageMatch(params: {
         skillName: command.skillName,
         skillSource,
         snapshot: params.ctx?.skillsSnapshot,
+        // The dispatch identity is exact: a same-name singleton from another
+        // source family never lends its file or stamp to the command.
+        exactSource: true,
       });
       const commandFile = canonicalSkillFile(command.skillFile);
       const skillFile = commandFile ?? snapshotMatch?.skillFile;

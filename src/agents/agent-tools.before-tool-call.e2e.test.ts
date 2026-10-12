@@ -2348,6 +2348,165 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("rejects a read's acquisition when the epoch clears during its instruction I/O", async () => {
+    const delivery = createSkillDeliveryState();
+    const acquirer = vi.fn(async () => "fp-should-not-arm");
+    const execute = vi.fn(async () => {
+      // The compaction epoch clears while this delivery's instruction I/O is in flight.
+      delivery.cache.clear();
+      delivery.markers.clear();
+      return asSkillUsageTextResult(pondInstructions);
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      wrapReadToolWithSkillContent(
+        asAgentTool({ name: "read", execute }),
+        [
+          {
+            filePath: pondLocator,
+            acquireDeliveredFingerprint: acquirer,
+          },
+        ],
+        {
+          instructionDeliveryCache: delivery.cache,
+          instructionDeliveryMarkers: delivery.markers,
+        },
+      ),
+      createSkillFingerprintContext({ delivery }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "cleared-mid-io-read",
+        { path: pondLocator },
+        undefined,
+        undefined,
+      );
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      // The cleared delivery never arms its acquisition: no walk, no marker.
+      expect(acquirer).not.toHaveBeenCalled();
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("rejects a skills_read receipt when the epoch clears during its serving read", async () => {
+    const delivery = createSkillDeliveryState();
+    const acquirer = vi.fn(async () => "fp-should-not-arm");
+    const skills = [
+      {
+        name: "pond",
+        description: "Pond skill",
+        location: pondLocator,
+        source: { filePath: pondLocator },
+        promptListed: true,
+        acquireDeliveredFingerprint: acquirer,
+        reader: async () => {
+          // The epoch clears while the serving read is in flight.
+          delivery.markers.clear();
+          return pondInstructions;
+        },
+      },
+    ];
+    const tools = createInstalledSkillTools(skills, {
+      skillInstructionDeliveryMarkers: delivery.markers,
+    });
+    const skillsReadTool = tools.find((tool) => tool.name === "skills_read")!;
+    const tool = wrapToolWithBeforeToolCallHook(
+      skillsReadTool,
+      createSkillFingerprintContext({
+        delivery,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "pond" }],
+          resolvedSkills: [
+            {
+              ...createCanonicalFixtureSkill({
+                name: "pond",
+                description: "Pond skill",
+                filePath: pondLocator,
+                baseDir: pondBaseDir,
+                source: "workspace",
+              }),
+            },
+          ],
+        },
+      }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      const result = await tool.execute(
+        "cleared-mid-read-skills",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      // The cleared serving read never arms its acquisition: no walk, no receipt.
+      expect(acquirer).not.toHaveBeenCalled();
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("omits a command fingerprint whose source is not the dispatched command's own", async () => {
+    const delivery = createSkillDeliveryState();
+    const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
+    const ctx = createSkillFingerprintContext({ delivery });
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "message", execute: commandExecute }),
+      {
+        ...ctx,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "pond" }],
+          resolvedSkills: [
+            {
+              ...createCanonicalFixtureSkill({
+                name: "pond",
+                description: "Pond skill",
+                filePath: pondLocator,
+                baseDir: pondBaseDir,
+                source: "openclaw-workspace",
+              }),
+              bundleFingerprint: "fp-workspace-tree",
+            },
+          ],
+        },
+        skillCommand: {
+          commandName: "pond_command",
+          skillFile: pondLocator,
+          skillName: "pond",
+          skillSource: "bundled",
+          toolName: "message",
+        },
+      },
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await tool.execute(
+        "command-source-mismatch",
+        { commandName: "pond_command" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        skillName: "pond",
+        activation: "command",
+      });
+      // Same file, different source family: the dispatch identity is not the
+      // stamped entry's, so the stamp is never borrowed.
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
   it("attributes the installed skills_read route from the receipt its serving read captures", async () => {
     const delivery = createSkillDeliveryState();
     // Real receipt shapes: a live-tree entry acquires at delivery against the

@@ -1189,6 +1189,11 @@ export function wrapReadToolWithSkillContent(
       }
       let settleDelivery = (_delivered: boolean): void => undefined;
       let delivery: Promise<boolean> | undefined;
+      // The delivery cohort is the epoch this delivery started in: an epoch
+      // clear during its instruction I/O rejects acquisition and settlement
+      // together, so a cleared delivery never arms a walk a fresh
+      // generation could join.
+      const deliveryCohort = instructionDeliveryMarkers?.generation();
       if (instructionDeliveryCache) {
         delivery = new Promise<boolean>((resolve) => {
           settleDelivery = resolve;
@@ -1260,21 +1265,28 @@ export function wrapReadToolWithSkillContent(
         // telemetry-only: a failure or unprovable association omits and never
         // fails the delivery.
         const acquirer = deliveredIdentityAcquirers.get(instructionPath);
+        // An epoch clear during this delivery's instruction I/O rejects
+        // acquisition and marker settlement together: a fresh generation owns
+        // the path now, so this invocation never arms a walk — or settles a
+        // receipt — the next generation could observe.
+        const cleared =
+          deliveryCohort !== undefined &&
+          instructionDeliveryMarkers?.generation() !== deliveryCohort;
         let fingerprint: string | undefined;
-        if (acquirer) {
+        if (acquirer && !cleared) {
           try {
             // Telemetry acquisition never holds a completed read: it is
             // bound to this invocation's abort signal, and an aborted or
             // already-aborted signal omits the identity instead of stalling
             // the returned result or settling a marker for a canceled read.
             fingerprint = await racePromiseWithAbortSignal(
-              acquirer(getReadResultContent(result), instructionDeliveryMarkers?.generation()),
+              acquirer(getReadResultContent(result), deliveryCohort),
               signal,
             );
           } catch {
             fingerprint = undefined;
           }
-        } else {
+        } else if (!cleared) {
           fingerprint = instructionFingerprints.get(instructionPath);
         }
         // Cancellation recheck after acquisition: an aborted invocation never
