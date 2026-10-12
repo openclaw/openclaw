@@ -22,8 +22,7 @@ import {
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { readQueryableWikiPages } from "./query-pages.js";
-import { resolveQueryableWikiPageByLookup } from "./query.js";
+import { readMemoryWikiPageByLookup } from "./query.js";
 import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -286,10 +285,12 @@ function buildUpdatedFrontmatter(params: {
 async function applyUpdateMetadataMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: UpdateMetadataMemoryWikiMutation;
+  signal?: AbortSignal;
 }): Promise<{ changed: boolean; pagePath: string; pageId?: string }> {
-  const page = resolveQueryableWikiPageByLookup(
-    await readQueryableWikiPages(params.config.vault.path),
+  const page = await readMemoryWikiPageByLookup(
+    params.config.vault.path,
     params.mutation.lookup,
+    params.signal ? { signal: params.signal } : {},
   );
   if (!page) {
     throw new Error(`Wiki page not found: ${params.mutation.lookup}`);
@@ -331,6 +332,7 @@ export async function applyMemoryWikiMutation(params: {
         : await applyUpdateMetadataMutation({
             config: params.config,
             mutation: params.mutation,
+            ...(params.signal ? { signal: params.signal } : {}),
           });
     params.signal?.throwIfAborted();
     const compile = await compileMemoryWikiVault(

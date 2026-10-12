@@ -17,6 +17,7 @@ import {
   usesNativeMemoryProvider,
   withActiveMemoryProvider,
 } from "./query-memory-provider.js";
+import { normalizeLookupKey } from "./query-pages.js";
 
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
@@ -47,11 +48,6 @@ export type SharedMemoryPage = {
   truncated?: boolean;
   citations?: MemoryCitation[];
 } & SharedMemoryResultSource;
-
-export function normalizeLookupKey(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
-  return normalized.endsWith(".md") ? normalized : normalized.replace(/\/+$/, "");
-}
 
 function buildLookupCandidates(lookup: string): string[] {
   const normalized = normalizeLookupKey(lookup);

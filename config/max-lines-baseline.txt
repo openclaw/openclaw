@@ -103,7 +103,6 @@ extensions/memory-wiki/src/chatgpt-import.ts
 extensions/memory-wiki/src/cli.ts
 extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
-extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
 extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts

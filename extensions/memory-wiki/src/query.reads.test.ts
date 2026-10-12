@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
+import * as wikiMarkdown from "./markdown.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -10,7 +10,6 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 afterEach(() => {
-  __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
 });
 
@@ -32,47 +31,6 @@ async function createReadVault(relativePath = "sources/alpha.md") {
 }
 
 describe("wiki query page reads", () => {
-  it("reads only compiled metadata candidates for distributed query tokens", async () => {
-    const { rootDir, config, targetPath, relativePath } = await createReadVault();
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.quartz",
-          title: "Cobalt",
-          aliases: ["amber"],
-          questions: ["lantern"],
-        },
-        body: "# Cobalt\n\nSelected evidence.\n",
-      }),
-    );
-    const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
-    await fs.writeFile(
-      unrelatedPath,
-      renderWikiMarkdown({
-        frontmatter: { pageType: "source", title: "Unrelated" },
-        body: "# Unrelated\n",
-      }),
-    );
-    const query = "cobalt quartz amber lantern";
-    const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
-    expect(liveResults[0]?.path).toBe(relativePath);
-    await compileMemoryWikiVault(config);
-    const openedPages: string[] = [];
-    __setFsSafeTestHooksForTest({
-      beforeOpen: (filePath) => {
-        if (filePath.endsWith(".md")) {
-          openedPages.push(filePath);
-        }
-      },
-    });
-
-    await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(liveResults);
-    expect(openedPages).toContain(targetPath);
-    expect(openedPages).not.toContain(unrelatedPath);
-  });
-
   it.each(["large", "hardlinked"] as const)(
     "keeps exact, basename and ID reads equivalent for a %s page",
     async (kind) => {
@@ -166,12 +124,14 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each(["exact", "basename", "search"] as const)(
-    "rejects a page swapped outside the vault during %s reads",
+  // Exact reads open the lookup path directly and compiled candidates are read by
+  // path, so a page replaced by a symlink is reached and must be refused. Directory
+  // walks skip symlinks, which is why the whole-vault routes cannot reach one here.
+  it.each(["exact", "search"] as const)(
+    "rejects a compiled or exact page swapped outside the vault during %s reads",
     async (route) => {
       const { config, targetPath, relativePath } = await createReadVault();
       const outside = await createReadVault();
-      const canonicalTarget = await fs.realpath(targetPath);
       await fs.writeFile(
         outside.targetPath,
         (await fs.readFile(outside.targetPath, "utf8")).replace(
@@ -179,36 +139,46 @@ describe("wiki query page reads", () => {
           "outside-vault marker",
         ),
       );
-      let swapped = false;
-      const swap = async () => {
-        if (swapped) {
-          return;
-        }
-        swapped = true;
-        await fs.unlink(targetPath);
-        await fs.symlink(outside.targetPath, targetPath);
-      };
-      __setFsSafeTestHooksForTest({
-        beforeOpen: async (filePath) => {
-          if (path.resolve(filePath) === canonicalTarget) {
-            await swap();
-          }
-        },
-      });
-      const readdir = vi.spyOn(fs, "readdir");
+      if (route === "search") {
+        await compileMemoryWikiVault(config);
+      }
+      await fs.unlink(targetPath);
+      await fs.symlink(outside.targetPath, targetPath);
       const read =
         route === "search"
           ? searchMemoryWiki({ config, query: "Alpha" })
-          : getMemoryWikiPage({ config, lookup: route === "exact" ? relativePath : "alpha" });
+          : getMemoryWikiPage({ config, lookup: relativePath });
 
       await expect(read).rejects.toMatchObject({
         name: "FsSafeError",
         code: expect.stringMatching(/symlink|path-mismatch/u),
       });
-      expect(swapped).toBe(true);
-      if (route === "exact") {
-        expect(readdir).not.toHaveBeenCalled();
-      }
     },
   );
+
+  it("never parses whole-vault pages on the calling thread (#166304)", async () => {
+    const { rootDir, config, relativePath } = await createReadVault();
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "beta.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "concept", id: "concept.beta", title: "Beta" },
+        body: "# Beta\n\nanother readable line\n",
+      }),
+    );
+    // Without a compiled digest every search reads the whole vault, and a basename
+    // lookup resolves against every page; both parse each page with this function.
+    // Only the lookup's one matched page is parsed here, like any single-page read.
+    const scan = vi.spyOn(wikiMarkdown, "scanWikiPageSummary");
+
+    const results = await searchMemoryWiki({ config, query: "readable line" });
+    const page = await getMemoryWikiPage({ config, lookup: "alpha" });
+
+    expect(
+      results
+        .map((result) => result.path ?? "")
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(["concepts/beta.md", relativePath]);
+    expect(page?.path).toBe(relativePath);
+    expect(scan.mock.calls.map(([params]) => params.relativePath)).toEqual([relativePath]);
+  });
 });

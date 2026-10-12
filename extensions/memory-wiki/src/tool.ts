@@ -15,7 +15,8 @@ import {
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { WIKI_SEARCH_MODES } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
