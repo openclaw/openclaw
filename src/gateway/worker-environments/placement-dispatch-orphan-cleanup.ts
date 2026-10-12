@@ -29,6 +29,8 @@ export async function cleanupPendingWorkspaceResultOrphans(
   }
   const { placements } = deps;
   const { completedRoots, rootsBySession } = pass;
+  // A sweep is incomplete until every admitted placement has been resolved and cleaned.
+  let complete = true;
   // Each sweep admits the current placements, but a placement's workspace root is resolved
   // once per pass; a failed resolution stays uncached and is retried on the next sweep.
   const workspaceSessions = new Map<string, string[]>();
@@ -41,6 +43,9 @@ export async function cleanupPendingWorkspaceResultOrphans(
         rootsBySession.set(placement.sessionId, root);
       } catch {
         // Cleanup refs are independently retryable on the next sweep or after the next restart.
+        // A resolution failure is an incomplete sweep: retain the pending pass so the caller
+        // does not clear it, and the unresolved session is retried on the next sweep.
+        complete = false;
         continue;
       }
     }
@@ -51,7 +56,6 @@ export async function cleanupPendingWorkspaceResultOrphans(
     sessionIds.push(placement.sessionId);
     workspaceSessions.set(root, sessionIds);
   }
-  let complete = true;
   // The existing minute sweep owns continuation; orphan refs carry no live authority.
   // Keep serial session admission and bound cold-start work independently of history size.
   let remaining = 8;
