@@ -38,7 +38,7 @@ export function serializeFileLogRecord(
 ): string {
   const ancestors: object[] = [];
   // Materialize native values once so the display message cannot invoke toJSON again.
-  const materialized = JSON.parse(
+  const materialized: unknown = JSON.parse(
     JSON.stringify(record, function (key, value: unknown) {
       while (ancestors.length > 0 && ancestors.at(-1) !== this) {
         ancestors.pop();
@@ -54,7 +54,10 @@ export function serializeFileLogRecord(
       }
       return value;
     }),
-  ) as Record<string, unknown>;
+  );
+  if (!isRecord(materialized)) {
+    throw new TypeError("File log records must serialize to objects");
+  }
   const text: string[] = [];
   for (const { key, json, primitiveText } of parts) {
     const part = primitiveText ?? stringifyFileLogMessagePart(materialized[key], json);

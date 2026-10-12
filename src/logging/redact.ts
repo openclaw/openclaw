@@ -1136,13 +1136,13 @@ export function redactSensitiveLines(
         } catch {
           return line;
         }
-        if (record === null || typeof record !== "object" || Array.isArray(record)) {
+        if (record === null || typeof record !== "object" || !isPlainRedactableObject(record)) {
           return line;
         }
         return JSON.stringify(
-          redactLogRecordForTransport(record as Record<string, unknown>, {
+          redactLogRecordForTransport(record, {
             redaction: resolved,
-            message: getFileLogRedactionMessage(record as Record<string, unknown>),
+            message: getFileLogRedactionMessage(record),
           }),
         );
       })
