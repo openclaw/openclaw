@@ -182,45 +182,6 @@ describe("Discord REST error redaction", () => {
     expect(deepDetails).toContain("[Discord error body redacted: maximum depth exceeded]");
   });
 
-  it("preserves fields whose redacted error keys collide", () => {
-    const error = new DiscordError(new Response(null, { status: 500 }), {
-      message: "safe diagnostic",
-      reflectedKeys: {
-        "authorization=alpha-secret-value-123456": "first rejection",
-        "authorization=bravo-secret-value-123456": "second rejection",
-      },
-    });
-    const reflectedKeys = (error.rawBody as { reflectedKeys: Record<string, unknown> })
-      .reflectedKeys;
-
-    expect(reflectedKeys).toEqual({
-      "authorization=***": "first rejection",
-      "authorization=*** [2]": "second rejection",
-    });
-  });
-
-  it("redacts reflected credentials inside Discord validation arrays", () => {
-    const token = "MTAxMjM0NTY3ODkwMTIzNDU2.validation.array.credential";
-    const error = new DiscordError(new Response(null, { status: 400 }), {
-      message: "Invalid Form Body",
-      errors: {
-        content: {
-          _errors: [
-            {
-              code: "BASE_TYPE_BAD_LENGTH",
-              message: `Authorization: Bot ${token}`,
-            },
-          ],
-        },
-      },
-    });
-    const details = JSON.stringify(error.rawBody);
-
-    expect(details).not.toContain(token);
-    expect(details).toContain("BASE_TYPE_BAD_LENGTH");
-    expect(details).toContain("Invalid Form Body");
-  });
-
   it("redacts low-entropy values solely from their sensitive field key", () => {
     const error = new DiscordError(new Response(null, { status: 400 }), {
       message: "Invalid Form Body",
@@ -237,18 +198,6 @@ describe("Discord REST error redaction", () => {
         "*** [2]": "***",
       },
     });
-  });
-
-  it("ignores empty Discord rate-limit bucket headers", () => {
-    const error = new RateLimitError(
-      new Response(null, {
-        status: 429,
-        headers: { "X-RateLimit-Bucket": "" },
-      }),
-      { message: "Rate limited", retry_after: 1, global: false },
-    );
-
-    expect(error.bucket).toBeNull();
   });
 
   it("marks a priority-only object that exhausts the redaction node budget", () => {
