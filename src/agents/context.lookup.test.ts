@@ -267,7 +267,7 @@ describe("context cache lifecycle", () => {
       queueMicrotask(() => {
         cancelled = true;
       });
-      return { config: state.config, modelCatalog: state.catalog };
+      return { config: state.config, modelCatalog: state.catalog, isCurrent: () => true };
     });
 
     await context.prewarmContextWindowCacheAfterReady({
