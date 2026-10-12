@@ -264,7 +264,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved PreparedAgentRunStart contract.
       // +2: readRuntimeConfig and captureRuntimeConfigAsyncReader on runtime-config-snapshot.
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
-// +1: approved lexical database-engine admission scope for workboard boot/migrations.
+      // +1: approved lexical database-engine admission scope for workboard boot/migrations.
       3739,
       env,
     ),
@@ -296,7 +296,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: the same transcript read replacement pairs.
       // +2: the same prepared runtime reader and asynchronous config preparation functions.
       // +5: shared database-engine host and worker operations.
-// +1: the same lexical database-engine admission scope.
+      // +1: the same lexical database-engine admission scope.
       2192,
       env,
     ),
