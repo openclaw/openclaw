@@ -252,7 +252,7 @@ export type NativeDeviceSettingsCapability = {
   ): void;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
-  resolvePermission?(request: NodePermissionRequest): Promise<void>;
+  resolvePermission?: (this: void, request: NodePermissionRequest) => Promise<void>;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
   setupChromeExtension(
