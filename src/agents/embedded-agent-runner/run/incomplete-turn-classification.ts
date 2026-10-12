@@ -102,6 +102,26 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
+/** Delivery content is a non-empty value; bare flags and empty containers are not. */
+function hasDeliveryContent(value: unknown): boolean {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as object).length > 0;
+  }
+  return true;
+}
+
 /** Excludes only plain progress text; structured or tool-owned payloads remain delivery evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
@@ -141,12 +161,15 @@ export function countSettledTurnDeliveryPayloads(params: {
     }
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     const hasNonTextDelivery = Object.entries(payload).some(
-      ([key, value]) => key !== "text" && value !== undefined && value !== false,
+      ([key, value]) => key !== "text" && hasDeliveryContent(value),
     );
+    // An empty projection, a bare flag, or an empty container is neither an answer
+    // nor a delivery. Counting it as delivery evidence consumed the settled-tool
+    // terminal continuation retry that exists for exactly this turn shape.
     return (
       hasNonTextDelivery ||
-      !text ||
-      !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text)
+      (text.length > 0 &&
+        !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text))
     );
   }).length;
 }

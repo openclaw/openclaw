@@ -308,6 +308,84 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     );
     expect(request([{ text: finalAnswer }])).toBeNull();
   });
+
+  const settledTurnPayloadRequest = (
+    attempt: ReturnType<typeof makeEmbeddedRunnerAttempt>,
+    terminalState: ReturnType<typeof resolveEmbeddedRunAttemptTerminalState>,
+    payloadsWithToolMedia: Parameters<
+      typeof resolveSettledTurnFinalizationRequest
+    >[0]["payloadsWithToolMedia"],
+  ) =>
+    resolveSettledTurnFinalizationRequest({
+      runParams: {
+        sessionId: "session:settled-empty-payload",
+        runId: "run:settled-empty-payload",
+        trigger: "user",
+        terminalReplyExpectation: "required",
+      } as never,
+      attempt,
+      activeErrorContext: { provider: "ollama-cloud", model: "glm-5.3-flash" },
+      modelApi: "ollama",
+      executionContract: undefined,
+      payloadsWithToolMedia,
+      hasTerminalToolPresentation: false,
+      terminalState,
+      settledTurnFinalizationAvailable: true,
+    });
+
+  const settledToolAttempt = () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "edit", arguments: {} }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      toolMetas: [{ toolName: "edit", toolCallId: "tool-1", isError: false, replaySafe: true }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        assistant,
+        makeTextToolResult("tool-1", "edit", "edited note.txt", false, 0),
+      ],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    return {
+      attempt,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+    };
+  };
+
+  // Every tool settled successfully and the model produced no reply. A payload that
+  // carries neither text nor content is not delivery evidence and must leave the
+  // settled-tool continuation retry available (#169501).
+  it.each([
+    ["no payload entries", []],
+    ["empty text", [{ text: "" }]],
+    ["whitespace-only text", [{ text: "   " }]],
+    ["bare reasoning flag", [{ text: "", isReasoning: true }]],
+    ["empty media list", [{ text: "", mediaUrls: [] }]],
+    ["empty structured container", [{ text: "", channelData: {} }]],
+  ] as const)(
+    "keeps the settled-tool continuation without payload content: %s",
+    (_name, payloads) => {
+      const { attempt, terminalState } = settledToolAttempt();
+      expect(settledTurnPayloadRequest(attempt, terminalState, payloads as never)).toBe(
+        SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      );
+    },
+  );
+
+  // Legal controls: content the turn actually produced stays delivery evidence.
+  it.each([
+    ["visible answer text", [{ text: "Edited note.txt." }]],
+    ["non-empty media", [{ text: "", mediaUrls: ["file:///tmp/note.txt"] }]],
+    ["non-empty structured content", [{ text: "", channelData: { kind: "progress" } }]],
+  ] as const)("treats payload content as delivery evidence: %s", (_name, payloads) => {
+    const { attempt, terminalState } = settledToolAttempt();
+    expect(settledTurnPayloadRequest(attempt, terminalState, payloads as never)).toBeNull();
+  });
 });
 
 describe("terminal presentation and delivery state", () => {
