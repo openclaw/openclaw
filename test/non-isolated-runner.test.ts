@@ -6,7 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
@@ -42,6 +42,15 @@ function childEnv(): NodeJS.ProcessEnv {
   delete env.OPENCLAW_SKIP_CHANNELS;
   delete env.OPENCLAW_SKIP_CRON;
   return env;
+}
+
+const fixtureWorkers = createVitestWorkerRun(childEnv());
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
 }
 
 function documentFocusFixtureFiles(): Record<string, string> {
@@ -596,7 +605,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
-    // The fixture primes Node's native generation before Vite imports this source.
+    // External source imports retain their native generation across file cleanup.
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
@@ -613,10 +622,10 @@ export default defineConfig({
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",
-    execArgv: ["--experimental-transform-types"],
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,
+    execArgv: sharedVitestConfig.test.execArgv,
     server: { deps: { external: [new RegExp(${JSON.stringify(
       `^${path
         .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
@@ -634,8 +643,7 @@ export default defineConfig({
     const reportPath = path.join(root, "report.json");
     let child!: ChildProcess;
     const env = childEnv();
-    const workers = createVitestWorkerRun(env);
-    const command = runVitestShutdownCommand({
+    const result = await runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -653,19 +661,13 @@ export default defineConfig({
       ],
       cwd: repoRoot,
       env,
-      workerRun: workers,
+      workerRun: fixtureWorkers,
       maxBytes: 16 * 1024 * 1024,
       signal,
       onReady(owned) {
         child = owned;
       },
     });
-    let result: Awaited<typeof command>;
-    try {
-      result = await command;
-    } finally {
-      await workers.dispose();
-    }
     const completion: ChildCompletion = {
       exitCode: child.exitCode,
       signalCode: child.signalCode,
@@ -898,15 +900,23 @@ async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    await fs.writeFile(path.join(root, "events.log"), "");
-    const files = gatewayWorkerLifetimeFixtureFiles(repoRoot);
+    await fs.writeFile(path.join(root, "threads-events.log"), "");
+    await fs.writeFile(path.join(root, "provenance-events.log"), "");
+    const files = {
+      ...gatewayWorkerLifetimeFixtureFiles(repoRoot, "threads"),
+      ...gatewayWorkerLifetimeFixtureFiles(repoRoot, "provenance"),
+    };
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }
-    await fs.writeFile(
-      path.join(root, "vitest.config.ts"),
-      `
-import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.gateway-core.config.ts"))};
+    for (const [mode, name, config] of [
+      ["threads", "gateway-worker-lifetimes", "vitest.gateway-core.config.ts"],
+      ["provenance", "gateway-provenance-lifetimes", "vitest.gateway-database-workers.config.ts"],
+    ] as const) {
+      await fs.writeFile(
+        path.join(root, `vitest.${mode}.config.ts`),
+        `
+import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest", config))};
 import { defineConfig } from "vitest/config";
 import { BaseSequencer } from "vitest/node";
 class AlphabeticalSequencer extends BaseSequencer {
@@ -914,24 +924,31 @@ class AlphabeticalSequencer extends BaseSequencer {
     return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
   }
 }
-// Keep Gateway isolation and cleanup, with fixture-only membership and no
+// Use the actual Gateway execution policy, with fixture-only membership and no
 // ordinary setup hooks that could close A's database before runner cleanup.
 export default defineConfig({
-  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  cacheDir: ${JSON.stringify(path.join(root, `.vite-${mode}`))},
   plugins: gateway.plugins,
   resolve: gateway.resolve,
   test: {
-    name: "gateway-worker-lifetimes",
-    // Shared-state admission needs the host broker on a process main thread.
-    pool: "forks",
+    name: "${name}",
+    pool: gateway.test.pool,
     isolate: gateway.test.isolate,
     runner: gateway.test.runner,
+    execArgv: gateway.test.execArgv,
     maxWorkers: gateway.test.maxWorkers,
     fileParallelism: gateway.test.fileParallelism,
-    include: ["a-producer.test.ts", "b-observer.test.ts"],
+    include: ["${mode}-a-producer.test.ts", "${mode}-b-observer.test.ts"],
     sequence: { sequencer: AlphabeticalSequencer },
   },
 });
+`,
+      );
+    }
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
+      `import { defineConfig } from "vitest/config";
+export default defineConfig({ test: { projects: ["./vitest.threads.config.ts", "./vitest.provenance.config.ts"] } });
 `,
     );
     const reportPath = path.join(root, "report.json");
@@ -941,8 +958,7 @@ export default defineConfig({
       OPENCLAW_VITEST_MAX_WORKERS: "1",
       GATEWAY_LIFETIME_PROBE_ROOT: root,
     };
-    const workers = createVitestWorkerRun(env);
-    const command = runVitestShutdownCommand({
+    const result = await runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -960,19 +976,13 @@ export default defineConfig({
       ],
       cwd: repoRoot,
       env,
-      workerRun: workers,
+      workerRun: fixtureWorkers,
       maxBytes: 16 * 1024 * 1024,
       signal,
       onReady(owned) {
         child = owned;
       },
     });
-    let result: Awaited<typeof command>;
-    try {
-      result = await command;
-    } finally {
-      await workers.dispose();
-    }
     expect(result.code, result.stdout + result.stderr).toBe(0);
     expect(child.exitCode).toBe(0);
     expect(child.signalCode).toBeNull();
@@ -991,20 +1001,29 @@ export default defineConfig({
       ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
     });
     expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected);
-    expect(capture.projects).toEqual([
-      {
-        name: "gateway-worker-lifetimes",
-        namePrefix: "",
-        root: canonicalRoot,
-        config: `${canonicalRoot}/vitest.config.ts`,
-        pool: "forks",
-      },
-    ]);
+    expect(capture.projects.toSorted((left, right) => left.name.localeCompare(right.name))).toEqual(
+      [
+        {
+          name: "gateway-provenance-lifetimes",
+          namePrefix: "",
+          root: canonicalRoot,
+          config: `${canonicalRoot}/vitest.provenance.config.ts`,
+          pool: "forks",
+        },
+        {
+          name: "gateway-worker-lifetimes",
+          namePrefix: "",
+          root: canonicalRoot,
+          config: `${canonicalRoot}/vitest.threads.config.ts`,
+          pool: "threads",
+        },
+      ],
+    );
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected);
     expect(report).toMatchObject({
-      numTotalTests: 2,
-      numPassedTests: 2,
+      numTotalTests: 4,
+      numPassedTests: 4,
       numFailedTests: 0,
       numPendingTests: 0,
       numTodoTests: 0,

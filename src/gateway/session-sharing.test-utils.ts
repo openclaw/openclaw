@@ -1,6 +1,8 @@
 import { afterEach } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -14,6 +16,11 @@ afterEach(() => {
   }
   profileSubscriptions.clear();
 });
+
+export async function prepareSessionSharingTestRuntime() {
+  await captureRuntimeConfigAsyncReader()();
+  return prepareUserProfileCatalog();
+}
 
 export function sharingPolicyClient(params: {
   user?: string;

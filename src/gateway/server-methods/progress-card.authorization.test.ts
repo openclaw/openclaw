@@ -18,7 +18,11 @@ import {
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  prepareSessionSharingTestRuntime,
+  roleClient,
+  rolePolicyConfig,
+} from "../session-sharing.test-utils.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -28,6 +32,7 @@ describe("progress card request authorization", () => {
     "reads visible cards without participation under %s and hides private cards",
     async (scope) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
         const client = roleClient("view", "card-viewer");
@@ -111,6 +116,7 @@ describe("progress card request authorization", () => {
     "does not publish a shared card after its %s changes during storage",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg, cfg);
         const client = roleClient("view", "delayed-card-viewer");
@@ -201,6 +207,7 @@ describe("progress card request authorization", () => {
     "revalidates $method after delayed storage (beforeCommit=$beforeCommit)",
     async ({ method, beforeCommit }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
@@ -322,6 +329,7 @@ describe("progress card request authorization", () => {
     "revalidates $method for $sessionKey after preparation (replace=$replace)",
     async (testCase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
@@ -515,6 +523,7 @@ it.each(
   ),
 )("rejects pre-reset $method after a same-id reset (admin=$admin)", async ({ admin, method }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    using _ = { [Symbol.dispose]: (await prepareSessionSharingTestRuntime()).release };
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
       agents: { ownership: "explicit", entries: { main: {}, work: {} } },

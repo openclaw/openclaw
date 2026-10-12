@@ -6,9 +6,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import * as subagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -19,7 +18,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import { observeSessionWorkAdmissionDrain } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
@@ -74,7 +73,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      await registerSubagentRun({
+      await subagentRegistry.registerSubagentRun({
         runId,
         childSessionKey,
         childAgentId: "main",
@@ -210,7 +209,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         sessionKey: grandchildKey,
         defaultSessionId: "grandchild-session",
       });
-      await registerSubagentRun({
+      await subagentRegistry.registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
         childAgentId: "main",
@@ -283,7 +282,7 @@ it.each(["child", "ancestor"])(
         defaultSessionId: "ancestor-session",
         lifecycleRevision: "original-ancestor",
       });
-      await registerSubagentRun({
+      await subagentRegistry.registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         childAgentId: "broken",
@@ -321,7 +320,7 @@ it.each(["child", "ancestor"])(
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original-child",
       });
-      await registerSubagentRun({
+      await subagentRegistry.registerSubagentRun({
         runId,
         childSessionKey,
         childAgentId,
@@ -344,21 +343,31 @@ it.each(["child", "ancestor"])(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
     expect(database).toBeDefined();
+    const corruptedSession = {
+      agentId: "broken",
+      storePath: database.path,
+      sessionKey: faultOwner === "ancestor" ? ancestorKey : badKey,
+    };
     let original: Buffer | undefined;
     let fault: unknown;
-    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-      if (original || !subagentRuns.get("bad")?.killIntent) {
-        return;
-      }
-      try {
-        expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toBeDefined();
-        expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        original = readFileSync(database.path);
-        writeFileSync(database.path, "not a SQLite database");
-      } catch (error) {
-        fault = error;
-      }
-    });
+    const claimKill = subagentRegistry.claimSubagentRunKill;
+    const corruption = vi
+      .spyOn(subagentRegistry, "claimSubagentRunKill")
+      .mockImplementation(async (params) => {
+        const claim = await claimKill(params);
+        if (!original && params.runId === "bad" && claim) {
+          try {
+            expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toBeDefined();
+            expect(await closeOpenClawAgentDatabaseByPathAsync(database.path, "broken")).toBe(true);
+            original = readFileSync(database.path);
+            writeFileSync(database.path, "not a SQLite database");
+            expect(() => loadExactSessionEntryReadOnly(corruptedSession)).toThrow();
+          } catch (error) {
+            fault = error;
+          }
+        }
+        return claim;
+      });
     const badDispatch = vi.fn(async () => {});
     const healthyDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
@@ -390,11 +399,7 @@ it.each(["child", "ancestor"])(
           message: expect.stringContaining("descendant cancellation was incomplete"),
         }),
       );
-      expect(() =>
-        loadExactSessionEntryReadOnly({
-          sessionKey: faultOwner === "ancestor" ? ancestorKey : badKey,
-        }),
-      ).toThrow();
+      expect(() => loadExactSessionEntryReadOnly(corruptedSession)).toThrow();
       if (faultOwner === "ancestor") {
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
@@ -411,8 +416,9 @@ it.each(["child", "ancestor"])(
       ).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
     } finally {
-      unsubscribe();
+      corruption.mockRestore();
       if (original) {
+        await closeOpenClawAgentDatabaseByPathAsync(database.path, "broken");
         writeFileSync(database.path, original);
       }
       releaseSwarmRun("bad");
