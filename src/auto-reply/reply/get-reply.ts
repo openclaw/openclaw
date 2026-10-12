@@ -975,7 +975,6 @@ async function resolveReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stagingSessionEntry =
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
@@ -1005,8 +1004,8 @@ async function resolveReplyFromConfig(
           })
         ).snapshot
       : undefined;
-    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
-      stageSandboxMedia({
+    const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
+      (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
@@ -1015,6 +1014,7 @@ async function resolveReplyFromConfig(
         workspaceDir: stagingWorkspaceDir,
         skillsSnapshot: stagingSkillsSnapshot,
         abortSignal: optsWithSkillFilter?.abortSignal,
+        awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;

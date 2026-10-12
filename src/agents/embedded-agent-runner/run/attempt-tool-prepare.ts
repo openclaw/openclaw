@@ -95,12 +95,17 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     : undefined;
   const awaitSessionDiffBaseline = captureBaseline
     ? async () => {
-        if (!assertBaselineSource) {
-          throw new Error("session attribution requires active admitted run authority");
+        try {
+          if (!assertBaselineSource) {
+            throw new Error("session attribution requires active admitted run authority");
+          }
+          assertBaselineSource();
+          await captureBaseline();
+          assertBaselineSource();
+        } catch (error) {
+          params.runAbortController.abort(error);
+          throw error;
         }
-        assertBaselineSource();
-        await captureBaseline();
-        assertBaselineSource();
       }
     : undefined;
   const completionCheck = attempt.completionCheck;

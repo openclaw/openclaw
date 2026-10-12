@@ -12,6 +12,7 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const { handleCommandsMock } = vi.hoisted(() => ({ handleCommandsMock: vi.fn() }));
 
+// mock-isolation: observe dispatch without running command handlers or their session/export effects.
 vi.mock("./commands.js", () => ({ handleCommands: handleCommandsMock }));
 
 vi.mock("../../channels/plugins/index.js", () => ({

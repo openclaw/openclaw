@@ -13,6 +13,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
   const onToolExecute = vi.fn(async () => ({ content: [], details: {} }));
+  const onToolPrepare = vi.fn(async (params: unknown) => params);
   const stubTool = (name: string) =>
     ({
       name,
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
       displaySummary: name,
       description: name,
       parameters: { type: "object", properties: {} },
+      prepareBeforeToolCallParams: onToolPrepare,
       execute: onToolExecute,
     }) satisfies AnyAgentTool;
 
@@ -27,6 +29,7 @@ const mocks = vi.hoisted(() => {
     createOpenClawToolsOptions: vi.fn(),
     stubTool,
     onToolExecute,
+    onToolPrepare,
   };
 });
 
@@ -62,12 +65,14 @@ describe("createOpenClawCodingTools cron scope", () => {
     mocks.createOpenClawToolsOptions.mockClear();
   });
 
-  it.each(["settled", "failed"] as const)(
+  it.each(["settled", "failed", "aborted"] as const)(
     "gates constructed tool effects on initial workspace attribution (%s)",
     async (outcome) => {
       const entered = createDeferred();
       const baseline = createDeferred();
+      const controller = new AbortController();
       mocks.onToolExecute.mockClear();
+      mocks.onToolPrepare.mockClear();
       const tools = createOpenClawCodingToolsInternal({
         awaitSessionDiffBaseline: async () => {
           entered.resolve();
@@ -76,17 +81,25 @@ describe("createOpenClawCodingTools cron scope", () => {
       });
       const gateway = tools.find((tool) => tool.name === "gateway");
       expect(gateway).toBeDefined();
-      const pending = gateway!.execute("attribution-call", {});
+      const pending = gateway!.execute("attribution-call", {}, controller.signal);
       try {
         await awaitGateBeforeSettlement(entered.promise, pending, "Tool bypassed attribution");
         expect(mocks.onToolExecute).not.toHaveBeenCalled();
+        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
         if (outcome === "failed") {
           baseline.reject(new Error("attribution failed"));
-          await expect(pending).rejects.toThrow("before_tool_call");
+          await expect(pending).rejects.toThrow("attribution failed");
+        } else if (outcome === "aborted") {
+          controller.abort(new Error("tool generation expired"));
+          baseline.resolve();
+          await expect(pending).rejects.toThrow("tool generation expired");
+          expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+          expect(mocks.onToolExecute).not.toHaveBeenCalled();
         } else {
           baseline.resolve();
           await pending;
           expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+          expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
         }
       } finally {
         baseline.resolve();

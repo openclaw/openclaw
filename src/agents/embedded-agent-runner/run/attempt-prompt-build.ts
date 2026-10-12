@@ -160,20 +160,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages = input.activeSession.messages;
   const promptEvent = { prompt: effectivePrompt, messages: promptBuildMessages };
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
-    attempt.admittedRunContext,
-    activeAbortSignal,
-  );
   const hookResult = preserveExactPrompt
     ? undefined
     : await resolvePromptBuildHookResult({
-        awaitSessionDiffBaseline: attempt.awaitSessionDiffBaseline
-          ? async () => {
-              await attempt.awaitSessionDiffBaseline?.();
-              activeAbortSignal?.throwIfAborted();
-              assertHostActive?.();
-            }
-          : undefined,
         config: attempt.config ?? getRuntimeConfig(),
         prompt: effectivePrompt,
         messages: promptBuildMessages,
@@ -202,6 +191,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
+  const assertHostActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    activeAbortSignal,
+  );
   assertHostActive?.();
   const hasPendingActionInstructions = Boolean(
     // Authorized enrichment runs after policy; do not pre-empt its required actions.

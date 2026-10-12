@@ -247,6 +247,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   });
   const assertActiveRun = requireActiveAssertion(attemptAbortController.signal);
   assertActiveRun();
+  if (runtime.pluginHarnessOwnsTransport) {
+    await params.awaitSessionDiffBaseline?.();
+    assertActiveRun();
+  }
   using placement = runtime.pluginHarnessOwnsTransport
     ? await preparePluginHarnessWorkspace({
         ...params,

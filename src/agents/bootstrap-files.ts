@@ -274,8 +274,6 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 type BootstrapFileResolutionParams = {
-  awaitSessionDiffBaseline?: () => Promise<void>;
-  abortSignal?: AbortSignal;
   bootstrapUserProfileId?: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -371,8 +369,6 @@ async function resolveBootstrapFiles(
   const hooked =
     hooks === "registered"
       ? await applyBootstrapHookOverrides({
-          awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
-          abortSignal: params.abortSignal,
           files: bootstrapFiles,
           workspaceDir: params.workspaceDir,
           config: params.config,
