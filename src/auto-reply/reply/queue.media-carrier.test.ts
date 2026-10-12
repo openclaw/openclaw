@@ -183,6 +183,7 @@ describe("followup prompt metadata carrier", () => {
             senderUsername: "ambiguous",
             senderE164: "+15550000000",
             senderIsOwner: true,
+            senderIsBot: true,
             traceAuthorized: true,
             ownerNumbers: ["+15550000000"],
           });
@@ -246,6 +247,7 @@ describe("followup prompt metadata carrier", () => {
             senderUsername: undefined,
             senderE164: undefined,
             senderIsOwner: false,
+            senderIsBot: undefined,
             traceAuthorized: false,
             ownerNumbers: [],
           });

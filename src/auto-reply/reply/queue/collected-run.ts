@@ -22,6 +22,7 @@ export function resolveCollectedRun(items: readonly FollowupRun[], source: Follo
     senderUsername: undefined,
     senderE164: undefined,
     senderIsOwner: false,
+    senderIsBot: undefined,
     traceAuthorized: false,
     ownerNumbers: [],
   };

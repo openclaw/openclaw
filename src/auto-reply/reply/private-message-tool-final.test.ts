@@ -9,6 +9,7 @@ const base = {
   successfulSourceReplyDelivery: false,
   isHeartbeat: false,
   isRoomEvent: false,
+  optionalBotSenderReply: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
@@ -28,6 +29,17 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
     expect(
       shouldWarnAboutPrivateMessageToolFinal({ ...base, successfulSourceReplyDelivery: true }),
     ).toBe(false);
+  });
+
+  it("treats a private final as intended silence on an optional bot-sender turn", () => {
+    expect(classifyPrivateMessageToolFinal({ ...base, optionalBotSenderReply: true })).toBe("none");
+    expect(
+      classifyPrivateMessageToolFinal({
+        ...base,
+        optionalBotSenderReply: true,
+        finalText: "Got it.",
+      }),
+    ).toBe("none");
   });
 
   it("does not flag silent sentinel variants (intentional silence)", () => {

@@ -2,9 +2,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  BOT_SENDER_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -12,6 +16,7 @@ import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { isOptionalBotSenderReply } from "./source-reply-delivery-mode.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
@@ -56,6 +61,8 @@ type ReplyPromptEnvelopeBaseParams = {
   isHeartbeat?: boolean;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Admission-time reply requiredness; selects the bot-sender delivery hint. */
+  replyExpectation?: ReplyExpectation;
 };
 
 function formatRoomEventLine(ctx: TemplateContext, body: string): string {
@@ -99,8 +106,10 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
 }
 
 function resolvePerTurnDeliveryDirective(params: {
+  sessionCtx: TemplateContext;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  replyExpectation?: ReplyExpectation;
 }): string | undefined {
   if (params.inboundEventKind === "room_event") {
     return params.sourceReplyDeliveryMode === "message_tool_only"
@@ -111,7 +120,12 @@ function resolvePerTurnDeliveryDirective(params: {
     params.inboundEventKind === "user_request" &&
     params.sourceReplyDeliveryMode === "message_tool_only"
   ) {
-    return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
+    return isOptionalBotSenderReply({
+      senderIsBot: params.sessionCtx.SenderIsBot,
+      replyExpectation: params.replyExpectation,
+    })
+      ? BOT_SENDER_DELIVERY_HINT
+      : MESSAGE_TOOL_ONLY_DELIVERY_HINT;
   }
   return undefined;
 }

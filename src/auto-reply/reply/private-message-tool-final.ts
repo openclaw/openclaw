@@ -18,6 +18,8 @@ type PrivateMessageToolFinalContext = {
   successfulSourceReplyDelivery: boolean;
   isHeartbeat: boolean;
   isRoomEvent: boolean;
+  /** A bot sender's turn was admitted with an optional reply, so silence is valid. */
+  optionalBotSenderReply: boolean;
 };
 
 /** Returns whether a private final can represent an expected source reply that was not delivered. */
@@ -27,6 +29,7 @@ export function shouldClassifyPrivateMessageToolFinal(
   return !(
     params.isHeartbeat ||
     params.isRoomEvent ||
+    params.optionalBotSenderReply ||
     params.sourceReplyDeliveryMode !== "message_tool_only" ||
     params.sendPolicyDenied ||
     params.successfulSourceReplyDelivery
