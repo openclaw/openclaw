@@ -143,7 +143,11 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         for (const watchFile of sourceCatalogResult.watchFiles) {
           this.addWatchFile(watchFile);
         }
-        this.addWatchFile(memoryPath);
+        // Vite turns watched files into imports during dev transforms. A source-only
+        // locale has no memory file yet, so importing that path would fail.
+        if (existsSync(memoryPath)) {
+          this.addWatchFile(memoryPath);
+        }
         let partitionLoad = activeCache.partitionLoads.get(request.locale);
         if (!partitionLoad) {
           partitionLoad = loadControlUiLocaleCatalogPartition(
