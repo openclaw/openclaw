@@ -4,6 +4,7 @@ import type {
   SessionActorReceipt,
   SessionActorReducer,
 } from "../../config/sessions/session-actor-contract.js";
+import { SessionActorReadInvalidatedError } from "../../config/sessions/session-actor-read-error.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
 import {
   runSessionActorCommand,
@@ -85,7 +86,18 @@ export async function withAgentTurnCompletion<T>(
           }
         },
       };
-      let snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
+      const readCurrent = async () => {
+        try {
+          return actor.snapshot(authority) ?? (await actor.read(authority));
+        } catch (error) {
+          if (!(error instanceof SessionActorReadInvalidatedError)) {
+            throw error;
+          }
+          // Only repeat the read: the completed model/tool work and accepted writes stay settled.
+          return actor.snapshot(authority) ?? actor.read(authority);
+        }
+      };
+      let snapshot = await readCurrent();
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
@@ -101,7 +113,7 @@ export async function withAgentTurnCompletion<T>(
         return { entry: next, reducers };
       };
       const refresh = async () => {
-        snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
+        snapshot = await readCurrent();
         return project().entry;
       };
       const completion: AgentTurnCompletion = {
@@ -129,7 +141,7 @@ export async function withAgentTurnCompletion<T>(
           }
           const committed: { receipt?: SessionActorReceipt } = {};
           const outcome = await runSessionActorCommand(actor, authority, async (current) => {
-            snapshot = current ?? (await actor.read(authority));
+            snapshot = current ?? (await readCurrent());
             ({ reducers } = project());
             restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
             return actor.completeTurn(

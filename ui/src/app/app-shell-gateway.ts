@@ -411,6 +411,9 @@ export class ShellGatewayOwner {
         );
       }
       void connectionBootstrap.run("outbox", () => this.host.outboxStoreImport.load());
+    } else {
+      // A reconnect can retain the client; retire its completed preference read now.
+      void this.ensureRuntimeConfig(snapshot, context?.runtimeConfig);
     }
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
