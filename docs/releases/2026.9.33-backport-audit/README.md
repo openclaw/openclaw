@@ -1,6 +1,12 @@
-# 2026.9.33 preparation and backport audit
+# 2026.9.33 preparation and backport audits
 
-This is a preparation PR from shipped **2026.9.9**, not a frozen or publishable release candidate. **The eleven audit proposals remain unapplied; one separately scoped, CI-required runtime repair is included. No proposal set is approved, and no tag or package is published.** The branch contains version metadata, the shipped-updater compatibility inventory, CI repairs, and this audit/proposal handoff.
+This directory preserves the original preparation audit merged in [PR #168346](https://github.com/openclaw/openclaw/pull/168346). The source bounds, proposal statuses, and proof below describe that historical preparation only.
+
+The subsequently authorized [update-backport round](https://docs.openclaw.ai/releases/2026.9.33-backport-audit/update-backports-20261010) records the extended-stable upgrade issue search, additional mainline audit, compatible product adaptations, and remaining qualification gaps. It includes four update-related groups from the original eleven proposals; the other seven remain outside that round. No tag or package has been published.
+
+## Original preparation snapshot
+
+The preparation PR started from shipped **2026.9.9**, not a frozen or publishable release candidate. **Its eleven audit proposals were unapplied; one separately scoped, CI-required runtime repair was included.** It contained version metadata, the shipped-updater compatibility inventory, CI repairs, and the audit/proposal handoff below.
 
 ## Frozen source bounds
 
