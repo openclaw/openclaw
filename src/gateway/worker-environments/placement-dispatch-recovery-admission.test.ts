@@ -530,7 +530,7 @@ describe("placement recovery session admission with persisted placements", () =>
     }
   });
 
-  it("retries orphan cleanup on the next full sweep when a startup placement was busy", async () => {
+  it("retries startup orphan cleanup after a busy placement becomes inactive", async () => {
     const root = support.testState.root;
     await git(root, "init", "--quiet");
     await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
@@ -569,6 +569,9 @@ describe("placement recovery session admission with persisted placements", () =>
       releaseProvider.resolve();
       await dispatch;
     }
+    await coordinated.reclaim(REQUEST);
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
     await coordinated.reconcileActive();
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
