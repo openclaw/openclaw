@@ -17,6 +17,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
+  onRemaining?: (sessionFiles: string[]) => void;
   sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
@@ -54,6 +55,9 @@ export async function refreshCostUsageCacheForAgent(params: {
           scoped.incognito?.actor.assertCurrent();
           scoped.incognito?.authority.assertCurrent();
           publishSessionCostUsageUpdated(agentId);
+        }
+        if (result.remainingFiles?.length) {
+          scoped.onRemaining?.(result.remainingFiles);
         }
         return "refreshed";
       } catch (error) {

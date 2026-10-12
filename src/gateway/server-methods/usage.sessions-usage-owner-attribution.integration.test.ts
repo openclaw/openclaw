@@ -37,6 +37,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { RespondFn } from "./types.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
 
 function usageMessage(tokens: number, timestamp: number): AssistantMessage {
@@ -104,6 +105,73 @@ function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptRep
     tools: { listChars: ordinal, schemaChars: 0, entries: [] },
   };
 }
+
+it("keeps same-key overview context reports with their selected agent", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const timestamp = Date.now() - 60_000;
+    const candidates: usageSessionSelection.UsageSessionSelection[] = [];
+    const reports = [contextReport(timestamp, 1), contextReport(timestamp, 2)];
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      const sessionId = `${agentId}-global-context`;
+      const scope = {
+        agentId,
+        sessionId,
+        sessionKey: "global",
+        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: timestamp,
+        systemPromptReport: reports[index],
+      });
+      await persistSessionTranscriptTurn(scope, {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [{ message: usageMessage(index + 1, timestamp), now: timestamp }],
+      });
+      await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
+      candidates.push(
+        ...(await usageSessionSelection.selectUsageSessions({
+          config,
+          agentId,
+          specificKey: null,
+          groupingMode: "instance",
+          startMs: 0,
+          endMs: Date.now(),
+        })),
+      );
+    }
+    expect(candidates.map(({ agentId, key }) => [agentId, key])).toEqual([
+      ["main", "global"],
+      ["opus", "global"],
+    ]);
+    // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
+    const selection = vi
+      .spyOn(usageSessionSelection, "selectUsageSessions")
+      .mockResolvedValueOnce(candidates);
+    try {
+      const result = await readUsage({
+        agentScope: "all",
+        range: "all",
+        projection: "overview",
+        includeContextWeight: true,
+      });
+      expect(result.sessions).toHaveLength(2);
+      for (const [index, agentId] of ["main", "opus"].entries()) {
+        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+          key: "global",
+          agentId,
+          sessionId: `${agentId}-global-context`,
+          hasContextWeight: true,
+          contextWeight: reports[index],
+        });
+      }
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
 
 it("keeps prior cron runs attributed through guarded replacement and the real usage handler", async () => {
   await withUsageState(async (state) => {

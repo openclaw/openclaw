@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For, Show, createMemo } from "solid-js";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { extractQueryTerms } from "./helpers.ts";
 import { setQueryTokensForKey } from "./query.ts";
 
 export function UsageQueryFilter(props: {

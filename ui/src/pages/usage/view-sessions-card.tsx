@@ -30,7 +30,9 @@ const buildSessionMeta = (session: UsageSessionEntry): string[] =>
 
 export function SessionsCard(props: {
   sessions: UsageSessionEntry[];
-  usage: Pick<UsageProps, "filters" | "display" | "callbacks">;
+  usage: UsageProps;
+  overview?: UsageProps["data"]["sessionPage"];
+  loading?: boolean;
   totalSessions: number;
 }) {
   const state = createMemo(() => {
@@ -40,8 +42,8 @@ export function SessionsCard(props: {
     const callbacks = props.usage.callbacks;
     const totalSessions = props.totalSessions;
 
-    const { selectedSessions, selectedDays } = filters;
-    const { sessionSort, sessionSortDir, recentSessions, sessionsTab } = display;
+    const { selectedSessions } = filters;
+    const { sessionSort, sessionSortDir, sessionsTab } = display;
     const { onSelectSession } = callbacks.details;
     const onDisplayChange = callbacks.display.onChange;
     const { onClearSessions } = callbacks.filters;
@@ -49,71 +51,33 @@ export function SessionsCard(props: {
     const sortDirectionLabel = t(
       sessionSortDir === "desc" ? "usage.sessions.descending" : "usage.sessions.ascending",
     );
-    const selectedDaySet = new Set(selectedDays);
 
-    const sortedSessions = sessions
-      .map((session) => {
-        const usage = session.usage;
-        let tokens = usage?.totalTokens ?? 0;
-        let cost = usage?.totalCost ?? 0;
-        const daily = selectedDaySet.size > 0 ? usage?.dailyBreakdown : undefined;
-        if (daily?.length) {
-          tokens = 0;
-          cost = 0;
-          for (const day of daily) {
-            if (selectedDaySet.has(day.date)) {
-              tokens += day.tokens;
-              cost += day.cost;
-            }
-          }
-        }
-        const rawLabel = session.label || session.key;
-        // Agent session keys often include a token query param; remove it for readability.
-        const displayLabel =
-          rawLabel.startsWith("agent:") && rawLabel.includes("?token=")
-            ? rawLabel.slice(0, rawLabel.indexOf("?token="))
-            : rawLabel;
-        return {
-          session,
-          displayLabel,
-          value: isTokenMode ? tokens : cost,
-          sortValue: {
-            recent: session.updatedAt ?? 0,
-            messages: usage?.messageCounts?.total ?? 0,
-            errors: usage?.messageCounts?.errors ?? 0,
-            cost,
-            tokens,
-          }[sessionSort],
-        };
-      })
-      .toSorted((a, b) => {
-        const valueDiff = b.sortValue - a.sortValue;
-        if (valueDiff !== 0) {
-          return valueDiff;
-        }
-        const recentDiff = (b.session.updatedAt ?? 0) - (a.session.updatedAt ?? 0);
-        if (recentDiff !== 0) {
-          return recentDiff;
-        }
-        return a.displayLabel.localeCompare(b.displayLabel);
-      });
-    const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
-
-    const totalValue = sortedWithDir.reduce((sum, entry) => sum + entry.value, 0);
-    const avgValue = sortedWithDir.length ? totalValue / sortedWithDir.length : 0;
-    const totalErrors = sortedWithDir.reduce(
-      (sum, entry) => sum + (entry.session.usage?.messageCounts?.errors ?? 0),
-      0,
-    );
+    const entries = sessions.map((session) => {
+      const usage = session.usage;
+      const tokens = usage?.totalTokens ?? 0;
+      const cost = usage?.totalCost ?? 0;
+      const rawLabel = session.label || session.key;
+      // Agent session keys often include a token query param; remove it for readability.
+      const displayLabel =
+        rawLabel.startsWith("agent:") && rawLabel.includes("?token=")
+          ? rawLabel.slice(0, rawLabel.indexOf("?token="))
+          : rawLabel;
+      return {
+        session,
+        displayLabel,
+        value: isTokenMode ? tokens : cost,
+      };
+    });
+    const count = props.overview?.tableSessionCount ?? 0;
+    const totals = props.overview?.tableTotals;
+    const totalValue = (isTokenMode ? totals?.tokens : totals?.cost) ?? 0;
+    const avgValue = count ? totalValue / count : 0;
+    const totalErrors = totals?.errors ?? 0;
 
     const selectedSet = new Set(selectedSessions);
-    const selectedEntries = sortedWithDir.filter((entry) => selectedSet.has(entry.session.key));
+    const selectedEntries = entries.filter((entry) => selectedSet.has(entry.session.key));
     const selectedCount = selectedEntries.length;
-    const sessionMap = new Map(sortedWithDir.map((entry) => [entry.session.key, entry]));
-    const recentEntries = recentSessions
-      .map((key) => sessionMap.get(key))
-      .filter((entry) => entry !== undefined);
-    const displayedEntries = sessionsTab === "recent" ? recentEntries : sortedWithDir.slice(0, 50);
+    const displayedEntries = entries;
 
     return {
       displayedEntries,
@@ -233,16 +197,39 @@ export function SessionsCard(props: {
               isTokenMode={state().isTokenMode}
               onSelect={state().onSelectSession}
             />
-            {state().sessionsTab === "all" &&
-            state().sessions.length > state().displayedEntries.length ? (
-              <div class="usage-more-sessions">
-                {t("usage.sessions.more", {
-                  count: String(state().sessions.length - state().displayedEntries.length),
-                })}
-              </div>
-            ) : undefined}
           </div>
         )}
+        {state().sessionsTab === "all" && props.overview ? (
+          <div class="data-table-pagination">
+            <div class="data-table-pagination__controls">
+              <button
+                class="btn btn--sm"
+                disabled={props.loading || props.overview.offset === 0}
+                onClick={() =>
+                  props.usage.callbacks.display.onPageChange(
+                    Math.max(0, props.overview!.offset - props.overview!.limit),
+                  )
+                }
+              >
+                {t("common.previous")}
+              </button>
+              <button
+                class="btn btn--sm"
+                disabled={
+                  props.loading ||
+                  props.overview.offset + props.overview.limit >= props.overview.total
+                }
+                onClick={() =>
+                  props.usage.callbacks.display.onPageChange(
+                    props.overview!.offset + props.overview!.limit,
+                  )
+                }
+              >
+                {t("common.next")}
+              </button>
+            </div>
+          </div>
+        ) : undefined}
         {state().selectedCount > 1 ? (
           <div class="sessions-selected-group">
             <div class="sessions-card-count">

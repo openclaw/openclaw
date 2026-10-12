@@ -2,11 +2,15 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { buildAggregatesFromSessions } from "./metrics.ts";
-import { buildUsageFilterOptions } from "./query.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
-import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { createUsageProps, usageSession } from "./view.test-support.ts";
+import type { UsageProps, UsageTotals } from "./types.ts";
+import {
+  buildUsageFilterOptions,
+  buildAggregatesFromSessions,
+  projectUsageData,
+  createUsageProps,
+  usageSession,
+} from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
@@ -25,106 +29,6 @@ function averageCostSummary(container: ParentNode) {
       ?.textContent?.trim(),
   };
 }
-
-it.each([
-  { query: "provider:openai" },
-  { selectedSessions: ["agent:main:matched"] },
-  { selectedSessions: ["agent:main:matched", "agent:main:earlier"] },
-  { query: "provider:openai", selectedHours: [12] },
-])("intersects selected days with the session scope %j", (scope) => {
-  const base = createUsageProps();
-  const matched = usageSession("agent:main:matched", "main", "openai", {
-    totalTokens: 800,
-    totalCost: 80,
-  });
-  const other = usageSession("agent:other:other", "other", "anthropic", {
-    totalTokens: 900,
-    totalCost: 90,
-  });
-  const selectedDay = {
-    date: "2026-05-14",
-    tokens: 99,
-    cost: 10,
-    input: 1,
-    output: 2,
-    cacheRead: 3,
-    cacheWrite: 4,
-    totalTokens: 99,
-    totalCost: 10,
-    inputCost: 1,
-    outputCost: 2,
-    cacheReadCost: 3,
-    cacheWriteCost: 4,
-    missingCostEntries: 1,
-    missingCostByModel: { "openai/unpriced": 1 },
-  };
-  matched.usage!.activityDates = ["2026-05-13", "2026-05-14"];
-  matched.usage!.firstActivity = Date.UTC(2026, 4, 14, 12);
-  matched.usage!.lastActivity = matched.usage!.firstActivity;
-  matched.usage!.dailyBreakdown = [
-    { ...selectedDay, date: "2026-05-13", tokens: 701, cost: 70, totalTokens: 701, totalCost: 70 },
-    selectedDay,
-  ];
-  other.usage!.activityDates = ["2026-05-14"];
-  other.usage!.dailyBreakdown = [
-    { ...selectedDay, tokens: 900, cost: 90, totalTokens: 900, totalCost: 90 },
-  ];
-  const earlier = usageSession("agent:main:earlier", "main", "openai", { totalCost: 5 });
-  earlier.usage!.activityDates = ["2026-05-13"];
-  earlier.usage!.firstActivity = Date.UTC(2026, 4, 13, 12);
-  earlier.usage!.lastActivity = earlier.usage!.firstActivity;
-  earlier.usage!.dailyBreakdown = [
-    {
-      ...selectedDay,
-      date: "2026-05-13",
-      tokens: 50,
-      cost: 5,
-      totalTokens: 50,
-      totalCost: 5,
-    },
-  ];
-  const onExportJson = vi.fn();
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...base.data,
-            sessions: [matched, other, earlier],
-            totals: { ...selectedDay, totalCost: 170 },
-            costDaily: [{ ...selectedDay, totalTokens: 999, totalCost: 100 }],
-          },
-          filters: { ...base.filters, ...scope, timeZone: "utc", selectedDays: [selectedDay.date] },
-          callbacks: {
-            ...base.callbacks,
-            display: { ...base.callbacks.display, onExportJson },
-          },
-        }),
-      ),
-    { container },
-  );
-  flush();
-  expect(
-    [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
-  ).toEqual(["99", "$10.00", "1"]);
-  container.querySelector(".usage-export-menu")!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      detail: { item: { value: "json" } },
-    }),
-  );
-  const { date, tokens: _tokens, cost: _cost, ...expectedTotals } = selectedDay;
-  expect(onExportJson.mock.calls[0]?.[0].totals).toEqual(expectedTotals);
-  expect(onExportJson.mock.calls[0]?.[0].sessions).toEqual([matched]);
-  expect(
-    onExportJson.mock.calls[0]?.[0].daily.find(
-      (day: { date: string }) => day.date === "2026-05-13",
-    ),
-  ).toMatchObject({ totalCost: scope.selectedSessions?.length === 1 ? 70 : 75 });
-  expect(onExportJson.mock.calls[0]?.[0].daily).toEqual(
-    expect.arrayContaining([{ date, ...expectedTotals }]),
-  );
-});
 
 it("renders shared skeletons while initial usage is loading", () => {
   const container = document.createElement("div");
@@ -204,6 +108,9 @@ describe("renderUsage", () => {
             get filters() {
               return currentFilters();
             },
+            get data() {
+              return { ...props.data, ...projectUsageData(fixture.sessions, currentFilters()) };
+            },
           }),
         { container },
       );
@@ -248,62 +155,6 @@ describe("renderUsage", () => {
     expect(container.textContent).not.toContain("Provider usage is unavailable");
   });
 
-  it("keeps pending sessions on their selected local or UTC activity day", () => {
-    const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
-      this: Date,
-    ) {
-      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-    });
-    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
-      this: Date,
-    ) {
-      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-    });
-    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
-      return new Date(this.getTime() + localOffsetMs).getUTCDate();
-    });
-
-    try {
-      const pendingSession = {
-        key: "agent:main:pending-cache",
-        label: "Pending cache",
-        agentId: "main",
-        updatedAt: Date.parse("2026-05-14T00:30:00.000Z"),
-        usage: null,
-      } satisfies UsageSessionEntry;
-
-      for (const { timeZone, selectedDay, visible } of [
-        { timeZone: "utc", selectedDay: "2026-05-14", visible: true },
-        { timeZone: "local", selectedDay: "2026-05-13", visible: true },
-        { timeZone: "local", selectedDay: "2026-05-14", visible: false },
-      ] as const) {
-        const container = document.createElement("div");
-        mountSolid(
-          () =>
-            renderUsage(
-              createUsageProps({
-                data: { ...createUsageProps().data, sessions: [pendingSession] },
-                filters: {
-                  ...createUsageProps().filters,
-                  selectedDays: [selectedDay],
-                  timeZone,
-                },
-              }),
-            ),
-          { container },
-        );
-        flush();
-
-        expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
-      }
-    } finally {
-      localYear.mockRestore();
-      localMonth.mockRestore();
-      localDay.mockRestore();
-    }
-  });
-
   it("filters visible sessions and insight aggregates with an explicit agent query", () => {
     const container = document.createElement("div");
     const sessions = [
@@ -317,9 +168,7 @@ describe("renderUsage", () => {
           createUsageProps({
             data: {
               ...createUsageProps().data,
-              sessions,
-              totals: sessions[0]?.usage ?? null,
-              aggregates: buildAggregatesFromSessions(sessions),
+              ...projectUsageData(sessions, { query: "agent:research" }),
             },
             filters: {
               ...createUsageProps().filters,
@@ -350,9 +199,7 @@ describe("renderUsage", () => {
           createUsageProps({
             data: {
               ...createUsageProps().data,
-              sessions,
-              totals: sessions[0]?.usage ?? null,
-              aggregates: buildAggregatesFromSessions(sessions),
+              ...projectUsageData(sessions, { query: "missing-session" }),
             },
             filters: {
               ...createUsageProps().filters,
@@ -389,6 +236,7 @@ describe("renderUsage", () => {
               data: {
                 ...base.data,
                 sessions: [session],
+                totals,
                 costDaily: [{ ...totals, date: "2026-05-14" }],
               },
               filters: {
@@ -409,7 +257,7 @@ describe("renderUsage", () => {
         .querySelector(".usage-export-menu")
         ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
       expect(onExportJson).toHaveBeenCalledOnce();
-      expect(onExportJson.mock.calls[0]?.[0]).toMatchObject({ totals: missing });
+      expect(onExportJson).toHaveBeenCalledWith();
     },
   );
 
@@ -515,7 +363,7 @@ describe("renderUsage", () => {
             get filters() {
               return filters();
             },
-            data: { ...base.data, sessions, aggregates: buildAggregatesFromSessions(sessions) },
+            data: { ...base.data, ...projectUsageData(sessions) },
             callbacks: {
               ...base.callbacks,
               filters: { ...base.callbacks.filters, onQueryDraftChange },
@@ -665,6 +513,7 @@ describe("renderUsage", () => {
       usageSession("first", "main", "first", { totalTokens: 200, totalCost: 1 }),
       usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
     ];
+    props.data.overview = projectUsageData(props.data.sessions).overview;
     props.filters.query = "provider:absent";
     props.filters.queryDraft = 'label:"Team  Planning" provider:second';
     props.callbacks.filters.onQueryDraftChange = vi.fn();
@@ -710,17 +559,20 @@ describe("renderUsage", () => {
     flush();
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
-    expect(values()).toEqual(["second", "first"]);
+    expect(values()).toEqual(["first", "second"]);
     // The replacement report is already scoped by the Gateway.
     setData({
       ...data(),
-      sessions: data().sessions.filter((session) => session.agentId === "main"),
+      ...projectUsageData(data().sessions.filter((session) => session.agentId === "main")),
     });
     flush();
     expect(values()).toEqual(["first"]);
     expect(container.querySelector(".usage-query-suggestion")).toBeNull();
 
-    setData({ ...data(), sessions: [usageSession("replacement", "main", "second-new")] });
+    setData({
+      ...data(),
+      ...projectUsageData([usageSession("replacement", "main", "second-new")]),
+    });
     flush();
     expect(values()).toEqual(["second-new"]);
     container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
@@ -840,7 +692,7 @@ describe("renderUsage", () => {
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
-  it("keeps complete agent totals and history while limiting session-derived insights to the visible page", () => {
+  it("keeps complete insights and history beyond the visible page", () => {
     const container = document.createElement("div");
     const base = createUsageProps();
     const totals: UsageTotals = {
@@ -872,7 +724,6 @@ describe("renderUsage", () => {
           createUsageProps({
             data: {
               ...base.data,
-              sessionsLimitReached: true,
               totals,
               costDaily: [
                 {
@@ -945,7 +796,7 @@ describe("renderUsage", () => {
     const messagesValue = container.querySelector(
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
     );
-    expect(messagesValue?.textContent?.trim()).toBe("2");
+    expect(messagesValue?.textContent?.trim()).toBe("100");
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
     );
@@ -961,55 +812,6 @@ describe("renderUsage", () => {
         .querySelector(".cost-window-card--range .cost-window-card__value")
         ?.textContent?.trim(),
     ).toBe("$10.00");
-  });
-
-  it("hides range-wide cost windows when a post-load filter is active", () => {
-    const base = createUsageProps();
-    const totals = {
-      input: 100,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 100,
-      totalCost: 1,
-      inputCost: 1,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
-    const data = {
-      ...base.data,
-      totals,
-      costDaily: [{ ...totals, date: "2026-05-14" }],
-    };
-    const filterCases: Array<Partial<UsageProps["filters"]>> = [
-      { query: "provider:openai" },
-      { selectedDays: ["2026-05-14"] },
-      { selectedHours: [12] },
-      { selectedSessions: ["agent:main:main"] },
-    ];
-
-    const unfiltered = document.createElement("div");
-    mountSolid(() => renderUsage(createUsageProps({ data })), { container: unfiltered });
-    flush();
-    expect(unfiltered.querySelector(".cost-window-analysis")).not.toBeNull();
-
-    for (const filterCase of filterCases) {
-      const container = document.createElement("div");
-      mountSolid(
-        () =>
-          renderUsage(
-            createUsageProps({
-              data,
-              filters: { ...base.filters, ...filterCase },
-            }),
-          ),
-        { container },
-      );
-      flush();
-      expect(container.querySelector(".cost-window-analysis")).toBeNull();
-    }
   });
 
   it("shows the empty state for an all-zero successful response", () => {

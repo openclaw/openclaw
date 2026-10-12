@@ -1,9 +1,9 @@
 import { For } from "solid-js";
+import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { extractQueryTerms } from "./helpers.ts";
 import { applySuggestionToQuery, removeQueryToken } from "./query.ts";
-import type { buildQuerySuggestions, buildUsageFilterOptions } from "./query.ts";
+import type { buildQuerySuggestions, UsageFilterOptions } from "./query.ts";
 import type { UsageProps } from "./types.ts";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 
@@ -16,7 +16,7 @@ export function UsageQuerySection(props: {
   hasOverviewData: boolean;
   matchingSessions: number;
   totalSessions: number;
-  filterOptions: ReturnType<typeof buildUsageFilterOptions>;
+  filterOptions: UsageFilterOptions;
   queryTerms: ReturnType<typeof extractQueryTerms>;
   querySuggestions: ReturnType<typeof buildQuerySuggestions>;
   queryWarnings: string[];

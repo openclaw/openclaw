@@ -1,8 +1,5 @@
 import { For, Show, createMemo } from "solid-js";
-import {
-  addCostUsageTotals,
-  createEmptyCostUsageTotals,
-} from "../../../../src/infra/session-cost-usage-totals.js";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import {
   SettingsSection,
@@ -10,31 +7,18 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
-import { downloadTextFile } from "../../lib/download.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { resolveUsageOverviewState } from "./cache-status.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/usage.css";
+import { resolveUsageOverviewState } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
-import { extractQueryTerms, filterSessionsByQuery, formatIsoDate } from "./helpers.ts";
+import { formatIsoDate } from "./helpers.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
-import {
-  buildAggregatesFromSessions,
-  buildPeakErrorHours,
-  buildUsageInsightStats,
-  formatUsageCost,
-  formatUsageTokens,
-  sessionTouchesSelectedHours,
-} from "./metrics.ts";
+import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
-import {
-  buildDailyCsv,
-  buildQuerySuggestions,
-  buildSessionsCsv,
-  buildUsageFilterOptions,
-} from "./query.ts";
-import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { buildQuerySuggestions } from "./query.ts";
+import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
@@ -123,138 +107,67 @@ export function renderUsage(props: UsageProps) {
     const isTokenMode = display.chartMode === "tokens";
     const hasQuery = filters.query.trim().length > 0;
     const hasDraftQuery = filters.queryDraft.trim().length > 0;
-    const selectedDaySet = new Set(filters.selectedDays);
-    const selectedSessionSet = new Set(filters.selectedSessions);
-
-    const sortedSessions = data.sessions.toSorted((a, b) => {
-      const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
-      const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
-      return valB - valA;
-    });
-
-    const hourFilteredSessions =
-      filters.selectedHours.length > 0
-        ? sortedSessions.filter((session) =>
-            sessionTouchesSelectedHours(session, filters.selectedHours, filters.timeZone),
-          )
-        : sortedSessions;
-    const queryResult = filterSessionsByQuery(hourFilteredSessions, filters.query);
-    const matchesSelectedDays = (session: UsageSessionEntry) => {
-      if (selectedDaySet.size === 0) {
-        return true;
-      }
-      if (session.usage?.activityDates?.length) {
-        return session.usage.activityDates.some((date) => selectedDaySet.has(date));
-      }
-      return Boolean(
-        session.updatedAt &&
-        selectedDaySet.has(formatIsoDate(new Date(session.updatedAt), filters.timeZone)),
-      );
+    const overview = data.overview;
+    const filteredSessions = data.sessions;
+    const queryWarnings = overview?.queryWarnings ?? [];
+    const filterOptions = overview?.filterOptions ?? {
+      agent: [],
+      channel: [],
+      provider: [],
+      model: [],
+      tool: [],
     };
-    const filteredSessions = queryResult.sessions.filter(matchesSelectedDays);
-    const queryWarnings = queryResult.warnings;
-    const filterOptions = buildUsageFilterOptions(sortedSessions, data.aggregates);
     const querySuggestions = buildQuerySuggestions(filters.queryDraft, filterOptions);
     const queryTerms = extractQueryTerms(filters.queryDraft);
-
     const primarySelectedEntry =
-      filters.selectedSessions.length === 1
-        ? data.sessions.find((s) => s.key === filters.selectedSessions[0])
+      filters.selectedSessions.length === 1 && overview?.selectedRowCount !== 0
+        ? (data.selectedSession ??
+          data.sessions.find((session) => session.key === filters.selectedSessions[0]))
         : null;
-
-    const scopedSessions = selectedSessionSet.size
-      ? queryResult.sessions.filter((session) => selectedSessionSet.has(session.key))
-      : queryResult.sessions;
-    const aggregateSessions = scopedSessions.filter(matchesSelectedDays);
-    const hasSessionFilters =
-      selectedSessionSet.size > 0 || hasQuery || filters.selectedHours.length > 0;
-    const hasAggregateFilters = hasSessionFilters || selectedDaySet.size > 0;
-    const computeTotals = (sources: Iterable<UsageTotals | null | undefined>): UsageTotals => {
-      const totals = createEmptyCostUsageTotals();
-      for (const source of sources) {
-        if (source) {
-          addCostUsageTotals(totals, source);
-        }
-      }
-      return totals;
+    const filteredDaily = data.costDaily;
+    const displayTotals = hasOverviewData ? data.totals : null;
+    const totalSessions =
+      overview?.unfilteredSessionCount ?? data.aggregates?.sessionCount ?? data.sessions.length;
+    const activeAggregates = data.aggregates ?? {
+      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+      byModel: [],
+      byProvider: [],
+      byAgent: [],
+      byChannel: [],
+      daily: [],
     };
-    // Keep global daily totals when no row scope is active: the visible session page can be capped.
-    let filteredDaily = data.costDaily;
-    if (hasSessionFilters) {
-      const days = new Map<string, UsageTotals>();
-      for (const session of scopedSessions) {
-        for (const day of session.usage?.dailyBreakdown ?? []) {
-          const totals = days.get(day.date) ?? createEmptyCostUsageTotals();
-          addCostUsageTotals(totals, day);
-          days.set(day.date, totals);
-        }
-      }
-      filteredDaily = Array.from(days, ([date, totals]) => ({ date, ...totals })).toSorted((a, b) =>
-        a.date.localeCompare(b.date),
-      );
-    }
-    const displayTotals = !hasOverviewData
-      ? null
-      : selectedDaySet.size
-        ? computeTotals(filteredDaily.filter((day) => selectedDaySet.has(day.date)))
-        : hasSessionFilters
-          ? computeTotals(aggregateSessions.map((session) => session.usage))
-          : data.totals;
-    const totalSessions = data.aggregates?.sessionCount ?? sortedSessions.length;
-    const activeAggregates = hasAggregateFilters
-      ? buildAggregatesFromSessions(aggregateSessions)
-      : buildAggregatesFromSessions([], data.aggregates);
-    const serverCreators = !hasSessionFilters ? data.aggregates?.byCreator : undefined;
-    if (selectedDaySet.size > 0) {
-      activeAggregates.byCreator = (serverCreators ?? activeAggregates.byCreator ?? []).flatMap(
-        (creator) => {
-          const daily = creator.daily.filter((day) => selectedDaySet.has(day.date));
-          const sessionActivity = creator.sessionActivity.flatMap((activity) => {
-            const dates = activity.dates.filter((date) => selectedDaySet.has(date));
-            return dates.length ? [{ dates, sessionCount: activity.sessionCount }] : [];
-          });
-          const sessionCount = sessionActivity.reduce(
-            (sum, activity) => sum + activity.sessionCount,
-            0,
-          );
-          const totals = computeTotals(daily);
-          return sessionCount || totals.totalTokens || totals.totalCost
-            ? [{ ...creator, totals, sessionCount, daily, sessionActivity }]
-            : [];
-        },
-      );
-    }
     const displaySessionCount =
-      selectedDaySet.size > 0 && serverCreators
-        ? (activeAggregates.byCreator ?? []).reduce((sum, creator) => sum + creator.sessionCount, 0)
-        : hasAggregateFilters
-          ? aggregateSessions.length
-          : (data.aggregates?.sessionCount ?? aggregateSessions.length);
-    if (selectedDaySet.size > 0 && serverCreators) {
-      activeAggregates.sessionCount = displaySessionCount;
-    }
-    const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
-    const insightTotals = insightsUseVisiblePage
-      ? computeTotals(aggregateSessions.map((session) => session.usage))
-      : displayTotals;
-    const insightAggregates = insightsUseVisiblePage
-      ? buildAggregatesFromSessions(aggregateSessions)
-      : activeAggregates;
-    // Cost windows use range-wide daily totals; filtered pages need exact scoped data.
-    const costWindowComparison = hasAggregateFilters
-      ? undefined
-      : renderCostWindowComparison(
-          data.costDaily,
-          filters.startDate,
-          filters.endDate,
-          filters.timeZone,
-        );
-
-    const insightStats = buildUsageInsightStats(
-      aggregateSessions,
-      insightTotals,
-      insightAggregates,
+      overview?.selectedSessionCount ??
+      overview?.total ??
+      data.aggregates?.sessionCount ??
+      data.sessions.length;
+    const exportSessionCount = overview?.selectedRowCount ?? displaySessionCount;
+    const insightTotals = displayTotals;
+    const insightAggregates = activeAggregates;
+    const costWindowComparison = renderCostWindowComparison(
+      data.costDaily,
+      filters.startDate,
+      filters.endDate,
+      filters.timeZone,
     );
+    const durationMs = overview?.durationMs ?? 0;
+    const durationCount = overview?.durationCount ?? 0;
+    const insightStats = {
+      durationCount,
+      avgDurationMs: durationCount ? durationMs / durationCount : 0,
+      throughputTokensPerMin:
+        displayTotals && durationMs > 0
+          ? displayTotals.totalTokens / (durationMs / 60000)
+          : undefined,
+      throughputCostPerMin:
+        displayTotals && durationMs > 0
+          ? displayTotals.totalCost / (durationMs / 60000)
+          : undefined,
+      errorRate: activeAggregates.messages.total
+        ? activeAggregates.messages.errors / activeAggregates.messages.total
+        : 0,
+    };
     // The gateway always returns a totals object (all-zero when idle), so key
     // the empty state off content — and never render it under an error callout,
     // where "no usage data yet" would misexplain the failure.
@@ -264,6 +177,7 @@ export function renderUsage(props: UsageProps) {
       !data.loading &&
       !data.error &&
       data.sessions.length === 0 &&
+      (overview?.unfilteredSessionCount ?? 0) === 0 &&
       (data.totals?.totalTokens ?? 0) === 0;
     const hasMissingCost = (displayTotals?.missingCostEntries ?? 0) > 0;
     const datePresets = [
@@ -299,11 +213,9 @@ export function renderUsage(props: UsageProps) {
       filterActions.onDatesChange({ startDate: "1970-01-01" });
       filterActions.onDatesChange({ endDate: formatIsoDate(new Date(), filters.timeZone) });
     };
-    const exportStamp = formatIsoDate(new Date());
 
     return {
       activeAggregates,
-      aggregateSessions,
       applyAllRange,
       applyPreset,
       costWindowComparison,
@@ -314,8 +226,8 @@ export function renderUsage(props: UsageProps) {
       display,
       displayActions,
       displaySessionCount,
+      exportSessionCount,
       displayTotals,
-      exportStamp,
       filterActions,
       filterOptions,
       filteredDaily,
@@ -503,21 +415,10 @@ export function renderUsage(props: UsageProps) {
                     switch (value) {
                       case "sessions-csv":
                       case "daily-csv":
-                        downloadTextFile(
-                          `openclaw-usage-${value === "sessions-csv" ? "sessions" : "daily"}-${state().exportStamp}.csv`,
-                          value === "sessions-csv"
-                            ? buildSessionsCsv(state().aggregateSessions)
-                            : buildDailyCsv(state().filteredDaily),
-                          "text/csv;charset=utf-8",
-                        );
+                        state().displayActions.onExportCsv(value);
                         break;
                       case "json":
-                        state().displayActions.onExportJson({
-                          totals: state().displayTotals,
-                          sessions: state().aggregateSessions,
-                          daily: state().filteredDaily,
-                          aggregates: state().activeAggregates,
-                        });
+                        state().displayActions.onExportJson();
                         break;
                       case undefined:
                         break;
@@ -534,7 +435,7 @@ export function renderUsage(props: UsageProps) {
                   </button>
                   <wa-dropdown-item
                     value="sessions-csv"
-                    disabled={state().aggregateSessions.length === 0}
+                    disabled={state().data.exporting || state().exportSessionCount === 0}
                   >
                     {t("usage.export.sessionsCsv")}
                   </wa-dropdown-item>
@@ -546,7 +447,7 @@ export function renderUsage(props: UsageProps) {
                     disabled={
                       state().data.exporting ||
                       state().data.loading ||
-                      (state().aggregateSessions.length === 0 && state().filteredDaily.length === 0)
+                      (state().exportSessionCount === 0 && state().filteredDaily.length === 0)
                     }
                   >
                     {t("usage.export.json")}
@@ -562,7 +463,11 @@ export function renderUsage(props: UsageProps) {
               hasDraftQuery={state().hasDraftQuery}
               hasQuery={state().hasQuery}
               hasOverviewData={state().hasOverviewData}
-              matchingSessions={state().filteredSessions.length}
+              matchingSessions={
+                state().data.sessionPage?.total ??
+                state().data.overview?.total ??
+                state().filteredSessions.length
+              }
               totalSessions={state().totalSessions}
               filterOptions={state().filterOptions}
               queryTerms={state().queryTerms}
@@ -588,9 +493,6 @@ export function renderUsage(props: UsageProps) {
                     : "usage.cacheStatus.warning",
                 )}
               </div>
-            ) : undefined}
-            {state().data.sessionsLimitReached ? (
-              <div class="callout warning usage-callout">{t("usage.sessions.limitReached")}</div>
             ) : undefined}
           </div>
         </section>
@@ -644,11 +546,11 @@ export function renderUsage(props: UsageProps) {
               aggregates={state().insightAggregates}
               stats={state().insightStats}
               showCostHint={state().hasMissingCost}
-              showCostShares={
-                /* Daily buckets are exact; category rollups remain full-session totals. */
-                state().filters.selectedDays.length === 0
-              }
-              errorHours={buildPeakErrorHours(state().aggregateSessions, state().filters.timeZone)}
+              showCostShares={state().filters.selectedDays.length === 0}
+              errorHours={buildPeakErrorHours(
+                state().data.overview?.hourlyMessages ?? [],
+                state().data.overview?.hourlyErrors ?? [],
+              )}
               sessionCount={state().displaySessionCount}
               totalSessions={state().totalSessions}
             />
@@ -660,7 +562,7 @@ export function renderUsage(props: UsageProps) {
             )}
             {
               <UsageMosaic
-                sessions={state().aggregateSessions}
+                overview={state().data.overview}
                 timeZone={state().filters.timeZone}
                 selectedHours={state().filters.selectedHours}
                 onSelectHour={state().filterActions.onSelectHour}
@@ -672,7 +574,9 @@ export function renderUsage(props: UsageProps) {
                 <SessionsCard
                   sessions={state().filteredSessions}
                   usage={props}
-                  totalSessions={state().totalSessions}
+                  totalSessions={state().data.overview?.total ?? state().totalSessions}
+                  overview={state().data.sessionPage ?? state().data.overview}
+                  loading={state().data.loading}
                 />
               </div>
               <Show when={state().primarySelectedEntry}>

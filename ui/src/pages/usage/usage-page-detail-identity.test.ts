@@ -314,27 +314,27 @@ describe("UsagePage detail identity", () => {
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-      await vi.waitFor(() => expect(page.details.contextWeight.loading).toBe(false));
+      await vi.waitFor(() => expect(page.details.session.loading).toBe(false));
       await page.updateComplete;
       if (conflict) {
-        expect.soft(page.details.contextWeight.data).toBeNull();
+        expect.soft(page.details.session.data).toBeNull();
         expect
-          .soft(page.details.contextWeight.status.error)
+          .soft(page.details.session.status.error)
           .toBe("These context details are out of date. Refresh usage and try again.");
         expect
           .soft(page.querySelector(".context-details-panel")?.textContent)
           .not.toContain(report);
       } else {
-        expect(page.details.contextWeight.data).toEqual(contextWeight(report));
-        expect(page.details.contextWeight.status.error).toBeNull();
+        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report));
+        expect(page.details.session.status.error).toBeNull();
       }
       returnedId = captured;
       report = "Recovered context";
       refreshButton(page).click();
       await vi.waitFor(() =>
-        expect(page.details.contextWeight.data).toEqual(contextWeight(report)),
+        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report)),
       );
-      expect(page.details.contextWeight.status.error).toBeNull();
+      expect(page.details.session.status.error).toBeNull();
       expect(page.usageSelectedSessions).toEqual(["global"]);
       for (const [method, params] of request.mock.calls) {
         if (method === "sessions.usage" && params?.key) {

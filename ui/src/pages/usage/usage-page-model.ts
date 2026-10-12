@@ -13,7 +13,7 @@ import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
-import { createUsageJsonExportRequest } from "./export.ts";
+import { createUsageExportRequest } from "./export.ts";
 import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
@@ -66,6 +66,8 @@ export class UsagePageModel {
     query: "",
   };
   private usageSelectedSessions: string[] = [];
+  private usageOffset = 0;
+  private selectedSession: UsageProps["data"]["selectedSession"] = null;
   private usageAgentId: string | null = null;
   private usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
@@ -152,6 +154,12 @@ export class UsagePageModel {
         const sessionKey =
           this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
         if (sessionKey) {
+          const selectedRow = snapshot.value.result.sessions.find(
+            (session) => session.key === sessionKey,
+          );
+          if (selectedRow) {
+            this.selectedSession = selectedRow;
+          }
           // Manual intent belongs to this request's selection, never a later poll or selection.
           this.details.load(sessionKey, value.refreshSessionKey === sessionKey);
         }
@@ -172,7 +180,7 @@ export class UsagePageModel {
     },
   });
 
-  private readonly usageExportRequest = createUsageJsonExportRequest(
+  private readonly usageExportRequest = createUsageExportRequest(
     () => this.notify(),
     this.gateway,
     () => this.currentQuery,
@@ -182,7 +190,10 @@ export class UsagePageModel {
     () => this.notify(),
     this.gateway,
     () => this.currentQuery,
-    () => this.usageResult?.sessions ?? [],
+    () =>
+      this.selectedSession
+        ? [...(this.usageRosterResult?.sessions ?? []), this.selectedSession]
+        : (this.usageRosterResult?.sessions ?? []),
     () => {
       this.usageTimeSeriesCursorStart = null;
       this.usageTimeSeriesCursorEnd = null;
@@ -328,7 +339,7 @@ export class UsagePageModel {
   private get usageCacheIncomplete(): boolean {
     return isUsageCacheIncomplete(
       this.usageResult?.cacheStatus,
-      this.usageCostSummary?.cacheStatus,
+      this.usageCalendarSummary?.cacheStatus,
     );
   }
 
@@ -340,10 +351,18 @@ export class UsagePageModel {
       timeZone: this.filters.timeZone,
       agentId: normalizeLowercaseStringOrEmpty(this.usageAgentId ?? "") || undefined,
       creatorKey: this.filters.creatorKey ?? undefined,
+      query: this.filters.query,
+      selectedDays: this.filters.selectedDays,
+      selectedHours: this.filters.selectedHours,
+      selectedSessions: this.usageSelectedSessions,
+      recentKeys: this.display.sessionsTab === "recent" ? this.display.recentSessions : undefined,
+      offset: this.usageOffset,
+      sort: this.display.sessionSort,
+      sortDirection: this.display.sessionSortDir,
     };
   }
 
-  private isCurrentQuery(query: SessionUsageQuery): boolean {
+  private isCurrentRosterQuery(query: SessionUsageQuery): boolean {
     const current = this.currentQuery;
     return (
       query.startDate === current.startDate &&
@@ -351,8 +370,28 @@ export class UsagePageModel {
       query.scope === current.scope &&
       query.timeZone === current.timeZone &&
       query.agentId === current.agentId &&
-      query.creatorKey === current.creatorKey
+      query.creatorKey === current.creatorKey &&
+      query.query === current.query &&
+      JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays) &&
+      JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
+      JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
+      query.offset === current.offset &&
+      query.sort === current.sort &&
+      query.sortDirection === current.sortDirection
     );
+  }
+
+  private isCurrentQuery(query: SessionUsageQuery): boolean {
+    return (
+      this.isCurrentRosterQuery(query) &&
+      JSON.stringify(query.selectedSessions) === JSON.stringify(this.currentQuery.selectedSessions)
+    );
+  }
+
+  private get usageRosterResult(): SessionsUsageResult | null {
+    return this.usageSnapshot && this.isCurrentRosterQuery(this.usageSnapshot.query)
+      ? this.usageSnapshot.result
+      : null;
   }
 
   get usageResult(): SessionsUsageResult | null {
@@ -361,10 +400,25 @@ export class UsagePageModel {
       : null;
   }
 
-  private get usageCostSummary(): CostUsageSummary | null {
-    return this.usageSnapshot && this.isCurrentQuery(this.usageSnapshot.query)
-      ? this.usageSnapshot.costSummary
-      : null;
+  private get usageCalendarSummary(): CostUsageSummary | null {
+    const previous = this.usageSnapshot?.query;
+    const current = this.currentQuery;
+    if (
+      !previous ||
+      previous.startDate !== current.startDate ||
+      previous.endDate !== current.endDate ||
+      previous.scope !== current.scope ||
+      previous.timeZone !== current.timeZone ||
+      previous.agentId !== current.agentId ||
+      previous.creatorKey !== current.creatorKey ||
+      previous.query !== current.query ||
+      JSON.stringify(previous.selectedHours) !== JSON.stringify(current.selectedHours) ||
+      JSON.stringify(previous.selectedSessions) !== JSON.stringify(current.selectedSessions)
+    ) {
+      return null;
+    }
+    // Day selection changes totals, but the same calendar remains available for Shift-click.
+    return this.usageSnapshot?.costSummary ?? null;
   }
 
   private get usageCreatorOptions() {
@@ -373,10 +427,6 @@ export class UsagePageModel {
     return this.usageSnapshot?.query.agentId === this.currentQuery.agentId
       ? (this.usageSnapshot?.result?.creatorOptions ?? [])
       : [];
-  }
-
-  private get providerUsageStalled(): boolean {
-    return this.providerUsageIncomplete && this.refreshPolicy.incompleteUsageExhausted;
   }
 
   private applyUsageError(error: unknown) {
@@ -417,6 +467,8 @@ export class UsagePageModel {
     this.usageExportRequest.cancel();
     this.setFilters({ selectedDays: [], selectedHours: [] });
     this.usageSelectedSessions = [];
+    this.selectedSession = null;
+    this.usageOffset = 0;
     this.details.clear();
   }
 
@@ -463,14 +515,15 @@ export class UsagePageModel {
       for (const detail of [
         this.details.timeSeries,
         this.details.sessionLogs,
-        this.details.contextWeight,
+        this.details.session,
       ]) {
-        void detail.recover(sessionKey, detail === this.details.contextWeight);
+        void detail.recover(sessionKey, detail === this.details.session);
       }
     }
   }
 
   private selectSession(key: string, shiftKey: boolean, orderedKeys: string[]) {
+    const selectedRow = this.usageRosterResult?.sessions.find((session) => session.key === key);
     this.details.clear();
     this.display = {
       ...this.display,
@@ -488,12 +541,26 @@ export class UsagePageModel {
       "replace",
     );
 
+    this.selectedSession =
+      this.usageSelectedSessions.length === 1 ? (selectedRow ?? this.selectedSession) : null;
+    this.refreshOverview();
     if (this.usageSelectedSessions.length === 1) {
       const sessionKey = this.usageSelectedSessions[0];
       if (sessionKey) {
         this.details.load(sessionKey);
       }
     }
+  }
+
+  private refreshOverview() {
+    this.usageOffset = 0;
+    void this.loadUsage();
+  }
+
+  private applyQuery() {
+    this.clearDebounce("queryDebounceTimer");
+    this.setFilters({ query: this.filters.queryDraft });
+    this.refreshOverview();
   }
 
   read(): UsageProps {
@@ -503,28 +570,31 @@ export class UsagePageModel {
         loading: this.usageLoading,
         exporting: this.usageExportRequest.pending,
         error: this.usageError,
-        sessions: this.usageResult?.sessions ?? [],
+        sessions: this.usageRosterResult?.sessions ?? [],
+        sessionPage: this.usageRosterResult?.overview,
         creatorOptions: this.usageCreatorOptions,
-        sessionsLimitReached: (this.usageResult?.sessions.length ?? 0) >= 1000,
+        overview: this.usageResult?.overview,
+        selectedSession: this.details.session.data ?? this.selectedSession,
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
-        costDaily: this.usageCostSummary?.daily ?? [],
+        costDaily: this.usageCalendarSummary?.daily ?? [],
         cacheRefresh: this.usageCacheIncomplete
           ? this.usageRefreshFailed
             ? "failed"
             : "retrying"
           : "complete",
         providerUsage: this.providerUsageSummary?.providers ?? [],
-        providerUsageStalled: this.providerUsageStalled,
+        providerUsageStalled:
+          this.providerUsageIncomplete && this.refreshPolicy.incompleteUsageExhausted,
         providerUsageUnavailable: this.providerUsageUnavailable,
       },
       filters: { ...this.filters, selectedSessions: this.usageSelectedSessions },
       display: this.display,
       detail: {
         context: {
-          weight: this.details.contextWeight.data,
-          loading: this.details.contextWeight.loading,
-          status: this.details.contextWeight.status,
+          weight: this.details.session.data?.contextWeight,
+          loading: this.details.session.loading,
+          status: this.details.session.status,
         },
         timeSeriesMode: this.usageTimeSeriesMode,
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
@@ -570,22 +640,23 @@ export class UsagePageModel {
                 "append",
               ),
             });
+            this.refreshOverview();
           },
           onQueryDraftChange: (query) => {
             this.setFilters({ queryDraft: query });
             this.clearDebounce("queryDebounceTimer");
             this.queryDebounceTimer = window.setTimeout(() => {
-              this.setFilters({ query: this.filters.queryDraft });
               this.queryDebounceTimer = null;
+              this.applyQuery();
             }, 250);
           },
           onApplyQuery: () => {
-            this.clearDebounce("queryDebounceTimer");
-            this.setFilters({ query: this.filters.queryDraft });
+            this.applyQuery();
           },
           onClearQuery: () => {
             this.clearDebounce("queryDebounceTimer");
             this.setFilters({ queryDraft: "", query: "" });
+            this.refreshOverview();
           },
           onSelectDay: (day, shiftKey, orderedDays) => {
             this.setFilters({
@@ -597,21 +668,47 @@ export class UsagePageModel {
                 "toggle",
               ),
             });
+            this.refreshOverview();
           },
-          onClearDays: () => this.setFilters({ selectedDays: [] }),
-          onClearHours: () => this.setFilters({ selectedHours: [] }),
+          onClearDays: () => {
+            this.setFilters({ selectedDays: [] });
+            this.refreshOverview();
+          },
+          onClearHours: () => {
+            this.setFilters({ selectedHours: [] });
+            this.refreshOverview();
+          },
           onClearSessions: () => {
             this.usageSelectedSessions = [];
+            this.selectedSession = null;
             this.details.clear();
+            this.refreshOverview();
           },
-          onClearFilters: () => this.clearSelectionsAndDetails(),
+          onClearFilters: () => {
+            this.clearSelectionsAndDetails();
+            this.refreshOverview();
+          },
         },
         display: {
-          onExportJson: (data) => {
-            void this.usageExportRequest.run(data);
+          onExportJson: () => {
+            void this.usageExportRequest.run("json");
+          },
+          onExportCsv: (format) => {
+            void this.usageExportRequest.run(format);
+          },
+          onPageChange: (offset) => {
+            this.usageOffset = offset;
+            void this.loadUsage();
           },
           onChange: (next) => {
             this.display = { ...this.display, ...next };
+            if (
+              next.sessionSort !== undefined ||
+              next.sessionSortDir !== undefined ||
+              next.sessionsTab !== undefined
+            ) {
+              this.refreshOverview();
+            }
             this.notify();
           },
         },

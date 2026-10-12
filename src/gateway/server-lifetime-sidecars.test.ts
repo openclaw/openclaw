@@ -47,6 +47,11 @@ vi.mock("./github-oauth-lifecycle.js", () => ({
   installActiveGitHubOAuthLifecycle: oauth.install,
 }));
 
+// mock-isolation: Prevent unrelated backfill; real lifetime/worker proof covers publication.
+vi.mock("./session-cost-usage-lifetime.js", () => ({
+  startSessionCostUsageProjectionLifetime: () => ({ stop: async () => {} }),
+}));
+
 const roots: string[] = [];
 
 function createStateDir(): string {

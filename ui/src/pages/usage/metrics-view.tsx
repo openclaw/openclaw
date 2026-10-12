@@ -2,21 +2,28 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createMemo, For } from "solid-js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import { buildUsageMosaicStats, formatUsageTokens } from "./metrics.ts";
-import type { UsageSessionEntry } from "./types.ts";
+import type { SessionsUsageResult } from "./data-types.ts";
+import { formatUsageTokens } from "./metrics.ts";
 
 export function UsageMosaic(props: {
-  sessions: UsageSessionEntry[];
+  overview: SessionsUsageResult["overview"];
   timeZone: "local" | "utc";
   selectedHours: number[];
   onSelectHour: (hour: number, shiftKey: boolean) => void;
 }) {
   const state = createMemo(() => {
-    const sessions = props.sessions;
     const timeZone = props.timeZone;
     const selectedHours = props.selectedHours;
     const onSelectHour = props.onSelectHour;
-    const stats = buildUsageMosaicStats(sessions, timeZone);
+    const stats = {
+      hasData: props.overview?.hasTimelineData ?? false,
+      totalTokens: props.overview?.hourTokens.reduce((sum, value) => sum + value, 0) ?? 0,
+      hourTotals: props.overview?.hourTokens ?? Array.from({ length: 24 }, () => 0),
+      weekdayTotals: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].map((day, index) => ({
+        label: t(`usage.mosaic.${day}`),
+        tokens: props.overview?.weekdayTokens[index] ?? 0,
+      })),
+    };
     const maxHour = Math.max(...stats.hourTotals, 1);
     const maxWeekday = Math.max(...stats.weekdayTotals.map((d) => d.tokens), 1);
 

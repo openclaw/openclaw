@@ -6,58 +6,64 @@ import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import { formatIsoDate } from "./helpers.ts";
+import { buildDailyCsv, buildSessionsCsv } from "./query.ts";
 import { createUsageRequest } from "./request.ts";
-import type { UsageJsonExport, UsageSessionEntry } from "./types.ts";
+import type { UsageJsonExport } from "./types.ts";
 
 registerUsageEnglish();
 
-// Logical keys can be reused after deletion; context belongs to a concrete session.
-function sessionIdentity({ agentId, key, sessionId }: UsageSessionEntry): string {
-  return JSON.stringify([agentId, key, sessionId]);
-}
-
-export function createUsageJsonExportRequest(
+export function createUsageExportRequest(
   notify: () => void,
   gateway: GatewayPageBinding,
   query: () => SessionUsageQuery,
 ) {
   return createUsageRequest(notify, {
-    task: async (data: UsageJsonExport, { signal }) => {
+    task: async (format: "json" | "sessions-csv" | "daily-csv", { signal }) => {
       const connection = gateway.capture();
       if (!connection) {
         throw new Error(t("common.offline"));
       }
-      const filename = `openclaw-usage-${formatIsoDate(new Date())}.json`;
-      let weights = new Map<string, UsageSessionEntry["contextWeight"]>();
-      if (data.sessions.some((session) => session.hasContextWeight)) {
-        const result = await requestSessionUsage(connection.client, query(), {
-          includeContextWeight: true,
+      const selectedQuery = query();
+      const result = await requestSessionUsage(
+        connection.client,
+        { ...selectedQuery, offset: undefined, recentKeys: undefined },
+        {
+          includeContextWeight: format === "json",
+          ...(format === "daily-csv"
+            ? { projection: "overview" as const, limit: 50 }
+            : { limit: Number.MAX_SAFE_INTEGER }),
           signal,
-        });
-        weights = new Map(
-          result.sessions.map((session) => [sessionIdentity(session), session.contextWeight]),
-        );
-        if (
-          data.sessions.some(
-            (session) => session.hasContextWeight && !weights.get(sessionIdentity(session)),
-          )
-        ) {
-          throw new Error(t("usage.export.changed"));
-        }
-      }
-      // Export the clicked snapshot's totals and rows; only hydrate their omitted details.
-      const hydratedData = {
-        ...data,
-        sessions: data.sessions.map((session) => ({
-          ...session,
-          contextWeight: weights.get(sessionIdentity(session)) ?? null,
-        })),
+        },
+      );
+      const selectedKeys = new Set(selectedQuery.selectedSessions);
+      const data: UsageJsonExport = {
+        sessions: selectedKeys.size
+          ? result.sessions.filter((session) => selectedKeys.has(session.key))
+          : result.sessions,
+        totals: result.totals,
+        aggregates: result.aggregates,
+        daily: result.aggregates.costDaily ?? [],
       };
-      return { connection, filename, data: hydratedData };
+      return { connection, data, format };
     },
-    onComplete: ({ connection, filename, data }) => {
-      if (gateway.isCurrent(connection)) {
-        downloadTextFile(filename, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
+    onComplete: ({ connection, data, format }) => {
+      if (!gateway.isCurrent(connection)) {
+        return;
+      }
+      const stamp = formatIsoDate(new Date());
+      if (format === "json") {
+        downloadTextFile(
+          `openclaw-usage-${stamp}.json`,
+          JSON.stringify(data, null, 2),
+          "application/json;charset=utf-8",
+        );
+      } else {
+        const kind = format === "sessions-csv" ? "sessions" : "daily";
+        downloadTextFile(
+          `openclaw-usage-${kind}-${stamp}.csv`,
+          kind === "sessions" ? buildSessionsCsv(data.sessions) : buildDailyCsv(data.daily),
+          "text/csv;charset=utf-8",
+        );
       }
     },
     onError: (error) => {

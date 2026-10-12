@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
+import { buildUsageOverview, mergeUsageOverviews } from "../../../../src/shared/usage-overview.js";
+import type { UsageFilterOptions } from "./query.ts";
+import type { UsageProps, UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const noop = vi.fn();
 
@@ -46,14 +49,13 @@ export function usageSession(
 }
 
 export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
-  return {
+  const props: UsageProps = {
     data: {
       loading: false,
       exporting: false,
       error: null,
       sessions: [],
       creatorOptions: [],
-      sessionsLimitReached: false,
       totals: null,
       aggregates: null,
       costDaily: [],
@@ -126,6 +128,8 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       },
       display: {
         onExportJson: noop,
+        onExportCsv: noop,
+        onPageChange: noop,
         onChange: noop,
       },
       details: {
@@ -140,4 +144,115 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
     },
     ...overrides,
   };
+  if (props.data.sessions.length && !props.data.overview) {
+    props.data.overview = projectUsageData(props.data.sessions).overview;
+  }
+  return props;
+}
+
+export function createUsageOverview(
+  overrides: Partial<NonNullable<UsageProps["data"]["overview"]>> = {},
+): NonNullable<UsageProps["data"]["overview"]> {
+  return {
+    total: 0,
+    unfilteredSessionCount: 0,
+    selectedSessionCount: 0,
+    selectedRowCount: 0,
+    tableSessionCount: 0,
+    tableTotals: { tokens: 0, cost: 0, errors: 0 },
+    offset: 0,
+    limit: 50,
+    queryWarnings: [],
+    hourTokens: Array(24).fill(0),
+    weekdayTokens: Array(7).fill(0),
+    hasTimelineData: false,
+    durationMs: 0,
+    durationCount: 0,
+    hourlyMessages: Array(24).fill(0),
+    hourlyErrors: Array(24).fill(0),
+    filterOptions: { agent: [], channel: [], provider: [], model: [], tool: [] },
+    ...overrides,
+  };
+}
+
+export function projectUsageData(
+  sessions: UsageSessionEntry[],
+  filters: Partial<UsageProps["filters"]> = {},
+): Pick<UsageProps["data"], "sessions" | "totals" | "aggregates" | "overview" | "costDaily"> {
+  const slice = buildUsageOverview({
+    sessions: sessions.map(({ usage: _usage, contextWeight: _context, ...session }) => ({
+      ...session,
+      agentId: session.agentId ?? "main",
+      instances: [{ sessionFile: "fixture" }],
+    })),
+    summaries: sessions.map((session) => session.usage),
+    options: {
+      query: filters.query,
+      selectedDays: filters.selectedDays,
+      selectedHours: filters.selectedHours,
+      selectedSessions: filters.selectedSessions,
+    },
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  const result = mergeUsageOverviews([slice], {});
+  return { ...result, costDaily: result.aggregates.costDaily ?? [] };
+}
+
+export const buildAggregatesFromSessions = (
+  sessions: UsageSessionEntry[],
+  fallback?: UsageAggregates | null,
+): UsageAggregates => {
+  if (sessions.length === 0) {
+    return (
+      fallback ?? {
+        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+      }
+    );
+  }
+
+  const accumulator = createUsageAggregateAccumulator();
+  for (const session of sessions) {
+    accumulator.add(session);
+  }
+  return accumulator.finish();
+};
+
+function appendFilterValues<T>(
+  values: string[],
+  entries: readonly T[],
+  read: (entry: T) => string | undefined,
+  limit = 12,
+): void {
+  for (const entry of entries) {
+    if (values.length >= limit) {
+      break;
+    }
+    const value = read(entry);
+    if (value && !values.includes(value)) {
+      values.push(value);
+    }
+  }
+}
+
+export function buildUsageFilterOptions(
+  sessions: readonly UsageSessionEntry[],
+  aggregates?: UsageAggregates | null,
+): UsageFilterOptions {
+  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
+  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
+  appendFilterValues(options.channel, sessions, (session) => session.channel);
+  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
+  // Overrides follow every observed provider, preserving the menu's first-seen order.
+  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
+  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
+  appendFilterValues(options.model, sessions, (session) => session.model);
+  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
+  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
+  return options;
 }

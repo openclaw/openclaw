@@ -39,6 +39,16 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     params.gatewayRequestContext,
     params.publishSidecars,
   );
+  if (!params.minimalTestGateway) {
+    const { startSessionCostUsageProjectionLifetime } =
+      await import("./session-cost-usage-lifetime.js");
+    params.publishSidecars(
+      startSessionCostUsageProjectionLifetime({
+        getConfig: params.gatewayRequestContext.getRuntimeConfig,
+        warn: params.logWarning,
+      }),
+    );
+  }
   const modelAccountConnect = createModelAccountConnectService({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),

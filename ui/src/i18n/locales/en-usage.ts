@@ -54,7 +54,7 @@ const enUsage = {
     query: {
       placeholder:
         "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
-      apply: "Filter (client-side)",
+      apply: "Filter",
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
       tip: "Tip: use filters or click bars to refine days.",

@@ -4365,6 +4365,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/e2e/update-triage.e2e.test.ts",
   "ui/src/e2e/usage-calendar-boundaries.e2e.test.ts",
   "ui/src/e2e/usage-cost-analysis.e2e.test.ts",
+  "ui/src/e2e/usage-overview.e2e.test.ts",
   "ui/src/e2e/usage-reconnect.e2e.test.ts",
   "ui/src/e2e/warm-boot.e2e.test.ts",
   "ui/src/i18n/plugin-bundle-loading.test.ts",

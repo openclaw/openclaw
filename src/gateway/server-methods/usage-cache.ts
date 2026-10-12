@@ -46,6 +46,7 @@ export async function loadUsageResultCached<T extends object>(params: {
   revision: string | number;
   load: () => Promise<T>;
   isComplete?: (value: T) => boolean;
+  revisionOnly?: boolean;
 }): Promise<T> {
   const { cache, cacheKey, configRef, revision } = params;
   const now = Date.now();
@@ -55,7 +56,11 @@ export async function loadUsageResultCached<T extends object>(params: {
   if (cached) {
     cached.lastAccessedAt = now;
   }
-  if (cached?.value && cached.updatedAt && now - cached.updatedAt < USAGE_CACHE_TTL_MS) {
+  if (
+    cached?.value &&
+    cached.updatedAt !== undefined &&
+    (params.revisionOnly || now - cached.updatedAt < USAGE_CACHE_TTL_MS)
+  ) {
     return cached.value;
   }
   if (cached?.inFlight) {

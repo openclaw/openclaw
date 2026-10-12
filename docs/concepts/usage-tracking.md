@@ -31,11 +31,11 @@ the command again later. The **Session** total is loaded separately. The CLI
 `openclaw gateway usage-cost` also reports the recorded cache state before its
 totals.
 
-The Control UI checks incomplete usage totals again after 5, 10, and 20 seconds.
-These spaced checks give large histories time to load while keeping refresh
-traffic bounded. Until a cold cache has any usage data, the page shows a
-loading placeholder instead of zero totals. Available partial totals stay visible;
-if automatic checks finish without complete data, select **Refresh** to try again.
+The Control UI checks incomplete provider usage again after 5, 10, and 20 seconds.
+Session usage refreshes as its background projection publishes progress. Until a
+cold cache has any usage data, the page shows a loading placeholder instead of
+zero totals. Available partial totals stay visible; if a refresh fails, select
+**Refresh** to try again.
 
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
@@ -59,9 +59,17 @@ to its creator, not individual turns to participants or charges to provider API
 accounts. Current account settings are not used to guess historical attribution.
 
 Selecting chart days narrows creator totals and session counts across the full
-report, including sessions beyond the visible list limit. A session active on
-several selected days counts once. Session, text, and hour filters use the loaded
-session rows instead.
+report. A session active on several selected days counts once. Text, creator,
+and hour filters also cover every matching session, including sessions beyond
+the visible page. The table loads 50 rows at a time; sorting and paging do not
+change chart totals. Selecting sessions narrows the charts while retaining the
+comparison table. JSON export loads the full matching report.
+
+The overview uses a rebuildable usage projection maintained after committed
+transcript changes. A restart or pricing change can require background backfill;
+the page shows partial totals while it advances. Transcripts remain the source
+of truth. Detailed reports retain exact timestamp boundaries and the recorded
+order of floating-point cost additions.
 
 ## Usage date ranges
 

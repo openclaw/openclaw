@@ -3,11 +3,10 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
-import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
+import type { UsageTotals } from "./types.ts";
 
 registerUsageEnglish();
 
@@ -46,105 +45,14 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
 }
 
-function visitSessionHours(
-  session: UsageSessionEntry,
-  timeZone: "local" | "utc",
-  visitor:
-    | { kind: "inclusive"; visit: (hour: number) => boolean }
-    | {
-        kind: "weighted";
-        visit: (slice: { hour: number; weekday: number; share: number }) => void;
-      },
-) {
-  const start = session.usage?.firstActivity ?? session.updatedAt;
-  const end = session.usage?.lastActivity ?? session.updatedAt;
-  if (!start || !end) {
-    return false;
-  }
-
-  const startMs = Math.min(start, end);
-  const endMs = Math.max(start, end);
-
-  const durationMs = endMs - startMs;
-  let cursor = startMs;
-  while (cursor <= endMs) {
-    const date = new Date(cursor);
-    if (visitor.kind === "inclusive") {
-      if (!visitor.visit(getZonedHour(date, timeZone)) || cursor === endMs) {
-        break;
-      }
-      cursor = Math.min(nextHourBoundary(date, timeZone), endMs);
-    } else {
-      const nextMs = cursor === endMs ? cursor : Math.min(nextHourBoundary(date, timeZone), endMs);
-      visitor.visit({
-        hour: getZonedHour(date, timeZone),
-        weekday: getZonedWeekday(date, timeZone),
-        share: startMs === endMs ? 1 : (nextMs - cursor) / durationMs,
-      });
-      if (nextMs === endMs) {
-        break;
-      }
-      cursor = nextMs;
-    }
-  }
-
-  return true;
-}
-
-function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
-  const hourErrors = Array.from({ length: 24 }, () => 0);
-  const hourMsgs = Array.from({ length: 24 }, () => 0);
-
-  for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
-      continue;
-    }
-    const messageCounts = usage.messageCounts;
-
-    // Prefer precise quarter-hour message counts when available.
-    // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
-    // For local view, construct a Date from the UTC components and use getHours()
-    // so the browser's DST-aware timezone logic handles offset automatically.
-    if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
-      const bucketState = createUtcQuarterBucketState();
-      for (const quarterHour of usage.utcQuarterHourMessageCounts) {
-        const mapped = mapUtcQuarterBucket(
-          quarterHour.date,
-          quarterHour.quarterIndex,
-          timeZone,
-          bucketState,
-        );
-        if (!mapped) {
-          continue;
-        }
-        hourErrors[mapped.hour] = (hourErrors[mapped.hour] ?? 0) + quarterHour.errors;
-        hourMsgs[mapped.hour] = (hourMsgs[mapped.hour] ?? 0) + quarterHour.total;
-      }
-      continue;
-    }
-
-    // Fallback: time-based proportional allocation (legacy algorithm)
-    visitSessionHours(session, timeZone, {
-      kind: "weighted",
-      visit: ({ hour, share }) => {
-        hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
-        hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
-      },
-    });
-  }
-
+function buildPeakErrorHours(hourMsgs: number[], hourErrors: number[]) {
   return hourMsgs
-    .map((msgs, hour) => {
-      const errors = hourErrors[hour] ?? 0;
-      const rate = msgs > 0 ? errors / msgs : 0;
-      return {
-        hour,
-        rate,
-        errors,
-        msgs,
-      };
-    })
+    .map((msgs, hour) => ({
+      hour,
+      msgs,
+      errors: hourErrors[hour] ?? 0,
+      rate: msgs > 0 ? (hourErrors[hour] ?? 0) / msgs : 0,
+    }))
     .filter((entry) => entry.msgs > 0 && entry.errors > 0)
     .toSorted((a, b) => b.rate - a.rate)
     .slice(0, 5)
@@ -155,203 +63,22 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }));
 }
 
-function getZonedHour(date: Date, zone: "local" | "utc"): number {
-  return zone === "utc" ? date.getUTCHours() : date.getHours();
-}
-
-function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
-  return zone === "utc" ? date.getUTCDay() : date.getDay();
-}
-
-function parseYmdDate(dateStr: string, timeZone: "local" | "utc" = "local"): Date | null {
+function parseYmdDate(dateStr: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) {
     return null;
   }
-  const [, y, m, d] = match;
-  const year = Number(y);
-  const month = Number(m) - 1;
-  const day = Number(d);
-  const date =
-    timeZone === "utc" ? new Date(Date.UTC(year, month, day)) : new Date(year, month, day);
-  const [actualYear, actualMonth, actualDay] =
-    timeZone === "utc"
-      ? [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()]
-      : [date.getFullYear(), date.getMonth(), date.getDate()];
-  // Reject normalized dates, including a local calendar date skipped by an offset change.
-  return actualYear === year && actualMonth === month && actualDay === day ? date : null;
-}
-
-type UtcQuarterBucketState = {
-  utcDateKey: string | undefined;
-  utcWeekday: number | null;
-  utcStartMs: number;
-};
-
-function createUtcQuarterBucketState(): UtcQuarterBucketState {
-  return { utcDateKey: undefined, utcWeekday: null, utcStartMs: 0 };
-}
-
-function mapUtcQuarterBucket(
-  dateStr: string,
-  quarterIndex: number,
-  timeZone: "local" | "utc",
-  state: UtcQuarterBucketState,
-): { hour: number; weekday: number } | null {
-  if (!Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
-    return null;
-  }
-  if (dateStr !== state.utcDateKey) {
-    state.utcDateKey = dateStr;
-    const date = parseYmdDate(dateStr, "utc");
-    state.utcWeekday = date ? date.getUTCDay() : null;
-    state.utcStartMs = date ? date.getTime() : 0;
-  }
-  if (state.utcWeekday === null) {
-    return null;
-  }
-  const localDate =
-    timeZone === "local" ? new Date(state.utcStartMs + quarterIndex * 900_000) : null;
-  return {
-    // Date getters return +0 even for a -0 quarter index.
-    hour: localDate ? getZonedHour(localDate, timeZone) : Math.floor((quarterIndex + 0) / 4),
-    weekday: localDate ? getZonedWeekday(localDate, timeZone) : state.utcWeekday,
-  };
-}
-
-function nextHourBoundary(date: Date, zone: "local" | "utc"): number {
-  const start = date.getTime();
-  const minutes = zone === "utc" ? date.getUTCMinutes() : date.getMinutes();
-  const seconds = zone === "utc" ? date.getUTCSeconds() : date.getSeconds();
-  // Local setters can move backward into the first occurrence of a repeated hour.
-  const next = start + (60 - minutes) * 60_000 - seconds * 1_000 - date.getMilliseconds();
-  if (zone === "utc" || new Date(next - 1).getTimezoneOffset() === date.getTimezoneOffset()) {
-    return next;
-  }
-
-  // Some zones change offset within an hour (Chatham at :45). Split at that
-  // transition so the elapsed interval keeps its original local hour and weekday.
-  const offset = date.getTimezoneOffset();
-  let low = start + 1;
-  let high = next - 1;
-  while (low < high) {
-    const middle = low + Math.floor((high - low) / 2);
-    if (new Date(middle).getTimezoneOffset() === offset) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
-  }
-  return low;
-}
-
-function forEachSessionTokenUsageBucket(
-  session: UsageSessionEntry,
-  timeZone: "local" | "utc",
-  visitor: (params: { hour: number; weekday: number; tokens: number }) => boolean | void,
-): boolean {
-  const buckets = session.usage?.utcQuarterHourTokenUsage;
-  if (!buckets || buckets.length === 0) {
-    return false;
-  }
-  let visited = false;
-  const bucketState = createUtcQuarterBucketState();
-  for (const bucket of buckets) {
-    if (bucket.totalTokens <= 0) {
-      continue;
-    }
-    const mapped = mapUtcQuarterBucket(bucket.date, bucket.quarterIndex, timeZone, bucketState);
-    if (!mapped) {
-      continue;
-    }
-    visited = true;
-    if (
-      visitor({ hour: mapped.hour, weekday: mapped.weekday, tokens: bucket.totalTokens }) === false
-    ) {
-      break;
-    }
-  }
-  return visited;
-}
-
-function sessionTouchesSelectedHours(
-  session: UsageSessionEntry,
-  hours: number[],
-  timeZone: "local" | "utc",
-): boolean {
-  if (hours.length === 0) {
-    return true;
-  }
-  let touches = false;
-  const hasPreciseTokenBuckets = forEachSessionTokenUsageBucket(session, timeZone, ({ hour }) => {
-    touches = hours.includes(hour);
-    return !touches;
-  });
-  if (hasPreciseTokenBuckets) {
-    return touches;
-  }
-  visitSessionHours(session, timeZone, {
-    kind: "inclusive",
-    visit: (hour) => {
-      touches = hours.includes(hour);
-      return !touches;
-    },
-  });
-  return touches;
-}
-
-function buildUsageMosaicStats(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
-  const hourTotals = Array.from({ length: 24 }, () => 0);
-  const weekdayTotals = Array.from({ length: 7 }, () => 0);
-  let totalTokens = 0;
-  let hasData = false;
-
-  for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage || !usage.totalTokens || usage.totalTokens <= 0) {
-      continue;
-    }
-    totalTokens += usage.totalTokens;
-
-    if (
-      forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
-        hourTotals[hour] = (hourTotals[hour] ?? 0) + tokens;
-        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + tokens;
-      })
-    ) {
-      hasData = true;
-      continue;
-    }
-
-    if (
-      !visitSessionHours(session, timeZone, {
-        kind: "weighted",
-        visit: ({ hour, weekday, share }) => {
-          hourTotals[hour] = (hourTotals[hour] ?? 0) + usage.totalTokens * share;
-          weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usage.totalTokens * share;
-        },
-      })
-    ) {
-      continue;
-    }
-    hasData = true;
-  }
-
-  const weekdayLabels = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].map((day, index) => ({
-    label: t(`usage.mosaic.${day}`),
-    tokens: weekdayTotals[index] ?? 0,
-  }));
-
-  return {
-    hasData,
-    totalTokens,
-    hourTotals,
-    weekdayTotals: weekdayLabels,
-  };
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day
+    ? date
+    : null;
 }
 
 function parseIsoDayIndex(dateStr: string): number | null {
-  const date = parseYmdDate(dateStr, "utc");
+  const date = parseYmdDate(dateStr);
   return date ? date.getTime() / DAY_MS : null;
 }
 
@@ -365,7 +92,7 @@ function formatFullDate(dateStr: string): string {
 
 function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
   const date = parseYmdDate(dateStr);
-  return date ? date.toLocaleDateString(undefined, options) : dateStr;
+  return date ? date.toLocaleDateString(undefined, { ...options, timeZone: "UTC" }) : dateStr;
 }
 
 function buildUsageCostWindows(
@@ -393,31 +120,6 @@ function buildUsageCostWindows(
   });
 }
 
-const buildAggregatesFromSessions = (
-  sessions: UsageSessionEntry[],
-  fallback?: UsageAggregates | null,
-): UsageAggregates => {
-  if (sessions.length === 0) {
-    return (
-      fallback ?? {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
-      }
-    );
-  }
-
-  const accumulator = createUsageAggregateAccumulator();
-  for (const session of sessions) {
-    accumulator.add(session);
-  }
-  return accumulator.finish();
-};
-
 type UsageInsightStats = {
   durationCount: number;
   avgDurationMs: number;
@@ -426,51 +128,13 @@ type UsageInsightStats = {
   errorRate: number;
 };
 
-const buildUsageInsightStats = (
-  sessions: UsageSessionEntry[],
-  totals: UsageTotals | null,
-  aggregates: UsageAggregates,
-): UsageInsightStats => {
-  let durationSumMs = 0;
-  let durationCount = 0;
-  for (const session of sessions) {
-    const duration = session.usage?.durationMs ?? 0;
-    if (duration > 0) {
-      durationSumMs += duration;
-      durationCount += 1;
-    }
-  }
-
-  const avgDurationMs = durationCount ? durationSumMs / durationCount : 0;
-  const throughputTokensPerMin =
-    totals && durationSumMs > 0 ? totals.totalTokens / (durationSumMs / 60000) : undefined;
-  const throughputCostPerMin =
-    totals && durationSumMs > 0 ? totals.totalCost / (durationSumMs / 60000) : undefined;
-
-  const errorRate = aggregates.messages.total
-    ? aggregates.messages.errors / aggregates.messages.total
-    : 0;
-
-  return {
-    durationCount,
-    avgDurationMs,
-    throughputTokensPerMin,
-    throughputCostPerMin,
-    errorRate,
-  };
-};
-
 export type { UsageInsightStats };
 export {
-  buildAggregatesFromSessions,
   buildUsageCostWindows,
   buildPeakErrorHours,
-  buildUsageInsightStats,
   charsToTokens,
   formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatUsageTokens,
-  buildUsageMosaicStats,
-  sessionTouchesSelectedHours,
 };

@@ -17,6 +17,7 @@ import { readHotSessionTranscriptSnapshot } from "../config/sessions/session-col
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import { buildUsageOverview } from "../shared/usage-overview.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -37,6 +38,12 @@ import {
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
+  decodeUsageCostPartition,
+  partitionUsageCostRollup,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import { readSessionCostUsagePartitionsInDatabase } from "./session-cost-usage-partitions.worker.js";
+import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
 } from "./session-cost-usage-projection.js";
@@ -44,11 +51,12 @@ import {
   canUseUsageCostRollupForPartial,
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
-  encodeUsageCostRollup,
   isUsageCostRollupFresh,
+  USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
+import { readUsageCostReportEntry } from "./session-cost-usage-worker-report.js";
 import type {
   UsageCostWorkerDatabase,
   UsageCostWorkerHostEffects,
@@ -267,189 +275,16 @@ export async function executeUsageCostWorker(
             return result.found ? result.value : undefined;
           }),
         );
-  if (operation.kind === "summary" || operation.kind === "sessions") {
-    const project = async (
-      rows: SessionCostUsageRollupRow[],
-      body: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>,
-    ): Promise<UsageCostWorkerResult> => {
-      // Capture cache metadata before transcript stats: a concurrent refresh must
-      // not make a valid newer checkpoint appear ahead of this report's inventory.
-      const reportFiles =
-        operation.kind === "summary"
-          ? await inventory()
-          : await resolveUsageCostTranscriptFiles(
-              operation.sessions.map((session) => session.sessionFile),
-              access,
-            );
-      const byPath = new Map(rows.map((row) => [row.key, row]));
-      const consumed = new Set<string>();
-      const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-      const source = {
-        readRow(filePath: string) {
-          consumed.add(filePath);
-          return byPath.get(filePath);
-        },
-        readBody: body,
-        onInvalidBody(key: string) {
-          const row = byPath.get(key);
-          if (row) {
-            invalidRows.set(key, row);
-          }
-        },
-        remainingRows: (function* () {
-          for (const row of rows) {
-            if (!consumed.has(row.key)) {
-              yield row;
-            }
-          }
-        })(),
-      };
-      const result =
-        operation.kind === "summary"
-          ? {
-              kind: "summary" as const,
-              summary: await projectCostUsageSummary({
-                ...source,
-                ...operation,
-                files: reportFiles.filter((file) => file !== undefined),
-              }),
-            }
-          : {
-              kind: "sessions" as const,
-              ...(await projectSessionCostSummaries({
-                ...source,
-                ...operation,
-                files: reportFiles,
-              })),
-            };
-      control.throwIfCancelled();
-      return { ...result, invalidRows: [...invalidRows.values()] };
-    };
-    if (!memoryCache) {
-      try {
-        return await control.runNativeSection(async () => {
-          const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
-          if (!opened.found) {
-            return project([], () => null);
-          }
-          const { db } = opened.database;
-          try {
-            // sqlite-allow-raw: This dedicated read-only handle owns the complete report snapshot.
-            db.exec("BEGIN DEFERRED");
-            return await project(
-              readSessionCostUsageRollupRowsInDatabase(db, selectedPaths),
-              (row) => {
-                const body = readSessionCostUsageRollupBodyInDatabase(db, row);
-                if (!body) {
-                  throw new WorkerTaskError("Usage cache snapshot is unavailable", "unavailable");
-                }
-                return body.blob;
-              },
-            );
-          } finally {
-            try {
-              if (db.isTransaction) {
-                // sqlite-allow-raw: End this report's read-only snapshot before closing its handle.
-                db.exec("ROLLBACK");
-              }
-            } finally {
-              opened.database.close();
-            }
-          }
-        });
-      } catch (error) {
-        if (!isTransientSqliteError(error)) {
-          throw error;
-        }
-        return project([], () => null);
-      }
-    }
-    // Incognito uses its live host writer; validate the complete metadata snapshot
-    // after streamed body reads instead of retaining a transaction across host awaits.
-    const changed = new Error("usage cache snapshot changed");
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const rows = await readMetadata();
-      try {
-        const result = await project(rows, async (row) => {
-          const body = await readBody(row);
-          if (!body) {
-            throw changed;
-          }
-          return body.blob;
-        });
-        const current = new Map((await readMetadata()).map((row) => [row.key, row]));
-        if (
-          current.size === rows.length &&
-          rows.every((row) => {
-            const next = current.get(row.key);
-            return next?.valueJson === row.valueJson && next.updatedAt === row.updatedAt;
-          })
-        ) {
-          control.throwIfCancelled();
-          return result;
-        }
-      } catch (error) {
-        if (error !== changed) {
-          throw error;
-        }
-      }
-    }
-    throw new WorkerTaskError("Usage cache changed while reading; retry the report", "unavailable");
-  }
-
-  const rows = await readMetadata();
-  const byPath = new Map(rows.map((row) => [row.key, row]));
-
-  const discovered = await inventory(operation.sessionsDir);
-  const requestedFiles = (
-    await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
-  ).filter((file) => file !== undefined);
-  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
-    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
-  }
-  const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
-  for (const file of requestedFiles) {
-    filesByPath.set(file.filePath, file);
-  }
-  for (const row of rows) {
-    if (filesByPath.has(row.key)) {
-      continue;
-    }
-    const bytes = new TextEncoder().encode(row.valueJson);
-    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
-      bytes.buffer,
-    ]);
-  }
-  await host("prune", {});
-  const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
-  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
-  const stale = [];
-  for (const file of filesByPath.values()) {
-    if (
-      requestedPaths.size > 0
-        ? !requestedPaths.has(file.filePath)
-        : operation.startMs !== undefined && file.mtimeMs < operation.startMs
-    ) {
-      continue;
-    }
-    const row = byPath.get(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
-      : undefined;
-    const invalid = rebuildByPath.get(file.filePath);
-    const rebuild =
-      row && invalid?.valueJson === row.valueJson && invalid.updatedAt === row.updatedAt;
-    if (rebuild || !isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file })) {
-      stale.push({ file, row, envelope, rebuild });
-    }
-  }
-  stale.sort((a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath));
-  const maxFiles =
-    operation.maxFiles !== undefined &&
-    Number.isFinite(operation.maxFiles) &&
-    operation.maxFiles > 0
-      ? Math.floor(operation.maxFiles)
-      : undefined;
+  const readPartitions = (filePath: string, startMs?: number, endMs?: number) =>
+    control.runNativeSection(() =>
+      readDatabase(cacheDatabase, () => {
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (opened) => readSessionCostUsagePartitionsInDatabase(opened.db, filePath, startMs, endMs),
+          { ...cacheDatabase, env },
+        );
+        return result.found ? result.value : [];
+      }),
+    );
   const prices = new Map<string, ModelCostConfig | undefined>();
   const resolveCosts = async (pairs: Array<{ provider?: string; model?: string }>) => {
     const missing = new Map(
@@ -538,7 +373,237 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
-  let changed = false;
+  if (operation.kind === "summary" || operation.kind === "sessions") {
+    const project = async (
+      rows: SessionCostUsageRollupRow[],
+      body: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>,
+      partitions: (
+        filePath: string,
+        startMs?: number,
+        endMs?: number,
+      ) => UsageCostPartition[] | Promise<UsageCostPartition[]> = readPartitions,
+    ): Promise<UsageCostWorkerResult> => {
+      // Capture cache metadata before transcript stats: a concurrent refresh must
+      // not make a valid newer checkpoint appear ahead of this report's inventory.
+      const reportFiles =
+        operation.kind === "summary"
+          ? await inventory()
+          : await resolveUsageCostTranscriptFiles(
+              operation.sessions.map((session) => session.sessionFile),
+              access,
+            );
+      const byPath = new Map(rows.map((row) => [row.key, row]));
+      const filesByPath = new Map(
+        reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
+      );
+      const consumed = new Set<string>();
+      const invalidRows = new Map<string, SessionCostUsageRollupRow>();
+      const source = {
+        readRow(filePath: string) {
+          consumed.add(filePath);
+          return byPath.get(filePath);
+        },
+        readBody: body,
+        readEntry: (row: SessionCostUsageRollupRow) =>
+          readUsageCostReportEntry({
+            row,
+            file: filesByPath.get(row.key),
+            body,
+            partitions,
+            startMs: operation.startMs,
+            endMs: operation.endMs,
+            dayBucket: operation.dayBucket,
+            overview:
+              operation.kind === "sessions" && operation.projection === "overview" && !memoryCache,
+            scan: {
+              pricingFingerprint: operation.pricingFingerprint,
+              resolveCosts,
+              readRows,
+              access,
+            },
+          }),
+        onInvalidBody(key: string) {
+          const row = byPath.get(key);
+          if (row) {
+            invalidRows.set(key, row);
+          }
+        },
+        remainingRows: (function* () {
+          for (const row of rows) {
+            if (!consumed.has(row.key)) {
+              yield row;
+            }
+          }
+        })(),
+      };
+      const result =
+        operation.kind === "summary"
+          ? {
+              kind: "summary" as const,
+              summary: await projectCostUsageSummary({
+                ...source,
+                ...operation,
+                files: reportFiles.filter((file) => file !== undefined),
+              }),
+            }
+          : {
+              kind: "sessions" as const,
+              ...(await projectSessionCostSummaries({
+                ...source,
+                ...operation,
+                files: reportFiles,
+              })),
+            };
+      control.throwIfCancelled();
+      if (result.kind === "sessions" && operation.kind === "sessions" && operation.overview) {
+        return {
+          kind: "overview",
+          result: buildUsageOverview({
+            ...operation.overview,
+            summaries: result.summaries,
+            dayBucket: operation.dayBucket,
+          }),
+          cacheStatus: result.cacheStatus,
+          staleSessionFiles: result.staleSessionFiles,
+          invalidRows: [...invalidRows.values()],
+        };
+      }
+      return { ...result, invalidRows: [...invalidRows.values()] };
+    };
+    if (!memoryCache) {
+      try {
+        return await control.runNativeSection(async () => {
+          const opened = openOpenClawAgentDatabaseReadOnly({ ...cacheDatabase, env });
+          if (!opened.found) {
+            return project([], () => null);
+          }
+          const { db } = opened.database;
+          try {
+            // sqlite-allow-raw: This dedicated read-only handle owns the complete report snapshot.
+            db.exec("BEGIN DEFERRED");
+            return await project(
+              readSessionCostUsageRollupRowsInDatabase(db, selectedPaths),
+              (row) => {
+                const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+                if (!body) {
+                  throw new WorkerTaskError("Usage cache snapshot is unavailable", "unavailable");
+                }
+                return body.blob;
+              },
+              (filePath, startMs, endMs) =>
+                readSessionCostUsagePartitionsInDatabase(db, filePath, startMs, endMs),
+            );
+          } finally {
+            try {
+              if (db.isTransaction) {
+                // sqlite-allow-raw: End this report's read-only snapshot before closing its handle.
+                db.exec("ROLLBACK");
+              }
+            } finally {
+              opened.database.close();
+            }
+          }
+        });
+      } catch (error) {
+        if (!isTransientSqliteError(error)) {
+          throw error;
+        }
+        return project([], () => null);
+      }
+    }
+    // Incognito uses its live host writer; validate the complete metadata snapshot
+    // after streamed body reads instead of retaining a transaction across host awaits.
+    const changed = new Error("usage cache snapshot changed");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rows = await readMetadata();
+      try {
+        const result = await project(rows, async (row) => {
+          const body = await readBody(row);
+          if (!body) {
+            throw changed;
+          }
+          return body.blob;
+        });
+        const current = new Map((await readMetadata()).map((row) => [row.key, row]));
+        if (
+          current.size === rows.length &&
+          rows.every((row) => {
+            const next = current.get(row.key);
+            return next?.valueJson === row.valueJson && next.updatedAt === row.updatedAt;
+          })
+        ) {
+          control.throwIfCancelled();
+          return result;
+        }
+      } catch (error) {
+        if (error !== changed) {
+          throw error;
+        }
+      }
+    }
+    throw new WorkerTaskError("Usage cache changed while reading; retry the report", "unavailable");
+  }
+
+  const rows = await readMetadata();
+  const byPath = new Map(rows.map((row) => [row.key, row]));
+
+  const discovered = await inventory(operation.sessionsDir);
+  const requestedFiles = (
+    await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
+  ).filter((file) => file !== undefined);
+  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
+    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+  }
+  const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
+  for (const file of requestedFiles) {
+    filesByPath.set(file.filePath, file);
+  }
+  let pruned = false;
+  for (const row of rows) {
+    if (filesByPath.has(row.key)) {
+      continue;
+    }
+    pruned = true;
+    const bytes = new TextEncoder().encode(row.valueJson);
+    await host("prune-row", { key: row.key, value: bytes, updatedAt: row.updatedAt }, [
+      bytes.buffer,
+    ]);
+  }
+  await host("prune", {});
+  const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
+  const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
+  const stale = [];
+  for (const file of filesByPath.values()) {
+    if (
+      requestedPaths.size > 0
+        ? !requestedPaths.has(file.filePath)
+        : operation.startMs !== undefined && file.mtimeMs < operation.startMs
+    ) {
+      continue;
+    }
+    const row = byPath.get(file.filePath);
+    const envelope = row
+      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
+      : undefined;
+    const invalid = rebuildByPath.get(file.filePath);
+    const rebuild =
+      row && invalid?.valueJson === row.valueJson && invalid.updatedAt === row.updatedAt;
+    if (
+      rebuild ||
+      (!memoryCache && !envelope?.projection) ||
+      !isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file })
+    ) {
+      stale.push({ file, row, envelope, rebuild });
+    }
+  }
+  stale.sort((a, b) => a.file.size - b.file.size || a.file.filePath.localeCompare(b.file.filePath));
+  const maxFiles =
+    operation.maxFiles !== undefined &&
+    Number.isFinite(operation.maxFiles) &&
+    operation.maxFiles > 0
+      ? Math.floor(operation.maxFiles)
+      : undefined;
+  let changed = pruned;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
@@ -554,29 +619,81 @@ export async function executeUsageCostWorker(
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
     }
-    const entry = await scanUsageCostRollupInWorker({
-      file,
-      previous,
-      pricingFingerprint: operation.pricingFingerprint,
-      resolveCosts,
-      readRows,
-      access,
-    });
-    const { valueJson, blob } = encodeUsageCostRollup(entry);
+    const priorPartitions =
+      previous && envelope?.projection && !memoryCache ? await readPartitions(file.filePath) : [];
+    if (previous && envelope?.projection) {
+      if (memoryCache || priorPartitions.length !== envelope.projection.dates.length) {
+        previous = undefined;
+      } else {
+        for (const partition of priorPartitions) {
+          const day = decodeUsageCostPartition(partition.valueJson, partition.blob);
+          if (!day) {
+            previous = undefined;
+            break;
+          }
+          Object.assign(previous.rollup.buckets, day.buckets);
+        }
+      }
+    }
+    const entry =
+      previous &&
+      !envelope?.projection &&
+      isUsageCostRollupFresh({ checkpoint: previous.checkpoint, file })
+        ? { ...previous, version: USAGE_COST_ROLLUP_VERSION }
+        : await scanUsageCostRollupInWorker({
+            file,
+            previous,
+            pricingFingerprint: operation.pricingFingerprint,
+            resolveCosts,
+            readRows,
+            access,
+          });
+    const { valueJson, blob, partitions } = partitionUsageCostRollup(
+      entry,
+      previous !== undefined && envelope?.projection?.canonicalNumbers === true,
+      memoryCache,
+    );
+    const previousPartitions = new Map(
+      priorPartitions.map((partition) => [partition.date, partition.valueJson]),
+    );
+    const changedPartitions = partitions.filter(
+      (partition) => previousPartitions.get(partition.date) !== partition.valueJson,
+    );
+    const dates = new Set(partitions.map((partition) => partition.date));
+    const removedDates = envelope?.projection?.dates.filter((date) => !dates.has(date)) ?? [];
     const value = new TextEncoder().encode(valueJson);
     const rawPrevious = byPath.get(file.filePath)?.valueJson;
     const previousValue = rawPrevious === undefined ? null : new TextEncoder().encode(rawPrevious);
     const written = await host(
       "write",
-      { key: file.filePath, previousValue, value, blob, updatedAt: entry.scannedAt },
-      [value.buffer, blob.buffer, ...(previousValue ? [previousValue.buffer] : [])],
+      {
+        key: file.filePath,
+        previousValue,
+        value,
+        blob,
+        updatedAt: entry.scannedAt,
+        ...(!memoryCache
+          ? {
+              partitions: changedPartitions,
+              removedDates,
+              replacePartitions: previous === undefined || !envelope?.projection,
+            }
+          : {}),
+      },
+      [
+        value.buffer,
+        blob.buffer,
+        ...changedPartitions.map((partition) => partition.blob.buffer),
+        ...(previousValue ? [previousValue.buffer] : []),
+      ],
     );
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
     changed = true;
   }
-  return { kind: "refresh", changed };
+  const remainingFiles = maxFiles ? stale.slice(maxFiles).map(({ file }) => file.sourcePath) : [];
+  return { kind: "refresh", changed, ...(remainingFiles.length ? { remainingFiles } : {}) };
 }
 
 export function usageCostWorkerFailure(

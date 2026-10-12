@@ -2,13 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => TEST_RUNTIME_CONFIG) }));
 vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => {
@@ -42,6 +45,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   return {
     ...actual,
     resolveUsageSessionSource: vi.fn(actual.resolveUsageSessionSource),
+    loadSessionCostOverviewFromCache: vi.fn(actual.loadSessionCostOverviewFromCache),
     discoverAllSessions: vi.fn(async ({ agentId }: { agentId?: string }) =>
       ["main", "opus"].includes(agentId ?? "")
         ? [
@@ -70,6 +74,7 @@ import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessio
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionCostOverviewFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   resolveUsageSessionSource,
@@ -152,6 +157,113 @@ describe("sessions.usage", () => {
   beforeEach(() => {
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     vi.clearAllMocks();
+  });
+
+  it.each(["sharing", "configuration"])(
+    "withholds a report when %s changes during its worker read",
+    async (change) => {
+      const started = createDeferred();
+      const released = createDeferred();
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async () => {
+        started.resolve();
+        await released.promise;
+        return {
+          summaries: [{ ...createEmptyCostUsageTotals(), totalTokens: 123 }],
+          cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+        };
+      });
+      const pending = runSessionsUsage(BASE_USAGE_RANGE);
+      await started.promise;
+      if (change === "sharing") {
+        bumpGatewayAccessRevision();
+      } else {
+        TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
+      }
+      released.resolve();
+      const respond = await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("Refresh"),
+        }),
+      );
+    },
+  );
+
+  it("filters all overview candidates before pagination and keeps canonical filtered exports complete", async () => {
+    const discovered = Array.from({ length: 1001 }, (_, index) => ({
+      sessionId: `row-${index}`,
+      sessionFile: `/tmp/row-${index}.jsonl`,
+      mtime: index + 1,
+    }));
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce(discovered)
+      .mockResolvedValueOnce(discovered);
+    vi.mocked(loadSessionCostOverviewFromCache).mockImplementation(async (params) => ({
+      ...buildUsageOverview({
+        sessions: params.sessions,
+        summaries: params.sessions.flatMap((session) =>
+          session.instances.map(({ sessionId }) => ({
+            ...createEmptyCostUsageTotals(),
+            sessionId,
+            totalTokens: 7,
+            firstActivity: 1,
+            activityDates: ["2026-02-01"],
+            dailyBreakdown: [
+              {
+                ...createEmptyCostUsageTotals(),
+                date: "2026-02-01",
+                totalTokens: 7,
+                tokens: 7,
+                cost: 0,
+              },
+            ],
+          })),
+        ),
+        options: params.options,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        compact: params.projection === "overview",
+      }),
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: params.sessions.length,
+        staleFiles: 0,
+        pendingFiles: 0,
+      },
+    }));
+    const overview = readResult(
+      await runSessionsUsage({
+        ...BASE_USAGE_RANGE,
+        projection: "overview",
+        offset: 50,
+        query: "row-",
+        sort: "recent",
+        selectedSessions: ["agent:main:row-0"],
+      }),
+    );
+    expect(overview.overview).toMatchObject({
+      total: 1001,
+      offset: 50,
+      limit: 50,
+      selectedSessionCount: 1,
+    });
+    expect(overview.sessions).toHaveLength(50);
+    expect(overview.sessions[0]?.key).toBe("agent:main:row-950");
+    expect(overview.totals.totalTokens).toBe(7);
+    expect(overview.sessions[0]?.usage?.dailyBreakdown).toBeUndefined();
+    const exported = readResult(
+      await runSessionsUsage({
+        ...BASE_USAGE_RANGE,
+        query: "row-",
+        limit: Number.MAX_SAFE_INTEGER,
+      }),
+    );
+    expect(exported.sessions).toHaveLength(1001);
+    expect(exported.totals.totalTokens).toBe(7007);
+    expect(exported.sessions[0]?.usage?.dailyBreakdown).toHaveLength(1);
+    expect(loadSessionCostSummariesFromCache).not.toHaveBeenCalled();
   });
 
   it("rejects all-agent scope with a specific agent or key", async () => {

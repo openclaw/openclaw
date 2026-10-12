@@ -155,7 +155,7 @@ function createUsageDetailRequest<T>(
 export class UsageDetailsController {
   readonly timeSeries;
   readonly sessionLogs;
-  readonly contextWeight;
+  readonly session;
 
   constructor(
     notify: () => void,
@@ -187,18 +187,14 @@ export class UsageDetailsController {
       },
       resolveTarget,
     );
-    this.contextWeight = createUsageDetailRequest(
+    this.session = createUsageDetailRequest(
       notify,
       gateway,
       async (client, target, signal, sessionId) => {
         const result = await requestSessionUsage(
           client,
           { ...query(), agentId: target.agentId },
-          {
-            key: target.key,
-            includeContextWeight: true,
-            signal,
-          },
+          { key: target.key, includeContextWeight: true, signal },
         );
         const session = result.sessions[0];
         if (
@@ -208,28 +204,27 @@ export class UsageDetailsController {
         ) {
           throw new Error(t("usage.details.contextOutOfDate"));
         }
-        return session?.contextWeight;
+        return session;
       },
       resolveTarget,
-      (key) => sessions().some((session) => session.key === key && session.hasContextWeight),
     );
   }
 
   load(sessionKey: string, refreshAll = true): void {
+    void this.session.load(sessionKey, refreshAll);
     void this.timeSeries.load(sessionKey, refreshAll);
     void this.sessionLogs.load(sessionKey, refreshAll);
-    void this.contextWeight.load(sessionKey);
   }
 
   cancel(): void {
+    this.session.cancel();
     this.timeSeries.cancel();
     this.sessionLogs.cancel();
-    this.contextWeight.cancel();
   }
 
   clear(): void {
+    this.session.clear();
     this.timeSeries.clear();
     this.sessionLogs.clear();
-    this.contextWeight.clear();
   }
 }

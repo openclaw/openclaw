@@ -35,7 +35,7 @@ export async function requestUsageSnapshot(
   );
   try {
     const [result, providerUsage] = await Promise.all([
-      requestSessionUsage(client, query, { signal }),
+      requestSessionUsage(client, query, { projection: "overview", signal }),
       providerUsagePromise,
     ]);
     const costSummary: CostUsageSummary = {

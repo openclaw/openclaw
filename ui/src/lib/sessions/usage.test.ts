@@ -93,6 +93,46 @@ describe("requestSessionUsage", () => {
     });
   });
 
+  it("requests a bounded overview with server filter and page ownership", async () => {
+    const request = vi.fn().mockResolvedValue({ sessions: [] });
+    await requestSessionUsage(
+      { request } as never,
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+        query: "provider:openai",
+        selectedDays: ["2026-07-14"],
+        selectedHours: [12],
+        selectedSessions: ["agent:main:chosen"],
+        recentKeys: ["agent:main:chosen"],
+        offset: 50,
+        sort: "cost",
+        sortDirection: "asc",
+      },
+      { projection: "overview" },
+    );
+    expect(request).toHaveBeenCalledWith("sessions.usage", {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      groupBy: "family",
+      mode: "utc",
+      agentScope: "all",
+      projection: "overview",
+      limit: 50,
+      includeContextWeight: false,
+      query: "provider:openai",
+      selectedDays: ["2026-07-14"],
+      selectedHours: [12],
+      selectedSessions: ["agent:main:chosen"],
+      recentKeys: ["agent:main:chosen"],
+      offset: 50,
+      sort: "cost",
+      sortDirection: "asc",
+    });
+  });
+
   it("surfaces a rejected request without retrying an older Gateway shape", async () => {
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",

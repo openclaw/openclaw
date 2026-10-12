@@ -2534,6 +2534,31 @@ pinned or authorizer-controlled reads do not reuse those facts. Closing the nati
 connection retires its cache. Confirmation capability remains available to bound
 consults after call closure, independently of the open-state check.
 
+## Session usage overview projection
+
+Session usage retains its derived cache in the existing `cache_entries` owner.
+The `session-cost-usage-rollup-v3` scope holds the versioned transcript checkpoint
+and untimestamped contribution. The adjacent `session-cost-usage-projection-v1`
+scope stores UTC-date partitions containing quarter-hour session and model
+aggregates. The checkpoint and affected partitions commit atomically. This
+replaces the previous whole-history per-event cache body; no tables, indexes,
+or database schema version change. Incognito sessions retain their existing
+process-local, nonpersistent cache and create no date partitions.
+
+Committed transcript publications schedule advancement through the existing
+usage worker queue. Startup and topology changes backfill in bounded batches.
+Deletion, transcript rewind or branch changes, and pricing revisions rebuild
+through the same owner. SQL and aggregation run in workers. Reports reuse
+completed results only while their transcript, usage, session metadata,
+visibility, profile, and configuration revisions remain current.
+
+Transcripts remain authoritative; the projection changes neither retention nor
+billing data. Exact partial-quarter ranges and arithmetic that cannot be
+represented by the aggregate use canonical transcript reads. Partial backfill
+remains visible in the existing cache-status fields. An older implementation
+ignores the new representation's version and reconstructs its prior cache from
+transcripts, so rollback needs no reverse data migration.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

@@ -124,7 +124,7 @@ export function loadModelProviderCost(
       scope: "family",
       timeZone: "local",
     },
-    { signal },
+    { signal, projection: "overview" },
   )
     .then((result) => result?.aggregates?.byProvider ?? null)
     .catch((error: unknown) => {

@@ -22,6 +22,8 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
@@ -404,7 +406,8 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-      ).toEqual([initialEntry.checkpoint.parsedOffset]);
+        // Refresh advances the checkpoint; exact legacy detail then replays canonical records.
+      ).toEqual([initialEntry.checkpoint.parsedOffset, 0]);
 
       const completeSize = (await fs.stat(sessionFile)).size;
       await fs.appendFile(sessionFile, '\n{"type":"message","timestamp":"2026-02-05', "utf-8");
@@ -436,7 +439,7 @@ if (!isMainThread) {
         (await probe.read()).flatMap((entry) =>
           entry.kind === "transcript" && entry.method === "createReadStream" ? [entry.start] : [],
         ),
-      ).toEqual([0]);
+      ).toEqual([0, 0]);
       const rebuiltRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
         "expected rebuilt rollup",
@@ -534,6 +537,7 @@ if (!isMainThread) {
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
         dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+        projection: "overview",
         requestRefresh: false,
       });
 
@@ -557,5 +561,50 @@ if (!isMainThread) {
           .toSorted(),
       ).toEqual(sessions.map((session) => session.sessionFile).toSorted());
     });
+  });
+});
+
+it("keeps model addition order when integer timestamp totals hide fractional model costs", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-model-rounding";
+    const sessionFile = state.path("usage-model-rounding.jsonl");
+    const records = [
+      { timestamp: "2026-09-18T00:00:00Z", costs: [0.1, 0.9] },
+      { timestamp: "2026-09-18T00:15:00Z", costs: [0.2, 0.8] },
+      { timestamp: "2026-09-18T00:16:00Z", costs: [0.3, 0.7] },
+    ].flatMap(({ timestamp, costs }) =>
+      costs.map((cost, index) =>
+        JSON.stringify({
+          type: "message",
+          timestamp,
+          message: {
+            role: "assistant",
+            provider: "test",
+            model: `model-${index}`,
+            usage: { input: 1, output: 0, totalTokens: 1, cost: { total: cost } },
+          },
+        }),
+      ),
+    );
+    await fs.writeFile(sessionFile, records.join("\n") + "\n");
+    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    const request = {
+      agentId,
+      sessions: [{ sessionFile }],
+      requestRefresh: false,
+      startMs: Date.UTC(2026, 8, 18),
+      endMs: Date.UTC(2026, 8, 18, 0, 29, 59, 999),
+      dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+    };
+    const canonical = await loadSessionCostSummariesFromCache(request);
+    const overview = await loadSessionCostSummariesFromCache({
+      ...request,
+      projection: "overview",
+    });
+    expect(overview.cacheStatus.status).toBe("fresh");
+    expect(overview.summaries[0]?.totalCost).toBe(3);
+    expect(overview.summaries[0]?.modelUsage).toEqual(canonical.summaries[0]?.modelUsage);
+    const model = overview.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
+    expect(model?.totals.totalCost).toBe(0.6000000000000001);
   });
 });

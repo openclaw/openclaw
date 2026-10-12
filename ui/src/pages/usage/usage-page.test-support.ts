@@ -1,8 +1,10 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
+import { buildUsageOverview, mergeUsageOverviews } from "../../../../src/shared/usage-overview.js";
+import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -21,7 +23,6 @@ export type TestUsagePage = Pick<
   routeData: UsageRouteData | undefined;
   usageError: string | null;
   readonly usageResult: SessionsUsageResult | null;
-  readonly usageCostSummary: CostUsageSummary | null;
   readonly usageLoading: boolean;
   usageSelectedSessions: string[];
   details: UsageDetailsController;
@@ -47,7 +48,6 @@ type InspectedUsagePageModel = Pick<
   | "loadUsage"
   | "providerUsageSummary"
   | "usageSelectedSessions"
-  | "usageCostSummary"
   | "refreshPolicy"
   | "gateway"
 >;
@@ -146,6 +146,59 @@ export async function createPage(
   renderView = false,
   context: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
+  // Legacy test fixtures describe canonical rows; expose the same server projection
+  // as the real RPC so page tests exercise request ownership and presentation.
+  const originalRequest = client.request.bind(client);
+  client.request = (async (method, params, options) => {
+    const result = await originalRequest(method, params, options);
+    if (
+      method !== "sessions.usage" ||
+      !result ||
+      typeof result !== "object" ||
+      !("sessions" in result) ||
+      !("totals" in result)
+    ) {
+      return result;
+    }
+    const usage = result as SessionsUsageResult;
+    const requestParams = (params ?? {}) as Record<string, unknown>;
+    if (usage.overview || requestParams.key) {
+      return result;
+    }
+    const filters = params as UsageOverviewOptions | undefined;
+    const slice = buildUsageOverview({
+      sessions: usage.sessions.map(({ usage: _usage, contextWeight: _context, ...session }) => ({
+        ...session,
+        agentId: session.agentId ?? "main",
+        instances: [{ sessionFile: "fixture" }],
+      })),
+      summaries: usage.sessions.map((session) => session.usage),
+      options: filters ?? {},
+      dayBucket:
+        requestParams.mode === "specific" && typeof requestParams.timeZone === "string"
+          ? { mode: "time-zone", timeZone: requestParams.timeZone }
+          : { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    const projected = mergeUsageOverviews([slice], filters ?? {});
+    const hasFilters = Boolean(
+      filters?.query ||
+      filters?.selectedDays?.length ||
+      filters?.selectedHours?.length ||
+      filters?.selectedSessions?.length,
+    );
+    return {
+      ...usage,
+      ...projected,
+      ...(!hasFilters ? { totals: usage.totals, aggregates: usage.aggregates } : {}),
+      ...(requestParams.projection === "overview"
+        ? {}
+        : {
+            sessions: usage.sessions.filter((session) =>
+              projected.sessions.some((row) => row.key === session.key),
+            ),
+          }),
+    };
+  }) as GatewayBrowserClient["request"];
   const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
   const container = document.createElement("div");
   const [revision, setRevision] = createSignal(0);
@@ -224,9 +277,6 @@ export async function createPage(
     },
     get usageResult() {
       return model.usageResult;
-    },
-    get usageCostSummary() {
-      return inspect().usageCostSummary;
     },
     get usageLoading() {
       return model.read().data.loading;

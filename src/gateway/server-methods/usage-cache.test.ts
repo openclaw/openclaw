@@ -59,6 +59,24 @@ describe("usage result cache", () => {
     }
   });
 
+  it("retains a complete projection until its owner revision changes", async () => {
+    const params = {
+      cache,
+      cacheKey: "overview",
+      configRef: {},
+      revision: 1,
+      revisionOnly: true,
+      load: loadSummary,
+    };
+    const first = await loadUsageResultCached(params);
+    now += 60_000;
+    expect(await loadUsageResultCached(params)).toBe(first);
+    expect(loadSummary).toHaveBeenCalledTimes(1);
+    loadSummary.mockResolvedValueOnce(createSummary(2));
+    expect((await loadUsageResultCached({ ...params, revision: 2 })).totals.totalTokens).toBe(2);
+    expect(loadSummary).toHaveBeenCalledTimes(2);
+  });
+
   it.each([true, false])(
     "reclaims expired query variants before the count cap is reached (complete=%s)",
     async (complete) => {
