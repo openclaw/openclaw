@@ -78,7 +78,7 @@ export async function drainGatewayActiveWork({
         recordWarning(warning);
         logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
-        runtime.abortActiveCronTaskRuns("Gateway restarting.");
+        runtime.abortActiveCronTaskRuns();
       },
       () => [
         ["activeWork", activeWorkAtDrainStart],

@@ -86,7 +86,7 @@ it.skipIf(process.platform === "win32").each([
     await waitForOutput("process proof: ready:1", 45_000);
     expect(child.kill(signal)).toBe(true);
     if (mode === "timeout") {
-      await waitForOutput("process proof: cron-cancelled:Gateway restarting.");
+      await waitForOutput("process proof: cron-cancelled:restart");
       await waitForOutput("process proof: close-entered");
     } else {
       await waitForOutput("draining active work before");

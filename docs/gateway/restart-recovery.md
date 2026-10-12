@@ -14,6 +14,10 @@ normally needs no manual intervention. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+This includes automation turns running in dashboard main sessions. If a restart
+exhausts its drain budget, cancellation preserves restart recovery even when the
+provider reports an error and the turn settles before shutdown discovers it.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 

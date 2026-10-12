@@ -134,7 +134,7 @@ export async function prepareGatewayRestartIteration(
   // Rotation aborts rootless stale owners before reset pumps preserved queues.
   rotateAgentEventLifecycleGeneration();
   advanceCronActiveJobGeneration();
-  abortActiveCronTaskRuns("Gateway restarting.");
+  abortActiveCronTaskRuns();
   const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
   const cronDrain = await waitForActiveCronJobs(1_000);
   if (!cronTaskDrain.drained || !cronDrain.drained) {

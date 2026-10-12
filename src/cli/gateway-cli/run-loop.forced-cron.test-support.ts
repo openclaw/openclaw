@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { CronService } from "../../cron/service.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import { drainGatewayCron } from "../../gateway/server-cron-drain.js";
@@ -45,7 +46,8 @@ const cron = new CronService({
       trace("cron-started");
       if (!force) {
         await cancelled.promise;
-        trace(`cron-cancelled:${String(abortSignal.reason)}`);
+        assert(isAgentRunRestartAbortReason(abortSignal.reason));
+        trace("cron-cancelled:restart");
       }
       await cleanupMayFinish.promise;
       if (force) {
