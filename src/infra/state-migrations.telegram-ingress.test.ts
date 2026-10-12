@@ -12,7 +12,6 @@ import {
 } from "../plugins/doctor-contract-module.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];

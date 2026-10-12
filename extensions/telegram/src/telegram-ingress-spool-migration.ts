@@ -22,7 +22,9 @@ const LEGACY_UPDATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const STALE_LEGACY_REASON = "stale-legacy-import";
 
 function updateTimestamp(update: unknown): number | undefined {
-  if (!isRecord(update)) return undefined;
+  if (!isRecord(update)) {
+    return undefined;
+  }
   const message = Object.values(update)
     .filter(isRecord)
     .find((value) => isNonNegativeSafeInteger(value.date));
