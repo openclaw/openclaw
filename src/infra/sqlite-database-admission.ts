@@ -45,7 +45,6 @@ export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissions"), () => ({
   registry: new SqliteDatabaseAdmissionRegistry(),
-  connections: new WeakMap<DatabaseSync, Admission>(),
   openedIdentities: new WeakMap<DatabaseSync, string>(),
   unproven: new WeakSet<DatabaseSync>(),
   suspended: new WeakSet<DatabaseSync>(),
@@ -93,10 +92,11 @@ function exchange(target: string | Admission, create?: boolean): void {
   state.exchanging = true;
   try {
     const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
+    const retired = typeof target !== "string" && isRetired(target);
     installSqliteDatabaseAdmissions(
       current(
-        captureSqliteDatabaseAdmissions(undefined, scope),
-        typeof target === "string" ? target : target.location,
+        retired ? [target] : captureSqliteDatabaseAdmissions(undefined, scope),
+        retired ? undefined : typeof target === "string" ? target : target.location,
         create,
       ),
     );
@@ -123,7 +123,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   if (threadId !== 0) {
     return;
   }
-  const descriptor = fs.openSync(location, "r");
+  const descriptor = state.registry.descriptors.get(key) ?? fs.openSync(location, "r");
   // Never close a source descriptor while another native connection may hold POSIX locks.
   const opened = fs.fstatSync(descriptor, { bigint: true });
   if (!opened.isFile() || identity(opened) !== key) {
@@ -224,7 +224,7 @@ export function prepareSqliteDatabaseAdmission(
 }
 
 export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: string): void {
-  state.connections.delete(database);
+  state.registry.connections.delete(database);
   state.openedIdentities.delete(database);
   state.unproven.delete(database);
   const location = database.location();
@@ -246,7 +246,7 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
   }
   const record = state.registry.records.get(observed);
   if (record && !isRetired(record)) {
-    state.connections.set(database, record);
+    retainConnection(database, record);
   }
 }
 
@@ -255,7 +255,7 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (!database.isOpen || expected === undefined || state.unproven.has(database)) {
     return undefined;
   }
-  const retained = state.connections.get(database);
+  const retained = state.registry.connections.get(database);
   if (retained) {
     // A retained descriptor cannot change its physical file when the path is replaced.
     return isRetired(retained) ? undefined : retained;
@@ -270,9 +270,33 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
     throw new Error("SQLite database changed identity before admission");
   }
   if (record && !isRetired(record)) {
-    state.connections.set(database, record);
+    retainConnection(database, record);
   }
   return record && !isRetired(record) ? record : undefined;
+}
+
+function retainConnection(database: DatabaseSync, record: Admission): void {
+  state.registry.retainConnection(database, record);
+  try {
+    exchange(record);
+  } catch (error) {
+    state.registry.releaseConnection(database);
+    state.openedIdentities.delete(database);
+    throw error;
+  }
+}
+
+/** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
+export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
+  const record = state.registry.releaseConnection(database);
+  state.openedIdentities.delete(database);
+  state.local.delete(database);
+  if (record) {
+    if (isRetired(record)) {
+      state.localSchemaRevisions.delete(record.identity);
+    }
+    exchange(record);
+  }
 }
 
 export function getSqliteDatabaseAdmission<T>(
@@ -432,16 +456,8 @@ export function trackSqliteDatabaseAdmissionWorker(worker: {
   readonly threadId: number;
   once(event: "exit", listener: () => void): unknown;
 }): void {
-  worker.once("exit", () => {
-    for (const record of state.registry.records.values()) {
-      Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
-      Atomics.add(
-        new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.unscopedWriteRevision,
-        1,
-      );
-    }
-  });
+  const owner = worker.threadId;
+  worker.once("exit", () => state.registry.releaseWorker(owner));
 }
 
 export function hasPendingSqliteDatabaseSchemaMutation(database: DatabaseSync): boolean {
@@ -585,7 +601,7 @@ export function publishSqliteDatabaseSchemaChange(database: DatabaseSync): void 
 
 export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
   // A close failure can report corruption after native disposal; keep revocation on that file.
-  const record = state.connections.get(database) ?? admission(database);
+  const record = state.registry.connections.get(database) ?? admission(database);
   if (record) {
     const cell = new Int32Array(record.generation);
     Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
@@ -609,28 +625,32 @@ export function retireSqliteDatabaseAdmissionForPath(
   options: { requireSoleDescriptor?: boolean } = {},
 ): void {
   const observed = prepareSqliteDatabaseAdmission(location);
-  if (observed) {
-    state.localSchemaRevisions.delete(observed);
-  }
-  const record = observed ? state.registry.records.get(observed) : undefined;
-  if (!record || isRetired(record)) {
+  if (!observed) {
     return;
   }
-  const file = fs.fstatSync(record.descriptor, { bigint: true });
+  state.localSchemaRevisions.delete(observed);
+  const record = threadId === 0 ? state.registry.records.get(observed) : pathAdmission(location);
+  const descriptor = state.registry.descriptors.get(observed) ?? record?.descriptor;
+  if (descriptor === undefined) {
+    return;
+  }
+  const file = fs.fstatSync(descriptor, { bigint: true });
   if (
     file.nlink > 1n ||
-    (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(record.descriptor, file))
+    (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(descriptor, file))
   ) {
     return;
   }
-  const cell = new Int32Array(record.generation);
-  if (Atomics.compareExchange(cell, SqliteDatabaseGenerationSlot.retired, 0, 1) === 0) {
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
-    Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
-    fs.closeSync(record.descriptor);
+  if (record) {
+    Atomics.store(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired, 1);
   }
-  state.registry.records.delete(record.identity);
-  state.registry.publish(record);
+  fs.closeSync(descriptor);
+  state.registry.descriptors.delete(observed);
+  state.registry.forget(observed);
+  state.registry.publish();
+  if (record) {
+    exchange(record);
+  }
 }
 
 export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {

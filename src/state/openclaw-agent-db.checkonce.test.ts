@@ -21,6 +21,12 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import {
+  readOpenClawAgentIntegrityVerification,
+  readOpenClawDatabaseQuarantineFailure,
+} from "./openclaw-quarantine-store.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
 const metadataSchema = `CREATE TABLE schema_meta (
   meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
@@ -128,13 +134,21 @@ it.each(["drop", "recreate"] as const)(
   },
 );
 
-it("reuses physical agent admission after reader opens and writer idle retirement", async () => {
+it("reuses live agent admission and revalidates after writer idle retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
+    const shared = openOpenClawStateDatabase({ env });
+    using registry = openNodeSqliteDatabase(shared.path, { readOnly: true });
+    admitSqliteSchema(registry);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const first = openOpenClawAgentDatabase(options);
       const firstNative = first.db;
+      using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), {
+        readOnly: true,
+      });
+      admitSqliteSchema(quarantine);
+      expect(readOpenClawAgentIntegrityVerification(first.path, env, true)?.clean_close).toBe(0);
       const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
         const reader = openOpenClawAgentDatabaseReadOnly(options);
@@ -142,12 +156,15 @@ it("reuses physical agent admission after reader opens and writer idle retiremen
         if (reader.found) {
           reader.database.close();
         }
+        expect(validationStatements(observation.queries)).toEqual([]);
         vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
         expect(firstNative.isOpen).toBe(false);
         const reopened = openOpenClawAgentDatabase(options);
         expect(reopened.db === firstNative).toBe(false);
         expect(reopened.db.isOpen).toBe(true);
-        expect(validationStatements(observation.queries)).toEqual([]);
+        expect(
+          observation.queries.filter((sql) => /\bFROM main\.sqlite_schema\b/iu.test(sql)),
+        ).toHaveLength(1);
       } finally {
         observation.restore();
       }
@@ -161,8 +178,12 @@ it("keeps a tracked sibling's committed catalog when reopening an admitted agent
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const first = openOpenClawAgentDatabase(options);
+    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), { readOnly: true });
+    admitSqliteSchema(quarantine);
+    expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
     await closeOpenClawAgentDatabaseByPathAsync(first.path);
     using sibling = openNodeSqliteDatabase(first.path);
+    admitSqliteSchema(sibling);
     sibling.exec("CREATE TABLE adoption_probe (id INTEGER); INSERT INTO adoption_probe VALUES (1)");
     expect(getAdmittedSqliteSchemaFacts(sibling)?.tables.has("adoption_probe")).toBe(true);
     const reopened = openOpenClawAgentDatabase(options);
@@ -209,20 +230,23 @@ it.each(["tracked", "raw"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
       const first = openOpenClawAgentDatabase(options);
+      using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(env), {
+        readOnly: true,
+      });
+      admitSqliteSchema(quarantine);
+      expect(readOpenClawDatabaseQuarantineFailure("agent", first.path, { env })).toBeUndefined();
       first.db.exec(`INSERT INTO auth_profile_state (state_key, state_json, updated_at)
         VALUES ('maintenance-handoff', '{"preserved":true}', 1)`);
       await closeOpenClawAgentDatabaseByPathAsync(first.path);
-      {
-        using database =
-          opener === "tracked"
-            ? openNodeSqliteDatabase(first.path)
-            : new (requireNodeSqlite().DatabaseSync)(first.path);
-        ensureOpenClawAgentDatabaseSchema(database, {
-          ...options,
-          path: first.path,
-          register: true,
-        });
-      }
+      using database =
+        opener === "tracked"
+          ? openNodeSqliteDatabase(first.path)
+          : new (requireNodeSqlite().DatabaseSync)(first.path);
+      ensureOpenClawAgentDatabaseSchema(database, {
+        ...options,
+        path: first.path,
+        register: true,
+      });
       expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
         expect.objectContaining({ agentId: "main", path: first.path }),
       );
@@ -253,6 +277,13 @@ it("registers a new alias without repeating the physical database admission", as
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const first = openOpenClawAgentDatabase(options);
+    using quarantine = openNodeSqliteDatabase(resolveQuarantineStorePath(state.env), {
+      readOnly: true,
+    });
+    admitSqliteSchema(quarantine);
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", first.path, { env: state.env }),
+    ).toBeUndefined();
     const aliasDirectory = state.path("agent-alias");
     symlinkSync(path.dirname(first.path), aliasDirectory, "junction");
     const aliasPath = path.join(aliasDirectory, path.basename(first.path));

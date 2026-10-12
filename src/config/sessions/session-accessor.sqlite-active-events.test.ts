@@ -36,6 +36,7 @@ import {
 } from "./session-accessor.sqlite-history.test-support.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import * as projectionWriter from "./session-transcript-projection-writer.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,
@@ -102,78 +103,98 @@ describe("SQLite active transcript event projection", () => {
   });
 
   it("defers branch rewind rebuilds off history and writer stacks", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("root", null, { role: "user", content: "root" }),
-        transcriptMessage("inactive", "root", { role: "assistant", content: "inactive" }),
-        transcriptMessage("active", "root", { role: "assistant", content: "active" }),
-      ],
-      touchSessionEntry: false,
-    });
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const claimProjection = projectionWriter.claimPreparedSessionTranscriptProjection;
+    // Hold the real rebuild before publication while the asynchronous turn finishes.
+    const claim = vi
+      .spyOn(projectionWriter, "claimPreparedSessionTranscriptProjection")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return claimProjection(...args);
+      });
+    try {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          transcriptMessage("root", null, { role: "user", content: "root" }),
+          transcriptMessage("inactive", "root", { role: "assistant", content: "inactive" }),
+          transcriptMessage("active", "root", { role: "assistant", content: "active" }),
+        ],
+        touchSessionEntry: false,
+      });
+      await entered.promise;
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
 
-    expect(
-      database.db
+      expect(
+        database.db
+          .prepare(
+            "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+          )
+          .get(scope.sessionId),
+      ).toEqual({ active_message_count: 2, needs_rebuild: 1 });
+
+      expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow(
+        SessionTranscriptProjectionUnavailableError,
+      );
+      expect(() => readLatestSessionTranscriptMessageEvent(scope)).toThrow(
+        SessionTranscriptProjectionUnavailableError,
+      );
+      release.resolve();
+      await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+      const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+
+      expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+        "root",
+        "active",
+      ]);
+      expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
+      expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "active" });
+      expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
+      expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
+      expect(page.totalMessages).toBe(2);
+      expect(
+        database.db
+          .prepare(
+            "SELECT needs_rebuild, active_event_count, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+          )
+          .get(scope.sessionId),
+      ).toEqual({ active_event_count: 2, active_message_count: 2, needs_rebuild: 0 });
+      expect(
+        database.db
+          .prepare(
+            "SELECT active_position, event_seq, message_position FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
+          )
+          .all(scope.sessionId),
+      ).toEqual([
+        { active_position: 0, event_seq: 1, message_position: 0 },
+        { active_position: 1, event_seq: 3, message_position: 1 },
+      ]);
+
+      const activeRows = database.db
         .prepare(
-          "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ active_message_count: 2, needs_rebuild: 1 });
-
-    expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow(
-      SessionTranscriptProjectionUnavailableError,
-    );
-    expect(() => readLatestSessionTranscriptMessageEvent(scope)).toThrow(
-      SessionTranscriptProjectionUnavailableError,
-    );
-    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
-
-    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
-
-    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "root",
-      "active",
-    ]);
-    expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
-    expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "active" });
-    expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
-    expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
-    expect(page.totalMessages).toBe(2);
-    expect(
-      database.db
-        .prepare(
-          "SELECT needs_rebuild, active_event_count, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ active_event_count: 2, active_message_count: 2, needs_rebuild: 0 });
-    expect(
-      database.db
-        .prepare(
-          "SELECT active_position, event_seq, message_position FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-        )
-        .all(scope.sessionId),
-    ).toEqual([
-      { active_position: 0, event_seq: 1, message_position: 0 },
-      { active_position: 1, event_seq: 3, message_position: 1 },
-    ]);
-
-    const activeRows = database.db
-      .prepare(
-        `SELECT event.event_json
+          `SELECT event.event_json
          FROM session_transcript_active_events AS active
          JOIN transcript_events AS event
            ON event.session_id = active.session_id AND event.seq = active.event_seq
          WHERE active.session_id = ?
          ORDER BY active.active_position`,
-      )
-      .all(scope.sessionId) as Array<{ event_json: string }>;
-    expect(readActiveTranscriptStats(scope)).toEqual({
-      eventCount: activeRows.length,
-      sizeBytes: activeRows.reduce(
-        (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
-        0,
-      ),
-    });
+        )
+        .all(scope.sessionId) as Array<{ event_json: string }>;
+      expect(readActiveTranscriptStats(scope)).toEqual({
+        eventCount: activeRows.length,
+        sizeBytes: activeRows.reduce(
+          (total, row) => total + Buffer.byteLength(row.event_json, "utf8") + 1,
+          0,
+        ),
+      });
+    } finally {
+      release.resolve();
+      claim.mockRestore();
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    }
   });
 
   it("stops counting discarded transcript bytes after a reset", async () => {

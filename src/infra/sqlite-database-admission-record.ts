@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { setEnvironmentData, threadId } from "node:worker_threads";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
@@ -46,6 +47,7 @@ export type Admission = {
   /** Last complete host snapshot; relays preserve this value without advancing it. */
   hostRevision?: number;
   writeScopes: Map<string, SharedArrayBuffer>;
+  references: Map<number, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
 export type SqliteDatabaseAdmissions = Admission[];
@@ -149,9 +151,77 @@ export function createSqliteDatabaseAdmissionCursor(): SqliteDatabaseAdmissionCu
 
 export class SqliteDatabaseAdmissionRegistry {
   readonly records = new Map<string, Admission>();
+  readonly connections = new WeakMap<DatabaseSync, Admission>();
+  private readonly referenced = new WeakSet<DatabaseSync>();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, Admission>();
+  readonly descriptors = new Map<string, number>();
   private revision = 0;
+
+  retainConnection(database: DatabaseSync, record: Admission): void {
+    let references = record.references.get(threadId);
+    if (!references) {
+      references = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      record.references.set(threadId, references);
+    }
+    Atomics.add(new Int32Array(references), 0, 1);
+    this.connections.set(database, record);
+    this.referenced.add(database);
+    this.publish(record);
+  }
+
+  releaseConnection(database: DatabaseSync): Admission | undefined {
+    const record = this.connections.get(database);
+    // Corruption can be reported after close; the weak association still revokes live siblings.
+    if (record && this.referenced.delete(database)) {
+      const references = record.references.get(threadId);
+      if (references) {
+        Atomics.sub(new Int32Array(references), 0, 1);
+      }
+      this.retireUnreferenced(record);
+      this.publish(record);
+      return record;
+    }
+    return undefined;
+  }
+
+  private retireUnreferenced(record: Admission): void {
+    if (
+      threadId !== 0 ||
+      [...record.references.values()].some((references) =>
+        Atomics.load(new Int32Array(references), 0),
+      )
+    ) {
+      return;
+    }
+    // Closed metadata releases its payloads; only explicit retirement closes descriptor custody.
+    Atomics.compareExchange(
+      new Int32Array(record.generation),
+      SqliteDatabaseGenerationSlot.retired,
+      0,
+      2,
+    );
+    record.facts.clear();
+    record.writeScopes.clear();
+  }
+
+  releaseWorker(owner: number): void {
+    for (const record of this.records.values()) {
+      const references = owner > 0 ? record.references.get(owner) : undefined;
+      if (references) {
+        Atomics.store(new Int32Array(references), 0, 0);
+        record.references.delete(owner);
+        this.retireUnreferenced(record);
+      }
+      Atomics.add(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.writeRevision, 1);
+      Atomics.add(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.unscopedWriteRevision,
+        1,
+      );
+    }
+    this.publish();
+  }
 
   observeLocation(location: string, identity: string): void {
     this.locations.set(normalizeDatabasePath(path.resolve(location)), identity);
@@ -171,6 +241,16 @@ export class SqliteDatabaseAdmissionRegistry {
     return hasSqliteDatabaseSchemaAdmission(this.records.get(key));
   }
 
+  forget(identity: string): void {
+    this.records.delete(identity);
+    this.published.delete(identity);
+    for (const [location, observed] of this.locations) {
+      if (observed === identity) {
+        this.locations.delete(location);
+      }
+    }
+  }
+
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
     const record: Admission = {
       identity: readSqliteDatabaseAdmissionIdentity(opened),
@@ -186,9 +266,11 @@ export class SqliteDatabaseAdmissionRegistry {
         Int32Array.BYTES_PER_ELEMENT * SQLITE_DATABASE_GENERATION_LENGTH,
       ),
       writeScopes: new Map(),
+      references: new Map(),
       facts: new Map(),
     };
     this.records.set(record.identity, record);
+    this.descriptors.set(record.identity, descriptor);
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
@@ -198,8 +280,16 @@ export class SqliteDatabaseAdmissionRegistry {
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
     for (const [identity, snapshot] of this.published) {
       if (isSqliteDatabaseAdmissionRetired(snapshot)) {
+        if (
+          Atomics.load(
+            new Int32Array(snapshot.generation),
+            SqliteDatabaseGenerationSlot.retired,
+          ) === 1
+        ) {
+          this.descriptors.delete(identity);
+        }
         if (this.records.get(identity)?.generationId === snapshot.generationId) {
-          this.records.delete(identity);
+          this.forget(identity);
         }
         this.published.delete(identity);
       }
@@ -210,6 +300,7 @@ export class SqliteDatabaseAdmissionRegistry {
         ...record,
         facts: new Map(record.facts),
         writeScopes: new Map(record.writeScopes),
+        references: new Map(record.references),
         hostRevision:
           threadId === 0
             ? Atomics.load(
@@ -257,6 +348,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   install(admissions: SqliteDatabaseAdmissions): void {
+    this.publish();
     for (const incoming of admissions) {
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
         continue;
@@ -303,6 +395,12 @@ export class SqliteDatabaseAdmissionRegistry {
         record.writeScopes.set(key, revision);
         changed = true;
       }
+      for (const [owner, references] of incoming.references) {
+        if (!record.references.has(owner)) {
+          record.references.set(owner, references);
+          changed = true;
+        }
+      }
       if (
         threadId !== 0 &&
         incoming.hostRevision !== undefined &&
@@ -313,7 +411,9 @@ export class SqliteDatabaseAdmissionRegistry {
         record.hostRevision = incoming.hostRevision;
         changed = true;
       }
-      if (changed) {
+      // Only the host has every borrower's reference cell; worker snapshots can omit later peers.
+      this.retireUnreferenced(record);
+      if (changed || isSqliteDatabaseAdmissionRetired(record)) {
         this.publish(record);
       }
     }

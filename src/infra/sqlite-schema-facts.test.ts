@@ -74,7 +74,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it("validates a physical file once across handles and close, and validates its replacement", () => {
+  it("shares validation across open handles and revalidates after final close or replacement", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");
     const first = openDatabase(undefined, true, filename);
@@ -83,14 +83,21 @@ describe("admitted SQLite schema facts", () => {
       observation.queries.filter((sql) =>
         /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
       );
+    const validations = () => schemaReads().filter((sql) => /^PRAGMA user_version$/iu.test(sql));
     try {
       const second = openDatabase("", true, filename);
       expect(tableExists(second, "original")).toBe(true);
       second.close();
+      expect(tableExists(first, "original")).toBe(true);
+      expect(schemaReads()).toEqual([]);
       first.close();
       const reopened = openDatabase("", true, filename);
       expect(tableExists(reopened, "original")).toBe(true);
-      expect(schemaReads()).toEqual([]);
+      expect(validations()).toHaveLength(1);
+      const sibling = openDatabase("", true, filename);
+      expect(tableExists(sibling, "original")).toBe(true);
+      expect(validations()).toHaveLength(1);
+      sibling.close();
       reopened.close();
 
       const replacementPath = path.join(root, "replacement.sqlite");
@@ -101,12 +108,11 @@ describe("admitted SQLite schema facts", () => {
       const replaced = openDatabase("", true, filename);
       expect(tableExists(replaced, "replacement")).toBe(true);
       expect(tableExists(replaced, "original")).toBe(false);
-      expect(schemaReads().length).toBeGreaterThan(0);
-      const firstValidationCount = schemaReads().length;
+      expect(validations()).toHaveLength(2);
       replaced.close();
       const replacementReopened = openDatabase("", true, filename);
       expect(tableExists(replacementReopened, "replacement")).toBe(true);
-      expect(schemaReads()).toHaveLength(firstValidationCount);
+      expect(validations()).toHaveLength(3);
     } finally {
       observation.restore();
     }
