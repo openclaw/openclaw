@@ -744,6 +744,31 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   return workflowSha;
 }
 
+function assertAdmissionContract(admissionWorkflowSha: string) {
+  const workflow = parseYaml(
+    run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
+  );
+  requireDispatch(
+    workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
+    "Selected P lacks qualification admission; update P independently without changing C/Q",
+  );
+}
+
+// Main routinely advances between P selection and the admission POST. A newer
+// tip replaces P only when it is trusted main, descends from the selected P,
+// and still declares the admission contract.
+function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+  requireDispatch(
+    resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
+    `Main tip ${currentSha} did not resolve to itself`,
+  );
+  requireDispatch(
+    runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
+    `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
+  );
+  assertAdmissionContract(currentSha);
+}
+
 function requireDispatch(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -1142,6 +1167,7 @@ const qualificationDispatchClient = {
   readApi: readGhApi,
   postApi: (args: string[]) => runGh(args, { stdio: ["ignore", "pipe", "pipe"] }),
   httpStatus: (response: string) => parseGhHttpResponse(response).status,
+  verifyMainAdvance: verifyMainAdmissionAdvance,
 };
 
 async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, argv: string[]) {
@@ -1707,13 +1733,7 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    const workflow = parseYaml(
-      run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
-    );
-    requireDispatch(
-      workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
-      "Selected P lacks qualification admission; update P independently without changing C/Q",
-    );
+    assertAdmissionContract(admissionWorkflowSha);
   }
   if (candidateOwned) {
     const baselinePolicy: unknown = JSON.parse(
@@ -2010,7 +2030,8 @@ async function executeFrozenDispatch(options: {
       parentConclusion = "success";
       verifyReleaseEvidence(
         parentRunId,
-        admissionWorkflowSha ?? workflowSha,
+        // Admission may have advanced P with main before its POST.
+        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
         candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
       );
       evidenceVerified = true;
