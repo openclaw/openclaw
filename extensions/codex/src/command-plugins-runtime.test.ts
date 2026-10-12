@@ -13,6 +13,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   clearSessionStoreCacheForTest,
   resolveStorePath,
   upsertSessionEntry,
@@ -49,6 +53,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENAI_API_KEY", undefined);
   vi.stubEnv("CODEX_API_KEY", undefined);
+  await captureRuntimeConfigAsyncReader()();
 });
 
 afterEach(async () => {
@@ -67,6 +72,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
   clearSessionStoreCacheForTest();
+  clearRuntimeConfigSnapshot();
   await fs.rm(root, { recursive: true, force: true });
 });
 

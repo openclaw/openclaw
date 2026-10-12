@@ -8,6 +8,10 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createRemoteShellSandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
@@ -30,7 +34,7 @@ describe("Codex app-server sandbox shell tools", () => {
   const hostCapabilityClosers: Array<() => void> = [];
   let tempDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     hoisted.loadNodeExecAvailability.mockResolvedValue({
       cacheKey: "eligible",
       isAvailable: () => true,
@@ -38,6 +42,7 @@ describe("Codex app-server sandbox shell tools", () => {
     hoisted.normalizeAgentRuntimeTools.mockClear();
     hoisted.resolveWebSearchToolPolicy.mockClear();
     tempDir = tempDirs.make("openclaw-codex-sandbox-tools-");
+    await captureRuntimeConfigAsyncReader()();
   });
 
   afterEach(() => {
@@ -45,6 +50,7 @@ describe("Codex app-server sandbox shell tools", () => {
       close();
     }
     resetGlobalHookRunner();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });

@@ -6,6 +6,7 @@ import type { GatewayRequestContext } from "../../gateway/server-methods/shared-
 import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -23,6 +24,9 @@ it.each([false, true])(
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
       const client = roleClient("view", "foreign-mirror-member");
+      using _ = {
+        [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release,
+      };
       const profileId = expectDefined(client.authenticatedUserProfile, "fixture profile").profileId;
       const source = {
         agentId: "main",

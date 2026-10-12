@@ -1,6 +1,8 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
+import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -77,9 +79,10 @@ async function holdLane(controller: LaneController) {
   return { observed, finish: finished.resolve };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
+  await captureRuntimeConfigAsyncReader()();
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
 });
@@ -92,6 +95,7 @@ afterEach(async () => {
   resetCommandQueueStateForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("runtime-owned lane deadline handoff", () => {

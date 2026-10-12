@@ -14,6 +14,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -86,6 +90,7 @@ describe("Codex command RPC helpers", () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);
     vi.stubEnv("CODEX_API_KEY", undefined);
     config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
+    await captureRuntimeConfigAsyncReader()();
     setAuthStore({ version: 1, profiles: {} });
     harness = createClientHarness();
     requestCodexAppServerJsonMock.mockReset();
@@ -119,6 +124,7 @@ describe("Codex command RPC helpers", () => {
     await closeOpenClawStateDatabaseAsync();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });

@@ -2,6 +2,10 @@
 import path from "node:path";
 import { isNativeError } from "node:util/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   clearSessionStoreCacheForTest,
@@ -38,7 +42,8 @@ const expectDeadlineOptions = () =>
 
 describe("requestCodexAppServerJson sandbox guard", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-preflight-");
-  beforeEach(() => {
+  beforeEach(async () => {
+    await captureRuntimeConfigAsyncReader()();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
@@ -46,6 +51,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
