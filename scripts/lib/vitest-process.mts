@@ -2,7 +2,12 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { waitForever } from "../../src/cli/wait.ts";
+import {
+  readGitHubTestReports,
+  printGitHubTestReport,
+} from "../../test/helpers/github-network-report.mjs";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import {
   resolveTestBrowserCache,
@@ -22,6 +27,7 @@ import {
 } from "../vitest-process-group.mts";
 import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -34,6 +40,7 @@ export function spawnOwnedVitestProcess(spec: {
   options: SpawnOptions;
   // Preparatory tools share lifetime ownership, but are not Vitest home consumers.
   homeMode?: TestHomeSelection | "tooling";
+  githubNetwork?: "live";
 }) {
   const env = spec.options.env ?? process.env;
   const mode = spec.homeMode ?? "unknown";
@@ -91,6 +98,32 @@ export function spawnOwnedVitestProcess(spec: {
         delete childEnv[key];
       }
     }
+    if (mode !== "tooling") {
+      childEnv.OPENCLAW_TEST_GITHUB_POLICY = spec.githubNetwork === "live" ? "live" : "offline";
+      if (spec.githubNetwork !== "live") {
+        const preload = path.join(
+          resolveRepoRoot(import.meta.url),
+          "test/helpers/github-network-preload.cjs",
+        );
+        const reportRoot =
+          childEnv.OPENCLAW_TEST_GITHUB_REPORT_DIR ?? path.join(tempRoot, "github-attempts");
+        fs.mkdirSync(reportRoot, { recursive: true });
+        childEnv.OPENCLAW_TEST_GITHUB_REPORT_DIR = fs.mkdtempSync(path.join(reportRoot, "child-"));
+        childEnv.OPENCLAW_TEST_GITHUB_NETWORK_GUARD = "1";
+        const nodeOptions = childEnv.NODE_OPTIONS ?? "";
+        childEnv.NODE_OPTIONS = `--require=${JSON.stringify(preload)} ${nodeOptions}`.trim();
+        for (const key of Object.keys(childEnv)) {
+          if (
+            /^(?:GH_|GITHUB_).*(?:TOKEN|SECRET|PASSWORD|KEY)$/iu.test(key) ||
+            ["GH_CONFIG_DIR", "SSH_AUTH_SOCK", "GIT_ASKPASS", "SSH_ASKPASS"].includes(
+              key.toUpperCase(),
+            )
+          ) {
+            delete childEnv[key];
+          }
+        }
+      }
+    }
     const options = { ...spec.options, detached, env: childEnv };
     child = spawn(spec.command, spec.args, options);
   } catch (error) {
@@ -145,9 +178,63 @@ export function runVitestCli(
   run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
 ): Promise<void> {
   return runWithFailedTrailer(tool, () =>
-    run(async (signal) => {
-      writeFailedTrailer(tool, signalExitCode(signal));
-      await exitVitestBySignal(signal);
-    }),
+    runGitHubOfflineTests(() =>
+      run(async (signal) => {
+        writeFailedTrailer(tool, signalExitCode(signal));
+        await exitVitestBySignal(signal);
+      }),
+    ),
   );
+}
+
+/** Ordinary entrypoints own one report across preparation, workers and descendants. */
+export async function runGitHubOfflineTests(run: () => Promise<void>): Promise<void> {
+  if (
+    process.env.OPENCLAW_TEST_GITHUB_NETWORK_GUARD === "1" &&
+    process.env.OPENCLAW_TEST_GITHUB_REPORT_DIR
+  ) {
+    await run();
+    return;
+  }
+  const supplied = process.env.OPENCLAW_TEST_GITHUB_REPORT_DIR;
+  const parent =
+    supplied ?? path.join(resolveRepoRoot(import.meta.url), ".artifacts/github-test-reports");
+  fs.mkdirSync(parent, { recursive: true });
+  const directory = fs.mkdtempSync(path.join(parent, "run-"));
+  process.env.OPENCLAW_TEST_GITHUB_REPORT_DIR = directory;
+  const guard: typeof import("../../test/helpers/github-network-guard.mjs") = await import(
+    pathToFileURL(
+      path.join(resolveRepoRoot(import.meta.url), "test/helpers/github-network-guard.mjs"),
+    ).href
+  );
+  const restore = guard.installGitHubNetworkGuard();
+  const previousMarker = process.env.OPENCLAW_TEST_GITHUB_NETWORK_GUARD;
+  process.env.OPENCLAW_TEST_GITHUB_NETWORK_GUARD = "1";
+  let settled = false;
+  try {
+    await run();
+    settled = true;
+  } finally {
+    const report = readGitHubTestReports(directory);
+    printGitHubTestReport(report);
+    if (report.incidental) {
+      process.exitCode ||= 1;
+    }
+    restore();
+    if (previousMarker === undefined) {
+      delete process.env.OPENCLAW_TEST_GITHUB_NETWORK_GUARD;
+    } else {
+      process.env.OPENCLAW_TEST_GITHUB_NETWORK_GUARD = previousMarker;
+    }
+    if (supplied === undefined) {
+      delete process.env.OPENCLAW_TEST_GITHUB_REPORT_DIR;
+    } else {
+      process.env.OPENCLAW_TEST_GITHUB_REPORT_DIR = supplied;
+    }
+    if (!supplied && settled && !report.incidental && process.platform !== "win32") {
+      fs.rmSync(directory, { recursive: true, force: true });
+    } else {
+      console.error(`[github-test-guard] reports: ${directory}`);
+    }
+  }
 }

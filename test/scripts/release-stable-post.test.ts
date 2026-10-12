@@ -21,7 +21,10 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = () => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make(".release-stable-post-test-", scratch));
+  return releaseFixture(
+    directories.make(".release-stable-post-test-", scratch),
+    directories.make("release-stable-post-bin-"),
+  );
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const closeoutAssets = (

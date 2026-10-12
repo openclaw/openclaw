@@ -535,7 +535,14 @@ describe("ui package vitest config", () => {
       expect(projectTestConfig.pool).toBe(expectedPool);
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
-      expect(projectTestConfig.setupFiles).toEqual(["./src/test-helpers/lit-warnings.setup.ts"]);
+      expect(projectTestConfig.setupFiles).toEqual(
+        projectTestConfig.browser?.enabled
+          ? ["./src/test-helpers/lit-warnings.setup.ts"]
+          : [
+              "./src/test-helpers/lit-warnings.setup.ts",
+              "./src/test-helpers/github-network.setup.ts",
+            ],
+      );
       expect(projectTestConfig.isolate).toBe(
         projectTestConfig.name === "unit-mock-registry" || projectTestConfig.name === "unit-timing",
       );

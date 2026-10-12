@@ -139,11 +139,14 @@ export function createUiE2eVitestConfig(
     maxWorkers: undefined,
     pool: "forks",
     runner: undefined,
-    setupFiles: [],
+    setupFiles: ["ui/src/test-helpers/github-network.setup.ts"],
   };
   const bundledSetup = {
     globalSetup: [chromiumSetup, "test/vitest/vitest.ui-e2e.bundled.global-setup.ts"],
-    setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
+    setupFiles: [
+      "ui/src/test-helpers/github-network.setup.ts",
+      "test/vitest/vitest.ui-e2e.setup.ts",
+    ],
   };
   const serialScheduling = {
     fileParallelism: false,

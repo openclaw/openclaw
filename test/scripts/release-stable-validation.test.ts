@@ -19,7 +19,10 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = () => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make(".release-stable-validation-test-", scratch));
+  return releaseFixture(
+    directories.make(".release-stable-validation-test-", scratch),
+    directories.make("release-stable-validation-bin-"),
+  );
 };
 const toolingTag = "release-publish/bbbbbbbbbbbb-123";
 

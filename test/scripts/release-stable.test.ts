@@ -30,7 +30,10 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const fixture = () => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make(".release-stable-test-", scratch));
+  return releaseFixture(
+    directories.make(".release-stable-test-", scratch),
+    directories.make("release-stable-bin-"),
+  );
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);

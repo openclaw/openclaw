@@ -949,7 +949,7 @@ describe("ManagedWorktreeService", () => {
       const moduleHead = await git(moduleRepo, "rev-parse", "HEAD");
       await git(repo, "-c", "protocol.file.allow=always", "submodule", "add", moduleRepo, "module");
       await git(repo, "commit", "-m", "add active submodule");
-      await git(repo, "push", "origin", "main");
+      await git(repo, "push", "--recurse-submodules=no", "origin", "main");
       await git(repo, "config", "submodule.recurse", "true");
       expect(await git(repo, "config", "--bool", "submodule.module.active")).toBe("true");
       expect(await git(path.join(repo, "module"), "rev-parse", "HEAD")).toBe(moduleHead);
