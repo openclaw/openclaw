@@ -13,6 +13,7 @@ import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import {
   rejectSubagentSpawnRequest,
@@ -211,6 +212,10 @@ export async function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
+  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
@@ -219,6 +224,7 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      callerDepth,
       inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {

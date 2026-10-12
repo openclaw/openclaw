@@ -9,7 +9,6 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
@@ -18,6 +17,7 @@ import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import * as sharingPreparation from "../session-sharing-preparation.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import {
@@ -118,25 +118,13 @@ describe("native profile-bound input admission", () => {
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const prepare = sharingPreparation.prepareSessionMutationFacts;
       let held = false;
       const workerRead = vi
-        .spyOn(targetDiscoveryLane.pool, "run")
-        .mockImplementation(async (prepare, options) => {
-          if (typeof prepare !== "function") {
-            return read(prepare, options);
-          }
-          let authorizationRead = false;
-          const result = await read(async () => {
-            const input = await prepare();
-            authorizationRead =
-              input.kind === "session-exact-entries" &&
-              input.includeMembers === true &&
-              input.selection === undefined &&
-              input.sessionKeys.includes(fixture.scope.sessionKey);
-            return input;
-          }, options);
-          if (!held && authorizationRead) {
+        .spyOn(sharingPreparation, "prepareSessionMutationFacts")
+        .mockImplementation(async (params) => {
+          const result = await prepare(params);
+          if (!held && params.sessionKey === fixture.scope.sessionKey) {
             held = true;
             entered.resolve();
             await release.promise;

@@ -4996,6 +4996,7 @@ describe("requester settle wake trigger", () => {
       const sessionFacts = vi.spyOn(sharing, "prepareSessionMutationFacts").mockResolvedValue({
         storageTarget: target,
         bindCreation: vi.fn(),
+        prepareRead: () => undefined,
         readCurrent: () => ({
           target: { ...target, entry: { sessionId: requesterSessionId, updatedAt: 1 } },
           membership: new Set(),

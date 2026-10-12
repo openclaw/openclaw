@@ -117,6 +117,66 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
   });
 });
 
+it("reuses complete sharing facts without dispatch and observes membership revocation and entry replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const sessionKey = "agent:main:retained-sharing";
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const scope = { agentId: "main", storePath: database.path, sessionKey, env };
+    const skillsSnapshot = { prompt: "retained prompt".repeat(8192), skills: [] };
+    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1, skillsSnapshot });
+    addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 1 });
+    const input = { ...scope, sessionKeys: [sessionKey], includeAuthorization: true };
+    const read = (projection: "sharing" | "full") =>
+      readSessionEntriesFromStoreInWorker({
+        ...input,
+        projection,
+        includeMembers: projection === "full",
+        snapshotFields: projection === "sharing" ? ["skillsSnapshot"] : undefined,
+      });
+    await read("full");
+    const requests = observeEntryReaderRequests();
+    try {
+      const warm = await read("sharing");
+      expect(warm.entries[0]?.entry.sessionId).toBe("original");
+      expect(warm.entries[0]?.entry).not.toHaveProperty("skillsSnapshot");
+      expect(warm.sharing).toMatchObject({
+        databaseIdentity: expect.stringMatching(/^file:/u),
+        members: [{ sessionKey, identityIds: ["reader"] }],
+        placeholders: [],
+      });
+      expect(requests.count()).toBe(0);
+
+      await removeSessionMemberInWorker(scope, "reader");
+      const revoked = await read("sharing");
+      expect(revoked.sharing?.members).toEqual([{ sessionKey, identityIds: [] }]);
+      expect(revoked.entries[0]?.entry).not.toHaveProperty("skillsSnapshot");
+      expect((await read("full")).entries[0]?.entry.skillsSnapshot).toEqual(skillsSnapshot);
+
+      replaceSessionEntrySync(scope, {
+        sessionId: "replacement",
+        lifecycleRevision: "replacement-revision",
+        updatedAt: 2,
+      });
+      expect((await read("sharing")).entries[0]?.entry).toMatchObject({
+        sessionId: "replacement",
+        lifecycleRevision: "replacement-revision",
+      });
+
+      const missing = { ...input, sessionKeys: ["agent:main:absent-sharing"] };
+      await readSessionEntriesFromStoreInWorker(missing);
+      requests.clear();
+      const absent = await readSessionEntriesFromStoreInWorker({
+        ...missing,
+        projection: "sharing",
+      });
+      expect(absent.entries).toEqual([]);
+      expect(requests.count()).toBeGreaterThan(0);
+    } finally {
+      requests.restore();
+    }
+  });
+});
+
 it("consumes a queued patch receipt without dispatch and preserves its full snapshots across a partial refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });

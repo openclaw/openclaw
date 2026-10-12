@@ -17,6 +17,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureSessionMutationRouting } from "../session-sharing-routing.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
 
 const core = vi.hoisted(() => vi.fn<typeof runEmbeddedAgent>());
@@ -66,6 +67,9 @@ it.each([false, true])(
         sessionKey,
         canonicalKey: sessionKey,
         storePath: path.join(state.sessionsDir(), "sessions.json"),
+        assertCurrent: captureSessionMutationRouting(config, undefined, [
+          { agentId: "main", sessionKey },
+        ]),
       },
       getVoiceSessionId: () => "voice-session",
       initialItems: [],

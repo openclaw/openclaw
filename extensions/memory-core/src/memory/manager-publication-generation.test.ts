@@ -1,6 +1,10 @@
 import path from "node:path";
 import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
+import {
+  getSessionEntryAsync,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   borrowOpenClawAgentDatabase,
   readOpenClawAgentDatabaseIdentity,
@@ -78,6 +82,60 @@ function publicationCommands(calls: unknown[][]): string[] {
     return [command.input?.command?.type ?? command.type];
   });
 }
+
+it("retains session entry facts across memory publication and refreshes after a session write", async () => {
+  await withPublishedIndex(async (database) => {
+    const target = {
+      agentId: "main",
+      storePath: database.db.location()!,
+      sessionKey: "agent:main:memory-publication",
+    };
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "memory-publication", updatedAt: 1, label: "Before" },
+    });
+    expect((await getSessionEntryAsync(target))?.label).toBe("Before");
+    const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+    const entryReads = () =>
+      messages.mock.calls.filter(([message]) => {
+        return (
+          typeof message === "object" &&
+          message !== null &&
+          "input" in message &&
+          typeof message.input === "object" &&
+          message.input !== null &&
+          "kind" in message.input &&
+          message.input.kind === "session-entry-read"
+        );
+      });
+    try {
+      await database.writeMetadata(metadata);
+      await database.replaceSource(
+        sourceReplacement("fts-only"),
+        () => {},
+        async () => true,
+      );
+      expect((await getSessionEntryAsync(target))?.label).toBe("Before");
+      expect(entryReads()).toEqual([]);
+
+      await withOpenClawAgentDatabaseWrite(
+        { agentId: "main", path: target.storePath },
+        ({ db }) => {
+          db.prepare(
+            "UPDATE session_nodes SET entry_json = ?, updated_at = 2, label = 'After' WHERE session_key = ?",
+          ).run(
+            JSON.stringify({ sessionId: "memory-publication", updatedAt: 2, label: "After" }),
+            target.sessionKey,
+          );
+        },
+      );
+      expect((await getSessionEntryAsync(target))?.label).toBe("After");
+      expect(entryReads()).toHaveLength(1);
+    } finally {
+      messages.mockRestore();
+    }
+  });
+});
 
 it("keeps no-op and refused publication preparation SQL-free without opening a worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

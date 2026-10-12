@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -29,7 +30,7 @@ import {
   setActiveEmbeddedRun,
 } from "./embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle, testing } from "./embedded-agent-runner/runs.test-support.js";
-import { captureRestartRecoveryDeliveryCurrent } from "./main-session-recovery/main-session-restart-recovery-delivery.js";
+import { prepareRestartRecoveryDeliveryCurrent } from "./main-session-recovery/main-session-restart-recovery-delivery.js";
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-recovery/main-session-restart-recovery-runtime.js";
 import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
@@ -159,7 +160,11 @@ it.each(["settle", "replacement"] as const)(
       session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") },
     });
     const admission = new AbortController();
-    const aborted = vi.fn(() => admission.abort());
+    const cancelled = createDeferredCore();
+    const aborted = vi.fn(() => {
+      admission.abort();
+      cancelled.resolve();
+    });
     setActiveEmbeddedRun(
       target.sessionId,
       createEmbeddedRunHandle({ runId: "cancel-run", abort: aborted }),
@@ -206,6 +211,11 @@ it.each(["settle", "replacement"] as const)(
     );
     try {
       try {
+        await awaitGateBeforeSettlement(
+          cancelled.promise,
+          clearing,
+          "Cancellation settled before reaching its captured run",
+        );
         expect(aborted).toHaveBeenCalledOnce();
       } finally {
         held.release.resolve();
@@ -276,7 +286,7 @@ it("rechecks delivery policy and exact actor lifetime in retained notice callbac
     restartRecoveryDeliveryContext: deliveryContext,
   });
   await withIncognitoSessionActor(actor, async () => {
-    const isCurrent = captureRestartRecoveryDeliveryCurrent({
+    const { isCurrent, release } = await prepareRestartRecoveryDeliveryCurrent({
       ...target,
       recoveryRunId: "notice-run",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -291,6 +301,7 @@ it("rechecks delivery policy and exact actor lifetime in retained notice callbac
       lifecycleRevision: "successor",
     }));
     expect(() => isCurrent()).toThrow("generation is no longer current");
+    release();
   });
 });
 

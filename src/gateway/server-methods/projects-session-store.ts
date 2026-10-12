@@ -73,12 +73,14 @@ export function loadProjectSessionStore(
       (left, right) => left.order - right.order || Buffer.compare(left.keyBytes, right.keyBytes),
     );
   const store = Object.fromEntries(entries.map(({ key, entry }) => [key, entry]));
+  const agents = new Map(entries.map(({ key }) => [key, selection.getTarget(key)!.agentId]));
   for (const source of incognitoStores ?? loadOpenIncognitoSessionStores()) {
     for (const { sessionKey, entry } of source.entries) {
       if (isIncognitoSessionKey(sessionKey) && entry.incognito === true) {
         store[sessionKey] = entry;
+        agents.set(sessionKey, source.agentId);
       }
     }
   }
-  return store;
+  return { store, agents };
 }

@@ -516,7 +516,6 @@ describe("Gateway model identity", () => {
           now: 1,
           rowContext,
           lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
           modelCatalog: [
             { provider: "custom", id: selected, name: selected, contextWindow: 128_000 },
           ],
@@ -664,7 +663,6 @@ describe("Gateway model identity", () => {
           key,
           entry,
           lightweightListRow,
-          skipTranscriptUsageFallback: true,
         });
         expect(row).toMatchObject(expected);
         expect(row.agentRuntime?.id).toBe("openclaw");

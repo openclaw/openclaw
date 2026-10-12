@@ -36,7 +36,7 @@ import {
 } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
-  canAccessIncognitoSession,
+  authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
   isGatewayAdmin,
 } from "../session-sharing.js";
@@ -115,7 +115,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       const canSearchSessionKey = (sessionKey: string, entry?: SessionEntry) => {
         if (
           isIncognitoSessionKey(sessionKey) &&
-          !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
+          authorizeIncognitoSessionTarget({ client: client ?? null, sessionKey, target: null }) !==
+            null
         ) {
           return false;
         }

@@ -3903,9 +3903,16 @@ jobs:
                 if [ "$(nproc)" -lt 8 ]; then
                   # Hosted/dispatch runners are too small for up to seven
                   # concurrent Knip processes; keep the serial path there.
+                  dc_failures=0
                   for dc in "${dc_scripts[@]}"; do
-                    pnpm "$dc"
+                    if ! pnpm "$dc"; then
+                      echo "::error title=${dc} failed::${dc} failed"
+                      dc_failures=1
+                    fi
                   done
+                  if [ "$dc_failures" -ne 0 ]; then
+                    exit 1
+                  fi
                 else
                   dc_pids=()
                   dc_logs=()

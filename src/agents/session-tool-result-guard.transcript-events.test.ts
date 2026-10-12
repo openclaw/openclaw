@@ -3,7 +3,7 @@ import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -110,6 +110,10 @@ async function openPersistedSessionManager(
   });
   return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
 }
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 
 afterEach(async () => {
   resetGlobalHookRunner();

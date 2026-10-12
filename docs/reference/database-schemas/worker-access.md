@@ -464,7 +464,8 @@ Schemas, retained bytes, durability, and update behavior are unchanged.
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
 through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-its awaited effect check reads both in one existing reader-worker snapshot. Typed
+its awaited effect check reads both in one existing reader-worker snapshot. The
+returned `release()` ends the owning operation’s captured authority after settlement. Typed
 mutations carry the prepared source so the writer checks all alternatives in one
 batched conversation read and publishes matching branches through its transaction
 grant. Entry-only binding mutations carry `entryCurrent` through existing writer

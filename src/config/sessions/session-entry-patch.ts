@@ -422,6 +422,11 @@ export async function runSessionEntryWorkerOperation<
           receipt.sharingUnchangedKeys,
           receipt.generationUnchangedKeys,
           receipt.transcriptPublication,
+          new Map(
+            [...receipt.current].filter(
+              ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
+            ),
+          ),
         );
       }
     },
