@@ -870,6 +870,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/command-execution-startup.test.ts",
   "src/cli/daemon-cli/lifecycle.restart-intent.test.ts",
   "src/cli/config-cli.integration.test.ts",
+  "src/cli/config-cli.reference-values.integration.test.ts",
+  "src/cli/config-cli.roster.integration.test.ts",
   "src/cli/config-cli.secrets.integration.test.ts",
   "src/cli/config-model-validation.runtime.test.ts",
   "src/cli/resume-cli.test.ts",
