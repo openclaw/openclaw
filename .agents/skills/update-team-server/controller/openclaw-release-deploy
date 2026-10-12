@@ -3058,6 +3058,7 @@ prepare_release() {
 	if [[ -e "$releases_root/$requested_sha" ]]; then
 		# An already sealed release needs validation, never resealing or activation.
 		prepared_info="$(proof validate-release "$releases_root/$requested_sha" "$requested_sha" "$root_uid" sealed)" || return 1
+		prewarm_release "$releases_root/$requested_sha"
 	else
 		prepared_info="$(publish_release "$requested_sha" "$mirror")"
 	fi
@@ -3334,6 +3335,16 @@ cleanup_candidate_failure() {
 	exit "$exit_code"
 }
 
+prewarm_release() {
+	local release="$1"
+	# The final filenames and runtime UID must match the cutover boot's cache keys.
+	if [[ -f "$release/dist/gateway-prewarm.js" ]]; then
+		bounded 120 "$runuser_bin" -u openclaw -- env -i HOME="$runtime_home" PATH=/usr/bin:/bin \
+			"$gateway_runtime_bin" "$release/gateway-prewarm.mjs" >&2 ||
+			printf 'WARNING compile-cache prewarm failed; the Gateway will compile on startup\n' >&2
+	fi
+}
+
 publish_release() (
 	set -Eeuo pipefail
 	local target_sha="$1" reference_release="$2"
@@ -3349,6 +3360,7 @@ publish_release() (
 		published_info="$(proof validate-release "$published" "$target_sha" "$root_uid" sealed)"
 		proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 		bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$published"
+		prewarm_release "$published"
 		printf '%s\n' "$published_info"
 		return 0
 	fi
@@ -3395,6 +3407,7 @@ publish_release() (
 	candidate_build_identity=""
 	trap - EXIT
 	proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
+	prewarm_release "$published"
 	printf '%s\n' "$published_info"
 )
 
