@@ -109,7 +109,7 @@ export function retainSessionPlacementRead(
 
 type PlacementReadObservation = {
   owner: PlacementAuthorityOwner;
-  observation: { revoked: boolean; indeterminate: boolean };
+  observation: { revokedBy: Set<string>; indeterminate: boolean };
   authority: { assertCurrent: () => void; release: () => void };
   assertUsable: () => void;
 };
@@ -179,7 +179,7 @@ export async function readCachedPlacementProjection(
       : (owner.projections.get(sessionId) ?? (await read()));
     signal?.throwIfAborted();
     assertUsable();
-    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
+    if (observation.revokedBy.size === 0 && !hasPendingPublication(owner, sessionId)) {
       retainProjection(owner, sessionId, value);
     }
     return structuredClone(value);
@@ -194,7 +194,6 @@ export async function prepareCachedPlacementPreservationRead(
 ) {
   return await preparePlacementRead(
     captured,
-    undefined,
     async (owner) => owner.preservation ?? (await read()),
     (value, { owner, authority }) => {
       owner.preservation = freezeJsonSnapshot(value);
@@ -208,26 +207,30 @@ export async function readCachedPlacementRecoveryCandidates(
   captured: PlacementReadObservation,
   read: () => Promise<WorkerPlacementRecoveryCandidate[]>,
 ): Promise<WorkerPlacementRecoveryCandidate[]> {
+  const { owner, observation, authority, assertUsable } = captured;
   try {
-    return await preparePlacementRead(
-      captured,
-      undefined,
-      async (owner) => (owner.recoveryCandidatesEmpty ? [] : await read()),
-      (candidates, { owner }) => {
-        if (candidates.length === 0) {
-          owner.recoveryCandidatesEmpty = true;
-        }
-        return candidates;
-      },
-    );
+    const signal = getAsyncWorkSignal();
+    signal?.throwIfAborted();
+    assertUsable();
+    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    signal?.throwIfAborted();
+    assertUsable();
+    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
+    if (
+      candidates.length === 0 &&
+      observation.revokedBy.size === 0 &&
+      !hasPendingPublication(owner)
+    ) {
+      owner.recoveryCandidatesEmpty = true;
+    }
+    return candidates;
   } finally {
-    captured.authority.release();
+    authority.release();
   }
 }
 
 export async function preparePlacementRead<T, Result>(
   captured: PlacementReadObservation,
-  _sessionId: string | undefined,
   read: (owner: PlacementAuthorityOwner) => Promise<T>,
   consume: (value: T, captured: PlacementReadObservation) => Result,
 ): Promise<Result> {

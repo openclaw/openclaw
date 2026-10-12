@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,6 +30,7 @@ describe("required sandbox creator namespaces", () => {
             },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         const actors: Array<SessionCreatedActor | undefined> = [
           { type: "human", source: "profile", id },
           { type: "human", source: "channel", id },

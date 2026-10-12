@@ -67,6 +67,13 @@ deduplication, not exactly-once processing. See
 
 ### Replay limits
 
+During upgrades, legacy spool updates older than 24 hours become
+`stale-legacy-import` failure tombstones, using their original receipt or message/edit
+date. Fresh updates still dispatch; original source bytes and import receipts stay
+preserved. One warning reports the count and oldest/newest dates. This intentionally
+forgoes genuinely unprocessed old updates to avoid executing stale instructions.
+Previously imported queue rows are unchanged.
+
 Both transports record the account's bot identity before accepting updates, even
 without a polling offset. Replacing a known bot clears its old ingress rows before
 the replacement starts. Same-bot restarts and token rotations retain queued work

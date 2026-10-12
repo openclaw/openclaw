@@ -13,7 +13,10 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
-import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
+import type {
+  SessionEntryBookkeepingReducer,
+  SessionEntryPatchOperation,
+} from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -165,6 +168,7 @@ export type SessionActorPhaseInputs = {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
+    restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
   };
   deliveryPending:
     | {
@@ -245,6 +249,8 @@ export type SessionActorReceipt = {
     after: SessionTranscriptContextVersion;
     /** Includes idempotency adoption, not only newly inserted messages. */
     appendedMessages: SessionTurnCommitted["result"]["appendedMessages"];
+    /** Complete append delta in this generation; absent when payloads are unavailable. */
+    appendedEvents?: Array<{ rawSeq: number; event: unknown; serializedBytes: number }>;
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };

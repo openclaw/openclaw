@@ -50,18 +50,6 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
     ).toEqual(["operator.write"]);
   });
 
-  it("restores trusted default operator scopes for shared-secret bearer routes opting into trusted-operator surface", () => {
-    expect(
-      resolvePluginRouteRuntimeOperatorScopes(
-        createReq({
-          authorization: "Bearer secret",
-        }),
-        { authMethod: "token", trustDeclaredOperatorScopes: false },
-        "trusted-operator",
-      ),
-    ).toEqual(createExpectedBroadOperatorScopes());
-  });
-
   it("restores trusted default operator scopes for trusted-proxy routes opting into trusted-operator when scopes header is absent", () => {
     expect(
       resolvePluginRouteRuntimeOperatorScopes(

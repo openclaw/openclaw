@@ -209,7 +209,7 @@ suite.define(() => {
     await expectBrowser(ownerRows.first()).toContainText("My sessions");
     await captureUiProof(
       suite,
-      currentPage.locator("openclaw-app-sidebar"),
+      currentPage.locator(".sidebar-shell"),
       "00-people-controls-from-session-owners.png",
       [ownerSelect],
     );
@@ -292,7 +292,7 @@ suite.define(() => {
     );
     await captureSessionOwnerPageProof(
       suite,
-      currentPage.locator("openclaw-app-sidebar"),
+      currentPage.locator(".sidebar-shell"),
       "05-owner-filter-restored-after-reload.png",
       [currentPage.locator("#sidebar-session-owner-title")],
     );

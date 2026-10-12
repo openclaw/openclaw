@@ -167,6 +167,77 @@ describe("standing intents", () => {
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).toThrow();
     await worker.close();
   });
+  it("skips empty matches without hiding creates, cancellation, or rolled-back expiry", async () => {
+    await listStandingIntents({ agentId: "main", nowMs: 1_000 });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    let refuseCommit = false;
+    const context = {
+      database: db,
+      admit(stage: "transaction" | "commit") {
+        if (stage === "commit" && refuseCommit) {
+          throw new Error("test commit refused");
+        }
+      },
+    };
+    let worker = bindSqliteWorkerBackend(undefined, context);
+    const match = (prompt = "release", nowMs = 1_000) =>
+      worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
+    const empty = { kind: "result", value: [] };
+    const row = {
+      id: "release",
+      description: "Review the release.",
+      trigger_keywords: '["release"]',
+      trigger_embedding: null,
+      channel_scope: null,
+      sender_scope: null,
+      creator_sender: "owner-sender",
+      status: "armed" as const,
+      expires_at: 10_000,
+      max_fires: 1,
+      fire_count: 0,
+      cooldown_seconds: 0,
+      last_fired_at: null,
+      created_at: 1_000,
+      source_session_id: null,
+    };
+    expect(match()).toEqual(empty);
+    await worker.close();
+    worker = bindSqliteWorkerBackend(undefined, context);
+    const observation = observeHostDataSql();
+    const intentQueries = () =>
+      observation.queries.filter((query) => query.includes('"standing_intents"'));
+    try {
+      expect(match()).toEqual(empty);
+      expect(intentQueries()).toEqual([]);
+      worker.execute({ type: "create", input: row });
+      expect(match("unrelated")).toEqual(empty);
+      expect(match()).toMatchObject({
+        kind: "result",
+        value: [{ id: row.id, status: "done", fireCount: 1 }],
+      });
+      worker.execute({ type: "create", input: { ...row, id: "cancelled" } });
+      worker.execute({ type: "cancel", input: { id: "cancelled" } });
+      expect(match()).toEqual(empty);
+      const reads = intentQueries().length;
+      expect(match()).toEqual(empty);
+      expect(intentQueries()).toHaveLength(reads);
+
+      worker.execute({ type: "create", input: { ...row, id: "rollback" } });
+      refuseCommit = true;
+      expect(() => match("release", 10_000)).toThrow("test commit refused");
+      refuseCommit = false;
+      expect(match()).toMatchObject({
+        kind: "result",
+        value: [{ id: "rollback", status: "done", fireCount: 1 }],
+      });
+    } finally {
+      observation.restore();
+      await worker.close();
+    }
+  });
+
   it("retains first-use schema after a failed create and retries without duplicate intents", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;

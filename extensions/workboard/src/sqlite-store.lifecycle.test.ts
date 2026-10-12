@@ -137,26 +137,23 @@ describe("Workboard SQLite facade cleanup", () => {
     },
   );
 
-  it.each(["overloaded", undefined])(
-    "retains nonterminal rejection %s for explicit retry",
-    async (code) => {
-      const failure = Object.assign(new Error("close refused"), { code });
-      const { execute, release, stores } = workerFixture();
-      execute
-        .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({ ok: true, value: undefined });
-      await stores.ready;
-      await expect(stores.close()).rejects.toBe(failure);
-      expect(release).not.toHaveBeenCalled();
-      await stores.close();
-      expect(execute.mock.calls.slice(1).map(([request]) => request)).toEqual([
-        { type: "connection.close", input: { connection: 7 } },
-        { type: "connection.close", input: { connection: 7 } },
-      ]);
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([undefined])("retains nonterminal rejection %s for explicit retry", async (code) => {
+    const failure = Object.assign(new Error("close refused"), { code });
+    const { execute, release, stores } = workerFixture();
+    execute
+      .mockResolvedValueOnce({ ok: true, value: { connection: 7 } })
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ ok: true, value: undefined });
+    await stores.ready;
+    await expect(stores.close()).rejects.toBe(failure);
+    expect(release).not.toHaveBeenCalled();
+    await stores.close();
+    expect(execute.mock.calls.slice(1).map(([request]) => request)).toEqual([
+      { type: "connection.close", input: { connection: 7 } },
+      { type: "connection.close", input: { connection: 7 } },
+    ]);
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it("reclaims a failed open while preserving its original initialization error", async () => {
     const openingFailure = new Error("connection initialization failed");

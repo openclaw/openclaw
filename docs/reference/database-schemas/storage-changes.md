@@ -2580,12 +2580,19 @@ version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
 rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
 
-Committed transcript publications schedule advancement through the existing
-usage worker queue. Startup and topology changes backfill in bounded batches,
+Usage-bearing transcript publications schedule advancement through the existing
+usage worker queue, coalescing nearby publications for 100 ms. User and metadata
+rows join the next usage scan. Overview reads flush and await pending publication
+batches so a completed turn's usage is visible immediately. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
+Append-only refreshes resume after the checkpoint sequence and decode each new
+page once. The transcript owner's existing rewrite watermark invalidates the
+checkpoint after a rewrite; branch changes rebuild from the visible ancestry.
+The Gateway serializes refreshes with a process-local reservation rather than
+durable cache-lock writes. Usage-only writes do not invalidate session facts.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

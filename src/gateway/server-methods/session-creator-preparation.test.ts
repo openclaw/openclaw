@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -106,6 +107,7 @@ async function withCreatorRows(
       },
     },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
       expect(process.env.VITEST).toBeUndefined();
       expect(process.env.NODE_ENV).toBe("production");
@@ -182,8 +184,12 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
     });
   });
 
-  it("reselects alias storage for each event after env changes and database reopening", async () => {
+  it("selects prepared aliases by state path and reacquires them after database reopening", async () => {
     await withCreatorRows(async ({ stateDir, callerId, creatorId, keys }) => {
+      const catalog = await profileAliases.prepareUserProfileCatalog();
+      using catalogCleanup = {
+        [Symbol.dispose]: catalog.release,
+      };
       const sessionKey = keys[0]!;
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
       linkEmail("creator@preparation.test", callerId);
@@ -197,9 +203,13 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       });
       expect(receive()).toBe(true);
       const pathname = `${stateDir}/state/openclaw.sqlite`;
+      catalogCleanup[Symbol.dispose]();
       await cleanupSessionStateForTest({ stateDir });
       const reopened = openOpenClawStateDatabase({ path: pathname }).db;
       reopened.prepare("DELETE FROM user_profiles WHERE id = ?").run(creatorId);
+      using _ = {
+        [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release,
+      };
       expect(receive()).toBe(false);
     });
   });

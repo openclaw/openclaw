@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -143,6 +144,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         skills: { load: { watch: false } },
         agents: { entries: { main: { workspace: state.workspaceDir } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const alice = ensureProfileForEmail("alice@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       const authority = {

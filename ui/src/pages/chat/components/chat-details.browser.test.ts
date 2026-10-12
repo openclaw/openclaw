@@ -100,6 +100,24 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("closes Details when a child dropdown has already closed", async () => {
+    const { element, trigger, panel, progress } = await fixture();
+    trigger.click();
+    await element.updateComplete;
+    const menu = progress.querySelector<WaDropdown>("wa-dropdown")!;
+    menu.querySelector<HTMLButtonElement>("button")!.click();
+    await menu.updateComplete;
+    expect(menu.open).toBe(true);
+    menu.open = false;
+    expect(menu.hasAttribute("open")).toBe(true);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("collapses session details and progress independently without revisions reopening them", async () => {
     const { element, trigger, session, progress } = await fixture();
     trigger.click();

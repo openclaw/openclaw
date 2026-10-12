@@ -369,6 +369,7 @@ it.each([false, true])(
   async (modelFactsChanged) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
       const query = { agentId: "main", key: "agent:main:catalog" };
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: query.key },
@@ -437,6 +438,7 @@ it.each([false, true])(
 it("updates one agent's catalog without rematerializing another agent's session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {}, other: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const queries = [
       { agentId: "main", key: "agent:main:catalog-owner" },
       { agentId: "other", key: "agent:other:catalog-owner" },
@@ -497,6 +499,7 @@ it("updates one agent's catalog without rematerializing another agent's session"
 it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const catalog = createDeferredCore<[]>();
     const admitted = vi.fn();
     const startup = createSessionRowProjection({ cfg, getModelCatalog: () => catalog.promise });
@@ -517,6 +520,7 @@ it("waits for the first catalog before admitting session reads", async () => {
 it("does not adopt a background catalog after disposal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const initial: [] = [];
     const current = createDeferredCore<[]>();
     const getModelCatalog = vi
@@ -622,6 +626,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const target = { agentId: "main", sessionKey: "agent:main:fallback", sessionId: "fallback" };
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,

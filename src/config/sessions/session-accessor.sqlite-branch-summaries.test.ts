@@ -11,6 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionBranches,
@@ -35,6 +36,7 @@ afterEach(async () => {
     await cleanupSessionStateForTest({ stateDir });
   }
   tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 function message(
@@ -256,6 +258,7 @@ const cases: Array<{
 ];
 
 async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
+  setRuntimeConfigSnapshot({});
   const agentId = "main";
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-branch-summary-") };
   const scope = {

@@ -277,6 +277,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   stagedResultRef: string;
   expectedBaseManifestRef: string;
   alreadyAccepted?: boolean;
+  additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
   publishAcceptedManifest?: (
@@ -296,6 +297,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         allowAdvancedLocalState: true,
         base: staged.base,
         current: staged.current,
+        additionalPaths: params.additionalPaths,
       });
       if (!accepted) {
         throw new Error("Cloud workspace staged result does not match the placement base");
@@ -315,6 +317,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         currentManifestRef: staged.currentManifestRef,
         base: staged.base,
         current: staged.current,
+        additionalPaths: params.additionalPaths,
         journal: params.journal,
         assertCurrent: params.assertCurrent,
         acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
@@ -331,6 +334,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   baseManifestRaw: string;
   currentManifestRaw: string;
   unchanged?: WorkerWorkspaceApplyResult;
+  additionalPaths?: ReadonlySet<string>;
   publishAcceptedManifest?: (
     accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
   ) => Promise<void>;
@@ -369,6 +373,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
           root,
           stagedResultRef: candidateRef,
           expectedBaseManifestRef: params.request.baseManifestRef,
+          additionalPaths: params.additionalPaths,
           journal: params.request.journal,
           assertCurrent: params.request.assertCurrent,
           publishAcceptedManifest: params.publishAcceptedManifest,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
@@ -84,6 +85,85 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
+  it.each([false, true])(
+    "publishes host-staged additions with worker changes=%s without enrolling other host files",
+    async (workerChanged) => {
+      const root = tempDirs.make("openclaw-staged-host-reconciliation-");
+      const stagingRoot = tempDirs.make("openclaw-staged-host-reconciliation-payload-");
+      await requireGit(root, ["init", "--quiet"]);
+      await fs.writeFile(path.join(root, "base.txt"), "base\n");
+      await fs.writeFile(path.join(root, ".gitignore"), "private.txt\n");
+      await requireGit(root, ["add", "."]);
+      await requireGit(root, [
+        "-c",
+        "user.name=Workspace Fixture",
+        "-c",
+        "user.email=workspace@example.invalid",
+        "commit",
+        "--quiet",
+        "--no-gpg-sign",
+        "-m",
+        "base",
+      ]);
+      const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+      const base = await captureWorkspaceManifest({ root, baseCommit });
+      await fs.mkdir(path.join(root, "added"));
+      await fs.writeFile(path.join(root, "added", "gateway.txt"), "gateway content\n");
+      await fs.writeFile(path.join(root, "untracked.txt"), "unadmitted host bytes\n");
+      await fs.writeFile(path.join(root, "private.txt"), "ignored host bytes\n");
+      await requireGit(root, ["add", "--", "added/gateway.txt"]);
+      let current = base;
+      if (workerChanged) {
+        await fs.copyFile(path.join(root, "base.txt"), path.join(stagingRoot, "base.txt"));
+        await fs.copyFile(path.join(root, ".gitignore"), path.join(stagingRoot, ".gitignore"));
+        await fs.writeFile(path.join(stagingRoot, "node.txt"), "node content\n");
+        current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
+      }
+      const publishAcceptedManifest = vi.fn();
+      const prepare = await prepareLocalWorkspaceReconciliation({
+        request: {
+          localPath: root,
+          remoteWorkspaceDir: "/worker/workspace",
+          baseManifestRef: base.manifestRef,
+          journal: {
+            load: async () => undefined,
+            begin: async () => {},
+            commit: async () => {},
+            abort: async () => {},
+          },
+          stagedResult: { ref: workerWorkspaceResultRef("host-staged-result"), record: () => {} },
+        },
+        hashMemo: new Map(),
+        metrics: createWorkspaceReconcileMetrics(),
+      });
+      const reconciliation = await prepare({
+        stagingRoot,
+        base: base.manifest,
+        current: current.manifest,
+        baseRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
+        currentManifestRef: current.manifestRef,
+        manifestRef: () => current.manifestRef,
+        publishAcceptedManifest,
+        verifyStable: async () => {},
+      });
+      const applied = await verifyReconciledWorkspaceFinal(reconciliation, {
+        assertActive: async () => {},
+        resume: async () => {},
+      });
+      expect(applied?.manifest.entries.map((entry) => entry.path)).toEqual([
+        ".gitignore",
+        "added/gateway.txt",
+        "base.txt",
+        ...(workerChanged ? ["node.txt"] : []),
+      ]);
+      expect(publishAcceptedManifest).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ manifestRef: applied?.manifestRef, manifest: applied?.manifest }),
+      );
+      expect(applied?.conflictPaths).toEqual([]);
+    },
+  );
+
   it.each([undefined, "local change\n"])(
     "retains a result ref only when local content %j needs reconciliation",
     async (localContent) => {

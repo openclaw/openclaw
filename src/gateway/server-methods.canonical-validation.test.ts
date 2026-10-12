@@ -1,6 +1,7 @@
 import { symlinkSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
@@ -114,6 +115,7 @@ it.each(["sessions.patch", "talk.session.create"])(
 
 it("authorizes exact rows independently of bulk validation and fences corrupt subscriptions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const insert = database.db.prepare(`INSERT INTO session_nodes
       (session_key, current_session_id, entry_json, entry_valid, updated_at)

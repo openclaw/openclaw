@@ -127,7 +127,7 @@ export type CronServiceDeps = {
   resolveDefaultAgentId?: () => string | undefined;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[] | Promise<string[]>;
-  /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
+  /** Revalidate resident policy using the worker's deletion facts. */
   isAgentAvailable?: CronAgentAvailability;
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */

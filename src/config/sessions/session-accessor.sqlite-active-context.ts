@@ -240,7 +240,10 @@ export function readSessionTranscriptBoundedActiveContextCore(
     readOnly?: boolean;
     resolvedScope?: ResolvedTranscriptReadScope;
     transaction?: CurrentTranscriptProjection["database"];
-    onRead?: (projection: CurrentTranscriptProjection) => void;
+    onRead?: (
+      projection: CurrentTranscriptProjection,
+      rows: Array<{ rawSeq: number; serializedBytes: number }>,
+    ) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
@@ -476,7 +479,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
     const version = projection.version;
-    const consumed = options.onRead?.(projection);
+    const sizes = new Map(selectedRows.map((row) => [row.event_seq, row.serialized_bytes]));
+    if (boundary) {
+      sizes.set(boundary.seq, boundary.serialized_bytes);
+    }
+    const consumed = options.onRead?.(projection, [
+      ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
+      ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
+    ]);
     if (isPromiseLike(consumed)) {
       void Promise.resolve(consumed).catch(() => {});
       throw new Error("Transcript snapshot consumers must remain synchronous");

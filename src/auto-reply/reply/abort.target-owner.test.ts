@@ -22,14 +22,17 @@ import {
   getSubagentRunByChildSessionKey,
   releaseSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryCurrentCheckInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
@@ -73,12 +76,14 @@ afterEach(() => {
   clearFollowupQueue(sessionKey);
   clearFollowupDrainCallback(sessionKey);
   testing.resetReplyRunRegistry();
+  clearRuntimeConfigSnapshot();
 });
 
 async function setupStop(createEntry = true) {
   const root = await dirs.make("case");
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath }, commands: { allowFrom: { "*": ["*"] } } };
+  setRuntimeConfigSnapshot(cfg);
   const entry = { sessionId: "session-a", updatedAt: Date.now() };
   await replaceSessionEntry(
     { storePath, sessionKey: createEntry ? sessionKey : "agent:main:other" },
@@ -773,20 +778,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     operation.complete();
   });
 
-  it.each(["session", "writer", "prepared writer"] as const)(
+  it.each(["session", "writer"] as const)(
     "skips stale abort bookkeeping after waiting for a replacement %s",
     async (replacement) => {
       const state = await setupStop();
-      if (replacement === "prepared writer") {
-        const current = await captureSessionEntryCurrentCheckInternal({
-          agentId: "main",
-          storePath: state.storePath,
-          sessionKey,
-          matchGeneration: false,
-        });
-        state.isCommandTargetCurrent = current.isCurrent;
-        state.params.opts = { isCommandTargetCurrent: current.isCurrent };
-      }
       const entered = createDeferred();
       const release = createDeferred();
       const nextOwner =

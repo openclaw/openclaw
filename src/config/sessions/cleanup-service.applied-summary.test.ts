@@ -16,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
@@ -99,6 +100,7 @@ describe("sessions cleanup applied summary", () => {
           },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const now = Date.now();
         const old = now - 31 * 24 * 60 * 60_000;
         const scope = (name: string) => ({
@@ -295,6 +297,7 @@ describe("sessions cleanup applied summary", () => {
           session: { maintenance: { mode: "enforce", maxDiskBytes: false, pruneAfter: "1s" } },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(state.sessionsDir(), { recursive: true });
         const orphan = path.join(state.sessionsDir(), "orphan.jsonl");
         await fs.writeFile(orphan, "");
@@ -336,6 +339,7 @@ describe("sessions cleanup applied summary", () => {
         session: { store: storePath, maintenance: { mode: "warn", pruneAfter: "1d" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const scopes = ["main", "beta"].map((agentId) => ({
         agentId,
         sessionKey: `agent:${agentId}:hook:stale`,

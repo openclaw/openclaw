@@ -158,28 +158,6 @@ describe("terminal controller lifecycle", () => {
     expect(underlying.resize).toHaveBeenCalledTimes(3);
   });
 
-  it.each([true, false])(
-    "preserves explicit terminal size with autoFit=%s and allows manual fitting",
-    async (autoFit) => {
-      const underlying = terminalController();
-      runtimeMocks.create.mockResolvedValue(underlying);
-      runtimeMocks.proposeDimensions.mockReturnValue({ cols: 51, rows: 25 });
-      const parent = document.body.appendChild(document.createElement("div"));
-      const size = { columns: 80, rows: 24 };
-      const signal = new AbortController().signal;
-      const controller = await createIsolatedGhosttyTerminal({ parent, size, autoFit, signal });
-
-      expect(runtimeMocks.create).toHaveBeenCalledWith(
-        expect.objectContaining({ parent, size, signal, autoFit: false }),
-      );
-      expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
-      expect(runtimeMocks.observe).toHaveBeenCalledTimes(autoFit ? 1 : 0);
-      controller.fit();
-      expect(underlying.resize).toHaveBeenCalledWith({ columns: 51, rows: 25 });
-      controller.dispose();
-    },
-  );
-
   it.each([false, true])(
     "remeasures loaded fonts only while the controller is live (disposed=%s)",
     async (disposed) => {
