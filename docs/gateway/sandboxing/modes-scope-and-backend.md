@@ -10,11 +10,11 @@ The mode, scope, and backend settings, how a creator-role requirement overrides 
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                                            | Default  |
-| ------- | --------------------------------- | ------------------------------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`                          | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`                      | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell`, `crabbox` | `docker` |
+| Setting | Key                               | Values                                                    | Default  |
+| ------- | --------------------------------- | --------------------------------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`                                  | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`                              | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell`, `crabbox`, `smol` | `docker` |
 
 **Mode** controls when sandboxing applies:
 
@@ -115,14 +115,14 @@ Non-shared runtime identity also includes the resolved agent workspace path. Thi
 
 The first use after upgrading from an older release creates non-shared runtimes and sandbox workspaces under the workspace-qualified identity. Existing non-shared runtimes are not adopted; this is an intentional one-time reset. They can age out through configured prune settings or be removed with `openclaw sandbox recreate`; the next use provisions the current identity.
 
-**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; Crabbox lease settings live under `plugins.entries.crabbox.config.sandbox` (see [Crabbox backend](/gateway/sandboxing/crabbox-backend)).
+**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; Crabbox lease settings live under `plugins.entries.crabbox.config.sandbox` (see [Crabbox backend](/gateway/sandboxing/crabbox-backend)); smol machine settings live under `plugins.entries.smol.config` (see [smol backend](/gateway/sandboxing/smol-backend)).
 
-|                     | Docker or Podman backend                  | SSH                                | OpenShell                                           |
-| ------------------- | ----------------------------------------- | ---------------------------------- | --------------------------------------------------- |
-| **Where it runs**   | Local Docker or Podman container          | Any SSH-accessible host            | OpenShell managed sandbox                           |
-| **Setup**           | Docker and/or Podman                      | SSH key + target host              | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy                        | Remote source of truth (seed once) | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none)          | Depends on remote host             | Depends on OpenShell                                |
-| **Browser sandbox** | Docker engine only                        | Not supported                      | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                            | N/A                                | N/A                                                 |
-| **Best for**        | Local development and container isolation | Offloading to a remote machine     | Managed remote sandboxes with optional two-way sync |
+|                     | Docker or Podman backend                  | SSH                                | OpenShell                                           | smol                                           |
+| ------------------- | ----------------------------------------- | ---------------------------------- | --------------------------------------------------- | ---------------------------------------------- |
+| **Where it runs**   | Local Docker or Podman container          | Any SSH-accessible host            | OpenShell managed sandbox                           | Local microVM (smol machine)                   |
+| **Setup**           | Docker and/or Podman                      | SSH key + target host              | OpenShell plugin enabled                            | smol CLI + plugin enabled                      |
+| **Workspace model** | Bind-mount or copy                        | Remote source of truth (seed once) | `mirror` or `remote`                                | Bind-mount (same as Docker)                    |
+| **Network control** | `docker.network` (default: none)          | Depends on remote host             | Depends on OpenShell                                | `docker.network` (default: none)               |
+| **Browser sandbox** | Docker engine only                        | Not supported                      | Not supported yet                                   | Not supported                                  |
+| **Bind mounts**     | `docker.binds`                            | N/A                                | N/A                                                 | N/A                                            |
+| **Best for**        | Local development and container isolation | Offloading to a remote machine     | Managed remote sandboxes with optional two-way sync | VM isolation on the host, branchable sandboxes |

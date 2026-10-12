@@ -1,0 +1,106 @@
+{
+  "id": "smol",
+  "categories": [
+    "security"
+  ],
+  "activation": {
+    "onStartup": true
+  },
+  "name": "smol machines Sandbox",
+  "description": "Run each sandbox as a smol machine: a real Linux microVM on this host with the workspace mounted like the Docker backend, no container runtime required.",
+  "configGroups": [
+    {
+      "id": "smol-runtime",
+      "title": "smol runtime",
+      "order": 10,
+      "properties": [
+        "command",
+        "timeoutSeconds"
+      ]
+    },
+    {
+      "id": "machine",
+      "title": "Machine",
+      "order": 20,
+      "properties": [
+        "image",
+        "cpus",
+        "memoryMb",
+        "workdir",
+        "branchable"
+      ]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "image": {
+        "type": "string",
+        "minLength": 1
+      },
+      "cpus": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64
+      },
+      "memoryMb": {
+        "type": "integer",
+        "minimum": 256,
+        "maximum": 1048576
+      },
+      "workdir": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\/"
+      },
+      "branchable": {
+        "type": "boolean"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "smol Command",
+      "help": "Path or command name for the smol CLI (the smolvm CLI is accepted too)."
+    },
+    "image": {
+      "label": "Image",
+      "help": "OCI image each machine boots. It needs /bin/sh, GNU coreutils and python3; the default is python:3.12-slim."
+    },
+    "cpus": {
+      "label": "vCPUs",
+      "help": "vCPUs per machine.",
+      "advanced": true
+    },
+    "memoryMb": {
+      "label": "Memory (MiB)",
+      "help": "RAM ceiling per machine. The host commits only what the guest uses.",
+      "advanced": true
+    },
+    "workdir": {
+      "label": "Workdir",
+      "help": "Absolute path inside the machine where the sandbox workspace is mounted. Overrides sandbox.docker.workdir.",
+      "advanced": true
+    },
+    "branchable": {
+      "label": "Branchable",
+      "help": "Start machines so they can be branched with `smol machine branch` (copy-on-write RAM). Costs nothing until a branch is taken.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for smol CLI lifecycle operations such as create, start and delete.",
+      "advanced": true
+    }
+  }
+}
