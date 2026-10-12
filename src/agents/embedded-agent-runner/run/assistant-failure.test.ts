@@ -508,6 +508,11 @@ describe("handleEmbeddedAssistantFailure", () => {
       rotates: true,
     },
     {
+      label: "rotates a plan-scoped model denial to the next profile",
+      errorMessage: "model not found for this plan",
+      rotates: true,
+    },
+    {
       label: "rotates a generic 404 page not found response to the next profile",
       errorMessage: "404 page not found",
       rotates: true,

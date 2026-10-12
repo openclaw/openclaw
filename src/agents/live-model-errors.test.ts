@@ -102,6 +102,16 @@ describe("live model error helpers", () => {
     );
     expect(
       isProviderWideModelNotFoundErrorMessage(
+        "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+      ),
+    ).toBe(true);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        "Internal error: Model exo-free has been deprecated.",
+      ),
+    ).toBe(true);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
     ).toBe(true);
@@ -140,6 +150,29 @@ describe("live model error helpers", () => {
     expect(
       isProviderWideModelNotFoundErrorMessage("The model gpt-foo was not found for your account"),
     ).toBe(false);
+    expect(isModelNotFoundErrorMessage("model not found for this plan")).toBe(true);
+    expect(isProviderWideModelNotFoundErrorMessage("model not found for this plan")).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("model not found for this plan.")).toBe(false);
+    expect(
+      isProviderWideModelNotFoundErrorMessage(
+        '{"error":{"message":"model not found for this plan"}}',
+      ),
+    ).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("model not included in the current plan")).toBe(
+      false,
+    );
+    expect(
+      isProviderWideModelNotFoundErrorMessage("The model gpt-foo was not found for this tier"),
+    ).toBe(false);
+    expect(isProviderWideModelNotFoundErrorMessage("model not found for your subscription")).toBe(
+      false,
+    );
+    expect(isProviderWideModelNotFoundErrorMessage("model not found for this membership")).toBe(
+      false,
+    );
+    expect(isProviderWideModelNotFoundErrorMessage("model not found for this entitlement")).toBe(
+      false,
+    );
   });
 
   it("treats a hard model deprecation as model-unavailable, not deprecation warnings", () => {

@@ -5,14 +5,16 @@
  * deprecated model ids from generic provider/runtime failures.
  */
 /**
- * Access, permission, or account wording means another authorized profile may
- * still serve the model. "continued paid access" on a retirement notice does not.
+ * Access, permission, plan, tier, subscription, membership, entitlement, or
+ * account wording means another authorized profile may still serve the model.
+ * "continued paid access" on a retirement notice does not.
  */
 const ACCOUNT_SCOPED_MODEL_NOT_FOUND_RE = new RegExp(
   String.raw`\b(?:do not have access|does not have access|don't have access|dont have access|` +
     String.raw`not have access|no access to|access denied|insufficient permissions?|` +
     String.raw`permission denied|not authorized|unauthorized|forbidden)\b|` +
-    String.raw`\bchatgpt account\b|\b(?:your|this|the) account\b`,
+    String.raw`\bchatgpt account\b|\b(?:your|this|the) account\b|` +
+    String.raw`\b(?:plans?|tiers?|subscriptions?|memberships?|entitlements?)\b`,
   "i",
 );
 
@@ -29,6 +31,8 @@ const PROVIDER_WIDE_MODEL_ABSENCE_PATTERNS: readonly RegExp[] = [
   /\bmodel\b[^.]{0,120}?\bdoes not exist\b/i,
   /\bmodel\b[^.]{0,160}?\b(?:retired|deprecated|no longer available)\b/i,
   /\b(?:retired|deprecated|no longer available)\b[^.]{0,80}?\bmodel\b/i,
+  // Ollama's retirement response names the model id without the word "model".
+  /\b[a-z0-9][a-z0-9._:/-]* was retired at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [a-z]+ \(ref:/i,
   /\bis not a valid model id\b/i,
   /\bno endpoints found for\b/i,
 ];
@@ -75,8 +79,8 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
  * True only for text that affirmatively says this model does not exist, was
  * retired, or was deprecated. A broad missing-model match with denial phrases
  * removed is not enough: empty, unknown, generic 404, and bare not_found_error
- * messages stay on profile rotation, as does any access, permission, or
- * account wording.
+ * messages stay on profile rotation, as does any access, permission, plan,
+ * tier, subscription, membership, entitlement, or account wording.
  */
 export function isProviderWideModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
