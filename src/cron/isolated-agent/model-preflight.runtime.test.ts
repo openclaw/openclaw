@@ -284,52 +284,56 @@ describe("preflightCronModelProvider", () => {
   });
 
   it.each([false, true])(
-    "retries on client timeout then reprobes after short cache TTL (nested: %s)",
+    "retries a client timeout, then reprobes on the next run without caching it (nested: %s)",
     async (nested) => {
       vi.useFakeTimers();
-      const timeout = new DOMException("request timed out", "TimeoutError");
-      const wrappedTimeout = nested ? new TypeError("fetch failed", { cause: timeout }) : timeout;
-      // Retry loop: all PREFLIGHT_RETRY_COUNT+1 attempts timeout, then second preflight call succeeds.
-      fetchWithSsrFGuardMock
-        .mockRejectedValueOnce(wrappedTimeout) // attempt 1
-        .mockRejectedValueOnce(wrappedTimeout) // attempt 2 (retry 1)
-        .mockRejectedValueOnce(wrappedTimeout) // attempt 3 (retry 2)
-        .mockResolvedValueOnce(mockReachableResponse()); // second preflight call (short TTL re-probe)
-      const cfg = {
-        models: {
-          providers: {
-            vllm: {
-              api: "openai-completions" as const,
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
+      try {
+        const timeout = new DOMException("request timed out", "TimeoutError");
+        const wrappedTimeout = nested ? new TypeError("fetch failed", { cause: timeout }) : timeout;
+        // First preflight: the initial attempt and both retries time out.
+        fetchWithSsrFGuardMock
+          .mockRejectedValueOnce(wrappedTimeout)
+          .mockRejectedValueOnce(wrappedTimeout)
+          .mockRejectedValueOnce(wrappedTimeout);
+        // Next preflight: the endpoint answers.
+        mockReachableResponse();
+        const cfg = {
+          models: {
+            providers: {
+              vllm: {
+                api: "openai-completions" as const,
+                baseUrl: "http://127.0.0.1:8000/v1",
+                models: [],
+              },
             },
           },
-        },
-      };
+        };
 
-      const firstPromise = preflightCronModelProvider({
-        cfg,
-        provider: "vllm",
-        model: "first",
-        nowMs: 1000,
-      });
-      // Advance past retry delays (2 x PREFLIGHT_RETRY_DELAY_MS = 800ms)
-      await vi.advanceTimersByTimeAsync(1000);
-      const first = await firstPromise;
+        const firstPromise = preflightCronModelProvider({
+          cfg,
+          provider: "vllm",
+          model: "first",
+          nowMs: 1000,
+        });
+        // Advance past both retry delays.
+        await vi.advanceTimersByTimeAsync(1000);
+        const first = await firstPromise;
 
-      // Short TTL (PREFLIGHT_TIMEOUT_CACHE_TTL_MS = 30s); nowMs=31000 is past it → fresh probe.
-      const next = await preflightCronModelProvider({
-        cfg,
-        provider: "vllm",
-        model: "next",
-        nowMs: 31_001,
-      });
+        // Well inside the 5-minute cache window: a timeout must not be cached,
+        // so the next run probes again instead of being skipped.
+        const next = await preflightCronModelProvider({
+          cfg,
+          provider: "vllm",
+          model: "next",
+          nowMs: 2000,
+        });
 
-      vi.useRealTimers();
-      expect(first.status).toBe("unavailable");
-      expect(next).toEqual({ status: "available" });
-      // All three retry attempts were made before caching the failure.
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+        expect(first.status).toBe("unavailable");
+        expect(next).toEqual({ status: "available" });
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
@@ -362,11 +366,13 @@ describe("preflightCronModelProvider", () => {
   it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {
     const timeoutError = new Error("request timed out");
     timeoutError.name = "TimeoutError";
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+    // Every attempt (initial + retries) times out, so the mock must throw each time.
+    fetchWithSsrFGuardMock.mockRejectedValue(
       new TypeError("fetch failed", { cause: timeoutError }),
     );
 
-    const result = await preflightCronModelProvider({
+    vi.useFakeTimers();
+    const pending = preflightCronModelProvider({
       cfg: {
         models: {
           providers: {
@@ -381,6 +387,9 @@ describe("preflightCronModelProvider", () => {
       provider: "ollama",
       model: "qwen3:32b",
     });
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await pending;
+    vi.useRealTimers();
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
