@@ -75,6 +75,128 @@ function atCopyBoundary(mutate: () => void, phase: "admission" | "mutation" = "m
   });
 }
 
+it("rechecks retained dependencies after inventorying the host manifest", async () => {
+  const base = await fs.realpath(dirs.make("candidate-retained-dependencies-"));
+  const modules = path.join(base, "lib/node_modules");
+  const source = path.join(modules, "openclaw");
+  const packageJson = path.join(source, "package.json");
+  const initialDependency = path.join(modules, "initial");
+  const lateDependency = path.join(modules, "late");
+  const targetStateDir = path.join(base, "snapshot");
+  const candidateRoot = path.join(targetStateDir, "candidate");
+  for (const directory of [
+    path.join(source, "dist"),
+    initialDependency,
+    lateDependency,
+    candidateRoot,
+  ]) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+  await fs.writeFile(
+    packageJson,
+    JSON.stringify({ name: "openclaw", dependencies: { initial: "1.0.0" } }),
+  );
+  for (const dependency of [initialDependency, lateDependency]) {
+    await fs.writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: path.basename(dependency) }),
+    );
+  }
+  let changed = false;
+  const project = (entry: string) => path.join(targetStateDir, path.relative(base, entry));
+  const plan = await prepareUpdateCandidatePluginTrees({
+    roots: new Map([
+      [packageJson, project(packageJson)],
+      [path.join(source, "dist"), project(path.join(source, "dist"))],
+    ]),
+    project,
+    targetStateDir,
+    candidateRoot,
+    retainedHostRoot: source,
+    retainedDependencyRoot: modules,
+    onProgress: async () => {
+      if (!changed) {
+        changed = true;
+        await fs.writeFile(
+          packageJson,
+          JSON.stringify({
+            name: "openclaw",
+            dependencies: { initial: "1.0.0", late: "1.0.0" },
+          }),
+        );
+      }
+    },
+  });
+  expect(changed).toBe(true);
+  expect(plan.copies.map(([root]) => root)).toEqual(
+    expect.arrayContaining([initialDependency, lateDependency]),
+  );
+  await expect(
+    copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
+  ).rejects.toThrow("changed after snapshot inventory");
+});
+
+it("rechecks transitive dependencies after inventorying their manifest", async () => {
+  const base = await fs.realpath(dirs.make("candidate-transitive-dependencies-"));
+  const modules = path.join(base, "lib/node_modules");
+  const source = path.join(modules, "openclaw");
+  const packageJson = path.join(source, "package.json");
+  const dependency = path.join(modules, "dependency");
+  const initialTransitive = path.join(modules, "initial-transitive");
+  const lateTransitive = path.join(modules, "late-transitive");
+  const targetStateDir = path.join(base, "snapshot");
+  const candidateRoot = path.join(targetStateDir, "candidate");
+  for (const directory of [source, dependency, initialTransitive, lateTransitive, candidateRoot]) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+  await fs.writeFile(
+    packageJson,
+    JSON.stringify({ name: "openclaw", dependencies: { dependency: "1.0.0" } }),
+  );
+  const dependencyManifest = path.join(dependency, "package.json");
+  await fs.writeFile(
+    dependencyManifest,
+    JSON.stringify({ name: "dependency", dependencies: { "initial-transitive": "1.0.0" } }),
+  );
+  for (const transitive of [initialTransitive, lateTransitive]) {
+    await fs.writeFile(
+      path.join(transitive, "package.json"),
+      JSON.stringify({ name: path.basename(transitive) }),
+    );
+  }
+  let progress = 0;
+  let changed = false;
+  const project = (entry: string) => path.join(targetStateDir, path.relative(base, entry));
+  const plan = await prepareUpdateCandidatePluginTrees({
+    roots: new Map([[packageJson, project(packageJson)]]),
+    project,
+    targetStateDir,
+    candidateRoot,
+    retainedHostRoot: source,
+    retainedDependencyRoot: modules,
+    onProgress: async () => {
+      progress += 1;
+      if (!changed && progress === 3) {
+        changed = true;
+        await fs.writeFile(
+          dependencyManifest,
+          JSON.stringify({
+            name: "dependency",
+            dependencies: { "initial-transitive": "1.0.0", "late-transitive": "1.0.0" },
+          }),
+        );
+      }
+    },
+  });
+  expect(changed).toBe(true);
+  expect(plan.copies.map(([root]) => root)).toEqual(
+    expect.arrayContaining([initialTransitive, lateTransitive]),
+  );
+  await expect(
+    copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
+  ).rejects.toThrow("changed after snapshot inventory");
+});
+
 it.for([".MODULES.YAML", ".moduleſ.yaml"])(
   "discovers external stores through the filesystem metadata alias %s",
   async (alias, context) => {

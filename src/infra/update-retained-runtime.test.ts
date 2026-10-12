@@ -621,10 +621,17 @@ it.each(["npm", "pnpm11"] as const)(
       globalRoot,
       layout === "npm" ? "fixture" : ".pnpm/node_modules/fixture",
     );
+    const dependencySource =
+      layout === "npm" ? dependency : path.join(globalRoot, ".pnpm/fixture@1/node_modules/fixture");
     const ambientModules = path.join(base, "node_modules");
+    const unrelatedGlobal = path.join(
+      globalRoot,
+      layout === "npm" ? "unrelated-global" : ".pnpm/unrelated@1/node_modules/unrelated",
+    );
     for (const directory of [
       path.join(root, "dist"),
-      dependency,
+      dependencySource,
+      unrelatedGlobal,
       path.join(ambientModules, "ambient-peer"),
       path.join(ambientModules, "unrelated"),
     ]) {
@@ -635,8 +642,16 @@ it.each(["npm", "pnpm11"] as const)(
       JSON.stringify({ name: "openclaw", type: "module", dependencies: { fixture: "1.0.0" } }),
     );
     await writeFile(path.join(root, "dist/updater.mjs"), 'export { value } from "fixture";');
+    if (layout === "pnpm11") {
+      await mkdir(path.dirname(dependency), { recursive: true });
+      await symlink(
+        dependencySource,
+        dependency,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
     await writeFile(
-      path.join(dependency, "package.json"),
+      path.join(dependencySource, "package.json"),
       JSON.stringify({
         name: "fixture",
         type: "module",
@@ -645,12 +660,16 @@ it.each(["npm", "pnpm11"] as const)(
         peerDependenciesMeta: { "ambient-peer": { optional: true } },
       }),
     );
-    await writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted survived";');
+    await writeFile(
+      path.join(dependencySource, "index.js"),
+      'export const value = "hoisted survived";',
+    );
     await writeFile(
       path.join(ambientModules, "ambient-peer/package.json"),
       '{"name":"ambient-peer"}',
     );
     await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    await writeFile(path.join(unrelatedGlobal, "sentinel.txt"), "unrelated global package");
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
     await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       await retain({
@@ -679,6 +698,9 @@ it.each(["npm", "pnpm11"] as const)(
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+      await expect(
+        readFile(path.resolve(retainedRoot, path.relative(root, unrelatedGlobal), "sentinel.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     });
   },
 );

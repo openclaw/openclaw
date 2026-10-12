@@ -247,32 +247,44 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     }
     for (const name of names) {
       for (let ancestor = directory; ; ancestor = path.dirname(ancestor)) {
-        // Node skips a redundant node_modules/node_modules lookup.
-        if (path.basename(ancestor) !== "node_modules") {
-          const modulesDir = path.join(ancestor, "node_modules");
-          const dependency = path.join(modulesDir, ...name.split("/"));
-          const exists = await fs.stat(dependency).then(
-            () => true,
-            (error: unknown) => {
-              if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-                return false;
-              }
-              throw error;
-            },
-          );
-          if (exists) {
-            // Copy the reached module owner, not its repository. Its projected
-            // ancestry preserves both nearest-package shadowing and sibling imports.
-            const realModules = await fs.realpath(modulesDir);
-            assertUpdateCandidatePluginCopySource(modulesDir, privateRoot);
-            assertUpdateCandidatePluginCopySource(realModules, privateRoot);
-            moduleOwners.add(realModules);
-            addRoot(realModules);
-            if (realModules !== modulesDir) {
-              moduleAliases.set(modulesDir, realModules);
+        // At a node_modules ancestor, Node searches that directory directly rather
+        // than appending a redundant node_modules segment.
+        const modulesDir =
+          path.basename(ancestor) === "node_modules"
+            ? ancestor
+            : path.join(ancestor, "node_modules");
+        const dependency = path.join(modulesDir, ...name.split("/"));
+        const exists = await fs.stat(dependency).then(
+          () => true,
+          (error: unknown) => {
+            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
+              return false;
             }
-            break;
+            throw error;
+          },
+        );
+        if (exists) {
+          const realModules = await fs.realpath(modulesDir);
+          assertUpdateCandidatePluginCopySource(modulesDir, privateRoot);
+          assertUpdateCandidatePluginCopySource(realModules, privateRoot);
+          moduleOwners.add(realModules);
+          // Installed runtimes retain only the dependency actually reached. Its
+          // own manifest discovers declared siblings without copying the whole
+          // shared global node_modules directory.
+          if (boundary && boundary !== retainedHostRoot) {
+            const realDependency = await fs.realpath(dependency);
+            assertUpdateCandidatePluginCopySource(realDependency, privateRoot);
+            addRoot(realDependency);
+            if (realDependency !== dependency) {
+              moduleAliases.set(dependency, realDependency);
+            }
+          } else {
+            addRoot(realModules);
           }
+          if (realModules !== modulesDir) {
+            moduleAliases.set(modulesDir, realModules);
+          }
+          break;
         }
         if (ancestor === boundary || path.dirname(ancestor) === ancestor) {
           // Missing optional dependencies remain absent; validation owns required ones.
@@ -311,9 +323,6 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       entries.some(
         (entry) => entry.name.toLowerCase() === name || /[^\x20-\x7e]|[. ]$/u.test(entry.name),
       );
-    if (mayContain("package.json")) {
-      await discoverHoistedDependencies(directory);
-    }
     // Read before link discovery, so custom external stores retain their owner.
     const modules = mayContain(".modules.yaml")
       ? await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"))
@@ -386,6 +395,11 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
         }
       }
     }
+    if (mayContain("package.json")) {
+      // Discover only after this manifest is part of the immutable inventory.
+      // Any dependency edit observed here is therefore rejected during copy.
+      await discoverHoistedDependencies(directory);
+    }
   }
   async function refreshHostEdges(): Promise<void> {
     const discovered: Array<{ source: string; real?: string }> = [];
@@ -443,12 +457,12 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
       }
     }
   }
-  if (retainedHostRoot) {
-    await discoverHoistedDependencies(retainedHostRoot);
-  }
   // A locator can itself name a package inside a pnpm store or hoisted tree.
   for (const source of params.roots.keys()) {
     if (source.split(path.sep).includes("node_modules")) {
+      if (retainedHostRoot && isPathInside(retainedHostRoot, source)) {
+        continue;
+      }
       addRoot(await dependencyOwner(source));
     }
   }
@@ -456,11 +470,17 @@ async function prepareUpdateCandidatePluginTreesWithHashing(
     for (const root of roots.keys()) {
       await scan(root);
     }
+    const rootsBeforeDiscovery = roots.size;
+    if (retainedHostRoot) {
+      // Bind dependency discovery to the host manifest already admitted above.
+      // A changed manifest either adds another scan wave or fails copy validation.
+      await discoverHoistedDependencies(retainedHostRoot);
+    }
     // Module ownership is a complete-wave fact, independent of root order.
     await refreshHostEdges();
     const storeLookup = lookupRoots(stores);
     const stagingLookup = lookupRoots(staging);
-    let added = false;
+    let added = roots.size > rootsBeforeDiscovery;
     for (const [file, { real, target }] of edges) {
       if (isRecoveryArtifact(file)) {
         edges.delete(file);
