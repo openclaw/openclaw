@@ -47,6 +47,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -373,6 +374,22 @@ class ChatCompletedWorkLayoutTest {
       composeRule.onNodeWithText(MIXED).assertIsDisplayed()
       command.assertIsDisplayed()
       composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+      // Exercise history parsing, timeline projection, bubble styling, and Markdown together.
+      for ((text, expected) in listOf(EARLIER to FontStyle.Italic, MIXED to FontStyle.Normal, FINAL to FontStyle.Normal)) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeRule
+          .onNodeWithText(text, useUnmergedTree = true)
+          .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+        assertEquals(
+          "Body phase style for $text",
+          expected,
+          layouts
+            .single()
+            .layoutInput
+            .style
+            .fontStyle,
+        )
+      }
     }
     command.performClick()
     capture("command-output")
@@ -761,7 +778,7 @@ class ChatCompletedWorkLayoutTest {
         "sessionInfo":{"key":"$SESSION","sessionId":"completed-work-proof","displayName":"Dashboard check","ownerAgentId":"main","archived":false},
         "messages":[
           {"role":"user","content":"Check the dashboard status.","timestamp":1783555000000,"__openclaw":{"id":"work-user"}},
-          {"role":"assistant","content":"$EARLIER","timestamp":1783555001000,"idempotencyKey":"work-earlier:assistant","__openclaw":{"id":"work-earlier"}},
+          {"role":"assistant","phase":"commentary","content":"$EARLIER","timestamp":1783555001000,"idempotencyKey":"work-earlier:assistant","__openclaw":{"id":"work-earlier"}},
           {
             "role":"assistant","timestamp":1783555002000,"__openclaw":{"id":"work-mixed"},
             "content":[
@@ -770,7 +787,7 @@ class ChatCompletedWorkLayoutTest {
             ]
           },
           {"role":"toolResult","toolCallId":"check-dashboard","toolName":"exec","content":"$OUTPUT","timestamp":1783555002500,"__openclaw":{"id":"work-result"}},
-          {"role":"assistant","content":"$FINAL","timestamp":1783555004000,"__openclaw":{"id":"work-final"}}
+          {"role":"assistant","phase":"final_answer","content":"$FINAL","timestamp":1783555004000,"__openclaw":{"id":"work-final"}}
         ]
       }
       """.trimIndent()

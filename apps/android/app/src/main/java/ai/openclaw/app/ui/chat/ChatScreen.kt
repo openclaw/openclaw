@@ -235,6 +235,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -1873,6 +1874,7 @@ private fun ChatMessageList(
                           messageId = item.message.id,
                           entryId = item.message.entryId,
                           role = item.message.role,
+                          phase = item.message.phase,
                           live = false,
                           content = visibleContent(item.message).filter { it.toolActivity == null },
                           timestampMs = item.message.timestampMs,
@@ -2198,6 +2200,7 @@ internal fun ChatBubble(
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
   senderLabel: String? = null,
   metadata: List<Pair<String, String>> = emptyList(),
+  phase: String? = null,
   reactions: List<ChatReactionSummary> = emptyList(),
   reactionViewerId: String? = null,
   onReact: ((String, String, Boolean) -> Unit)? = null,
@@ -2326,7 +2329,11 @@ internal fun ChatBubble(
                   text = part.text.orEmpty(),
                   textColor = ClawTheme.colors.text,
                   isStreaming = live,
-                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                  bodyStyle =
+                    ClawTheme.type.body.copy(
+                      fontWeight = FontWeight.Normal,
+                      fontStyle = if (normalizedRole == "assistant" && phase == "commentary") FontStyle.Italic else FontStyle.Normal,
+                    ),
                 )
               }
 
