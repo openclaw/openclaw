@@ -168,6 +168,27 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("classifies built-in groups without available members as core entries, not missing plugins", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["group:web"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (group:web). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
+  test("suppresses built-in group warnings when core tools are absent by design", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["group:fs", "group:web", "group:warning_case_unknown"],
+      label: "agents.main.tools.allow",
+      suppressUnavailableCoreToolWarning: true,
+    });
+    expect(warnings).toEqual([
+      "tools: agents.main.tools.allow allowlist contains unknown entries (group:warning_case_unknown). These entries won't match any tool unless the plugin is enabled.",
+    ]);
+  });
+
   test("includes the active reason for unavailable core tool warnings", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch", "reason_case_unknown"],
