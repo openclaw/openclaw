@@ -87,7 +87,7 @@ const corruptedReaders = new WeakSet<DatabaseSync>();
 let unregisterExitClose: (() => void) | undefined;
 
 /** Ordered partial results may carry corruption as data; the same reader owner still retires it. */
-export function retireOpenClawStateReadConnectionAfterCorruption(database: DatabaseSync): void {
+function retireOpenClawStateReadConnectionAfterCorruption(database: DatabaseSync): void {
   invalidateOpenClawStateRuntimeIntegrity(database);
   corruptedReaders.add(database);
 }
@@ -218,7 +218,6 @@ export function prepareOpenClawStateDirectReader(context: OpenClawStateWorkerCon
           }
         });
       }
-      assertSource();
       scheduleReaderRetirement(retained);
       return retained;
     } catch (error) {

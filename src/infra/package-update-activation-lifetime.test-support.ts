@@ -50,7 +50,7 @@ export function createPackageActivationLifetimeFixture() {
   }
 
   async function prepare(
-    cut?: (anchor: string) => void,
+    cut?: (anchor: string) => void | Promise<void>,
     onCustody?: (retained: boolean) => void,
     runtime: PackageActivationRuntime = packageActivationRuntimeForTest(),
   ) {
@@ -59,7 +59,7 @@ export function createPackageActivationLifetimeFixture() {
     const previous = await createPackageIntegrityReader().tree(f.packageRoot);
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
-      cut?.(anchor);
+      await cut?.(anchor);
       await preparePackageActivationJournal({
         options: { fence, runtime, onPrepared: () => {} },
         liveRoot: f.packageRoot,

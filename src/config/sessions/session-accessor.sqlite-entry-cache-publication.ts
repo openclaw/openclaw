@@ -1,3 +1,4 @@
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -46,6 +47,7 @@ import {
   recordAcquiringSessionMember,
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import type { SessionEntry } from "./types.js";
 
 export {
@@ -97,6 +99,18 @@ export function emitPreparedSessionSharingChange(
   };
   bindPreparedSessionEntryPublication(change, record);
   bindSessionEntryPublicationSource(change, database);
+  if (record.kind === "metadata") {
+    const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
+    if (
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        commit: seal,
+        rollback() {},
+      })
+    ) {
+      seal();
+    }
+  }
   sessionChanges.emit(change, database.db);
 }
 

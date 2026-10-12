@@ -58,6 +58,7 @@ function createBrowser(
         hello,
       },
     },
+    agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
@@ -81,6 +82,7 @@ function createBrowser(
       runtimeId: "",
     }),
     {
+      readAgents: () => context.agents,
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
@@ -215,9 +217,7 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "agents.list" ? { sessionPlacement: {} } : { projects: [] },
-    );
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -233,7 +233,7 @@ describe("DraftPlaceBrowser", () => {
         .slice(reads)
         .map(([method]) => method)
         .toSorted(),
-    ).toEqual(["agents.list", "projects.list"]);
+    ).toEqual(["projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
@@ -556,9 +556,6 @@ describe("DraftGatewayState", () => {
 
   it("discovers places from authenticated hello without refetching or losing input during migration", async () => {
     const request = vi.fn(async (method: string) => {
-      if (method === "agents.list") {
-        return { sessionPlacement: {} };
-      }
       if (method === "system.info") {
         return { machineName: "Gateway A" };
       }

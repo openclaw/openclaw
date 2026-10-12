@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import {
   assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
@@ -19,6 +20,11 @@ import {
   type CliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
+import {
+  formatMs,
+  parseCliArgs,
+  summarizeNumbers as summarizeGatewayBenchNumbers,
+} from "./lib/gateway-bench-runtime.ts";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -425,30 +431,11 @@ const COMMAND_CASES: readonly CommandCase[] = [
 ] as const;
 
 function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): Map<string, string[]> {
-  const flags = new Map<string, string[]>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
-    if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case" && flags.has(arg)) {
-        throw new Error(`${arg} was provided more than once`);
-      }
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value`);
-      }
-      const values = flags.get(arg) ?? [];
-      values.push(value);
-      flags.set(arg, values);
-      index += 1;
-      continue;
-    }
-    if (BOOLEAN_FLAGS.has(arg)) {
-      flags.set(arg, []);
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return flags;
+  return parseCliArgs(argv, {
+    booleanFlags: BOOLEAN_FLAGS,
+    repeatableValueFlags: new Set(["--case"]),
+    valueFlags: VALUE_FLAGS,
+  });
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -537,23 +524,14 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
 }
 
 function summarizeNumbers(values: number[]) {
-  const sorted = values.toSorted((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return {
-    avg: values.length > 0 ? total / values.length : 0,
-    p50:
-      sorted.length === 0
-        ? 0
-        : sorted.length % 2 === 0
-          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-            2
-          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
-    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
-    min: values.length > 0 ? Math.min(...values) : 0,
-    max: values.length > 0 ? Math.max(...values) : 0,
+  const { avg, p50, p95, min, max } = summarizeGatewayBenchNumbers(values) ?? {
+    avg: 0,
+    p50: 0,
+    p95: 0,
+    min: 0,
+    max: 0,
   };
+  return { avg, p50, p95, min, max };
 }
 
 function summarizeSamples(samples: Sample[]) {
@@ -571,10 +549,6 @@ function summarizeSamples(samples: Sample[]) {
     maxRssMb: rssValues.length > 0 ? summarizeNumbers(rssValues) : null,
     exitSummary: collectExitSummary(samples),
   };
-}
-
-function formatMs(value: number): string {
-  return `${value.toFixed(1)}ms`;
 }
 
 function formatMb(value: number): string {
@@ -1304,11 +1278,6 @@ function readBenchmarkReport(filePath: string): BenchmarkReport {
   return JSON.parse(readFileSync(filePath, "utf8")) as BenchmarkReport;
 }
 
-function writeJsonOutput(filePath: string, value: unknown): void {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 async function main(): Promise<void> {
   const flags = validateCliArgs();
   if (flags.has("--help")) {
@@ -1338,7 +1307,7 @@ async function main(): Promise<void> {
       deltas: buildCaseDeltas(baseline, candidate),
     };
     if (options.output) {
-      writeJsonOutput(options.output, comparison);
+      writeBenchmarkJson(comparison, options.output);
     }
     if (options.json) {
       console.log(JSON.stringify(comparison, null, 2));
@@ -1381,7 +1350,7 @@ async function main(): Promise<void> {
     ];
 
     if (options.output) {
-      writeJsonOutput(options.output, report);
+      writeBenchmarkJson(report, options.output);
     }
 
     if (options.json) {

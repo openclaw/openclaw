@@ -43,10 +43,6 @@ function SendStatusAction(props: {
   );
 }
 
-export function renderSolidChatSendStatus(status: SendStatus, actions: ChatSendStatusActions) {
-  return <ChatSendStatus status={status} actions={actions} />;
-}
-
 export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendStatusActions }) {
   const action = () =>
     props.actions.queuedMessageAction?.id === props.status?.id
