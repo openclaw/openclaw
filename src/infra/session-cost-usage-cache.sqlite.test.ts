@@ -364,13 +364,15 @@ describe("session cost usage SQLite cache", () => {
       expect(rows[1]).toMatchObject({ value_json: newer.valueJson, updated_at: 999 });
       const migrated = rows[2]!;
       expect(migrated.updated_at).toBe(123);
+      // Version-6 reports move intact but predate the current pricing rules, so readers rebuild them.
+      expect(migrated.value_json).toBe(encodeUsageCostRollup(entry).valueJson);
       expect(
         decodeUsageCostRollup(
           String(migrated.value_json),
           "synthetic",
           migrated.blob as Uint8Array,
         ),
-      ).toEqual(entry);
+      ).toBeUndefined();
       runOpenClawAgentWriteTransaction(
         ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
         { agentId },
