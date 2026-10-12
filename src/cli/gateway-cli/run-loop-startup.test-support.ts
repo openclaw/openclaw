@@ -224,4 +224,42 @@ export function registerGatewayStartupFailureTests(
       expect(Buffer.from(reason).toString()).toBe(reason);
     });
   });
+
+  it.each(["stopped daemon", "message-only error", "failed cleanup"] as const)(
+    "retains the startup failure classification for %s",
+    async (kind) => {
+      await withIsolatedSignals(async () => {
+        const { TailscaleBackendStoppedError } =
+          await import("../../infra/tailscale-backend-stopped-error.js");
+        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+        const stopped = new TailscaleBackendStoppedError();
+        const failure =
+          kind === "stopped daemon"
+            ? stopped
+            : kind === "message-only error"
+              ? new Error(stopped.message)
+              : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
+        const { runtime } = createRuntimeWithExitSignal();
+        const completeBoot = vi.fn();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        await expect(
+          runGatewayLoop({
+            start: vi.fn(async () => {
+              throw failure;
+            }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+            runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+            completeBoot,
+          }),
+        ).rejects.toBe(failure);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason:
+            kind === "failed cleanup" ? expect.stringContaining("cleanup failed") : stopped.message,
+          ...(kind === "stopped daemon"
+            ? { startupReason: "gateway.tailscale_backend_stopped" }
+            : {}),
+        });
+      });
+    },
+  );
 }
