@@ -7,6 +7,7 @@ import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -256,10 +257,12 @@ describe("role and team creation through persisted configuration", () => {
         foreign.exec(
           "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'reviewer'",
         );
+        publishAgentDeletionJournalStatus(foreign, "reviewer", "complete");
         result = await withOpenClawStateDatabaseReadSnapshot(async () => {
           foreign.exec(
             "UPDATE agent_deletion_journal SET cleanup_completed = 0 WHERE agent_id = 'reviewer'",
           );
+          publishAgentDeletionJournalStatus(foreign, "reviewer", "pending");
           const observation = observeHostDataSql();
           try {
             const created = await createAgentTeam({ workspaceRoot });

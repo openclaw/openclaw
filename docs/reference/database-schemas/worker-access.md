@@ -5154,6 +5154,13 @@ joins participant recording and reads the full row from the selected physical
 source; skill-selection commit guards retain their current native read. Incognito
 stores remain process-owned. Schemas, retention, and update behavior are unchanged.
 
+Native child planning reuses the requester entry captured by that worker read for
+sandbox classification, model, thinking, and fast-mode inheritance. Proxied
+completion captures its controller separately; completion routing never supplies
+the controller's policy. A newly minted child is classified with explicit absence,
+without querying its unused key. Preference writes during preparation apply to
+the next spawn; active-turn model and thinking overrides still take precedence.
+
 Startup/topology hydration, internal synchronous keyed and archived reads, and
 process-held incognito stores remain migration debt. Preserve the
 projection and its identity/revision invalidation instead of replacing it with

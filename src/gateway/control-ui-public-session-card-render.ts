@@ -349,7 +349,7 @@ function receipt(
   return svg;
 }
 
-export function renderPublicSessionCardSvg(card: PublicSessionCard): string {
+function renderPublicSessionCardSvg(card: PublicSessionCard): string {
   const worktree = card.worktree;
   const hasChanges =
     worktree &&

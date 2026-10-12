@@ -1185,6 +1185,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/node-worker-prepared-workspace.test.ts",
   "src/node-host/node-worker-prepared-workspace-publication.test.ts",
   "src/state/agent-deletion-journal.snapshot.test.ts",
+  "src/state/agent-deletion-journal-status.test.ts",
   "src/state/agent-deletion-journal.startup.test.ts",
   "src/state/agent-deletion-journal.native-startup.test.ts",
   "src/config/sessions/session-accessor.sqlite-branches.test.ts",
