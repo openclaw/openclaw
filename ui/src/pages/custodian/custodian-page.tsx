@@ -232,17 +232,13 @@ function CustodianPageContent(props: Props) {
   );
 }
 
-export const CustodianPage = defineSolidBridge<Props>(
-  "openclaw-custodian-page",
-  CustodianPageContent,
-  {
-    properties: {
-      onboarding: { default: false, attribute: false },
-      newAgentIntent: { default: false, attribute: false },
-      store: { default: custodianSessionStore, attribute: false },
-    },
+defineSolidBridge<Props>("openclaw-custodian-page", CustodianPageContent, {
+  properties: {
+    onboarding: { default: false, attribute: false },
+    newAgentIntent: { default: false, attribute: false },
+    store: { default: custodianSessionStore, attribute: false },
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

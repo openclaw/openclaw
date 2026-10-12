@@ -25,7 +25,6 @@ import { createGatewayQuestionPanelProps } from "../chat/components/chat-questio
 type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
-export type QuestionPage = SolidBridgeElement<QuestionPageProps>;
 
 class QuestionPageController {
   loading = true;
@@ -394,8 +393,14 @@ function QuestionPageContent(props: QuestionPageProps & { host: HTMLElement }) {
   );
 }
 
-export const QuestionPage = defineSolidBridge<QuestionPageProps>(
+defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
   (props, host) => <QuestionPageContent questionId={props.questionId} host={host} />,
   { properties: { questionId: { default: "", attribute: "question-id" } } },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-question-page": SolidBridgeElement<QuestionPageProps>;
+  }
+}

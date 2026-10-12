@@ -138,6 +138,10 @@ describe("cron execution watchdogs", () => {
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
       expect(record?.status).toBe("timed_out");
       expect(record?.error).toContain("timed out");
+      expect(requireJob(state, job.id)).toMatchObject({ enabled: true });
+      expect(requireJob(state, job.id).state.nextRunAtMs).toBeGreaterThan(SCHEDULED_AT);
+      expect(requireJob(state, job.id).state.autoDisabled).toBeUndefined();
+      expect(requireJob(state, job.id).state.lastErrorReason).toBe("timeout");
       expect(record?.sessionKey).toBe("key-attrib");
       expect(record?.detail).toMatchObject({
         provider: "deepseek",

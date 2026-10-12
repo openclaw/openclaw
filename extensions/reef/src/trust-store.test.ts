@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
   OpenAsyncKeyedStoreOptions,
@@ -14,11 +13,16 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { reefPeerIdentity } from "./friend-types.js";
-import type { ReefOutboundDeliveryBinding } from "./trust-store-format.js";
+import {
+  REEF_DELIVERY_STORE_OPTIONS,
+  REEF_TRUST_STORE_OPTIONS,
+  type ReefOutboundDeliveryBinding,
+} from "./trust-store-format.js";
 import {
   isReefPairingApprovalToken,
   openReefTrustStore,
@@ -28,7 +32,14 @@ import {
 } from "./trust-store.js";
 import type { RelayFriend } from "./types.js";
 
-let stateDir: string;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests({ closeDatabase: false });
+    cleanup();
+  }),
+);
+const stateDir = tempDirs.make("reef-trust-");
 let nextOperationWrite: (() => Promise<void> | void) | undefined;
 let nextOperationRead: (() => void) | undefined;
 let workerCommands: string[] = [];
@@ -149,19 +160,22 @@ function relayFriend(peer = "clawd", keyEpoch = 1): RelayFriend {
   };
 }
 
-beforeEach(() => {
-  resetPluginStateStoreForTests();
+beforeEach(async () => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
+  // Clear rows and invalidate receipts while retaining the suite's database worker.
+  for (const options of [REEF_TRUST_STORE_OPTIONS, REEF_DELIVERY_STORE_OPTIONS]) {
+    await createPluginStateKeyedStoreForTests("reef", {
+      ...options,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    }).clear();
+  }
   workerCommands = [];
-  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-trust-"));
 });
 
-afterEach(async () => {
+afterEach(() => {
   nextOperationWrite = undefined;
   nextOperationRead = undefined;
   vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
 describe("ReefTrustStore", () => {

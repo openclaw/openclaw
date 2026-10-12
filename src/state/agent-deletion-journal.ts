@@ -29,7 +29,10 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import {
   assertAgentDeletionJournalAvailable,
   ensureAgentDeletionJournalPhaseSchema,
@@ -579,22 +582,22 @@ export async function readAgentDeletionJournalAsync(
   return result;
 }
 
-/** Resume pending deletion work through the captured physical shared-state worker. */
+/** Committed-state read; deletion owners recheck pending entries under write authority. */
 export async function listPendingAgentDeletionJournalsAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<ReturnType<typeof listPendingAgentDeletionJournalsInDatabase>> {
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "agentDeletion.listPending", input: undefined }),
-    { existingOnly: true },
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "agentRecovery.pendingDeletions", input: undefined },
+    { current: true },
   );
-  context.admission.assertCurrent();
-  return result ?? { entries: [], manualClawAgentIds: [] };
+  if (reply && (!reply.ok || reply.type !== "agentRecovery.pendingDeletions")) {
+    throw new Error("Unexpected pending agent deletion read result");
+  }
+  return {
+    entries: reply?.entries ?? [],
+    manualClawAgentIds: reply?.manualClawAgentIds ?? [],
+  };
 }
 
 /** Administrative safety check; the caller retains its own deletion/monitor authority. */
